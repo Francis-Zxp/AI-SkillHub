@@ -251,11 +251,26 @@ D:\My Files\Zxp_global_skills\SkillHub.UI.ps1
 
 图形界面程序。可以添加 GitHub 仓库、手动同步、安装/移除每日自动更新、查看报告和查看当前启用的 Skill。
 
+界面支持中英双语：
+
+```text
+默认：根据 Windows 系统语言自动显示
+界面右上角：可以切换中文/英文
+中文模式：按钮、状态、弹窗、表头尽量只显示中文
+```
+
 ```text
 D:\My Files\Zxp_global_skills\打开SkillHub界面.cmd
 ```
 
 双击打开图形界面的入口。
+
+也可以强制打开某一种语言：
+
+```text
+D:\My Files\Zxp_global_skills\打开SkillHub界面_中文.cmd
+D:\My Files\Zxp_global_skills\OpenSkillHubUI_English.cmd
+```
 
 ```text
 D:\My Files\Zxp_global_skills\安装每日自动更新任务.ps1
@@ -564,3 +579,4 @@ README.md
 这样最容易被别人使用，也最容易跨电脑迁移。
 
 等脚本版稳定后，再考虑做图形界面。
+

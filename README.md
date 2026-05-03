@@ -19,6 +19,13 @@ Double-click:
 打开SkillHub界面.cmd
 ```
 
+This opens the UI in the system language when possible. You can also use:
+
+```text
+打开SkillHub界面_中文.cmd
+OpenSkillHubUI_English.cmd
+```
+
 Then use:
 
 ```text
@@ -78,3 +85,4 @@ powershell -ExecutionPolicy Bypass -File ".\SkillHub.ps1"
 ```
 
 This rebuilds Windows links for the new location.
+
