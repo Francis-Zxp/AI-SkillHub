@@ -26,3 +26,4 @@ product
 - No silent background work without a visible report.
 - No hidden destructive cleanup.
 - No assumption that every user has the same folder name or drive letter.
+

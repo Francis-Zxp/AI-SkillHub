@@ -1,6 +1,6 @@
-# SkillHub
+# AI SkillHub
 
-SkillHub is a small Windows manager for AI Skills collected from GitHub.
+AI SkillHub is a Windows manager for AI Skills collected from GitHub.
 
 It keeps a clean active `skills` folder by:
 
@@ -16,23 +16,16 @@ It keeps a clean active `skills` folder by:
 Double-click:
 
 ```text
-打开SkillHub界面.cmd
+AI SkillHub.exe
 ```
 
-This opens the UI in the system language when possible. You can also use:
+The interface opens in the system language when possible and supports:
 
 ```text
-打开SkillHub界面_中文.cmd
-OpenSkillHubUI_English.cmd
+中文 / English / 한국어
 ```
 
-Then use:
-
-```text
-Sync Now
-```
-
-to update repositories and rebuild links.
+Use `Sync Now` / `立即同步` to update repositories and rebuild links.
 
 ## Add A GitHub Skill
 
@@ -85,4 +78,7 @@ powershell -ExecutionPolicy Bypass -File ".\SkillHub.ps1"
 ```
 
 This rebuilds Windows links for the new location.
+
+You can also open `AI SkillHub.exe` and click the AI app link adoption button to connect Claude Code, Codex, and Antigravity to the active Skills folder.
+
 

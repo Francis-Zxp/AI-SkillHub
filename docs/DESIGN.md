@@ -30,3 +30,4 @@ Use a restrained palette:
 - Failure shows a red status and the most useful error lines.
 - Refresh the active Skill list after sync.
 - Never make users inspect PowerShell output to know whether something worked.
+

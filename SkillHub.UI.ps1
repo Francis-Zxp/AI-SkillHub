@@ -1,6 +1,6 @@
 ﻿param(
   [switch]$SelfTest,
-  [ValidateSet('auto','zh','en')]
+  [ValidateSet('auto','zh','en','ko')]
   [string]$Language = 'auto'
 )
 
@@ -14,6 +14,7 @@ Add-Type -AssemblyName System.Data
 $Base = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigPath = Join-Path $Base 'skillhub.config.json'
 $SkillHubPath = Join-Path $Base 'SkillHub.ps1'
+$AgentLinksPath = Join-Path $Base 'Manage-AgentSkillLinks.ps1'
 $InstallTaskPath = Join-Path $Base '安装每日自动更新任务.ps1'
 $UninstallTaskPath = Join-Path $Base '卸载每日自动更新任务.ps1'
 $ReportPath = Join-Path $Base 'reports\last-sync.md'
@@ -24,7 +25,7 @@ $SkillsPath = Join-Path $Base 'skills'
 if ($Language -eq 'auto') {
   $uiLang = [System.Globalization.CultureInfo]::CurrentUICulture.TwoLetterISOLanguageName
   $cultureLang = [System.Globalization.CultureInfo]::CurrentCulture.TwoLetterISOLanguageName
-  $script:Lang = if ($uiLang -eq 'zh' -or $cultureLang -eq 'zh') { 'zh' } else { 'en' }
+  $script:Lang = if ($uiLang -eq 'zh' -or $cultureLang -eq 'zh') { 'zh' } elseif ($uiLang -eq 'ko' -or $cultureLang -eq 'ko') { 'ko' } else { 'en' }
 } else {
   $script:Lang = $Language
 }
@@ -43,6 +44,7 @@ $Text = @{
     AddRepo = '添加并同步'
     InstallAuto = '安装每日自动更新'
     RemoveAuto = '移除自动更新'
+    AdoptLinks = '接管 AI 软件链接'
     OpenReport = '打开报告'
     OpenSkills = '打开技能目录'
     OpenSources = '打开源码目录'
@@ -51,6 +53,9 @@ $Text = @{
     RepoType = '类型'
     TypeSkills = '技能'
     TypePrompt = '提示词'
+    Category = '分类'
+    Note = '备注'
+    AutoCategory = '自动分类'
     SkillsTab = '已启用技能'
     ReposTab = '仓库来源'
     Activity = '运行反馈'
@@ -96,6 +101,7 @@ $Text = @{
     AddRepo = 'Add and Sync'
     InstallAuto = 'Install Daily Auto Update'
     RemoveAuto = 'Remove Auto Update'
+    AdoptLinks = 'Adopt AI App Links'
     OpenReport = 'Open Report'
     OpenSkills = 'Open Skills Folder'
     OpenSources = 'Open Sources Folder'
@@ -104,6 +110,9 @@ $Text = @{
     RepoType = 'Type'
     TypeSkills = 'skills'
     TypePrompt = 'prompt'
+    Category = 'Category'
+    Note = 'Note'
+    AutoCategory = 'Auto category'
     SkillsTab = 'Active Skills'
     ReposTab = 'Repositories'
     Activity = 'Activity'
@@ -135,6 +144,63 @@ $Text = @{
     FailBox = 'Operation failed. Check the activity panel below.'
     LangToggle = '中文'
     DetailHint = 'Failures show the necessary technical reason. Successful runs show a concise summary.'
+  }
+  ko = @{
+    Title = 'SkillHub 관리자'
+    Subtitle = 'GitHub Skill을 동기화하고 링크를 다시 만들며 활성 폴더를 정리합니다.'
+    Ready = '준비됨'
+    Running = '실행 중'
+    Success = '동기화 성공'
+    Failed = '동기화 실패'
+    AutoReady = '자동 업데이트 준비됨'
+    AutoRemoved = '자동 업데이트 제거됨'
+    SyncNow = '지금 동기화'
+    AddRepo = '추가 후 동기화'
+    InstallAuto = '매일 자동 업데이트 설치'
+    RemoveAuto = '자동 업데이트 제거'
+    AdoptLinks = 'AI 앱 링크 연결'
+    OpenReport = '보고서 열기'
+    OpenSkills = 'Skill 폴더 열기'
+    OpenSources = '소스 폴더 열기'
+    RepoUrl = 'GitHub 프로젝트 주소'
+    RepoUrlHint = 'GitHub 주소를 붙여넣으세요. 예: https://github.com/owner/repo.git'
+    RepoType = '유형'
+    TypeSkills = 'Skill'
+    TypePrompt = '프롬프트'
+    Category = '분류'
+    Note = '메모'
+    AutoCategory = '자동 분류'
+    SkillsTab = '활성 Skill'
+    ReposTab = '저장소'
+    Activity = '실행 피드백'
+    Summary = '상태'
+    ActiveSkills = '활성 Skill'
+    Repositories = '저장소'
+    LastSync = '최근 동기화'
+    AutoUpdate = '자동 업데이트'
+    DailyReady = '매일 09:00'
+    NotChecked = '확인 안 됨'
+    Skill = 'Skill'
+    Repo = '저장소'
+    Target = '소스 위치'
+    Name = '이름'
+    Url = '주소'
+    Mode = '모드'
+    Type = '유형'
+    Base = '루트'
+    NeedUrl = '먼저 GitHub 프로젝트 주소를 붙여넣으세요.'
+    BadUrl = '이 주소에서 저장소 이름을 찾을 수 없습니다.'
+    RepoExists = '이 저장소는 이미 설정에 있습니다.'
+    AddedRepo = '저장소 추가됨'
+    SyncStarted = '동기화를 시작합니다.'
+    SyncDone = '동기화가 완료되었습니다.'
+    InstallStarted = '매일 자동 업데이트를 설치합니다.'
+    RemoveStarted = '매일 자동 업데이트를 제거합니다.'
+    OpenReportMissing = '아직 보고서가 없습니다. 먼저 동기화하세요.'
+    DoneBox = 'SkillHub 동기화가 완료되었습니다.'
+    FailBox = '작업에 실패했습니다. 아래 실행 피드백을 확인하세요.'
+    LangToggle = '中文'
+    DetailHint = '실패 시 필요한 기술적 이유를 표시합니다. 성공 시에는 요약만 표시합니다.'
   }
 }
 
@@ -190,19 +256,28 @@ function New-Table($columns) {
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="SkillHub" Width="1180" Height="780" MinWidth="1040" MinHeight="700"
-        WindowStartupLocation="CenterScreen" Background="#F7F5EF" FontFamily="Segoe UI">
+        Title="SkillHub" Width="1180" Height="780" MinWidth="1040" MinHeight="700" Opacity="0"
+        WindowStartupLocation="CenterScreen" Background="#101617" FontFamily="Segoe UI">
+  <Window.Triggers>
+    <EventTrigger RoutedEvent="Window.Loaded">
+      <BeginStoryboard>
+        <Storyboard>
+          <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.22"/>
+        </Storyboard>
+      </BeginStoryboard>
+    </EventTrigger>
+  </Window.Triggers>
   <Window.Resources>
-    <SolidColorBrush x:Key="Ink" Color="#252B2D"/>
-    <SolidColorBrush x:Key="Muted" Color="#667174"/>
-    <SolidColorBrush x:Key="Surface" Color="#FCFBF7"/>
-    <SolidColorBrush x:Key="Panel" Color="#EEF2ED"/>
-    <SolidColorBrush x:Key="Border" Color="#D5DDD5"/>
-    <SolidColorBrush x:Key="Accent" Color="#2F7180"/>
-    <SolidColorBrush x:Key="AccentHover" Color="#245D6B"/>
-    <SolidColorBrush x:Key="Success" Color="#2E8062"/>
-    <SolidColorBrush x:Key="Warning" Color="#A86E23"/>
-    <SolidColorBrush x:Key="Error" Color="#A94242"/>
+    <SolidColorBrush x:Key="Ink" Color="#EAF2EF"/>
+    <SolidColorBrush x:Key="Muted" Color="#9AA9A6"/>
+    <SolidColorBrush x:Key="Surface" Color="#172123"/>
+    <SolidColorBrush x:Key="Panel" Color="#131B1D"/>
+    <SolidColorBrush x:Key="Border" Color="#2A393B"/>
+    <SolidColorBrush x:Key="Accent" Color="#48B8C7"/>
+    <SolidColorBrush x:Key="AccentHover" Color="#64D2DE"/>
+    <SolidColorBrush x:Key="Success" Color="#39A77B"/>
+    <SolidColorBrush x:Key="Warning" Color="#D29A45"/>
+    <SolidColorBrush x:Key="Error" Color="#D45B67"/>
 
     <Style TargetType="Button">
       <Setter Property="Height" Value="38"/>
@@ -222,11 +297,11 @@ $xaml = @'
             </Border>
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
-                <Setter TargetName="Chrome" Property="Background" Value="#F4F8F4"/>
-                <Setter TargetName="Chrome" Property="BorderBrush" Value="#B8C8C0"/>
+                <Setter TargetName="Chrome" Property="Background" Value="#1D2A2D"/>
+                <Setter TargetName="Chrome" Property="BorderBrush" Value="#3D575D"/>
               </Trigger>
               <Trigger Property="IsPressed" Value="True">
-                <Setter TargetName="Chrome" Property="Background" Value="#E8EFEA"/>
+                <Setter TargetName="Chrome" Property="Background" Value="#213236"/>
               </Trigger>
               <Trigger Property="IsEnabled" Value="False">
                 <Setter Property="Opacity" Value="0.55"/>
@@ -270,7 +345,8 @@ $xaml = @'
       <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
       <Setter Property="BorderThickness" Value="1"/>
       <Setter Property="GridLinesVisibility" Value="Horizontal"/>
-      <Setter Property="HorizontalGridLinesBrush" Value="#E4EAE3"/>
+      <Setter Property="HorizontalGridLinesBrush" Value="#263437"/>
+      <Setter Property="Foreground" Value="{StaticResource Ink}"/>
       <Setter Property="RowHeaderWidth" Value="0"/>
       <Setter Property="HeadersVisibility" Value="Column"/>
       <Setter Property="CanUserAddRows" Value="False"/>
@@ -296,12 +372,13 @@ $xaml = @'
         <TextBlock x:Name="TitleText" FontSize="25" FontWeight="Bold" Foreground="{StaticResource Ink}"/>
         <TextBlock x:Name="SubtitleText" Margin="1,7,0,0" FontSize="13" Foreground="{StaticResource Muted}"/>
       </StackPanel>
-      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-        <Border x:Name="StatusPill" Height="32" MinWidth="132" CornerRadius="16" Background="{StaticResource Accent}" Margin="0,0,10,0">
-          <TextBlock x:Name="StatusText" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16,0"/>
-        </Border>
-        <Button x:Name="LangButton" Width="92"/>
-      </StackPanel>
+      <Border Grid.Column="1" CornerRadius="18" Background="#152022" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="3" VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal">
+          <Button x:Name="LangZhButton" Width="72" Height="30" Content="中文"/>
+          <Button x:Name="LangEnButton" Width="82" Height="30" Content="English" Margin="4,0,0,0"/>
+          <Button x:Name="LangKoButton" Width="76" Height="30" Content="한국어" Margin="4,0,0,0"/>
+        </StackPanel>
+      </Border>
     </Grid>
 
     <Grid Grid.Row="1">
@@ -315,6 +392,9 @@ $xaml = @'
         <DockPanel LastChildFill="True">
           <StackPanel DockPanel.Dock="Top">
             <TextBlock x:Name="SummaryTitle" FontSize="15" FontWeight="Bold" Foreground="{StaticResource Ink}" Margin="0,0,0,12"/>
+            <Border x:Name="StatusPill" Height="34" CornerRadius="17" Background="{StaticResource Accent}" Margin="0,0,0,14">
+              <TextBlock x:Name="StatusText" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16,0"/>
+            </Border>
             <Grid Margin="0,0,0,14">
               <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -329,7 +409,7 @@ $xaml = @'
                 <TextBlock x:Name="ReposValue" FontSize="24" FontWeight="Bold" Foreground="{StaticResource Ink}" HorizontalAlignment="Right" Margin="0,2,0,0"/>
               </StackPanel>
             </Grid>
-            <Border CornerRadius="8" Background="#FAFBF8" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="10" Margin="0,0,0,14">
+            <Border CornerRadius="8" Background="#172123" BorderBrush="{StaticResource Border}" BorderThickness="1" Padding="10" Margin="0,0,0,14">
               <StackPanel>
                 <TextBlock x:Name="AutoUpdateLabel" Foreground="{StaticResource Muted}"/>
                 <TextBlock x:Name="AutoUpdateValue" FontWeight="SemiBold" Foreground="{StaticResource Ink}" Margin="0,3,0,0"/>
@@ -337,6 +417,7 @@ $xaml = @'
               </StackPanel>
             </Border>
             <Button x:Name="SyncButton" Style="{StaticResource PrimaryButton}" Margin="0,0,0,10"/>
+            <Button x:Name="AdoptLinksButton" Margin="0,0,0,10"/>
             <Button x:Name="InstallButton" Margin="0,0,0,10"/>
             <Button x:Name="RemoveButton" Margin="0,0,0,10"/>
             <Button x:Name="ReportButton" Margin="0,0,0,10"/>
@@ -349,7 +430,7 @@ $xaml = @'
 
       <Grid Grid.Column="2">
         <Grid.RowDefinitions>
-          <RowDefinition Height="102"/>
+          <RowDefinition Height="154"/>
           <RowDefinition Height="*"/>
           <RowDefinition Height="142"/>
         </Grid.RowDefinitions>
@@ -358,7 +439,8 @@ $xaml = @'
           <Grid>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
-              <RowDefinition Height="*"/>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
             <TextBlock x:Name="RepoUrlLabel" FontWeight="SemiBold" Foreground="{StaticResource Ink}" Margin="0,0,0,8"/>
             <Grid Grid.Row="1">
@@ -371,6 +453,14 @@ $xaml = @'
               <ComboBox x:Name="RepoTypeBox" Grid.Column="1" Margin="0,0,10,0"/>
               <Button x:Name="AddRepoButton" Grid.Column="2" Style="{StaticResource PrimaryButton}"/>
             </Grid>
+            <Grid Grid.Row="2" Margin="0,12,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="180"/>
+                <ColumnDefinition Width="*"/>
+              </Grid.ColumnDefinitions>
+              <ComboBox x:Name="RepoCategoryBox" Grid.Column="0" Margin="0,0,10,0"/>
+              <TextBox x:Name="RepoNoteBox" Grid.Column="1"/>
+            </Grid>
           </Grid>
         </Border>
 
@@ -379,7 +469,9 @@ $xaml = @'
             <DataGrid x:Name="SkillsGrid">
               <DataGrid.Columns>
                 <DataGridTextColumn x:Name="SkillColumn" Binding="{Binding Skill}" Width="180"/>
-                <DataGridTextColumn x:Name="SkillRepoColumn" Binding="{Binding Repo}" Width="210"/>
+                <DataGridTextColumn x:Name="SkillCategoryColumn" Binding="{Binding Category}" Width="130"/>
+                <DataGridTextColumn x:Name="SkillRepoColumn" Binding="{Binding Repo}" Width="190"/>
+                <DataGridTextColumn x:Name="SkillNoteColumn" Binding="{Binding Note}" Width="180"/>
                 <DataGridTextColumn x:Name="TargetColumn" Binding="{Binding Target}" Width="*"/>
               </DataGrid.Columns>
             </DataGrid>
@@ -389,21 +481,23 @@ $xaml = @'
               <DataGrid.Columns>
                 <DataGridTextColumn x:Name="RepoNameColumn" Binding="{Binding Name}" Width="180"/>
                 <DataGridTextColumn x:Name="RepoTypeColumn" Binding="{Binding Type}" Width="120"/>
+                <DataGridTextColumn x:Name="RepoCategoryColumn" Binding="{Binding Category}" Width="130"/>
                 <DataGridTextColumn x:Name="RepoModeColumn" Binding="{Binding Mode}" Width="140"/>
+                <DataGridTextColumn x:Name="RepoNoteColumn" Binding="{Binding Note}" Width="180"/>
                 <DataGridTextColumn x:Name="RepoUrlColumn" Binding="{Binding Url}" Width="*"/>
               </DataGrid.Columns>
             </DataGrid>
           </TabItem>
         </TabControl>
 
-        <Border Grid.Row="2" CornerRadius="10" Background="#252B2D" Padding="14">
+        <Border Grid.Row="2" CornerRadius="10" Background="#0E1415" BorderBrush="#253438" BorderThickness="1" Padding="14">
           <Grid>
             <Grid.RowDefinitions>
               <RowDefinition Height="Auto"/>
               <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
             <TextBlock x:Name="ActivityTitle" Foreground="#EAF0E9" FontWeight="SemiBold" Margin="0,0,0,8"/>
-            <TextBox x:Name="ActivityBox" Grid.Row="1" Background="#252B2D" Foreground="#EAF0E9" BorderThickness="0"
+            <TextBox x:Name="ActivityBox" Grid.Row="1" Background="#0E1415" Foreground="#EAF0E9" BorderThickness="0"
                      FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" AcceptsReturn="True"
                      IsReadOnly="True" VerticalScrollBarVisibility="Auto"/>
           </Grid>
@@ -420,11 +514,11 @@ $reader = New-Object System.Xml.XmlNodeReader ([xml]$xaml)
 $Window = [Windows.Markup.XamlReader]::Load($reader)
 
 $Names = @(
-  'TitleText','SubtitleText','StatusPill','StatusText','LangButton','SummaryTitle','ActiveSkillsLabel',
+  'TitleText','SubtitleText','StatusPill','StatusText','LangZhButton','LangEnButton','LangKoButton','SummaryTitle','ActiveSkillsLabel',
   'ActiveSkillsValue','ReposLabel','ReposValue','AutoUpdateLabel','AutoUpdateValue','LastSyncValue',
-  'SyncButton','InstallButton','RemoveButton','ReportButton','SkillsButton','SourcesButton','DetailHint',
-  'RepoUrlLabel','RepoUrlBox','RepoTypeBox','AddRepoButton','SkillsTab','ReposTab','SkillsGrid','ReposGrid',
-  'SkillColumn','SkillRepoColumn','TargetColumn','RepoNameColumn','RepoTypeColumn','RepoModeColumn','RepoUrlColumn',
+  'SyncButton','AdoptLinksButton','InstallButton','RemoveButton','ReportButton','SkillsButton','SourcesButton','DetailHint',
+  'RepoUrlLabel','RepoUrlBox','RepoTypeBox','RepoCategoryBox','RepoNoteBox','AddRepoButton','SkillsTab','ReposTab','SkillsGrid','ReposGrid',
+  'SkillColumn','SkillCategoryColumn','SkillRepoColumn','SkillNoteColumn','TargetColumn','RepoNameColumn','RepoTypeColumn','RepoCategoryColumn','RepoModeColumn','RepoNoteColumn','RepoUrlColumn',
   'ActivityTitle','ActivityBox','FooterText'
 )
 foreach ($name in $Names) {
@@ -443,6 +537,21 @@ function Set-Status([string]$key, [string]$kind) {
   [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
 }
 
+function Set-LanguageVisuals {
+  $activeBrush = $Window.Resources['Accent']
+  $normalBrush = $Window.Resources['Surface']
+  $inkBrush = $Window.Resources['Ink']
+  foreach ($button in @($LangZhButton,$LangEnButton,$LangKoButton)) {
+    $button.Background = $normalBrush
+    $button.Foreground = $inkBrush
+  }
+  switch ($script:Lang) {
+    'zh' { $LangZhButton.Background = $activeBrush; $LangZhButton.Foreground = [System.Windows.Media.Brushes]::White }
+    'en' { $LangEnButton.Background = $activeBrush; $LangEnButton.Foreground = [System.Windows.Media.Brushes]::White }
+    'ko' { $LangKoButton.Background = $activeBrush; $LangKoButton.Foreground = [System.Windows.Media.Brushes]::White }
+  }
+}
+
 function Add-Activity([string]$message) {
   $time = Get-Date -Format 'HH:mm:ss'
   $ActivityBox.AppendText("[$time] $message`r`n")
@@ -451,14 +560,14 @@ function Add-Activity([string]$message) {
 
 function Set-Busy([bool]$busy) {
   $Window.Cursor = if ($busy) { [System.Windows.Input.Cursors]::Wait } else { [System.Windows.Input.Cursors]::Arrow }
-  foreach ($button in @($SyncButton,$InstallButton,$RemoveButton,$AddRepoButton)) {
+  foreach ($button in @($SyncButton,$AdoptLinksButton,$InstallButton,$RemoveButton,$AddRepoButton)) {
     $button.IsEnabled = -not $busy
   }
   [System.Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{}, [System.Windows.Threading.DispatcherPriority]::Background)
 }
 
 function Test-DailyTask {
-  $result = & schtasks.exe /Query /TN ZxpGlobalSkillsDailyUpdate /FO LIST 2>$null
+  $result = & schtasks.exe /Query /TN AISkillHubDailyUpdate /FO LIST 2>$null
   return ($LASTEXITCODE -eq 0)
 }
 
@@ -489,14 +598,16 @@ function Format-RepoMode([string]$mode) {
 }
 
 function Refresh-Repos {
-  $table = New-Table @('Name','Type','Mode','Url')
+  $table = New-Table @('Name','Type','Category','Mode','Note','Url')
   try {
     $config = Read-Config
     foreach ($repo in ($config.repositories | Sort-Object name)) {
       $row = $table.NewRow()
       $row.Name = [string]$repo.name
       $row.Type = Format-RepoType ([string]$repo.type)
+      $row.Category = if ($repo.category) { [string]$repo.category } else { T 'AutoCategory' }
       $row.Mode = Format-RepoMode ([string]$repo.mode)
+      $row.Note = if ($repo.note) { [string]$repo.note } else { '' }
       $row.Url = [string]$repo.url
       $table.Rows.Add($row)
     }
@@ -508,14 +619,16 @@ function Refresh-Repos {
 }
 
 function Refresh-Skills {
-  $table = New-Table @('Skill','Repo','Target')
+  $table = New-Table @('Skill','Category','Repo','Note','Target')
   if (Test-Path -LiteralPath $StatePath) {
     $raw = Get-Content -LiteralPath $StatePath -Raw
     if ($raw.Trim()) {
       foreach ($item in (@($raw | ConvertFrom-Json) | Sort-Object Skill)) {
         $row = $table.NewRow()
         $row.Skill = [string]$item.Skill
+        $row.Category = if ($item.Category) { [string]$item.Category } else { T 'AutoCategory' }
         $row.Repo = [string]$item.Repo
+        $row.Note = if ($item.Note) { [string]$item.Note } else { '' }
         $row.Target = [string]$item.Target
         $table.Rows.Add($row)
       }
@@ -531,12 +644,13 @@ function Apply-Language {
   $Window.Title = T 'Title'
   $TitleText.Text = T 'Title'
   $SubtitleText.Text = T 'Subtitle'
-  $LangButton.Content = T 'LangToggle'
+  Set-LanguageVisuals
   $SummaryTitle.Text = T 'Summary'
   $ActiveSkillsLabel.Text = T 'ActiveSkills'
   $ReposLabel.Text = T 'Repositories'
   $AutoUpdateLabel.Text = T 'AutoUpdate'
   $SyncButton.Content = T 'SyncNow'
+  $AdoptLinksButton.Content = T 'AdoptLinks'
   $InstallButton.Content = T 'InstallAuto'
   $RemoveButton.Content = T 'RemoveAuto'
   $ReportButton.Content = T 'OpenReport'
@@ -549,11 +663,15 @@ function Apply-Language {
   $SkillsTab.Header = T 'SkillsTab'
   $ReposTab.Header = T 'ReposTab'
   $SkillColumn.Header = T 'Skill'
+  $SkillCategoryColumn.Header = T 'Category'
   $SkillRepoColumn.Header = T 'Repo'
+  $SkillNoteColumn.Header = T 'Note'
   $TargetColumn.Header = T 'Target'
   $RepoNameColumn.Header = T 'Name'
   $RepoTypeColumn.Header = T 'Type'
+  $RepoCategoryColumn.Header = T 'Category'
   $RepoModeColumn.Header = T 'Mode'
+  $RepoNoteColumn.Header = T 'Note'
   $RepoUrlColumn.Header = T 'Url'
   $ActivityTitle.Text = T 'Activity'
   $FooterText.Text = "$(T 'Base'): $Base"
@@ -562,6 +680,12 @@ function Apply-Language {
   [void]$RepoTypeBox.Items.Add((T 'TypeSkills'))
   [void]$RepoTypeBox.Items.Add((T 'TypePrompt'))
   $RepoTypeBox.SelectedIndex = 0
+  $RepoCategoryBox.Items.Clear()
+  foreach ($category in @((T 'AutoCategory'),'论文科研','科研图表','界面设计','文献研究','学术汇报','提示词/润色','通用工具')) {
+    [void]$RepoCategoryBox.Items.Add($category)
+  }
+  $RepoCategoryBox.SelectedIndex = 0
+  $RepoNoteBox.ToolTip = T 'Note'
   Refresh-Repos
   Refresh-Skills
   Set-Status 'Ready' 'ready'
@@ -614,16 +738,21 @@ function Add-Repository {
       [System.Windows.MessageBox]::Show((T 'RepoExists'), (T 'Title'), 'OK', 'Information') | Out-Null
     } else {
       $isPrompt = ($RepoTypeBox.SelectedIndex -eq 1)
+      $category = [string]$RepoCategoryBox.SelectedItem
+      $note = $RepoNoteBox.Text.Trim()
       $repo = [ordered]@{
         name = $name
         url = $url
         type = if ($isPrompt) { 'prompt' } else { 'skills' }
         mode = if ($isPrompt) { 'do-not-install' } else { 'scan' }
       }
+      if ($category -and $category -ne (T 'AutoCategory')) { $repo.category = $category }
+      if ($note) { $repo.note = $note }
       $config.repositories = @(@($config.repositories) + ([PSCustomObject]$repo))
       Save-Config $config
       Add-Activity "$(T 'AddedRepo'): $name"
       $RepoUrlBox.Clear()
+      $RepoNoteBox.Clear()
     }
     Invoke-Sync
   } catch {
@@ -635,6 +764,21 @@ function Add-Repository {
 
 $SyncButton.Add_Click({ Invoke-Sync })
 $AddRepoButton.Add_Click({ Add-Repository })
+$AdoptLinksButton.Add_Click({
+  Set-Busy $true
+  Set-Status 'Running' 'running'
+  Add-Activity (T 'AdoptLinks')
+  try {
+    $result = Run-PowerShellScript $AgentLinksPath
+    if ($result.ExitCode -eq 0) {
+      Set-Status 'Success' 'success'
+      Add-Activity (($result.Output).Trim())
+    } else {
+      Set-Status 'Failed' 'error'
+      Add-Activity (($result.Error + $result.Output).Trim())
+    }
+  } finally { Set-Busy $false }
+})
 $InstallButton.Add_Click({
   Set-Busy $true
   Set-Status 'Running' 'running'
@@ -673,10 +817,9 @@ $ReportButton.Add_Click({
 })
 $SkillsButton.Add_Click({ if (Test-Path -LiteralPath $SkillsPath) { Start-Process -FilePath $SkillsPath } })
 $SourcesButton.Add_Click({ if (Test-Path -LiteralPath $SourcesPath) { Start-Process -FilePath $SourcesPath } })
-$LangButton.Add_Click({
-  $script:Lang = if ($script:Lang -eq 'zh') { 'en' } else { 'zh' }
-  Apply-Language
-})
+$LangZhButton.Add_Click({ $script:Lang = 'zh'; Apply-Language })
+$LangEnButton.Add_Click({ $script:Lang = 'en'; Apply-Language })
+$LangKoButton.Add_Click({ $script:Lang = 'ko'; Apply-Language })
 
 Apply-Language
 Add-Activity (T 'Ready')

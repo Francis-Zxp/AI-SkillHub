@@ -1,4 +1,4 @@
-param(
+﻿param(
   [switch]$NoPull,
   [switch]$ReportOnly
 )
@@ -21,6 +21,7 @@ $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $archiveRoot = Join-Path $archivesRoot ("replaced_active_skill_copies_$stamp")
 $statePath = Join-Path $stateRoot 'managed-links.json'
 $reportPath = Join-Path $reportsRoot 'last-sync.md'
+$agentLinkScript = Join-Path $base 'Manage-AgentSkillLinks.ps1'
 
 New-Item -ItemType Directory -Force -Path $sourceRoot, $skillsRoot, $stateRoot, $reportsRoot, $archivesRoot | Out-Null
 
@@ -41,6 +42,26 @@ function Get-SkillName([string]$skillMdPath) {
     if ($name) { return $name }
   }
   return Split-Path -Leaf (Split-Path -Parent $skillMdPath)
+}
+
+function Get-SkillDescription([string]$skillMdPath) {
+  $lines = Get-Content -LiteralPath $skillMdPath -TotalCount 80
+  $descLine = $lines | Where-Object { $_ -match '^description:' } | Select-Object -First 1
+  if ($descLine) {
+    return (($descLine -replace '^description:\s*', '').Trim().Trim('"').Trim("'"))
+  }
+  return ''
+}
+
+function Get-InferredCategory([string]$skillName, [string]$description, [string]$repoName) {
+  $text = (($skillName + ' ' + $description + ' ' + $repoName).ToLowerInvariant())
+  if ($text -match 'figure|plot|chart|visual|panel|legend|data') { return '科研图表' }
+  if ($text -match 'nature|manuscript|scientific-writing|paper|rebuttal|submission|citation|reference|conference|reviewer|academic') { return '论文科研' }
+  if ($text -match 'research|literature|analyz|gap|methodolog') { return '文献研究' }
+  if ($text -match 'presentation|ppt|slide') { return '学术汇报' }
+  if ($text -match 'frontend|ui|interface|design|layout|component') { return '界面设计' }
+  if ($text -match 'prompt|polish|writing') { return '提示词/润色' }
+  return '通用工具'
 }
 
 function Get-PathPriority([string]$path) {
@@ -69,12 +90,19 @@ function Add-Candidate($list, [string]$folder, [string]$repoName, [bool]$explici
   if (-not (Test-Path -LiteralPath $skillMd)) { return }
 
   $skillName = Get-SkillName $skillMd
+  $description = Get-SkillDescription $skillMd
+  $repoConfig = Get-ConfiguredRepo $repoName
+  $category = if ($repoConfig -and $repoConfig.category) { [string]$repoConfig.category } else { Get-InferredCategory $skillName $description $repoName }
+  $note = if ($repoConfig -and $repoConfig.note) { [string]$repoConfig.note } else { '' }
   $priority = if ($explicit) { 0 } else { Get-PathPriority $folder }
   $list.Add([PSCustomObject]@{
     Skill = $skillName
     FolderName = Split-Path -Leaf $folder
     Repo = $repoName
     Source = (Convert-ToFullPath $folder)
+    Category = $category
+    Note = $note
+    Description = $description
     Priority = $priority
     Explicit = $explicit
   }) | Out-Null
@@ -240,10 +268,19 @@ if (-not $ReportOnly) {
     [PSCustomObject]@{
       Skill = $_.Skill
       Repo = $_.Repo
+      Category = $_.Category
+      Note = $_.Note
+      Description = $_.Description
       Target = $_.Source
     }
   }
   $managedState | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $statePath -Encoding UTF8
+
+  if ($config.manageAgentLinks -and (Test-Path -LiteralPath $agentLinkScript)) {
+    Write-Host ''
+    Write-Host 'Refreshing Claude Code / Codex / Antigravity skill links...'
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File $agentLinkScript -Quiet | Out-Null
+  }
 }
 
 $repoRows = foreach ($repoDir in $sourceRepos) {
@@ -269,10 +306,10 @@ foreach ($repo in ($repoRows | Sort-Object Name)) {
 $report.Add('') | Out-Null
 $report.Add('## Active Managed Skills') | Out-Null
 $report.Add('') | Out-Null
-$report.Add('| Skill | Repo | Source |') | Out-Null
-$report.Add('|---|---|---|') | Out-Null
+$report.Add('| Skill | Category | Repo | Note | Source |') | Out-Null
+$report.Add('|---|---|---|---|---|') | Out-Null
 foreach ($skill in ($selected | Sort-Object Skill)) {
-  $report.Add("| $($skill.Skill) | $($skill.Repo) | $($skill.Source) |") | Out-Null
+  $report.Add("| $($skill.Skill) | $($skill.Category) | $($skill.Repo) | $($skill.Note) | $($skill.Source) |") | Out-Null
 }
 if ($conflicts.Count -gt 0) {
   $report.Add('') | Out-Null
