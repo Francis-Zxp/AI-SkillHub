@@ -1,0 +1,20 @@
+# Runtime/source data
+github_sources/
+skills/
+reports/
+archives/
+.skillhub/
+
+# Local backups and migrated folders
+claude_skills_备份/
+codex_skills_备份/
+old_*/
+
+# Local launcher artifacts
+*.log
+*.tmp
+
+# OS/editor noise
+desktop.ini
+Thumbs.db
+.vscode/
