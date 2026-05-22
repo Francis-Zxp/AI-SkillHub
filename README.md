@@ -25,7 +25,7 @@ See `CHANGELOG.md` and `docs/release-notes/v1.1.0.md` for version details.
 - Link shared Skills into Claude Code, Codex, and Antigravity when those tools are detected.
 - Skip missing AI coding tools instead of creating fake tool folders.
 - Support source categories, tags, notes, search, sorting, duplicate-name hints, and recent operation history.
-- Provide system checks, share checks, diagnostics export, and zip-import safety checks.
+- Provide system checks, share checks, diagnostics export, troubleshooting bundles, zip-import safety checks, and clean-recipient validation.
 - Support Chinese, English, and Korean UI text, with multiple visual themes.
 
 ## Quick Start
@@ -70,6 +70,7 @@ AI-SkillHub/
     SkillHub.ps1
     Manage-AgentSkillLinks.ps1
     Export-SkillHubDiagnostics.ps1
+    Test-ShareRecipientExperience.ps1
     skillhub.config.example.json
 ```
 
@@ -97,8 +98,20 @@ Prompt/reference material is not a callable Skill. AI SkillHub keeps it as sourc
 
 AI SkillHub previews zip files before import and blocks unsafe paths that try to escape the target folder.
 
-## Developer Notes
+## Validation For Sharing
 
+Before publishing or sending a new build to someone else, developers can run these checks from the app folder or command line:
+
+```text
+AI SkillHub.exe --self-test
+AI SkillHub.exe --zip-preview-test
+AI SkillHub.exe --troubleshooting-test
+AI SkillHub.exe --share-recipient-test
+```
+
+The share-recipient test creates a temporary clean copy in a path with spaces and Chinese characters, confirms no personal Skills/config/reports are bundled, and simulates missing Codex, no detected AI tools, missing Git, and missing WebView2.
+
+## Developer Notes
 Current v1 stack:
 
 - C# WinForms shell

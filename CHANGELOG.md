@@ -10,10 +10,12 @@ All notable changes to AI SkillHub are documented here.
 - Quick Start help dialog in Chinese, English, and Korean.
 - Troubleshooting bundle export for sharing sanitized operation, import, sync, diagnostics, and zip-preview reports.
 - Reports folder shortcut and `--troubleshooting-test` smoke test.
+- Share-recipient validation script plus `--share-recipient-test`, covering a clean downloaded copy, first-run empty config, paths with spaces/Chinese, missing Codex, no detected AI tools, missing Git, and missing WebView2.
 
 ### Changed
 
 - App version label is prepared as `v1.1.1`.
+- Clean first-run diagnostics now treat an empty `skills` directory as `info` instead of `warn`, so new users are not scared by an expected empty library.
 - Codex detection wording now distinguishes "detected but not managed" from "managed per Skill", avoiding the confusing "detected / not linked / writable" state.
 - Added an AI Tool Details dialog that separates detection, managed state, folder permission, path, and next-step guidance.
 

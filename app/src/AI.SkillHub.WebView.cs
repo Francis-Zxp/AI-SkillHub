@@ -44,6 +44,12 @@ namespace AISkillHubWeb
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "--share-recipient-test")
+            {
+                Diagnostics.RunShareRecipientTest();
+                return;
+            }
+
             Application.Run(new SkillHubWindow());
         }
 
@@ -81,6 +87,7 @@ namespace AISkillHubWeb
                 Require(Path.Combine(app, "skillhub.config.example.json"));
                 Require(Path.Combine(app, "SkillHub.ps1"));
                 Require(Path.Combine(app, "Export-SkillHubDiagnostics.ps1"));
+                Require(Path.Combine(app, "Test-ShareRecipientExperience.ps1"));
                 Require(Path.Combine(app, "runtime", "Microsoft.Web.WebView2.Core.dll"));
                 Require(Path.Combine(app, "runtime", "Microsoft.Web.WebView2.WinForms.dll"));
                 Require(Path.Combine(app, "runtime", "WebView2Loader.dll"));
@@ -105,6 +112,57 @@ namespace AISkillHubWeb
         private static void Require(string path)
         {
             if (!File.Exists(path)) throw new FileNotFoundException("Missing required file", path);
+        }
+
+        public static void RunShareRecipientTest()
+        {
+            string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+            string app = Path.Combine(root, "app");
+            string reportDir = Path.Combine(app, "reports", "share-recipient-test");
+            string script = Path.Combine(app, "Test-ShareRecipientExperience.ps1");
+            Directory.CreateDirectory(reportDir);
+            string hostLog = Path.Combine(reportDir, "latest-share-recipient-host.txt");
+
+            try
+            {
+                Require(script);
+                string output = RunProcess(PowerShellPath(), "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -Quiet", app);
+                File.WriteAllText(hostLog, output, new UTF8Encoding(false));
+            }
+            catch (Exception ex)
+            {
+                File.WriteAllText(hostLog, "FAILED " + ex.Message, new UTF8Encoding(false));
+                Environment.ExitCode = 1;
+            }
+        }
+
+        private static string PowerShellPath()
+        {
+            string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+            if (!File.Exists(path)) throw new FileNotFoundException("Missing Windows PowerShell", path);
+            return path;
+        }
+
+        private static string RunProcess(string fileName, string arguments, string workingDirectory)
+        {
+            var psi = new ProcessStartInfo();
+            psi.FileName = fileName;
+            psi.Arguments = arguments;
+            psi.WorkingDirectory = workingDirectory;
+            psi.UseShellExecute = false;
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            psi.CreateNoWindow = true;
+            psi.StandardOutputEncoding = Encoding.UTF8;
+            psi.StandardErrorEncoding = Encoding.UTF8;
+            using (var p = Process.Start(psi))
+            {
+                string stdout = p.StandardOutput.ReadToEnd();
+                string stderr = p.StandardError.ReadToEnd();
+                p.WaitForExit();
+                if (p.ExitCode != 0) throw new InvalidOperationException((stderr.Length > 0 ? stderr : stdout).Trim());
+                return stdout + (stderr.Length > 0 ? Environment.NewLine + stderr : "");
+            }
         }
 
         public static void RunZipPreviewTest()

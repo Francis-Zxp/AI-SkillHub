@@ -1,7 +1,10 @@
 ﻿[CmdletBinding()]
 param(
   [switch]$Quiet,
-  [switch]$SimulateMissingCodex
+  [switch]$SimulateMissingCodex,
+  [switch]$SimulateMissingGit,
+  [switch]$SimulateMissingWebView2,
+  [switch]$SimulateNoAgents
 )
 
 $ErrorActionPreference = 'Continue'
@@ -137,7 +140,7 @@ function Get-LinkTargetText($Item) {
 }
 
 function Add-AgentStatus([string]$Id, [string]$Name, [string]$BaseDir, [string[]]$SkillsDirs, [string]$CommandName) {
-  $simulateMissing = ($Id -eq 'codex' -and $script:SimulateMissingCodex)
+  $simulateMissing = $script:SimulateNoAgents -or ($Id -eq 'codex' -and $script:SimulateMissingCodex)
   $command = if ($CommandName -and -not $simulateMissing) { Get-Command $CommandName -ErrorAction SilentlyContinue } else { $null }
   $baseExists = if ($simulateMissing) { $false } else { (Test-Path -LiteralPath $BaseDir -PathType Container) }
   $skillsInfo = @()
@@ -179,13 +182,14 @@ Add-Check 'project.config' '配置文件' $projectConfigStatus $projectConfigSum
 $reportsWritableStatus = if (Test-DirWritable $DiagnosticsRoot) { 'ok' } else { 'error' }
 Add-Check 'project.reportsWritable' '报告目录可写' $reportsWritableStatus '已检查诊断报告目录可写。' $DiagnosticsRoot '请确认当前用户对 AI SkillHub 文件夹有写入权限。'
 
-$gitCommand = Get-Command git -ErrorAction SilentlyContinue
+$gitCommand = if ($SimulateMissingGit) { $null } else { Get-Command git -ErrorAction SilentlyContinue }
 if ($gitCommand) {
   $gitVersion = Invoke-Tool 'git' '--version' $AppRoot
   $gitStatus = if ($gitVersion.ok) { 'ok' } else { 'warn' }
   Add-Check 'tool.git' 'Git' $gitStatus 'Git 已检测。' (($gitCommand.Source) + ' ' + $gitVersion.stdout.Trim() + ' ' + $gitVersion.stderr.Trim()) 'GitHub 同步需要 Git。若同步失败，请重新安装 Git for Windows。'
 } else {
-  Add-Check 'tool.git' 'Git' 'warn' '未检测到 Git；GitHub 同步会受影响。' '' '请安装 Git for Windows，然后重新打开 AI SkillHub。'
+  $gitSummary = if ($SimulateMissingGit) { '分享验收：已模拟未安装 Git；GitHub 同步会受影响。' } else { '未检测到 Git；GitHub 同步会受影响。' }
+  Add-Check 'tool.git' 'Git' 'warn' $gitSummary '' '请安装 Git for Windows，然后重新打开 AI SkillHub。'
 }
 
 $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
@@ -210,8 +214,13 @@ foreach ($base in @($pf86, $pf)) {
     if (Test-Path -LiteralPath $candidate) { $runtimeDirs += $candidate }
   }
 }
-$webviewStatus = if ((Test-Path -LiteralPath $runtimeDll) -and $runtimeDirs.Count -gt 0) { 'ok' } elseif (Test-Path -LiteralPath $runtimeDll) { 'warn' } else { 'error' }
-$webviewSummary = if ($webviewStatus -eq 'ok') { 'WebView2 运行组件已检测到。' } elseif ($webviewStatus -eq 'warn') { 'AI SkillHub 自带 WebView2 DLL，但未确认系统 Runtime。' } else { '缺少 WebView2 组件。' }
+$webviewDllExists = (Test-Path -LiteralPath $runtimeDll)
+if ($SimulateMissingWebView2) {
+  $webviewDllExists = $false
+  $runtimeDirs = @()
+}
+$webviewStatus = if ($webviewDllExists -and $runtimeDirs.Count -gt 0) { 'ok' } elseif ($webviewDllExists) { 'warn' } else { 'error' }
+$webviewSummary = if ($SimulateMissingWebView2) { '分享验收：已模拟缺少 WebView2；界面可能无法打开。' } elseif ($webviewStatus -eq 'ok') { 'WebView2 运行组件已检测到。' } elseif ($webviewStatus -eq 'warn') { 'AI SkillHub 自带 WebView2 DLL，但未确认系统 Runtime。' } else { '缺少 WebView2 组件。' }
 Add-Check 'tool.webview2' 'Microsoft Edge WebView2' $webviewStatus $webviewSummary (($runtimeDirs -join '; ') + '; packaged=' + $runtimeDll) '若界面无法打开，请安装 Microsoft Edge WebView2 Runtime。'
 
 Add-AgentStatus 'claude' 'Claude / Claude Code' (Join-Path $HomePath '.claude') @((Join-Path $HomePath '.claude\skills')) 'claude'
@@ -289,8 +298,9 @@ $SkillRows | Where-Object { $_.target } | Group-Object target | Where-Object { $
   $duplicatesByTarget += [PSCustomObject]@{ target = $_.Name; folders = @($_.Group | Select-Object -ExpandProperty folder) }
 }
 
-$skillsScanStatus = if ($SkillRows.Count -gt 0) { 'ok' } else { 'warn' }
-Add-Check 'skills.scan' 'Skill 扫描' $skillsScanStatus "扫描到 $($SkillRows.Count) 个启用 Skill。" $SkillsRoot '如果为 0，请点击“立即同步”。'
+$skillsScanStatus = if ($SkillRows.Count -gt 0) { 'ok' } elseif ($repoCount -eq 0) { 'info' } else { 'warn' }
+$skillsScanFix = if ($repoCount -eq 0) { '首次使用时先添加 GitHub、本地文件夹或 zip 来源，再点击“立即同步”。' } else { '如果为 0，请点击“立即同步”；若仍为 0，请检查来源中是否包含 SKILL.md。' }
+Add-Check 'skills.scan' 'Skill 扫描' $skillsScanStatus "扫描到 $($SkillRows.Count) 个启用 Skill。" $SkillsRoot $skillsScanFix
 $skillsHealthStatus = if ($HealthWarnings.Count -eq 0) { 'ok' } else { 'warn' }
 Add-Check 'skills.health' 'Skill 健康检查' $skillsHealthStatus "发现 $($HealthWarnings.Count) 个健康提示。" (($HealthWarnings | Select-Object -First 30 | ConvertTo-Json -Depth 5)) '缺少 description 通常不致命，但建议补齐，便于 AI 正确选择技能。'
 $skillsDuplicateStatus = if ($duplicatesByMetaName.Count -eq 0 -and $duplicatesByTarget.Count -eq 0) { 'ok' } else { 'warn' }
@@ -428,8 +438,26 @@ foreach ($check in $Checks) {
 $errorCount = @($Checks | Where-Object { $_.status -eq 'error' }).Count
 $warnCount = @($Checks | Where-Object { $_.status -eq 'warn' }).Count
 $overall = if ($errorCount -gt 0) { 'error' } elseif ($warnCount -gt 0) { 'warn' } else { 'ok' }
-$scenarioName = if ($SimulateMissingCodex) { 'share-preflight' } else { 'normal' }
-$scenarioNote = if ($SimulateMissingCodex) { '分享前检查：已模拟对方电脑没有 Codex。Codex 未检测到属于可忽略信息，不应阻止 Claude 使用。' } else { '正常系统体检。' }
+$scenarioName = 'normal'
+$scenarioNotes = New-Object System.Collections.Generic.List[string]
+if ($SimulateMissingCodex) {
+  $scenarioName = 'share-preflight'
+  $scenarioNotes.Add('已模拟对方电脑没有 Codex。Codex 未检测到属于可忽略信息，不应阻止 Claude 使用。') | Out-Null
+}
+if ($SimulateNoAgents) {
+  $scenarioName = 'share-no-agents'
+  $scenarioNotes.Add('已模拟没有任何可接管的 AI Coding 工具。此时应提示安装 Claude Code、Codex 或 Antigravity，而不是创建假目录。') | Out-Null
+}
+if ($SimulateMissingGit) {
+  $scenarioName = 'share-missing-git'
+  $scenarioNotes.Add('已模拟未安装 Git。此时 GitHub 同步应给出安装 Git 的提示。') | Out-Null
+}
+if ($SimulateMissingWebView2) {
+  $scenarioName = 'share-missing-webview2'
+  $scenarioNotes.Add('已模拟缺少 WebView2。此时应提示安装 Microsoft Edge WebView2 Runtime。') | Out-Null
+}
+if ($scenarioNotes.Count -eq 0) { $scenarioNotes.Add('正常系统体检。') | Out-Null }
+$scenarioNote = ($scenarioNotes -join ' ')
 
 $jsonPath = Join-Path $DiagnosticsRoot "skillhub-diagnostics_$Stamp.json"
 $mdPath = Join-Path $DiagnosticsRoot "skillhub-diagnostics_$Stamp.md"
@@ -452,6 +480,9 @@ $payload = [PSCustomObject]@{
   scenario = [PSCustomObject]@{
     name = $scenarioName
     simulateMissingCodex = [bool]$SimulateMissingCodex
+    simulateMissingGit = [bool]$SimulateMissingGit
+    simulateMissingWebView2 = [bool]$SimulateMissingWebView2
+    simulateNoAgents = [bool]$SimulateNoAgents
     note = $scenarioNote
   }
   overallStatus = $overall
