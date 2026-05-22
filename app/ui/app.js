@@ -54,6 +54,9 @@
       notDetected: "未检测",
       linked: "已链接",
       notLinked: "未链接",
+      managedCount: "已接管 {count} 个 Skill",
+      detectedNotManaged: "已检测，尚未接管",
+      detectedNotManagedHint: "打开“接管 AI 软件链接”后会自动处理",
       writable: "可写",
       notWritable: "不可写",
       syncNow: "立即同步",
@@ -207,6 +210,9 @@
       notDetected: "Missing",
       linked: "Linked",
       notLinked: "Not linked",
+      managedCount: "{count} Skills managed",
+      detectedNotManaged: "Detected, not managed yet",
+      detectedNotManagedHint: "Turn on Agent Links to connect it",
       writable: "Writable",
       notWritable: "Not writable",
       syncNow: "Sync Now",
@@ -360,6 +366,9 @@
       notDetected: "미감지",
       linked: "연결됨",
       notLinked: "미연결",
+      managedCount: "{count}개 Skill 연결됨",
+      detectedNotManaged: "감지됨, 아직 연결되지 않음",
+      detectedNotManagedHint: "AI 도구 연결을 켜면 자동으로 처리합니다",
       writable: "쓰기 가능",
       notWritable: "쓰기 불가",
       syncNow: "지금 동기화",
@@ -704,9 +713,9 @@
       dom.linkStatus.textContent = `${linkStatus} · ${t("noAgentDetected")}`;
       return;
     }
-    const claudeText = `Claude ${link.claudeDetected ? (link.claude ? t("linked") : t("notLinked")) : t("notDetected")}`;
-    const codexText = link.codexDetected ? `Codex ${codexCount}` : `Codex ${t("optionalMissing")}`;
-    const antigravityText = link.antigravityDetected ? `Antigravity ${link.antigravity ? t("linked") : t("notLinked")}` : `Antigravity ${t("optionalMissing")}`;
+    const claudeText = `Claude ${link.claudeDetected ? (link.claude ? t("linked") : t("detectedNotManaged")) : t("notDetected")}`;
+    const codexText = link.codexDetected ? `Codex ${codexCount > 0 ? formatText("managedCount", { count: codexCount }) : t("detectedNotManaged")}` : `Codex ${t("optionalMissing")}`;
+    const antigravityText = link.antigravityDetected ? `Antigravity ${link.antigravity ? t("linked") : t("detectedNotManaged")}` : `Antigravity ${t("optionalMissing")}`;
     dom.linkStatus.textContent = `${linkStatus} · ${claudeText} · ${codexText} · ${antigravityText}`;
   }
 
@@ -732,6 +741,9 @@
 
     dom.agentMatrix.replaceChildren();
     (diagnostics.agents || []).forEach(agent => {
+      const agentName = String(agent.name || agent.id || "");
+      const isCodex = /codex/i.test(agentName);
+      const codexManagedCount = Number((state.linkStatus || {}).codexCount || 0);
       const statusTone = agent.detected ? "ok" : "info";
       const item = el("div", "agent-item " + statusTone);
       const title = el("div", "agent-title");
@@ -743,7 +755,14 @@
       const meta = el("small");
       const parts = [];
       if (agent.detected) {
-        parts.push(agent.linked ? t("linked") : t("notLinked"));
+        if (isCodex && codexManagedCount > 0) {
+          parts.push(formatText("managedCount", { count: codexManagedCount }));
+        } else if (agent.linked) {
+          parts.push(t("linked"));
+        } else {
+          parts.push(t("detectedNotManaged"));
+          parts.push(t("detectedNotManagedHint"));
+        }
         if (agent.hasSkillsDir) parts.push(agent.writable ? t("writable") : t("notWritable"));
       } else {
         parts.push(t("optionalMissing"));
@@ -1492,6 +1511,12 @@
 
   function t(key) {
     return (text[lang] && text[lang][key]) || text.zh[key] || key;
+  }
+
+  function formatText(key, values) {
+    return t(key).replace(/\{(\w+)\}/g, (_, name) => {
+      return Object.prototype.hasOwnProperty.call(values || {}, name) ? values[name] : "";
+    });
   }
 
   function chooseLanguage() {

@@ -12,6 +12,7 @@ All notable changes to AI SkillHub are documented here.
 ### Changed
 
 - App version label is prepared as `v1.1.1`.
+- Codex detection wording now distinguishes "detected but not managed" from "managed per Skill", avoiding the confusing "detected / not linked / writable" state.
 
 ## v1.1.0 - Public Sharing Release
 
