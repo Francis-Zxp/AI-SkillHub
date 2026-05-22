@@ -4,6 +4,12 @@ AI SkillHub 是一个面向 Windows 的 AI Agent Skills 管理器。它把来自
 
 这个公开仓库只包含 AI SkillHub 程序本身，不包含 FrancisZhu 的个人 skills、GitHub 来源仓库、诊断报告、缓存或本机配置。
 
+## 命名约定
+
+产品显示名统一使用 `AI SkillHub`，GitHub 仓库名建议使用 `AI-SkillHub`。
+
+不建议改成 `AI SkillsHub`、`SkillsHub` 或 `AI Hub`：`AI SkillsHub` 读起来别扭，`SkillsHub/Skills Hub` 缺少 AI Agent 场景识别，`AI Hub` 又太宽泛。`AI SkillHub` 既保留 AI 属性，也让 SkillHub 成为一个清晰的产品名。
+
 ## 核心能力
 
 - 集中管理 GitHub Skills 仓库、本地 Skill 文件夹和 zip 导入来源。

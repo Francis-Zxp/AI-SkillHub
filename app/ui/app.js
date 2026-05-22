@@ -150,6 +150,7 @@
       managed: "已接管",
       notManaged: "未接管",
       optionalMissing: "未安装可忽略",
+      noAgentDetected: "未识别到可接管的 AI Coding 工具",
       enabled: "已启用",
       disabled: "未启用",
       confirmTitle: "确认删除来源？",
@@ -168,7 +169,7 @@
     en: {
       ready: "Ready",
       running: "Running",
-      eyebrow: "Shared Skill Hub",
+      eyebrow: "Shared SkillHub",
       subtitle: "Manage GitHub Skills, prompt sources, AI app links, and daily updates.",
       activeSkills: "Active Skills",
       repos: "Sources",
@@ -282,6 +283,7 @@
       managed: "Managed",
       notManaged: "Not managed",
       optionalMissing: "Optional missing",
+      noAgentDetected: "No AI coding tools detected",
       enabled: "Enabled",
       disabled: "Disabled",
       confirmTitle: "Remove this source?",
@@ -300,7 +302,7 @@
     ko: {
       ready: "준비됨",
       running: "실행 중",
-      eyebrow: "공유 Skill 허브",
+      eyebrow: "공유 SkillHub",
       subtitle: "GitHub Skill, 프롬프트 소스, AI 앱 링크, 매일 업데이트를 한곳에서 관리합니다.",
       activeSkills: "활성 Skill",
       repos: "저장소",
@@ -414,6 +416,7 @@
       managed: "연결됨",
       notManaged: "미연결",
       optionalMissing: "없어도 됨",
+      noAgentDetected: "연결할 AI 코딩 도구를 찾지 못했습니다",
       enabled: "활성",
       disabled: "비활성",
       confirmTitle: "소스를 삭제할까요?",
@@ -624,9 +627,15 @@
     const linkStatus = state.manageAgentLinks ? t("managed") : t("notManaged");
     const link = state.linkStatus || {};
     const codexCount = link.codexCount || 0;
+    const anyAgentDetected = Boolean(link.claudeDetected || link.codexDetected || link.antigravityDetected);
+    if (!anyAgentDetected) {
+      dom.linkStatus.textContent = `${linkStatus} · ${t("noAgentDetected")}`;
+      return;
+    }
     const claudeText = `Claude ${link.claudeDetected ? (link.claude ? t("linked") : t("notLinked")) : t("notDetected")}`;
     const codexText = link.codexDetected ? `Codex ${codexCount}` : `Codex ${t("optionalMissing")}`;
-    dom.linkStatus.textContent = `${linkStatus} · ${claudeText} · ${codexText}`;
+    const antigravityText = link.antigravityDetected ? `Antigravity ${link.antigravity ? t("linked") : t("notLinked")}` : `Antigravity ${t("optionalMissing")}`;
+    dom.linkStatus.textContent = `${linkStatus} · ${claudeText} · ${codexText} · ${antigravityText}`;
   }
 
   function renderControls() {

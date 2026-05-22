@@ -87,6 +87,21 @@ function Test-CodexPresent {
   return $false
 }
 
+function Test-ClaudePresent {
+  $claudeCommand = Get-Command claude -ErrorAction SilentlyContinue
+  if ($null -ne $claudeCommand) { return $true }
+
+  $claudeHome = Join-Path $HOME '.claude'
+  if (Test-Path -LiteralPath $claudeHome -PathType Container) { return $true }
+  return $false
+}
+
+function Test-AntigravityPresent {
+  $antigravityHome = Join-Path $HOME '.gemini\antigravity'
+  if (Test-Path -LiteralPath $antigravityHome -PathType Container) { return $true }
+  return $false
+}
+
 $activeSkillDirs = Get-ChildItem -LiteralPath $Shared -Force -Directory |
   Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') } |
   Sort-Object Name
@@ -94,11 +109,19 @@ $activeSkillDirs = Get-ChildItem -LiteralPath $Shared -Force -Directory |
 $rows = New-Object System.Collections.Generic.List[object]
 
 $claudePath = Join-Path $HOME '.claude\skills'
-$claudeStatus = Set-JunctionPath $claudePath $Shared
+if (Test-ClaudePresent) {
+  $claudeStatus = Set-JunctionPath $claudePath $Shared
+} else {
+  $claudeStatus = 'Skipped (Claude Code not installed)'
+}
 $rows.Add([PSCustomObject]@{ App = 'Claude Code'; Entry = $claudePath; Status = $claudeStatus; Target = $Shared }) | Out-Null
 
 $antigravityPath = Join-Path $HOME '.gemini\antigravity\skills'
-$antigravityStatus = Set-JunctionPath $antigravityPath $Shared
+if (Test-AntigravityPresent) {
+  $antigravityStatus = Set-JunctionPath $antigravityPath $Shared
+} else {
+  $antigravityStatus = 'Skipped (Antigravity not installed)'
+}
 $rows.Add([PSCustomObject]@{ App = 'Antigravity'; Entry = $antigravityPath; Status = $antigravityStatus; Target = $Shared }) | Out-Null
 
 $codexRoot = Join-Path $HOME '.codex\skills'
@@ -135,6 +158,10 @@ if (Test-CodexPresent) {
   $rows.Add([PSCustomObject]@{ App = 'Codex'; Entry = $codexRoot; Status = ("$($activeSkillDirs.Count) individual links"); Target = $Shared }) | Out-Null
 } else {
   $rows.Add([PSCustomObject]@{ App = 'Codex'; Entry = $codexRoot; Status = 'Skipped (Codex not installed)'; Target = $Shared }) | Out-Null
+}
+
+if (-not (Test-ClaudePresent) -and -not (Test-CodexPresent) -and -not (Test-AntigravityPresent)) {
+  Write-Step '未识别到可接管的 AI Coding 工具。安装 Claude Code、Codex 或 Antigravity 后，再重新打开接管开关。'
 }
 
 if (-not $Quiet) {

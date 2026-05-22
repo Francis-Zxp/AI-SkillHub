@@ -218,6 +218,10 @@ Add-AgentStatus 'claude' 'Claude / Claude Code' (Join-Path $HomePath '.claude') 
 Add-AgentStatus 'codex' 'OpenAI Codex' (Join-Path $HomePath '.codex') @((Join-Path $HomePath '.codex\skills'), (Join-Path $HomePath '.agents\skills')) 'codex'
 Add-AgentStatus 'antigravity' 'Antigravity' (Join-Path $HomePath '.gemini\antigravity') @((Join-Path $HomePath '.gemini\antigravity\skills')) ''
 
+if ((@($Agents | Where-Object { $_.detected }).Count) -eq 0) {
+  Add-Check 'agent.noneDetected' 'AI Coding 工具' 'info' '未识别到可接管的 AI Coding 工具。' '' '安装 Claude Code、Codex 或 Antigravity 后，再点击“接管 AI 软件链接”。AI SkillHub 不会创建假的工具目录。'
+}
+
 $config = $null
 try {
   if (Test-Path -LiteralPath $ConfigPath) {
