@@ -692,6 +692,13 @@ body[data-theme="dark"] .hero-card {
   gap: 10px;
 }
 
+.health-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .health-head strong {
   display: block;
   font-size: 13.5px;
@@ -1892,19 +1899,22 @@ body.resizing-columns .resize-handle::after {
 }
 
 .confirm-dialog,
-.help-dialog {
+.help-dialog,
+.agent-dialog {
   width: min(420px, calc(100vw - 48px));
   padding: 0;
   border: 0;
   background: transparent;
 }
 
-.help-dialog {
+.help-dialog,
+.agent-dialog {
   width: min(760px, calc(100vw - 56px));
 }
 
 .confirm-dialog::backdrop,
-.help-dialog::backdrop {
+.help-dialog::backdrop,
+.agent-dialog::backdrop {
   background: rgba(20, 49, 47, .28);
   backdrop-filter: blur(5px);
 }
@@ -1962,6 +1972,85 @@ body.resizing-columns .resize-handle::after {
 .help-grid strong {
   display: block;
   margin-bottom: 8px;
+}
+
+.agent-surface {
+  padding: 24px;
+}
+
+.agent-detail-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.agent-detail-empty,
+.agent-detail-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-soft), var(--surface) 58%);
+}
+
+.agent-detail-empty {
+  padding: 14px 16px;
+  color: var(--muted);
+}
+
+.agent-detail-card {
+  padding: 15px;
+}
+
+.agent-detail-card.ok {
+  border-color: color-mix(in srgb, var(--success), transparent 66%);
+}
+
+.agent-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.agent-detail-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.agent-detail-item {
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface), transparent 8%);
+}
+
+.agent-detail-item span,
+.agent-detail-item strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-detail-item span {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.agent-detail-item strong {
+  font-size: 12.2px;
+  line-height: 1.35;
+  white-space: nowrap;
 }
 
 .dialog-actions {
@@ -2136,7 +2225,8 @@ body.busy #miniStatus::before {
   }
 
   .onboarding-steps,
-  .help-grid {
+  .help-grid,
+  .agent-detail-grid {
     grid-template-columns: 1fr;
   }
 }

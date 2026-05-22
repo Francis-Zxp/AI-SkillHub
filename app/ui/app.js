@@ -45,6 +45,20 @@
       healthTitle: "系统体检",
       healthNotRun: "尚未体检，点击立即体检生成报告。",
       runHealthCheck: "立即体检",
+      agentDetails: "AI 软件详情",
+      agentDetailsTitle: "AI 工具接管状态",
+      agentDetailsIntro: "这里会把检测、目录权限、接管方式和下一步建议分开说明，避免把“检测到目录”和“已经接管”混在一起。",
+      agentDetailsEmpty: "还没有体检数据。先点击“立即体检”，再查看完整详情。",
+      agentDetailDetected: "检测",
+      agentDetailManaged: "接管",
+      agentDetailWritable: "权限",
+      agentDetailPath: "目录",
+      agentDetailNext: "下一步",
+      agentPermissionUnknown: "需体检确认",
+      agentNextReady: "状态正常，可以继续同步或使用。",
+      agentNextEnableLinks: "打开“接管 AI 软件链接”，然后点击“立即同步”。",
+      agentNextInstallTool: "如果要使用这个工具，请先安装或运行一次对应 AI Coding 工具。",
+      agentNextRunCheck: "先运行系统体检，获取更完整的目录和权限信息。",
       lastCheck: "最近体检",
       healthOk: "正常",
       healthWarn: "提醒",
@@ -201,6 +215,20 @@
       healthTitle: "System Check",
       healthNotRun: "No check yet. Run one to generate a report.",
       runHealthCheck: "Check Now",
+      agentDetails: "AI Tool Details",
+      agentDetailsTitle: "AI tool connection status",
+      agentDetailsIntro: "Detection, folder permissions, connection mode, and next steps are shown separately so detected does not look the same as connected.",
+      agentDetailsEmpty: "No check data yet. Run System Check first to view full details.",
+      agentDetailDetected: "Detection",
+      agentDetailManaged: "Managed",
+      agentDetailWritable: "Permission",
+      agentDetailPath: "Folder",
+      agentDetailNext: "Next step",
+      agentPermissionUnknown: "Check required",
+      agentNextReady: "Looks good. You can sync or use it now.",
+      agentNextEnableLinks: "Turn on Agent Links, then click Sync Now.",
+      agentNextInstallTool: "Install or run this AI coding tool once if you want to use it.",
+      agentNextRunCheck: "Run System Check first to collect folder and permission details.",
       lastCheck: "Last check",
       healthOk: "OK",
       healthWarn: "Warn",
@@ -357,6 +385,20 @@
       healthTitle: "시스템 점검",
       healthNotRun: "아직 점검하지 않았습니다. 점검을 실행하세요.",
       runHealthCheck: "지금 점검",
+      agentDetails: "AI 도구 상세",
+      agentDetailsTitle: "AI 도구 연결 상태",
+      agentDetailsIntro: "감지, 폴더 권한, 연결 방식, 다음 단계를 분리해서 보여줍니다.",
+      agentDetailsEmpty: "아직 점검 데이터가 없습니다. 먼저 시스템 점검을 실행하세요.",
+      agentDetailDetected: "감지",
+      agentDetailManaged: "연결",
+      agentDetailWritable: "권한",
+      agentDetailPath: "폴더",
+      agentDetailNext: "다음 단계",
+      agentPermissionUnknown: "점검 필요",
+      agentNextReady: "상태가 정상입니다. 동기화하거나 바로 사용할 수 있습니다.",
+      agentNextEnableLinks: "AI 도구 연결을 켠 뒤 지금 동기화를 누르세요.",
+      agentNextInstallTool: "이 도구를 사용하려면 먼저 설치하거나 한 번 실행하세요.",
+      agentNextRunCheck: "먼저 시스템 점검을 실행해 폴더와 권한 정보를 수집하세요.",
       lastCheck: "최근 점검",
       healthOk: "정상",
       healthWarn: "주의",
@@ -545,14 +587,15 @@
     [
       "brandLogo", "versionLabel", "miniStatus", "skillCount", "repoCount", "lastSync", "linkStatus",
       "healthSummary", "healthOk", "healthWarn", "healthError", "healthInfo", "agentMatrix", "healthChecks",
-      "dailyToggle", "linksToggle", "healthButton", "syncButton", "reportButton", "diagnosticsButton", "shareCheckButton", "skillsButton",
+      "dailyToggle", "linksToggle", "healthButton", "agentDetailsButton", "syncButton", "reportButton", "diagnosticsButton", "shareCheckButton", "skillsButton",
       "helpButton", "sourcesButton", "chooseFolderButton", "chooseZipButton", "importPreview", "repoUrl", "repoType", "repoCategory", "repoNote", "repoTags", "addButton",
       "saveButton", "deleteButton", "skillsView", "reposView", "promptsView", "searchInput", "categoryFilter", "sortSelect", "listMeta", "presetStrip",
       "insightPanel", "detailPanel", "historyTimeline", "logBox",
       "clearLog", "selectedChip", "composerTitle", "toastHost", "confirmDialog",
       "confirmTitle", "confirmBody", "cancelConfirm", "acceptConfirm", "onboardingCard",
       "guideStepSource", "guideStepSync", "guideStepAgent", "hideGuideButton", "helpDialog",
-      "closeHelpButton", "acceptHelpButton"
+      "closeHelpButton", "acceptHelpButton", "agentDialog", "agentDetailList",
+      "closeAgentButton", "acceptAgentButton", "agentRunCheckButton"
     ].forEach(id => { dom[id] = document.getElementById(id); });
   }
 
@@ -607,6 +650,10 @@
     dom.sortSelect.addEventListener("change", renderLists);
     dom.syncButton.addEventListener("click", () => send("sync"));
     dom.healthButton.addEventListener("click", () => send("runHealthCheck"));
+    dom.agentDetailsButton.addEventListener("click", () => {
+      renderAgentDetails();
+      dom.agentDialog.showModal();
+    });
     dom.reportButton.addEventListener("click", () => send("openReport"));
     dom.diagnosticsButton.addEventListener("click", () => send("exportDiagnostics"));
     dom.shareCheckButton.addEventListener("click", () => send("shareCheck"));
@@ -623,6 +670,12 @@
     });
     dom.closeHelpButton.addEventListener("click", () => dom.helpDialog.close());
     dom.acceptHelpButton.addEventListener("click", () => dom.helpDialog.close());
+    dom.closeAgentButton.addEventListener("click", () => dom.agentDialog.close());
+    dom.acceptAgentButton.addEventListener("click", () => dom.agentDialog.close());
+    dom.agentRunCheckButton.addEventListener("click", () => {
+      dom.agentDialog.close();
+      send("runHealthCheck");
+    });
     dom.dailyToggle.addEventListener("click", () => send("setDailyUpdate", { enabled: !state.dailyUpdateEnabled }));
     dom.linksToggle.addEventListener("click", () => send("setManageLinks", { enabled: !state.manageAgentLinks }));
 
@@ -807,6 +860,113 @@
     if (!node) return;
     node.classList.toggle("done", !!done);
     node.classList.toggle("todo", !done);
+  }
+
+  function renderAgentDetails() {
+    if (!dom.agentDetailList) return;
+    dom.agentDetailList.replaceChildren();
+
+    const diagnostics = state.diagnostics || {};
+    const rows = buildAgentRows();
+    if (!diagnostics.available) {
+      const empty = el("div", "agent-detail-empty");
+      empty.textContent = t("agentDetailsEmpty");
+      dom.agentDetailList.appendChild(empty);
+    }
+
+    rows.forEach(row => {
+      const card = el("div", "agent-detail-card " + (row.detected ? "ok" : "info"));
+      const head = el("div", "agent-detail-head");
+      const title = el("strong");
+      title.textContent = row.name;
+      head.append(title, badge(row.detected ? t("detected") : t("notDetected"), row.detected ? "ok" : "info"));
+
+      const grid = el("div", "agent-detail-grid");
+      grid.append(
+        agentDetailItem(t("agentDetailDetected"), row.detected ? t("detected") : t("notDetected")),
+        agentDetailItem(t("agentDetailManaged"), row.managedLabel),
+        agentDetailItem(t("agentDetailWritable"), row.writableLabel),
+        agentDetailItem(t("agentDetailPath"), row.path || "-"),
+        agentDetailItem(t("agentDetailNext"), row.next)
+      );
+      card.append(head, grid);
+      dom.agentDetailList.appendChild(card);
+    });
+  }
+
+  function buildAgentRows() {
+    const diagnostics = state.diagnostics || {};
+    const link = state.linkStatus || {};
+    const agents = Array.isArray(diagnostics.agents) ? diagnostics.agents : [];
+    if (agents.length) {
+      return agents.map(agent => normalizeAgentRow(agent, false));
+    }
+    return [
+      normalizeAgentRow({
+        id: "claude",
+        name: "Claude / Claude Code",
+        detected: !!link.claudeDetected,
+        linked: !!link.claude,
+        hasSkillsDir: !!link.claude,
+        path: "~\\.claude\\skills"
+      }, true),
+      normalizeAgentRow({
+        id: "codex",
+        name: "OpenAI Codex",
+        detected: !!link.codexDetected,
+        linked: Number(link.codexCount || 0) > 0,
+        hasSkillsDir: !!link.codexSkills || !!link.agentsSkills,
+        path: "~\\.codex\\skills"
+      }, true),
+      normalizeAgentRow({
+        id: "antigravity",
+        name: "Antigravity",
+        detected: !!link.antigravityDetected,
+        linked: !!link.antigravity,
+        hasSkillsDir: !!link.antigravity,
+        path: "~\\.gemini\\antigravity\\skills"
+      }, true)
+    ];
+  }
+
+  function normalizeAgentRow(agent, fallbackOnly) {
+    const agentName = String(agent.name || agent.id || "-");
+    const isCodex = /codex/i.test(agentName);
+    const codexManagedCount = Number((state.linkStatus || {}).codexCount || 0);
+    const detected = !!agent.detected;
+    const linked = !!agent.linked || (isCodex && codexManagedCount > 0);
+    const writableKnown = Object.prototype.hasOwnProperty.call(agent, "writable");
+    const writable = !!agent.writable;
+    const managedLabel = linked
+      ? (isCodex && codexManagedCount > 0 ? formatText("managedCount", { count: codexManagedCount }) : t("linked"))
+      : (detected ? t("detectedNotManaged") : t("notDetected"));
+    const writableLabel = writableKnown
+      ? (writable ? t("writable") : t("notWritable"))
+      : (agent.hasSkillsDir ? t("agentPermissionUnknown") : "-");
+    let next = t("agentNextReady");
+    if (!detected) next = t("agentNextInstallTool");
+    else if (fallbackOnly) next = t("agentNextRunCheck");
+    else if (!linked) next = t("agentNextEnableLinks");
+
+    return {
+      name: agentName,
+      detected,
+      linked,
+      managedLabel,
+      writableLabel,
+      path: agent.path || "",
+      next
+    };
+  }
+
+  function agentDetailItem(label, value) {
+    const item = el("div", "agent-detail-item");
+    const key = el("span");
+    const val = el("strong");
+    key.textContent = label;
+    val.textContent = value || "-";
+    item.append(key, val);
+    return item;
   }
 
   function renderImportPreview() {

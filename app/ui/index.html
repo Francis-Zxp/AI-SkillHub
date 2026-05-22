@@ -93,7 +93,10 @@
               <strong data-i18n="healthTitle">系统体检</strong>
               <small id="healthSummary">-</small>
             </div>
-            <button class="text-action compact" id="healthButton" data-i18n="runHealthCheck">立即体检</button>
+            <div class="health-actions">
+              <button class="text-action compact" id="healthButton" data-i18n="runHealthCheck">立即体检</button>
+              <button class="text-action compact" id="agentDetailsButton" data-i18n="agentDetails">AI 软件详情</button>
+            </div>
           </div>
           <div class="health-stats" aria-label="Health summary">
             <span class="health-stat ok"><b id="healthOk">0</b><em>OK</em></span>
@@ -282,6 +285,26 @@
       </div>
       <div class="dialog-actions">
         <button class="primary-action compact" id="acceptHelpButton" data-i18n="gotIt">明白了</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="agentDialog" class="agent-dialog">
+    <div class="dialog-surface agent-surface">
+      <div class="help-head">
+        <div>
+          <span class="eyebrow" data-i18n="agentDetails">AI 软件详情</span>
+          <h3 data-i18n="agentDetailsTitle">AI 工具接管状态</h3>
+        </div>
+        <button class="window-button" id="closeAgentButton" aria-label="Close">
+          <svg viewBox="0 0 20 20"><path d="M6 6l8 8M14 6l-8 8"/></svg>
+        </button>
+      </div>
+      <p data-i18n="agentDetailsIntro">这里会把检测、目录权限、接管方式和下一步建议分开说明，避免把“检测到目录”和“已经接管”混在一起。</p>
+      <div id="agentDetailList" class="agent-detail-list"></div>
+      <div class="dialog-actions">
+        <button class="soft-action compact" id="agentRunCheckButton" data-i18n="runHealthCheck">立即体检</button>
+        <button class="primary-action compact" id="acceptAgentButton" data-i18n="gotIt">明白了</button>
       </div>
     </div>
   </dialog>
