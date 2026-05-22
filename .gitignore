@@ -1,18 +1,46 @@
-# Runtime/source data
-github_sources/
-skills/
-reports/
-archives/
-.skillhub/
+# Personal skills and cloned third-party sources
+/skills/
+/github_sources/
+/app/github_sources/
 
-# Local backups and migrated folders
-claude_skills_备份/
-codex_skills_备份/
-old_*/
+# Local config/state generated on each computer
+/skillhub.config.json
+/app/skillhub.config.json
+/.skillhub/
+/app/.skillhub/
 
-# Local launcher artifacts
+# Reports, diagnostics, caches, and backups
+/reports/
+/app/reports/
+/archives/
+/app/archives/
+/app/webview2-data/
+/app/packages/
+/claude_skills_备份/
+/codex_skills_备份/
+/old_*/
+
+# Local reference material used during Francis's product research
+/其它人的优秀项目案例/
+
+# Local product-memory and planning notes
+/AGENTS.md
+/CLAUDE.md
+/PROJECT_MEMORY_PROTOCOL.md
+/AI_SKILLHUB_PROJECT_STATE.json
+/CONTEXT_SNAPSHOT.md
+/DECISIONS.md
+/FEATURE_MATRIX.md
+/REFERENCE_PROJECTS_ANALYSIS.md
+/TECHNICAL_ROADMAP.md
+/AI SkillHub 2.0 产品方向与上下文防丢失机制.md
+/功能差距优先级与UI重构方案.md
+/app/docs/
+
+# Local launcher/build noise
 *.log
 *.tmp
+*.nupkg
 
 # OS/editor noise
 desktop.ini

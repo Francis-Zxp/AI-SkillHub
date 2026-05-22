@@ -1,0 +1,1529 @@
+﻿(function () {
+  "use strict";
+
+  const categories = [
+    { id: "auto", zh: "自动分类", en: "Auto", ko: "자동 분류" },
+    { id: "academic-writing", zh: "论文科研", en: "Academic Writing", ko: "논문 연구" },
+    { id: "literature-research", zh: "文献研究", en: "Literature Research", ko: "문헌 연구" },
+    { id: "scientific-figures", zh: "科研图表", en: "Scientific Figures", ko: "과학 도표" },
+    { id: "ui-design", zh: "界面设计", en: "UI Design", ko: "UI 디자인" },
+    { id: "security", zh: "安全审计", en: "Security", ko: "보안 점검" },
+    { id: "agent-tools", zh: "智能体工具", en: "Agent Tools", ko: "에이전트 도구" },
+    { id: "image-generation", zh: "图像生成", en: "Image Generation", ko: "이미지 생성" },
+    { id: "knowledge-retrieval", zh: "知识检索", en: "Knowledge Retrieval", ko: "지식 검색" },
+    { id: "presentation", zh: "汇报演示", en: "Presentation", ko: "발표" },
+    { id: "prompt-polishing", zh: "提示词润色", en: "Prompt Polishing", ko: "프롬프트 다듬기" },
+    { id: "general", zh: "通用技能", en: "General", ko: "일반" }
+  ];
+
+  const APP_VERSION = "v1.1.0";
+  const defaultColumns = {
+    skills: [200, 132, 168, 320, 330],
+    repos: [210, 92, 132, 136, 118, 250, 300],
+    prompts: [220, 150, 360, 320, 160]
+  };
+
+  const presets = [
+    { id: "all", labelKey: "presetAll", tab: "", categories: [] },
+    { id: "paper", labelKey: "presetPaper", tab: "skills", categories: ["academic-writing", "literature-research", "presentation"] },
+    { id: "figures", labelKey: "presetFigures", tab: "skills", categories: ["scientific-figures", "image-generation"] },
+    { id: "ui", labelKey: "presetUi", tab: "skills", categories: ["ui-design"] },
+    { id: "security", labelKey: "presetSecurity", tab: "skills", categories: ["security"] },
+    { id: "prompts", labelKey: "presetPrompts", tab: "prompts", categories: [] }
+  ];
+
+  const text = {
+    zh: {
+      ready: "就绪",
+      running: "正在运行",
+      eyebrow: "共享技能中枢",
+      subtitle: "集中管理 GitHub Skills、Prompt 来源、AI 软件链接和每日自动更新。",
+      activeSkills: "已启用技能",
+      repos: "仓库来源",
+      dailyUpdate: "每日自动更新",
+      agentLinks: "接管 AI 软件链接",
+      healthTitle: "系统体检",
+      healthNotRun: "尚未体检，点击立即体检生成报告。",
+      runHealthCheck: "立即体检",
+      lastCheck: "最近体检",
+      healthOk: "正常",
+      healthWarn: "提醒",
+      healthError: "错误",
+      healthInfo: "信息",
+      detected: "已检测",
+      notDetected: "未检测",
+      linked: "已链接",
+      notLinked: "未链接",
+      writable: "可写",
+      notWritable: "不可写",
+      syncNow: "立即同步",
+      openReport: "打开报告",
+      exportDiagnostics: "导出诊断包",
+      shareCheck: "分享前检查",
+      openSkills: "打开技能目录",
+      openSources: "打开来源目录",
+      tipTitle: "使用提示",
+      tipBody: "选择仓库来源后，可修改类型、分类和备注。Prompt 来源只保存资料，不会安装为 Skill。",
+      addRepo: "添加仓库",
+      editRepo: "编辑来源",
+      addRepoDesc: "粘贴 GitHub 仓库地址，AI SkillHub 会自动克隆、分类并建立链接。",
+      githubUrl: "GitHub 项目地址",
+      type: "类型",
+      category: "细分分类",
+      note: "手动备注",
+      tags: "标签",
+      tagsPlaceholder: "论文, 图表, 常用",
+      tagCloud: "标签系统",
+      allTags: "全部标签",
+      untagged: "未标签",
+      duplicateInsight: "重复技能",
+      noDuplicates: "没有发现重复名称",
+      promptDetail: "Prompt 详情",
+      selectedSource: "当前选中来源",
+      detailHint: "在上方修改分类、备注或标签后点击保存修改。",
+      openThisSource: "打开此来源",
+      historyTitle: "最近操作",
+      noHistory: "暂无操作记录",
+      importTitle: "本地导入预览",
+      importDesc: "先扫描文件夹或 zip，再确认是否导入。只有包含 SKILL.md 的目录会作为 Skill。",
+      chooseFolder: "选择文件夹",
+      chooseZip: "选择 zip",
+      importEmpty: "还没有选择本地来源。",
+      importFound: "发现",
+      importSkills: "个 Skill",
+      importPromptHints: "个疑似 Prompt/资料",
+      importReadme: "包含 README",
+      importRootSkill: "根目录就是 Skill",
+      importNoSkill: "没有发现 SKILL.md，建议作为 Prompt/资料保存，不要安装为 Skill。",
+      importNameAdjusted: "名称已自动避让重名",
+      importRecommendedName: "推荐名称",
+      importPath: "来源位置",
+      importSamples: "示例 Skill",
+      importConfirm: "导入到来源并同步",
+      add: "添加仓库",
+      save: "保存修改",
+      delete: "删除来源",
+      tabSkills: "已启用技能",
+      tabRepos: "仓库来源",
+      tabPrompts: "Prompt 资料",
+      searchPlaceholder: "搜索名称、分类、备注",
+      filterAllCategories: "全部分类",
+      sortName: "按名称",
+      sortCategory: "按分类",
+      sortRepo: "按仓库",
+      sortType: "按类型",
+      sortHealth: "按健康",
+      listShowing: "显示",
+      duplicateGroups: "重复组",
+      presetAll: "全部",
+      presetPaper: "论文",
+      presetFigures: "图表",
+      presetUi: "UI 设计",
+      presetSecurity: "安全",
+      presetPrompts: "Prompt",
+      activity: "运行反馈",
+      clear: "清空",
+      skill: "技能",
+      prompt: "润色提示词",
+      name: "名称",
+      repo: "仓库",
+      source: "来源位置",
+      sourceHealth: "健康",
+      sourceOk: "可用",
+      sourceMissing: "未下载",
+      sourcePromptOnly: "资料保留",
+      sourceNoSkill: "无 SKILL.md",
+      sourceLocal: "本地",
+      sourceEnabled: "已启用",
+      sourceDisabled: "已停用",
+      enableSource: "启用来源",
+      disableSource: "停用来源",
+      address: "地址",
+      mode: "模式",
+      description: "说明",
+      status: "状态",
+      commit: "版本",
+      emptyTitle: "没有匹配结果",
+      emptyBody: "换一个搜索词，或同步后再看。",
+      lastSync: "最近同步",
+      never: "尚未同步",
+      managed: "已接管",
+      notManaged: "未接管",
+      optionalMissing: "未安装可忽略",
+      enabled: "已启用",
+      disabled: "未启用",
+      confirmTitle: "确认删除来源？",
+      confirmBody: "这只会从配置中移除来源，不会删除本地 GitHub 文件夹。",
+      cancel: "取消",
+      confirmDelete: "删除",
+      selectRepoFirst: "请先选择一个仓库来源。",
+      invalidUrl: "请先填写标准 GitHub 仓库地址。",
+      localRepo: "本地技能",
+      manualRepo: "手动来源",
+      themeCute: "可爱",
+      themeFresh: "清新",
+      themeDark: "深色",
+      resizeColumn: "拖动调整列宽"
+    },
+    en: {
+      ready: "Ready",
+      running: "Running",
+      eyebrow: "Shared Skill Hub",
+      subtitle: "Manage GitHub Skills, prompt sources, AI app links, and daily updates.",
+      activeSkills: "Active Skills",
+      repos: "Sources",
+      dailyUpdate: "Daily Update",
+      agentLinks: "Agent Links",
+      healthTitle: "System Check",
+      healthNotRun: "No check yet. Run one to generate a report.",
+      runHealthCheck: "Check Now",
+      lastCheck: "Last check",
+      healthOk: "OK",
+      healthWarn: "Warn",
+      healthError: "Error",
+      healthInfo: "Info",
+      detected: "Detected",
+      notDetected: "Missing",
+      linked: "Linked",
+      notLinked: "Not linked",
+      writable: "Writable",
+      notWritable: "Not writable",
+      syncNow: "Sync Now",
+      openReport: "Open Report",
+      exportDiagnostics: "Export Diagnostics",
+      shareCheck: "Share Check",
+      openSkills: "Open Skills",
+      openSources: "Open Sources",
+      tipTitle: "Tip",
+      tipBody: "Select a source to edit type, category, and note. Prompt sources are kept as material and are not installed as Skills.",
+      addRepo: "Add Source",
+      editRepo: "Edit Source",
+      addRepoDesc: "Paste a GitHub repository. AI SkillHub clones, classifies, and links it automatically.",
+      githubUrl: "GitHub Repository URL",
+      type: "Type",
+      category: "Category",
+      note: "Manual Note",
+      tags: "Tags",
+      tagsPlaceholder: "paper, figures, favorite",
+      tagCloud: "Tags",
+      allTags: "All tags",
+      untagged: "Untagged",
+      duplicateInsight: "Duplicate skills",
+      noDuplicates: "No duplicate names",
+      promptDetail: "Prompt Detail",
+      selectedSource: "Selected Source",
+      detailHint: "Edit category, note, or tags above, then save changes.",
+      openThisSource: "Open Source",
+      historyTitle: "Recent Activity",
+      noHistory: "No activity yet",
+      importTitle: "Local Import Preview",
+      importDesc: "Scan a folder or zip first. Only folders with SKILL.md are installed as Skills.",
+      chooseFolder: "Choose Folder",
+      chooseZip: "Choose zip",
+      importEmpty: "No local source selected yet.",
+      importFound: "Found",
+      importSkills: "Skills",
+      importPromptHints: "prompt/reference hints",
+      importReadme: "README included",
+      importRootSkill: "Root is a Skill",
+      importNoSkill: "No SKILL.md found. Keep it as Prompt/reference material, not an installed Skill.",
+      importNameAdjusted: "Name adjusted to avoid duplicate",
+      importRecommendedName: "Recommended name",
+      importPath: "Source path",
+      importSamples: "Sample Skills",
+      importConfirm: "Import and Sync",
+      add: "Add Source",
+      save: "Save Changes",
+      delete: "Remove Source",
+      tabSkills: "Active Skills",
+      tabRepos: "Sources",
+      tabPrompts: "Prompt Material",
+      searchPlaceholder: "Search names, categories, notes",
+      filterAllCategories: "All categories",
+      sortName: "Name",
+      sortCategory: "Category",
+      sortRepo: "Repository",
+      sortType: "Type",
+      sortHealth: "Health",
+      listShowing: "Showing",
+      duplicateGroups: "Duplicate groups",
+      presetAll: "All",
+      presetPaper: "Paper",
+      presetFigures: "Figures",
+      presetUi: "UI Design",
+      presetSecurity: "Security",
+      presetPrompts: "Prompt",
+      activity: "Activity",
+      clear: "Clear",
+      skill: "Skill",
+      prompt: "Prompt",
+      name: "Name",
+      repo: "Repository",
+      source: "Source Path",
+      sourceHealth: "Health",
+      sourceOk: "Ready",
+      sourceMissing: "Missing",
+      sourcePromptOnly: "Reference only",
+      sourceNoSkill: "No SKILL.md",
+      sourceLocal: "Local",
+      sourceEnabled: "Enabled",
+      sourceDisabled: "Disabled",
+      enableSource: "Enable source",
+      disableSource: "Disable source",
+      address: "URL",
+      mode: "Mode",
+      description: "Description",
+      status: "Status",
+      commit: "Commit",
+      emptyTitle: "No results",
+      emptyBody: "Try another keyword or sync again.",
+      lastSync: "Last sync",
+      never: "Never synced",
+      managed: "Managed",
+      notManaged: "Not managed",
+      optionalMissing: "Optional missing",
+      enabled: "Enabled",
+      disabled: "Disabled",
+      confirmTitle: "Remove this source?",
+      confirmBody: "This removes it from configuration only. The local GitHub folder is not deleted.",
+      cancel: "Cancel",
+      confirmDelete: "Remove",
+      selectRepoFirst: "Select a repository source first.",
+      invalidUrl: "Enter a standard GitHub repository URL first.",
+      localRepo: "Local skill",
+      manualRepo: "Manual source",
+      themeCute: "Cute",
+      themeFresh: "Fresh",
+      themeDark: "Dark",
+      resizeColumn: "Drag to resize column"
+    },
+    ko: {
+      ready: "준비됨",
+      running: "실행 중",
+      eyebrow: "공유 Skill 허브",
+      subtitle: "GitHub Skill, 프롬프트 소스, AI 앱 링크, 매일 업데이트를 한곳에서 관리합니다.",
+      activeSkills: "활성 Skill",
+      repos: "저장소",
+      dailyUpdate: "매일 업데이트",
+      agentLinks: "AI 앱 링크 연결",
+      healthTitle: "시스템 점검",
+      healthNotRun: "아직 점검하지 않았습니다. 점검을 실행하세요.",
+      runHealthCheck: "지금 점검",
+      lastCheck: "최근 점검",
+      healthOk: "정상",
+      healthWarn: "주의",
+      healthError: "오류",
+      healthInfo: "정보",
+      detected: "감지됨",
+      notDetected: "미감지",
+      linked: "연결됨",
+      notLinked: "미연결",
+      writable: "쓰기 가능",
+      notWritable: "쓰기 불가",
+      syncNow: "지금 동기화",
+      openReport: "보고서 열기",
+      exportDiagnostics: "진단 패키지 내보내기",
+      shareCheck: "공유 전 점검",
+      openSkills: "Skill 폴더 열기",
+      openSources: "소스 폴더 열기",
+      tipTitle: "사용 팁",
+      tipBody: "저장소를 선택하면 유형, 분류, 메모를 수정할 수 있습니다. Prompt 소스는 자료로만 보관됩니다.",
+      addRepo: "저장소 추가",
+      editRepo: "소스 편집",
+      addRepoDesc: "GitHub 저장소 주소를 붙여넣으면 자동으로 복제, 분류, 연결합니다.",
+      githubUrl: "GitHub 저장소 주소",
+      type: "유형",
+      category: "세부 분류",
+      note: "수동 메모",
+      tags: "태그",
+      tagsPlaceholder: "논문, 도표, 자주 사용",
+      tagCloud: "태그 시스템",
+      allTags: "전체 태그",
+      untagged: "태그 없음",
+      duplicateInsight: "중복 Skill",
+      noDuplicates: "중복 이름 없음",
+      promptDetail: "Prompt 상세",
+      selectedSource: "선택한 소스",
+      detailHint: "위에서 분류, 메모, 태그를 수정한 뒤 저장하세요.",
+      openThisSource: "소스 열기",
+      historyTitle: "최근 작업",
+      noHistory: "아직 작업 기록이 없습니다",
+      importTitle: "로컬 가져오기 미리보기",
+      importDesc: "폴더나 zip을 먼저 스캔합니다. SKILL.md가 있는 폴더만 Skill로 설치됩니다.",
+      chooseFolder: "폴더 선택",
+      chooseZip: "zip 선택",
+      importEmpty: "아직 로컬 소스를 선택하지 않았습니다.",
+      importFound: "발견",
+      importSkills: "개 Skill",
+      importPromptHints: "개 프롬프트/자료 후보",
+      importReadme: "README 포함",
+      importRootSkill: "루트가 Skill",
+      importNoSkill: "SKILL.md가 없습니다. Skill 설치가 아니라 자료로 보관하세요.",
+      importNameAdjusted: "중복을 피하도록 이름 조정됨",
+      importRecommendedName: "추천 이름",
+      importPath: "소스 위치",
+      importSamples: "예시 Skill",
+      importConfirm: "가져오고 동기화",
+      add: "저장소 추가",
+      save: "변경 저장",
+      delete: "소스 삭제",
+      tabSkills: "활성 Skill",
+      tabRepos: "저장소",
+      tabPrompts: "Prompt 자료",
+      searchPlaceholder: "이름, 분류, 메모 검색",
+      filterAllCategories: "전체 분류",
+      sortName: "이름순",
+      sortCategory: "분류순",
+      sortRepo: "저장소순",
+      sortType: "유형순",
+      sortHealth: "상태순",
+      listShowing: "표시",
+      duplicateGroups: "중복 그룹",
+      presetAll: "전체",
+      presetPaper: "논문",
+      presetFigures: "도표",
+      presetUi: "UI 디자인",
+      presetSecurity: "보안",
+      presetPrompts: "Prompt",
+      activity: "실행 피드백",
+      clear: "비우기",
+      skill: "Skill",
+      prompt: "프롬프트",
+      name: "이름",
+      repo: "저장소",
+      source: "소스 위치",
+      sourceHealth: "상태",
+      sourceOk: "사용 가능",
+      sourceMissing: "없음",
+      sourcePromptOnly: "자료 보관",
+      sourceNoSkill: "SKILL.md 없음",
+      sourceLocal: "로컬",
+      sourceEnabled: "활성",
+      sourceDisabled: "비활성",
+      enableSource: "소스 활성화",
+      disableSource: "소스 비활성화",
+      address: "주소",
+      mode: "모드",
+      description: "설명",
+      status: "상태",
+      commit: "버전",
+      emptyTitle: "검색 결과 없음",
+      emptyBody: "다른 검색어를 입력하거나 다시 동기화하세요.",
+      lastSync: "최근 동기화",
+      never: "동기화 전",
+      managed: "연결됨",
+      notManaged: "미연결",
+      optionalMissing: "없어도 됨",
+      enabled: "활성",
+      disabled: "비활성",
+      confirmTitle: "소스를 삭제할까요?",
+      confirmBody: "설정에서만 제거합니다. 로컬 GitHub 폴더는 삭제하지 않습니다.",
+      cancel: "취소",
+      confirmDelete: "삭제",
+      selectRepoFirst: "먼저 저장소 소스를 선택하세요.",
+      invalidUrl: "표준 GitHub 저장소 주소를 입력하세요.",
+      localRepo: "로컬 Skill",
+      manualRepo: "수동 소스",
+      themeCute: "귀여움",
+      themeFresh: "산뜻함",
+      themeDark: "다크",
+      resizeColumn: "열 너비 조정"
+    }
+  };
+
+  let lang = chooseLanguage();
+  let theme = chooseTheme();
+  let columnState = {
+    skills: loadColumns("skills"),
+    repos: loadColumns("repos"),
+    prompts: loadColumns("prompts")
+  };
+  let state = {
+    repositories: [],
+    skills: [],
+    operationHistory: [],
+    manageAgentLinks: false,
+    dailyUpdateEnabled: false,
+    lastSync: ""
+  };
+  let activeTab = "skills";
+  let activePreset = "all";
+  let activeTagFilter = "all";
+  let selectedRepo = null;
+  let importPreview = null;
+  let busy = false;
+
+  const dom = {};
+
+  document.addEventListener("DOMContentLoaded", () => {
+    bindDom();
+    bindEvents();
+    installWindowInteractions();
+    applyLanguage();
+    appendLog("info", "AI SkillHub UI ready.");
+    send("ready");
+  });
+
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.addEventListener("message", event => handleHostMessage(event.data));
+  }
+
+  function bindDom() {
+    [
+      "brandLogo", "versionLabel", "miniStatus", "skillCount", "repoCount", "lastSync", "linkStatus",
+      "healthSummary", "healthOk", "healthWarn", "healthError", "healthInfo", "agentMatrix", "healthChecks",
+      "dailyToggle", "linksToggle", "healthButton", "syncButton", "reportButton", "diagnosticsButton", "shareCheckButton", "skillsButton",
+      "sourcesButton", "chooseFolderButton", "chooseZipButton", "importPreview", "repoUrl", "repoType", "repoCategory", "repoNote", "repoTags", "addButton",
+      "saveButton", "deleteButton", "skillsView", "reposView", "promptsView", "searchInput", "categoryFilter", "sortSelect", "listMeta", "presetStrip",
+      "insightPanel", "detailPanel", "historyTimeline", "logBox",
+      "clearLog", "selectedChip", "composerTitle", "toastHost", "confirmDialog",
+      "confirmTitle", "confirmBody", "cancelConfirm", "acceptConfirm"
+    ].forEach(id => { dom[id] = document.getElementById(id); });
+  }
+
+  function bindEvents() {
+    document.querySelectorAll(".lang-button").forEach(button => {
+      button.addEventListener("click", () => {
+        lang = button.dataset.lang;
+        localStorage.setItem("skillhub.lang", lang);
+        applyLanguage();
+        renderAll();
+      });
+    });
+
+    document.querySelectorAll(".theme-button").forEach(button => {
+      button.addEventListener("click", () => {
+        theme = button.dataset.theme;
+        localStorage.setItem("skillhub.theme", theme);
+        applyTheme();
+      });
+    });
+
+    dom.brandLogo.addEventListener("click", event => {
+      playLogoSurprise(event);
+    });
+    dom.brandLogo.addEventListener("load", () => {
+      dom.brandLogo.classList.add("loaded");
+    });
+    dom.brandLogo.addEventListener("error", () => {
+      dom.brandLogo.classList.add("logo-fallback");
+    });
+
+    document.querySelectorAll(".window-button").forEach(button => {
+      button.addEventListener("click", () => send("window." + button.dataset.window));
+    });
+
+    document.querySelectorAll(".segment").forEach(button => {
+      button.addEventListener("click", () => {
+        activeTab = button.dataset.tab;
+        activePreset = "all";
+        activeTagFilter = "all";
+        renderAll();
+      });
+    });
+
+    dom.searchInput.addEventListener("input", renderLists);
+    dom.categoryFilter.addEventListener("change", () => {
+      activePreset = "all";
+      activeTagFilter = "all";
+      renderPresets();
+      renderLists();
+    });
+    dom.sortSelect.addEventListener("change", renderLists);
+    dom.syncButton.addEventListener("click", () => send("sync"));
+    dom.healthButton.addEventListener("click", () => send("runHealthCheck"));
+    dom.reportButton.addEventListener("click", () => send("openReport"));
+    dom.diagnosticsButton.addEventListener("click", () => send("exportDiagnostics"));
+    dom.shareCheckButton.addEventListener("click", () => send("shareCheck"));
+    dom.skillsButton.addEventListener("click", () => send("openSkills"));
+    dom.sourcesButton.addEventListener("click", () => send("openSources"));
+    dom.chooseFolderButton.addEventListener("click", () => send("chooseLocalSource"));
+    dom.chooseZipButton.addEventListener("click", () => send("chooseZipSource"));
+    dom.clearLog.addEventListener("click", () => { dom.logBox.textContent = ""; });
+    dom.dailyToggle.addEventListener("click", () => send("setDailyUpdate", { enabled: !state.dailyUpdateEnabled }));
+    dom.linksToggle.addEventListener("click", () => send("setManageLinks", { enabled: !state.manageAgentLinks }));
+
+    dom.addButton.addEventListener("click", () => {
+      if (!dom.repoUrl.value.trim()) return toast("error", t("invalidUrl"));
+      send("addRepo", formPayload());
+    });
+
+    dom.saveButton.addEventListener("click", () => {
+      if (!selectedRepo) return toast("error", t("selectRepoFirst"));
+      send("saveRepo", Object.assign({ name: selectedRepo.name }, formPayload()));
+    });
+
+    dom.deleteButton.addEventListener("click", () => {
+      if (!selectedRepo) return toast("error", t("selectRepoFirst"));
+      dom.confirmDialog.showModal();
+    });
+
+    dom.cancelConfirm.addEventListener("click", () => dom.confirmDialog.close());
+    dom.acceptConfirm.addEventListener("click", () => {
+      dom.confirmDialog.close();
+      if (selectedRepo) send("deleteRepo", { name: selectedRepo.name });
+    });
+  }
+
+  function handleHostMessage(message) {
+    if (!message || !message.type) return;
+    if (message.type === "state") {
+      state = message.data || state;
+      dom.versionLabel.textContent = state.version || APP_VERSION;
+      renderAll();
+    }
+    if (message.type === "busy") {
+      busy = !!message.busy;
+      document.body.classList.toggle("busy", busy);
+      dom.miniStatus.textContent = busy ? t("running") : t("ready");
+    }
+    if (message.type === "toast") toast(message.tone || "success", message.message || "");
+    if (message.type === "log") appendLog(message.level || "info", message.message || "");
+    if (message.type === "importPreview") {
+      importPreview = message.data || null;
+      renderImportPreview();
+    }
+  }
+
+  function send(action, payload) {
+    const message = Object.assign({ action }, payload || {});
+    if (window.chrome && window.chrome.webview) {
+      window.chrome.webview.postMessage(message);
+    } else {
+      appendLog("error", "WebView bridge is not available.");
+    }
+  }
+
+  function formPayload() {
+    return {
+      url: dom.repoUrl.value.trim(),
+      repoType: dom.repoType.value,
+      categoryId: dom.repoCategory.value,
+      note: dom.repoNote.value.trim(),
+      tags: parseTags(dom.repoTags.value)
+    };
+  }
+
+  function renderAll() {
+    renderMetrics();
+    renderControls();
+    renderHealth();
+    renderImportPreview();
+    renderFormOptions();
+    renderListControls();
+    renderPresets();
+    renderSelected();
+    renderLists();
+    renderHistory();
+  }
+
+  function renderMetrics() {
+    dom.skillCount.textContent = String(state.skillCount || (state.skills || []).length || 0);
+    dom.repoCount.textContent = String(state.repoCount || (state.repositories || []).length || 0);
+    dom.lastSync.textContent = `${t("lastSync")}: ${state.lastSync || t("never")}`;
+    const linkStatus = state.manageAgentLinks ? t("managed") : t("notManaged");
+    const link = state.linkStatus || {};
+    const codexCount = link.codexCount || 0;
+    const claudeText = `Claude ${link.claudeDetected ? (link.claude ? t("linked") : t("notLinked")) : t("notDetected")}`;
+    const codexText = link.codexDetected ? `Codex ${codexCount}` : `Codex ${t("optionalMissing")}`;
+    dom.linkStatus.textContent = `${linkStatus} · ${claudeText} · ${codexText}`;
+  }
+
+  function renderControls() {
+    setToggle(dom.dailyToggle, !!state.dailyUpdateEnabled);
+    setToggle(dom.linksToggle, !!state.manageAgentLinks);
+    dom.miniStatus.textContent = busy ? t("running") : t("ready");
+  }
+
+  function renderHealth() {
+    if (!dom.healthSummary) return;
+    const diagnostics = state.diagnostics || {};
+    const available = !!diagnostics.available;
+    const status = String(diagnostics.overallStatus || "info");
+    dom.healthSummary.textContent = available
+      ? `${t("lastCheck")}: ${formatCheckTime(diagnostics.generatedAt)} · ${statusLabel(status)}`
+      : t("healthNotRun");
+    dom.healthSummary.className = "health-summary " + status;
+    dom.healthOk.textContent = String(diagnostics.ok || 0);
+    dom.healthWarn.textContent = String(diagnostics.warn || 0);
+    dom.healthError.textContent = String(diagnostics.error || 0);
+    dom.healthInfo.textContent = String(diagnostics.info || 0);
+
+    dom.agentMatrix.replaceChildren();
+    (diagnostics.agents || []).forEach(agent => {
+      const statusTone = agent.detected ? "ok" : "info";
+      const item = el("div", "agent-item " + statusTone);
+      const title = el("div", "agent-title");
+      const name = el("strong");
+      name.textContent = agent.name || agent.id || "-";
+      const statusBadge = badge(agent.detected ? t("detected") : t("notDetected"), statusTone);
+      title.append(name, statusBadge);
+
+      const meta = el("small");
+      const parts = [];
+      if (agent.detected) {
+        parts.push(agent.linked ? t("linked") : t("notLinked"));
+        if (agent.hasSkillsDir) parts.push(agent.writable ? t("writable") : t("notWritable"));
+      } else {
+        parts.push(t("optionalMissing"));
+      }
+      meta.textContent = parts.join(" · ") + (agent.path ? ` · ${agent.path}` : "");
+      item.append(title, meta);
+      dom.agentMatrix.appendChild(item);
+    });
+
+    dom.healthChecks.replaceChildren();
+    (diagnostics.checks || []).slice(0, 5).forEach(check => {
+      const item = el("div", "health-check " + (check.status || "info"));
+      const dot = el("span", "status-dot " + (check.status || "info"));
+      const body = el("div");
+      const title = el("strong");
+      const summary = el("small");
+      title.textContent = check.name || "-";
+      summary.textContent = check.summary || "";
+      body.append(title, summary);
+      item.append(dot, body);
+      dom.healthChecks.appendChild(item);
+    });
+  }
+
+  function renderImportPreview() {
+    if (!dom.importPreview) return;
+    dom.importPreview.replaceChildren();
+    dom.importPreview.classList.toggle("empty", !importPreview);
+    if (!importPreview) {
+      const empty = el("span");
+      empty.textContent = t("importEmpty");
+      dom.importPreview.appendChild(empty);
+      return;
+    }
+
+    const top = el("div", "import-preview-top");
+    const title = el("div");
+    const name = el("strong");
+    const path = el("small");
+    name.textContent = `${t("importRecommendedName")}: ${importPreview.recommendedName || "-"}`;
+    path.textContent = `${t("importPath")}: ${importPreview.sourcePath || "-"}`;
+    title.append(name, path);
+    const status = badge(importPreview.skillCount > 0 ? `${t("importFound")} ${importPreview.skillCount} ${t("importSkills")}` : t("importNoSkill"), importPreview.skillCount > 0 ? "ok" : "warn");
+    top.append(title, status);
+
+    const chips = el("div", "import-chips");
+    chips.appendChild(chip(`${importPreview.promptHintCount || 0} ${t("importPromptHints")}`));
+    if (importPreview.hasReadme) chips.appendChild(chip(t("importReadme")));
+    if (importPreview.hasSkillMdAtRoot) chips.appendChild(chip(t("importRootSkill")));
+    if (importPreview.nameAdjusted) chips.appendChild(chip(t("importNameAdjusted")));
+    chips.appendChild(chip(`${importPreview.fileCount || 0} files`));
+
+    const samples = el("div", "import-samples");
+    const sampleLabel = el("small");
+    sampleLabel.textContent = t("importSamples") + ": ";
+    samples.appendChild(sampleLabel);
+    (importPreview.sampleSkills || []).slice(0, 5).forEach(item => samples.appendChild(chip(item || "-")));
+    if (!(importPreview.sampleSkills || []).length) samples.appendChild(chip("-"));
+
+    const actions = el("div", "import-confirm-row");
+    const confirm = el("button", "primary-action compact");
+    confirm.textContent = t("importConfirm");
+    confirm.disabled = !importPreview.canImport;
+    confirm.addEventListener("click", () => send("importLocalSource", {
+      sourcePath: importPreview.sourcePath,
+      sourceKind: importPreview.sourceKind,
+      recommendedName: importPreview.recommendedName,
+      repoType: importPreview.skillCount > 0 ? dom.repoType.value : "prompt",
+      categoryId: dom.repoCategory.value,
+      note: dom.repoNote.value.trim(),
+      tags: parseTags(dom.repoTags.value)
+    }));
+    actions.appendChild(confirm);
+
+    dom.importPreview.append(top, chips, samples, actions);
+  }
+
+  function chip(value) {
+    const node = el("span", "mini-chip");
+    node.textContent = value || "-";
+    return node;
+  }
+
+  function parseTags(value) {
+    const seen = new Set();
+    return String(value || "")
+      .split(/[,，;；\n\r]+/)
+      .map(item => item.trim().replace(/\s{2,}/g, " "))
+      .filter(item => item && item.length <= 28)
+      .filter(item => {
+        const key = item.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 12);
+  }
+
+  function renderFormOptions() {
+    const currentType = dom.repoType.value || "skills";
+    dom.repoType.replaceChildren(
+      option("skills", t("skill")),
+      option("prompt", t("prompt"))
+    );
+    dom.repoType.value = currentType === "prompt" ? "prompt" : "skills";
+
+    const currentCategory = dom.repoCategory.value || "auto";
+    dom.repoCategory.replaceChildren(...categories.map(c => option(c.id, c[lang])));
+    dom.repoCategory.value = categories.some(c => c.id === currentCategory) ? currentCategory : "auto";
+  }
+
+  function renderSelected() {
+    const selectedStillExists = selectedRepo && (state.repositories || []).some(repo => repo.name === selectedRepo.name);
+    if (selectedStillExists) {
+      selectedRepo = (state.repositories || []).find(repo => repo.name === selectedRepo.name) || selectedRepo;
+    } else {
+      selectedRepo = null;
+    }
+    dom.composerTitle.textContent = selectedRepo ? t("editRepo") : t("addRepo");
+    dom.selectedChip.hidden = !selectedRepo;
+    dom.saveButton.disabled = !selectedRepo;
+    dom.deleteButton.disabled = !selectedRepo;
+    if (selectedRepo) dom.selectedChip.textContent = selectedRepo.name;
+  }
+
+  function renderLists() {
+    document.querySelectorAll(".segment").forEach(button => {
+      button.classList.toggle("active", button.dataset.tab === activeTab);
+    });
+    dom.skillsView.hidden = activeTab !== "skills";
+    dom.reposView.hidden = activeTab !== "repos";
+    dom.promptsView.hidden = activeTab !== "prompts";
+    if (activeTab === "skills") renderSkills();
+    if (activeTab === "repos") renderRepos();
+    if (activeTab === "prompts") renderPrompts();
+  }
+
+  function renderListControls() {
+    const currentCategory = dom.categoryFilter.value || "all";
+    dom.categoryFilter.replaceChildren(
+      option("all", t("filterAllCategories")),
+      ...categories.filter(c => c.id !== "auto").map(c => option(c.id, c[lang]))
+    );
+    dom.categoryFilter.value = [...dom.categoryFilter.options].some(item => item.value === currentCategory) ? currentCategory : "all";
+
+    const currentSort = dom.sortSelect.value || "name";
+    dom.sortSelect.replaceChildren(
+      option("name", t("sortName")),
+      option("category", t("sortCategory")),
+      option("repo", t("sortRepo")),
+      option("type", t("sortType")),
+      option("health", t("sortHealth"))
+    );
+    dom.sortSelect.value = [...dom.sortSelect.options].some(item => item.value === currentSort) ? currentSort : "name";
+  }
+
+  function renderPresets() {
+    dom.presetStrip.replaceChildren();
+    presets.forEach(preset => {
+      const button = el("button", "preset-pill " + (preset.id === activePreset ? "active" : ""));
+      button.type = "button";
+      button.textContent = t(preset.labelKey);
+      button.addEventListener("click", () => {
+        activePreset = preset.id;
+        if (preset.tab) activeTab = preset.tab;
+        dom.categoryFilter.value = "all";
+        activeTagFilter = "all";
+        renderAll();
+      });
+      dom.presetStrip.appendChild(button);
+    });
+  }
+
+  function renderSkills() {
+    const sourceRows = state.skills || [];
+    const rows = applyListFilters(sourceRows, "skills");
+    const duplicates = duplicateGroups(sourceRows, item => item.name);
+    dom.skillsView.replaceChildren();
+    renderListMeta(rows.length, sourceRows.length, duplicates, sourceRows);
+    renderDetailPanel();
+    if (!rows.length) return dom.skillsView.appendChild(emptyState());
+
+    const table = el("div", "data-table skills-table");
+    applyTableColumns("skills", table);
+    table.appendChild(headerRow(["name", "category", "repo", "description", "source"].map(t), "skills"));
+    rows.forEach(skill => {
+      const cells = [
+        cellWithTags(skill.name, skill.tags, "name-cell"),
+        badge(categoryLabel(skill.categoryId), categoryClass(skill.categoryId, skill.mode)),
+        cell(skill.repo || t("localRepo")),
+        cell(skill.description || skill.note || "-"),
+        cell(skill.target || skill.localPath || "-")
+      ];
+      table.appendChild(row(cells));
+    });
+    dom.skillsView.appendChild(table);
+  }
+
+  function renderRepos() {
+    const sourceRows = state.repositories || [];
+    const rows = applyListFilters(sourceRows, "repos");
+    const duplicates = duplicateGroups(sourceRows, item => item.name);
+    dom.reposView.replaceChildren();
+    renderListMeta(rows.length, sourceRows.length, duplicates, sourceRows);
+    renderDetailPanel();
+    if (!rows.length) return dom.reposView.appendChild(emptyState());
+
+    const table = el("div", "data-table repos-table");
+    applyTableColumns("repos", table);
+    table.appendChild(headerRow(["name", "type", "category", "sourceHealth", "status", "note", "address"].map(t), "repos"));
+    rows.forEach(repo => {
+      const dataRow = row([
+        cell(repo.name, "name-cell"),
+        badge(repo.type === "prompt" ? t("prompt") : t("skill"), repo.type),
+        badge(categoryLabel(repo.categoryId || "auto"), categoryClass(repo.categoryId || "auto", "")),
+        badge(sourceHealthLabel(repo), sourceHealthClass(repo)),
+        repoEnableControl(repo),
+        cellWithTags(repo.note || "-", repo.tags),
+        cell(repo.url || repo.path || "-")
+      ], selectedRepo && selectedRepo.name === repo.name ? "selected" : "");
+      dataRow.addEventListener("click", () => selectRepo(repo));
+      table.appendChild(dataRow);
+    });
+    dom.reposView.appendChild(table);
+  }
+
+  function renderPrompts() {
+    const sourceRows = (state.repositories || []).filter(repo => repo.type === "prompt");
+    const rows = applyListFilters(sourceRows, "prompts");
+    const duplicates = duplicateGroups(sourceRows, item => item.name);
+    dom.promptsView.replaceChildren();
+    renderListMeta(rows.length, sourceRows.length, duplicates, sourceRows);
+    renderDetailPanel();
+    if (!rows.length) return dom.promptsView.appendChild(emptyState());
+
+    const table = el("div", "data-table prompts-table");
+    applyTableColumns("prompts", table);
+    table.appendChild(headerRow(["name", "category", "note", "address", "sourceHealth"].map(t), "prompts"));
+    rows.forEach(repo => {
+      const dataRow = row([
+        cell(repo.name, "name-cell"),
+        badge(categoryLabel(repo.categoryId || "auto"), categoryClass(repo.categoryId || "auto", "")),
+        cellWithTags(repo.note || "-", repo.tags),
+        cell(repo.url || repo.path || "-"),
+        badge(sourceHealthLabel(repo), sourceHealthClass(repo))
+      ], selectedRepo && selectedRepo.name === repo.name ? "selected" : "");
+      dataRow.addEventListener("click", () => selectRepo(repo));
+      table.appendChild(dataRow);
+    });
+    dom.promptsView.appendChild(table);
+  }
+
+  function renderDetailPanel() {
+    if (!dom.detailPanel) return;
+    const repo = selectedRepo;
+    if (!repo) {
+      dom.detailPanel.hidden = true;
+      dom.detailPanel.replaceChildren();
+      return;
+    }
+
+    dom.detailPanel.hidden = false;
+    dom.detailPanel.replaceChildren();
+    const title = el("div", "detail-title");
+    const heading = el("strong");
+    heading.textContent = repo.type === "prompt" ? t("promptDetail") : t("selectedSource");
+    const hint = el("small");
+    hint.textContent = t("detailHint");
+    const open = el("button", "text-action compact");
+    open.type = "button";
+    open.textContent = t("openThisSource");
+    open.addEventListener("click", () => send("openSourcePath", { name: repo.name }));
+    title.append(heading, hint, open);
+
+    const body = el("div", "detail-grid");
+    body.append(
+      detailItem(t("name"), repo.name || "-"),
+      detailItem(t("type"), repo.type === "prompt" ? t("prompt") : t("skill")),
+      detailItem(t("category"), categoryLabel(repo.categoryId || "auto")),
+      detailItem(t("sourceHealth"), sourceHealthLabel(repo)),
+      detailItem(t("address"), repo.url || repo.path || "-"),
+      detailItem(t("note"), repo.note || "-")
+    );
+
+    const tags = el("div", "detail-tags");
+    const label = el("span", "meta-label");
+    label.textContent = t("tags");
+    tags.appendChild(label);
+    const list = repo.tags && repo.tags.length ? repo.tags : [t("untagged")];
+    list.forEach(tag => tags.appendChild(chip(tag)));
+    dom.detailPanel.append(title, body, tags);
+  }
+
+  function selectRepo(repo) {
+    selectedRepo = repo;
+    dom.repoUrl.value = repo.url || "";
+    dom.repoType.value = repo.type === "prompt" ? "prompt" : "skills";
+    dom.repoCategory.value = repo.categoryId || "auto";
+    dom.repoNote.value = repo.note || "";
+    dom.repoTags.value = (repo.tags || []).join(", ");
+    renderAll();
+  }
+
+  function renderHistory() {
+    if (!dom.historyTimeline) return;
+    const items = state.operationHistory || [];
+    dom.historyTimeline.replaceChildren();
+    const head = el("div", "timeline-head");
+    head.textContent = t("historyTitle");
+    dom.historyTimeline.appendChild(head);
+    if (!items.length) {
+      const empty = el("small", "timeline-empty");
+      empty.textContent = t("noHistory");
+      dom.historyTimeline.appendChild(empty);
+      return;
+    }
+    items.slice(0, 6).forEach(item => {
+      const row = el("div", "timeline-item " + (item.status || "info"));
+      const dot = el("span", "timeline-dot");
+      const body = el("div");
+      const title = el("strong");
+      const detail = el("small");
+      title.textContent = item.title || "-";
+      detail.textContent = [formatCheckTime(item.time), item.detail || ""].filter(Boolean).join(" · ");
+      body.append(title, detail);
+      row.append(dot, body);
+      dom.historyTimeline.appendChild(row);
+    });
+  }
+
+  function detailItem(label, value) {
+    const item = el("div", "detail-item");
+    const key = el("span");
+    const val = el("strong");
+    key.textContent = label;
+    val.textContent = value || "-";
+    item.append(key, val);
+    return item;
+  }
+
+  function matches(item, query) {
+    if (!query) return true;
+    const haystack = Object.keys(item)
+      .map(key => String(item[key] || ""))
+      .concat(categoryLabel(item.categoryId || "auto"), itemHasSourceHealth(item) ? sourceHealthLabel(item) : "")
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(query);
+  }
+
+  function applyListFilters(rows, kind) {
+    const query = dom.searchInput.value.trim().toLowerCase();
+    const category = dom.categoryFilter.value || "all";
+    const preset = presets.find(item => item.id === activePreset) || presets[0];
+    const filtered = rows.filter(item => matches(item, query))
+      .filter(item => category === "all" || (item.categoryId || "auto") === category)
+      .filter(item => !preset.categories.length || preset.categories.includes(item.categoryId || "auto"))
+      .filter(item => itemMatchesTag(item, activeTagFilter));
+    return sortRows(filtered, kind);
+  }
+
+  function sortRows(rows, kind) {
+    const sort = dom.sortSelect.value || "name";
+    const copy = rows.slice();
+    const textValue = item => {
+      if (sort === "category") return categoryLabel(item.categoryId || "auto");
+      if (sort === "repo") return item.repo || item.name || "";
+      if (sort === "type") return item.type || item.mode || "";
+      if (sort === "health") return sourceHealthLabel(item);
+      return item.name || "";
+    };
+    copy.sort((a, b) => textValue(a).localeCompare(textValue(b), lang === "zh" ? "zh-Hans-CN" : lang, { sensitivity: "base" }));
+    return copy;
+  }
+
+  function renderListMeta(visible, total, duplicates, rows) {
+    const tags = collectTags(rows || []);
+    const untaggedCount = countUntagged(rows || []);
+    dom.listMeta.replaceChildren();
+    const summary = el("span", "meta-summary");
+    const tagText = activeTagFilter === "all" ? "" : ` · ${t("tags")} ${tagFilterLabel(activeTagFilter)}`;
+    summary.textContent = `${t("listShowing")} ${visible} / ${total} · ${t("duplicateGroups")} ${duplicates.length}${tagText}`;
+    dom.listMeta.appendChild(summary);
+
+    const tagWrap = el("div", "meta-tags");
+    const label = el("span", "meta-label");
+    label.textContent = t("tagCloud");
+    tagWrap.appendChild(label);
+    tagWrap.appendChild(tagFilterButton("all", `${t("allTags")} ${total}`));
+    if (tags.length) {
+      tags.slice(0, 12).forEach(item => {
+        tagWrap.appendChild(tagFilterButton(item.name, `${item.name} ${item.count}`));
+      });
+    }
+    if (untaggedCount > 0) tagWrap.appendChild(tagFilterButton("__untagged", `${t("untagged")} ${untaggedCount}`));
+    dom.listMeta.appendChild(tagWrap);
+    renderInsights(duplicates);
+  }
+
+  function tagFilterButton(value, label) {
+    const button = el("button", "meta-tag " + (String(activeTagFilter).toLowerCase() === String(value).toLowerCase() ? "active" : ""));
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      activeTagFilter = value;
+      renderLists();
+    });
+    return button;
+  }
+
+  function tagFilterLabel(value) {
+    if (value === "all") return t("allTags");
+    if (value === "__untagged") return t("untagged");
+    return value || t("allTags");
+  }
+
+  function itemMatchesTag(item, filter) {
+    if (!filter || filter === "all") return true;
+    const tags = (item.tags || []).map(tag => String(tag || "").trim().toLowerCase()).filter(Boolean);
+    if (filter === "__untagged") return tags.length === 0;
+    return tags.includes(String(filter).trim().toLowerCase());
+  }
+
+  function duplicateGroups(rows, pick) {
+    const map = new Map();
+    rows.forEach(item => {
+      const value = String(pick(item) || "").trim().toLowerCase();
+      if (!value) return;
+      if (!map.has(value)) map.set(value, { name: String(pick(item) || "").trim(), count: 0, items: [] });
+      const group = map.get(value);
+      group.count += 1;
+      group.items.push(item);
+    });
+    return Array.from(map.values())
+      .filter(group => group.count > 1)
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, lang === "zh" ? "zh-Hans-CN" : lang, { sensitivity: "base" }));
+  }
+
+  function collectTags(rows) {
+    const map = new Map();
+    rows.forEach(item => {
+      (item.tags || []).forEach(tag => {
+        const name = String(tag || "").trim();
+        if (!name) return;
+        const key = name.toLowerCase();
+        const current = map.get(key) || { name, count: 0 };
+        current.count += 1;
+        map.set(key, current);
+      });
+    });
+    return Array.from(map.values())
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, lang === "zh" ? "zh-Hans-CN" : lang, { sensitivity: "base" }));
+  }
+
+  function countUntagged(rows) {
+    let count = 0;
+    rows.forEach(item => {
+      const tags = (item.tags || []).map(tag => String(tag || "").trim()).filter(Boolean);
+      if (!tags.length) count += 1;
+    });
+    return count;
+  }
+
+  function renderInsights(duplicates) {
+    if (!dom.insightPanel) return;
+    dom.insightPanel.replaceChildren();
+    const head = el("span", "insight-title");
+    head.textContent = t("duplicateInsight");
+    dom.insightPanel.appendChild(head);
+    if (!duplicates.length) {
+      dom.insightPanel.appendChild(chip(t("noDuplicates")));
+      return;
+    }
+    duplicates.slice(0, 6).forEach(group => {
+      const button = el("button", "duplicate-chip");
+      button.type = "button";
+      button.textContent = `${group.name} ×${group.count}`;
+      button.addEventListener("click", () => {
+        dom.searchInput.value = group.name;
+        renderLists();
+      });
+      dom.insightPanel.appendChild(button);
+    });
+  }
+
+  function row(items, className) {
+    const node = el("div", "data-row " + (className || ""));
+    items.forEach(item => node.appendChild(typeof item === "string" ? cell(item) : item));
+    return node;
+  }
+
+  function headerRow(items, key) {
+    const node = el("div", "data-row header");
+    items.forEach((item, index) => {
+      const header = cell(item, "resizable-head");
+      if (index < items.length - 1) {
+        const handle = el("span", "resize-handle");
+        handle.title = t("resizeColumn");
+        handle.addEventListener("pointerdown", event => startColumnResize(event, key, index));
+        header.appendChild(handle);
+      }
+      node.appendChild(header);
+    });
+    return node;
+  }
+
+  function applyTableColumns(key, table) {
+    const cols = columnState[key] || defaultColumns[key];
+    table.style.setProperty("--table-columns", cols.map(value => `${value}px`).join(" "));
+    table.style.minWidth = `${cols.reduce((sum, value) => sum + value, 0) + 28}px`;
+  }
+
+  function startColumnResize(event, key, index) {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startCols = (columnState[key] || defaultColumns[key]).slice();
+    const minWidth = key === "repos" ? 78 : 96;
+    const startCurrent = startCols[index];
+    const startNext = startCols[index + 1];
+
+    document.body.classList.add("resizing-columns");
+    document.body.style.userSelect = "none";
+
+    const move = moveEvent => {
+      const delta = moveEvent.clientX - startX;
+      const nextDelta = Math.min(delta, startNext - minWidth);
+      const currentDelta = Math.max(nextDelta, minWidth - startCurrent);
+      const cols = startCols.slice();
+      cols[index] = Math.round(startCurrent + currentDelta);
+      cols[index + 1] = Math.round(startNext - currentDelta);
+      columnState[key] = cols;
+      document.querySelectorAll(`.${key}-table`).forEach(table => applyTableColumns(key, table));
+    };
+
+    const up = () => {
+      document.body.classList.remove("resizing-columns");
+      document.body.style.userSelect = "";
+      localStorage.setItem(columnStorageKey(key), JSON.stringify(columnState[key]));
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  function cell(value, className) {
+    const node = el("div", "cell " + (className || ""));
+    node.title = value || "";
+    node.textContent = value || "";
+    return node;
+  }
+
+  function cellWithTags(value, tags, className) {
+    const node = el("div", "cell multi " + (className || ""));
+    node.title = value || "";
+    const textNode = el("span", "cell-main");
+    textNode.textContent = value || "";
+    node.appendChild(textNode);
+    const safeTags = (tags || []).filter(Boolean);
+    if (safeTags.length) {
+      const tagRow = el("div", "tag-row");
+      safeTags.slice(0, 4).forEach(tag => {
+        const item = el("span", "tag-chip");
+        item.textContent = tag;
+        tagRow.appendChild(item);
+      });
+      if (safeTags.length > 4) {
+        const more = el("span", "tag-chip muted");
+        more.textContent = "+" + (safeTags.length - 4);
+        tagRow.appendChild(more);
+      }
+      node.appendChild(tagRow);
+    }
+    return node;
+  }
+
+  function badge(value, className) {
+    const node = el("span", "badge " + (className || ""));
+    node.textContent = value || "-";
+    return node;
+  }
+
+  function repoEnableControl(repo) {
+    const wrap = el("div", "repo-enable");
+    const configured = repo.configured !== false;
+    const canToggle = configured && repo.type !== "prompt";
+    const enabled = isRepoEnabled(repo);
+    const button = el("button", "mini-toggle " + (enabled ? "on" : ""));
+    button.type = "button";
+    button.disabled = !canToggle;
+    button.title = enabled ? t("disableSource") : t("enableSource");
+    button.setAttribute("aria-pressed", enabled ? "true" : "false");
+    button.appendChild(el("span"));
+    button.addEventListener("click", event => {
+      event.stopPropagation();
+      if (!canToggle) return;
+      send("setRepoEnabled", { name: repo.name, enabled: !enabled });
+    });
+    const label = el("small");
+    label.textContent = enabled ? t("sourceEnabled") : t("sourceDisabled");
+    wrap.append(button, label);
+    return wrap;
+  }
+
+  function isRepoEnabled(repo) {
+    if (!repo || repo.type === "prompt") return false;
+    if (repo.enabled === false) return false;
+    return repo.mode !== "do-not-install";
+  }
+
+  function emptyState() {
+    const node = el("div", "empty-state");
+    const wrap = el("div");
+    const title = el("strong");
+    const body = el("span");
+    title.textContent = t("emptyTitle");
+    body.textContent = t("emptyBody");
+    wrap.append(title, body);
+    node.appendChild(wrap);
+    return node;
+  }
+
+  function setToggle(node, enabled) {
+    node.classList.toggle("on", enabled);
+    node.setAttribute("aria-pressed", enabled ? "true" : "false");
+  }
+
+  function option(value, label) {
+    const node = document.createElement("option");
+    node.value = value;
+    node.textContent = label;
+    return node;
+  }
+
+  function categoryLabel(id) {
+    const found = categories.find(c => c.id === id);
+    return found ? found[lang] : (id || categories[0][lang]);
+  }
+
+  function categoryClass(id, mode) {
+    const safe = String(id || "general").replace(/[^a-z0-9_-]/gi, "-");
+    return (mode === "local" ? "local " : "") + "cat-" + safe;
+  }
+
+  function sourceHealthLabel(repo) {
+    if (!itemHasSourceHealth(repo)) return repo && repo.mode ? repo.mode : "";
+    if (!repo || !repo.exists) return t("sourceMissing");
+    if (repo.type === "prompt") return t("sourcePromptOnly");
+    if ((repo.skillCount || 0) <= 0) return t("sourceNoSkill");
+    const prefix = repo.sourceKind === "manual" || repo.sourceKind === "local" ? t("sourceLocal") + " · " : "";
+    return `${prefix}${repo.skillCount} ${t("importSkills")}`;
+  }
+
+  function sourceHealthClass(repo) {
+    if (!itemHasSourceHealth(repo)) return "info";
+    if (!repo || !repo.exists) return "error";
+    if (repo.type === "prompt") return "info";
+    if ((repo.skillCount || 0) <= 0) return "warn";
+    return "ok";
+  }
+
+  function itemHasSourceHealth(item) {
+    return !!item && (Object.prototype.hasOwnProperty.call(item, "exists") || Object.prototype.hasOwnProperty.call(item, "skillCount"));
+  }
+
+  function statusLabel(status) {
+    if (status === "ok") return t("healthOk");
+    if (status === "warn") return t("healthWarn");
+    if (status === "error") return t("healthError");
+    if (status === "info") return t("healthInfo");
+    return status || "-";
+  }
+
+  function formatCheckTime(value) {
+    if (!value) return t("never");
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value).replace("T", " ").replace(/\..+$/, "");
+    return date.toLocaleString();
+  }
+
+  function appendLog(level, message) {
+    if (!message) return;
+    const entry = el("div", "log-entry " + level);
+    const time = new Date().toLocaleTimeString();
+    entry.textContent = `[${time}] ${message}`;
+    dom.logBox.appendChild(entry);
+    dom.logBox.scrollTop = dom.logBox.scrollHeight;
+  }
+
+  function toast(tone, message) {
+    if (!message) return;
+    const node = el("div", "toast " + tone);
+    node.textContent = message;
+    dom.toastHost.appendChild(node);
+    window.setTimeout(() => {
+      node.style.opacity = "0";
+      node.style.transform = "translateY(8px) scale(.98)";
+      window.setTimeout(() => node.remove(), 220);
+    }, 3600);
+  }
+
+  function applyLanguage() {
+    document.documentElement.lang = lang === "zh" ? "zh-CN" : lang;
+    document.querySelectorAll("[data-i18n]").forEach(node => {
+      node.textContent = t(node.dataset.i18n);
+    });
+    document.querySelectorAll("[data-i18n-placeholder]").forEach(node => {
+      node.placeholder = t(node.dataset.i18nPlaceholder);
+    });
+    document.querySelectorAll(".lang-button").forEach(button => {
+      button.classList.toggle("active", button.dataset.lang === lang);
+    });
+    applyTheme();
+    dom.confirmTitle.textContent = t("confirmTitle");
+    dom.confirmBody.textContent = t("confirmBody");
+    dom.cancelConfirm.textContent = t("cancel");
+    dom.acceptConfirm.textContent = t("confirmDelete");
+    dom.miniStatus.textContent = busy ? t("running") : t("ready");
+  }
+
+  function t(key) {
+    return (text[lang] && text[lang][key]) || text.zh[key] || key;
+  }
+
+  function chooseLanguage() {
+    const saved = localStorage.getItem("skillhub.lang");
+    if (saved && text[saved]) return saved;
+    const browser = (navigator.language || "").toLowerCase();
+    if (browser.startsWith("ko")) return "ko";
+    if (browser.startsWith("en")) return "en";
+    return "zh";
+  }
+
+  function chooseTheme() {
+    const saved = localStorage.getItem("skillhub.theme");
+    return ["cute", "fresh", "dark"].includes(saved) ? saved : "cute";
+  }
+
+  function applyTheme() {
+    document.body.dataset.theme = theme;
+    document.querySelectorAll(".theme-button").forEach(button => {
+      button.classList.toggle("active", button.dataset.theme === theme);
+    });
+  }
+
+  function loadColumns(key) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(columnStorageKey(key)) || "null");
+      if (Array.isArray(saved) && saved.length === defaultColumns[key].length) {
+        return saved.map(value => Math.max(70, Number(value) || 70));
+      }
+    } catch (error) {
+    }
+    return defaultColumns[key].slice();
+  }
+
+  function columnStorageKey(key) {
+    return `skillhub.columns.v101.${key}`;
+  }
+
+  function playLogoSurprise(event) {
+    const logo = dom.brandLogo;
+    logo.classList.remove("jelly");
+    void logo.offsetWidth;
+    logo.classList.add("jelly");
+
+    const rect = logo.getBoundingClientRect();
+    const originX = rect.left + rect.width / 2;
+    const originY = rect.top + rect.height / 2;
+    const palette = theme === "dark"
+      ? ["#8BE9FD", "#C4B5FD", "#FDE68A", "#34D399", "#FB7185"]
+      : ["#22b88f", "#5b8ff7", "#ff9f7a", "#8b7cf6", "#ffd166"];
+    const count = 22 + Math.floor(Math.random() * 12);
+
+    for (let i = 0; i < count; i++) {
+      const particle = el("span", Math.random() > 0.45 ? "logo-particle bubble" : "logo-particle spark");
+      const angle = Math.random() * Math.PI * 2;
+      const distance = 46 + Math.random() * 110;
+      particle.style.left = `${originX}px`;
+      particle.style.top = `${originY}px`;
+      particle.style.setProperty("--dx", `${Math.cos(angle) * distance}px`);
+      particle.style.setProperty("--dy", `${Math.sin(angle) * distance - 36}px`);
+      particle.style.setProperty("--color", palette[i % palette.length]);
+      particle.style.animationDelay = `${Math.random() * 90}ms`;
+      document.body.appendChild(particle);
+      window.setTimeout(() => particle.remove(), 1100);
+    }
+  }
+
+  function el(tag, className) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    return node;
+  }
+
+  function installWindowInteractions() {
+    const grip = 8;
+    const cursorByEdge = {
+      left: "ew-resize",
+      right: "ew-resize",
+      top: "ns-resize",
+      bottom: "ns-resize",
+      "top-left": "nwse-resize",
+      "bottom-right": "nwse-resize",
+      "top-right": "nesw-resize",
+      "bottom-left": "nesw-resize"
+    };
+
+    document.addEventListener("mousemove", event => {
+      const edge = resizeEdge(event, grip);
+      document.body.style.cursor = edge ? cursorByEdge[edge] : "";
+    });
+
+    document.addEventListener("mouseleave", () => {
+      document.body.style.cursor = "";
+    });
+
+    document.addEventListener("mousedown", event => {
+      if (event.button !== 0) return;
+      const edge = resizeEdge(event, grip);
+      if (edge) {
+        event.preventDefault();
+        send("window.resize", { edge });
+        return;
+      }
+
+      const titlebar = event.target.closest(".titlebar");
+      const blocked = event.target.closest("button, input, select, textarea, a, .no-drag");
+      if (titlebar && !blocked) {
+        event.preventDefault();
+        send("window.drag");
+      }
+    });
+
+    document.querySelector(".titlebar").addEventListener("dblclick", event => {
+      if (event.target.closest("button, input, select, textarea, a, .no-drag")) return;
+      send("window.maximize");
+    });
+  }
+
+  function resizeEdge(event, grip) {
+    const x = event.clientX;
+    const y = event.clientY;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    const left = x <= grip;
+    const right = x >= w - grip;
+    const top = y <= grip;
+    const bottom = y >= h - grip;
+    if (left && top) return "top-left";
+    if (right && top) return "top-right";
+    if (left && bottom) return "bottom-left";
+    if (right && bottom) return "bottom-right";
+    if (left) return "left";
+    if (right) return "right";
+    if (top) return "top";
+    if (bottom) return "bottom";
+    return "";
+  }
+}());

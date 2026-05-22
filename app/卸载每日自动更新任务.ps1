@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Continue'
+﻿$ErrorActionPreference = 'Continue'
 
 $tasks = @(
   'AISkillHubDailyUpdate',
@@ -7,9 +7,14 @@ $tasks = @(
   'ZxpGlobalSkillsLogonUpdate'
 )
 
+$SchtasksExe = Join-Path $env:WINDIR 'System32\schtasks.exe'
+if (-not (Test-Path -LiteralPath $SchtasksExe)) {
+  throw "Missing schtasks: $SchtasksExe"
+}
+
 foreach ($task in $tasks) {
   Write-Host "Removing scheduled task: $task"
-  & schtasks.exe /Delete /TN $task /F
+  & $SchtasksExe /Delete /TN $task /F
 }
 
 $startupFiles = @(

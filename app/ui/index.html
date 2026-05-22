@@ -1,0 +1,232 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; img-src 'self' data: file:; style-src 'self' 'unsafe-inline'; script-src 'self';">
+  <title>AI SkillHub</title>
+  <link rel="preload" as="image" href="../assets/AI SkillHub.logo.ui.png">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app" class="app-shell" aria-live="polite">
+    <header class="titlebar">
+      <div class="brand-block drag-region">
+        <div>
+          <div class="brand-title">AI SkillHub</div>
+          <div id="miniStatus" class="brand-status">就绪</div>
+        </div>
+      </div>
+      <div class="title-actions no-drag">
+        <div class="theme-switch" role="group" aria-label="Theme">
+          <button class="theme-button" data-theme="cute" data-i18n="themeCute">可爱</button>
+          <button class="theme-button" data-theme="fresh" data-i18n="themeFresh">清新</button>
+          <button class="theme-button" data-theme="dark" data-i18n="themeDark">深色</button>
+        </div>
+        <div class="language-switch" role="group" aria-label="Language">
+          <button class="lang-button" data-lang="zh">中文</button>
+          <button class="lang-button" data-lang="en">English</button>
+          <button class="lang-button" data-lang="ko">한국어</button>
+        </div>
+        <div class="window-controls" role="group" aria-label="Window controls">
+          <button class="window-button" data-window="minimize" aria-label="Minimize">
+            <svg viewBox="0 0 20 20"><path d="M5 10.5h10"/></svg>
+          </button>
+          <button class="window-button" data-window="maximize" aria-label="Maximize">
+            <svg viewBox="0 0 20 20"><rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/></svg>
+          </button>
+          <button class="window-button close" data-window="close" aria-label="Close">
+            <svg viewBox="0 0 20 20"><path d="M6 6l8 8M14 6l-8 8"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="side-panel">
+        <section class="hero-card">
+          <div class="hero-main">
+            <img id="brandLogo" class="hero-logo" src="../assets/AI SkillHub.logo.ui.png" width="92" height="92" decoding="async" alt="">
+            <div class="hero-copy">
+              <div class="eyebrow" data-i18n="eyebrow">共享技能中枢</div>
+              <h1>AI SkillHub</h1>
+              <p data-i18n="subtitle">集中管理 GitHub Skills、Prompt 来源、AI 软件链接和每日自动更新。</p>
+            </div>
+          </div>
+          <div class="hero-meta">
+            <span>Developed by FrancisZhu</span>
+            <span id="versionLabel">v1.0.2</span>
+          </div>
+        </section>
+
+        <section class="metric-grid" aria-label="Metrics">
+          <div class="metric-card">
+            <span data-i18n="activeSkills">已启用技能</span>
+            <strong id="skillCount">0</strong>
+          </div>
+          <div class="metric-card">
+            <span data-i18n="repos">仓库来源</span>
+            <strong id="repoCount">0</strong>
+          </div>
+        </section>
+
+        <section class="control-card">
+          <div class="control-row">
+            <div>
+              <strong data-i18n="dailyUpdate">每日自动更新</strong>
+              <small id="lastSync">-</small>
+            </div>
+            <button class="toggle" id="dailyToggle" aria-pressed="false"><span></span></button>
+          </div>
+          <div class="control-row">
+            <div>
+              <strong data-i18n="agentLinks">接管 AI 软件链接</strong>
+              <small id="linkStatus">-</small>
+            </div>
+            <button class="toggle" id="linksToggle" aria-pressed="false"><span></span></button>
+          </div>
+        </section>
+
+        <section class="health-card">
+          <div class="health-head">
+            <div>
+              <strong data-i18n="healthTitle">系统体检</strong>
+              <small id="healthSummary">-</small>
+            </div>
+            <button class="text-action compact" id="healthButton" data-i18n="runHealthCheck">立即体检</button>
+          </div>
+          <div class="health-stats" aria-label="Health summary">
+            <span class="health-stat ok"><b id="healthOk">0</b><em>OK</em></span>
+            <span class="health-stat warn"><b id="healthWarn">0</b><em>Warn</em></span>
+            <span class="health-stat error"><b id="healthError">0</b><em>Error</em></span>
+            <span class="health-stat info"><b id="healthInfo">0</b><em>Info</em></span>
+          </div>
+          <div id="agentMatrix" class="agent-matrix"></div>
+          <div id="healthChecks" class="health-checks"></div>
+        </section>
+
+        <section class="action-stack">
+          <button class="primary-action" id="syncButton" data-i18n="syncNow">立即同步</button>
+          <button class="soft-action" id="reportButton" data-i18n="openReport">打开报告</button>
+          <button class="soft-action" id="diagnosticsButton" data-i18n="exportDiagnostics">导出诊断包</button>
+          <button class="soft-action" id="shareCheckButton" data-i18n="shareCheck">分享前检查</button>
+          <button class="soft-action" id="skillsButton" data-i18n="openSkills">打开技能目录</button>
+          <button class="soft-action" id="sourcesButton" data-i18n="openSources">打开来源目录</button>
+        </section>
+
+        <section class="hint-card">
+          <strong data-i18n="tipTitle">使用提示</strong>
+          <p data-i18n="tipBody">选择仓库来源后，可修改类型、分类和备注。Prompt 来源只保存资料，不会安装为 Skill。</p>
+        </section>
+      </aside>
+
+      <section class="content-panel">
+        <section class="composer-card">
+          <div class="composer-head">
+            <div>
+              <h2 id="composerTitle" data-i18n="addRepo">添加仓库</h2>
+              <p data-i18n="addRepoDesc">粘贴 GitHub 仓库地址，AI SkillHub 会自动克隆、分类并建立链接。</p>
+            </div>
+            <div class="repo-chip" id="selectedChip" hidden></div>
+          </div>
+
+          <div class="form-grid">
+            <label class="field wide">
+              <span data-i18n="githubUrl">GitHub 项目地址</span>
+              <input id="repoUrl" spellcheck="false" autocomplete="off" placeholder="https://github.com/owner/repo.git">
+            </label>
+            <label class="field">
+              <span data-i18n="type">类型</span>
+              <select id="repoType"></select>
+            </label>
+            <label class="field">
+              <span data-i18n="category">细分分类</span>
+              <select id="repoCategory"></select>
+            </label>
+            <label class="field note">
+              <span data-i18n="note">手动备注</span>
+              <input id="repoNote" autocomplete="off">
+            </label>
+            <label class="field tags">
+              <span data-i18n="tags">标签</span>
+              <input id="repoTags" autocomplete="off" data-i18n-placeholder="tagsPlaceholder" placeholder="论文, 图表, 常用">
+            </label>
+            <div class="composer-actions">
+              <button class="primary-action compact" id="addButton" data-i18n="add">添加仓库</button>
+              <button class="soft-action compact" id="saveButton" data-i18n="save">保存修改</button>
+              <button class="danger-action compact" id="deleteButton" data-i18n="delete">删除来源</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="import-card">
+          <div class="import-head">
+            <div>
+              <h2 data-i18n="importTitle">本地导入预览</h2>
+              <p data-i18n="importDesc">先扫描文件夹或 zip，再确认是否导入。只有包含 SKILL.md 的目录会作为 Skill。</p>
+            </div>
+            <div class="import-actions">
+              <button class="soft-action compact" id="chooseFolderButton" data-i18n="chooseFolder">选择文件夹</button>
+              <button class="soft-action compact" id="chooseZipButton" data-i18n="chooseZip">选择 zip</button>
+            </div>
+          </div>
+          <div id="importPreview" class="import-preview empty">
+            <span data-i18n="importEmpty">还没有选择本地来源。</span>
+          </div>
+        </section>
+
+        <section class="list-card">
+          <div class="list-toolbar">
+            <div class="segmented" role="tablist">
+              <button class="segment active" data-tab="skills" data-i18n="tabSkills">已启用技能</button>
+              <button class="segment" data-tab="repos" data-i18n="tabRepos">仓库来源</button>
+              <button class="segment" data-tab="prompts" data-i18n="tabPrompts">Prompt 资料</button>
+            </div>
+            <div class="list-controls">
+              <label class="search-box">
+                <svg viewBox="0 0 20 20"><circle cx="9" cy="9" r="5.8"></circle><path d="M13.4 13.4L17 17"></path></svg>
+                <input id="searchInput" autocomplete="off" data-i18n-placeholder="searchPlaceholder" placeholder="搜索名称、分类、备注">
+              </label>
+              <select id="categoryFilter" class="filter-select" aria-label="Category filter"></select>
+              <select id="sortSelect" class="filter-select sort-select" aria-label="Sort"></select>
+            </div>
+          </div>
+          <div id="listMeta" class="list-meta"></div>
+          <div id="presetStrip" class="preset-strip" aria-label="Scene presets"></div>
+          <div id="insightPanel" class="insight-panel"></div>
+          <div id="detailPanel" class="detail-panel" hidden></div>
+          <div class="table-shell">
+            <div id="skillsView" class="data-view"></div>
+            <div id="reposView" class="data-view" hidden></div>
+            <div id="promptsView" class="data-view" hidden></div>
+          </div>
+        </section>
+
+        <section class="log-card">
+          <div class="section-title">
+            <h2 data-i18n="activity">运行反馈</h2>
+            <button class="text-action" id="clearLog" data-i18n="clear">清空</button>
+          </div>
+          <div id="historyTimeline" class="history-timeline"></div>
+          <div id="logBox" class="log-box"></div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div id="toastHost" class="toast-host" aria-live="assertive"></div>
+
+  <dialog id="confirmDialog" class="confirm-dialog">
+    <div class="dialog-surface">
+      <h3 id="confirmTitle">确认删除</h3>
+      <p id="confirmBody">此操作只会从配置移除来源，不会删除 GitHub 源文件夹。</p>
+      <div class="dialog-actions">
+        <button class="soft-action compact" id="cancelConfirm">取消</button>
+        <button class="danger-action compact" id="acceptConfirm">删除</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="./app.js"></script>
+</body>
+</html>
