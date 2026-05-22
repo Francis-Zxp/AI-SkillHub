@@ -1,138 +1,118 @@
 # AI SkillHub
 
-AI SkillHub 是一个面向 Windows 的 AI Agent Skills 管理器。它把来自 GitHub、本地文件夹或 zip 压缩包的 Skills/Prompt 资料集中管理，并把可用的 Skill 接管到 Claude Code、Codex、Antigravity 等工具能识别的位置。
+AI SkillHub is a Windows desktop app for managing AI agent Skills in one place. It helps you collect Skills from GitHub, local folders, or zip files, then link the usable Skills into tools such as Claude Code, Codex, and Antigravity.
 
-这个公开仓库只包含 AI SkillHub 程序本身，不包含 FrancisZhu 的个人 skills、GitHub 来源仓库、诊断报告、缓存或本机配置。
+![AI SkillHub v1.1 interface](docs/images/v1.1.png)
 
-## 命名约定
+## Download
 
-产品显示名统一使用 `AI SkillHub`，GitHub 仓库名建议使用 `AI-SkillHub`。
+Recommended for normal users:
 
-不建议改成 `AI SkillsHub`、`SkillsHub` 或 `AI Hub`：`AI SkillsHub` 读起来别扭，`SkillsHub/Skills Hub` 缺少 AI Agent 场景识别，`AI Hub` 又太宽泛。`AI SkillHub` 既保留 AI 属性，也让 SkillHub 成为一个清晰的产品名。
+1. Open the latest release page: <https://github.com/Francis-Zxp/AI-SkillHub/releases/latest>
+2. Download `AI-SkillHub-v1.1.0.zip`.
+3. Unzip it to a normal folder, for example `D:\AI-SkillHub`.
+4. Double-click `AI SkillHub.exe`.
 
-## 核心能力
+If no release asset is available yet, you can still use the green `Code` button on GitHub and choose `Download ZIP`. After unzipping the repository, run `AI SkillHub.exe`.
 
-- 集中管理 GitHub Skills 仓库、本地 Skill 文件夹和 zip 导入来源。
-- 自动识别真正的 Skill：只有包含 `SKILL.md` 的目录才会安装为 Skill。
-- 区分 Skill 与 Prompt/参考资料，避免把普通提示词资料误装成 Skill。
-- 支持 Claude Code、Codex、Antigravity 的 skills 目录接管；没有安装的工具会自动跳过，不创建假目录。
-- 支持每日自动同步、立即同步、来源启用/停用、分类、标签、备注、重复技能提示和操作历史。
-- 内置系统体检、分享前检查、诊断包导出和 zip 安全预览测试。
-- UI 支持中文、English、한국어，包含浅色/可爱/深色主题。
+## What It Does
 
-## 快速开始
+- Manage GitHub Skill repositories, local Skill folders, and zip imports.
+- Install only real Skills: a folder must contain `SKILL.md` before it is treated as a Skill.
+- Keep Prompt/reference repositories as material instead of installing them as Skills.
+- Link shared Skills into Claude Code, Codex, and Antigravity when those tools are detected.
+- Skip missing AI coding tools instead of creating fake tool folders.
+- Support source categories, tags, notes, search, sorting, duplicate-name hints, and recent operation history.
+- Provide system checks, share checks, diagnostics export, and zip-import safety checks.
+- Support Chinese, English, and Korean UI text, with multiple visual themes.
 
-1. 下载或克隆本仓库。
-2. 双击运行 `AI SkillHub.exe`。
-3. 第一次启动时，程序会自动创建空白个人配置：`app/skillhub.config.json`。
-4. 在软件里粘贴 GitHub 仓库地址，或导入本地文件夹/zip。
-5. 点击“立即同步”，软件会把识别到的 Skill 链接到根目录 `skills` 文件夹。
-6. 打开“接管 AI 软件链接”后，Claude Code、Codex、Antigravity 会读取这套共享 skills。
+## Quick Start
 
-公开仓库默认不会带任何第三方 Skill。每个人应在自己的电脑上添加自己的 GitHub 来源。
+1. Run `AI SkillHub.exe`.
+2. Paste a GitHub repository URL, or import a local folder/zip.
+3. Click `Sync Now`.
+4. Turn on `Agent Links` if you want Claude Code, Codex, or Antigravity to read the shared Skills.
+5. Use `System Check` or `Share Check` when sending the app to another computer.
 
-## 推荐目录结构
+The public package does not include anyone's personal Skills. Each user adds their own Skill repositories after the first launch.
+
+## Requirements
+
+- Windows 10 or Windows 11.
+- Git for Windows, required for GitHub sync.
+- Microsoft Edge WebView2 Runtime, usually already included on modern Windows.
+
+Node, Python, Rust, and Visual Studio are not required for normal use.
+
+## First Launch Behavior
+
+On first launch, AI SkillHub creates a local config file:
 
 ```text
-AI_global_skills/
+app/skillhub.config.json
+```
+
+This file stores your own sources, tags, notes, and switches. It is local to your computer and is not included in this public repository.
+
+## Folder Layout
+
+```text
+AI-SkillHub/
   AI SkillHub.exe
   README.md
   使用说明.md
-  skills/                    # 本机生成，不提交到 GitHub
   app/
     assets/
     runtime/
-    src/
     ui/
     SkillHub.ps1
     Manage-AgentSkillLinks.ps1
     Export-SkillHubDiagnostics.ps1
     skillhub.config.example.json
-    skillhub.config.json       # 本机生成，不提交到 GitHub
-    github_sources/            # 本机克隆，不提交到 GitHub
-    reports/                   # 本机诊断，不提交到 GitHub
 ```
 
-## 安装要求
+The app will create local working folders such as `skills/`, `app/github_sources/`, and `app/reports/` when needed.
 
-- Windows 10/11。
-- Git for Windows：用于克隆和更新 GitHub 来源。
-- Microsoft Edge WebView2 Runtime：用于显示界面。大多数 Windows 11 电脑已经自带。
+## Common Questions
 
-普通使用不强制需要 Node、Python、Rust 或 Visual Studio。后续参与 v2/Tauri 开发时才需要这些开发工具。
+### Why are there no Skills after downloading?
 
-## 隐私与发布边界
+The public download does not bundle personal Skills. Add a GitHub Skill repository or import a local Skill folder/zip, then sync.
 
-这些内容被 `.gitignore` 明确排除，不会进入公开仓库：
+### What if I only use Claude Code and do not have Codex?
 
-- `skills/`
-- `app/github_sources/`
-- `app/skillhub.config.json`
-- `app/reports/`
-- `app/.skillhub/`
-- `app/webview2-data/`
-- `app/archives/`
-- `app/packages/`
-- `其它人的优秀项目案例/`
+That is fine. Codex is optional. AI SkillHub detects what is installed and skips missing tools.
 
-如果你要发布自己的版本，请先运行：
+### What if no AI coding tool is installed?
 
-```powershell
-git status --short
-```
+AI SkillHub will show that no linkable AI coding tool was detected. Install Claude Code, Codex, or Antigravity first, then enable agent linking again.
 
-确认没有把个人 Skill、诊断包、本机路径或私有配置放进暂存区。
+### Why does a Prompt repository not appear as an active Skill?
 
-## 开发技术栈
+Prompt/reference material is not a callable Skill. AI SkillHub keeps it as source material instead of installing it into `skills/`.
 
-当前 v1 版本：
+### Is zip import safe?
 
-- C# WinForms 外壳
+AI SkillHub previews zip files before import and blocks unsafe paths that try to escape the target folder.
+
+## Developer Notes
+
+Current v1 stack:
+
+- C# WinForms shell
 - Microsoft WebView2
-- 静态 HTML/CSS/JavaScript UI
-- PowerShell 同步与链接脚本
-- JSON 配置
+- Static HTML/CSS/JavaScript UI
+- PowerShell sync/link scripts
+- JSON config
 
-长期 v2 方向：
+Future v2 direction:
 
 - Tauri 2
 - React
 - TypeScript
-- Vite
-- Rust 后端
+- Rust
 - SQLite
 
-v1 会保持可用；v2 会在稳定后再逐步替换底层。
-
-## 常见问题
-
-### 为什么下载后没有任何 Skill？
-
-因为公开仓库不会附带个人 skills。你需要在软件里添加 GitHub Skill 仓库，或者导入本地 Skill/zip。
-
-### 对方电脑没有 Codex 会报错吗？
-
-不会。AI SkillHub 会检测 Codex 是否真的安装。没有安装时会显示为可忽略信息，不会创建假的 Codex 目录，也不会影响 Claude Code 使用。
-
-### Prompt 仓库为什么不出现在已启用技能里？
-
-Prompt/润色资料不是 Skill。AI SkillHub 会把它作为资料来源保存，但不会安装到 `skills/`，避免 AI 工具把普通文档当成可调用技能。
-
-### zip 导入安全吗？
-
-软件会先预览 zip，并验证解压路径不会逃出目标目录。带 `../` 这类危险路径的 zip 会被拒绝。
-
-## 项目状态
-
-当前公开准备版本：`v1.1.0`。
-
-已通过的关键检查包括：
-
-- `app/ui/app.js` 语法检查
-- `AI SkillHub.exe --self-test`
-- `AI SkillHub.exe --zip-preview-test`
-- 分享前检查：模拟只有 Claude、没有 Codex 的电脑
-
-## 作者
+## Author
 
 Developed by FrancisZhu.

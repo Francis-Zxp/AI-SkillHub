@@ -16,6 +16,8 @@
 /app/archives/
 /app/webview2-data/
 /app/packages/
+/release/
+/dist/
 /claude_skills_备份/
 /codex_skills_备份/
 /old_*/
