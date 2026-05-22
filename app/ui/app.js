@@ -16,7 +16,7 @@
     { id: "general", zh: "通用技能", en: "General", ko: "일반" }
   ];
 
-  const APP_VERSION = "v1.1.0";
+  const APP_VERSION = "v1.1.1";
   const defaultColumns = {
     skills: [200, 132, 168, 320, 330],
     repos: [210, 92, 132, 136, 118, 250, 300],
@@ -60,6 +60,26 @@
       openReport: "打开报告",
       exportDiagnostics: "导出诊断包",
       shareCheck: "分享前检查",
+      quickStart: "快速上手",
+      onboardingEyebrow: "新用户引导",
+      onboardingTitle: "三步完成第一次配置",
+      onboardingDesc: "先添加来源，再同步，最后接管已安装的 AI Coding 工具。没有安装的工具会自动跳过。",
+      guideStepSourceTitle: "添加 Skill 来源",
+      guideStepSourceBody: "粘贴 GitHub 地址，或导入本地文件夹 / zip。",
+      guideStepSyncTitle: "同步到共享目录",
+      guideStepSyncBody: "只会启用包含 SKILL.md 的目录。",
+      guideStepAgentTitle: "接管 AI 软件链接",
+      guideStepAgentBody: "Claude Code、Codex、Antigravity 检测到才会链接。",
+      hideGuide: "我知道了",
+      gotIt: "明白了",
+      helpTitle: "AI SkillHub 应该怎么用？",
+      helpIntro: "它不是内置 Skill 商店，而是帮你把 GitHub、zip、本地文件夹里的真实 Skill 统一管理，然后链接给已安装的 AI Coding 工具。",
+      helpSourceTitle: "来源",
+      helpSourceBody: "只有目录里有 SKILL.md，才会被当作 Skill。Prompt 仓库会保留为资料，不会强行安装。",
+      helpAgentTitle: "工具",
+      helpAgentBody: "没安装 Codex 或 Antigravity 不算错误。AI SkillHub 会跳过缺失工具，不创建假目录。",
+      helpShareTitle: "分享",
+      helpShareBody: "给别人前运行“分享前检查”。如果出错，让对方导出诊断包发回来。",
       openSkills: "打开技能目录",
       openSources: "打开来源目录",
       tipTitle: "使用提示",
@@ -193,6 +213,26 @@
       openReport: "Open Report",
       exportDiagnostics: "Export Diagnostics",
       shareCheck: "Share Check",
+      quickStart: "Quick Start",
+      onboardingEyebrow: "First-run guide",
+      onboardingTitle: "Finish the first setup in three steps",
+      onboardingDesc: "Add a source, sync it, then link detected AI coding tools. Missing tools are skipped.",
+      guideStepSourceTitle: "Add a Skill source",
+      guideStepSourceBody: "Paste a GitHub URL, or import a local folder / zip.",
+      guideStepSyncTitle: "Sync to the shared folder",
+      guideStepSyncBody: "Only folders with SKILL.md are enabled.",
+      guideStepAgentTitle: "Link AI tools",
+      guideStepAgentBody: "Claude Code, Codex, and Antigravity are linked only when detected.",
+      hideGuide: "Got it",
+      gotIt: "Got it",
+      helpTitle: "How should I use AI SkillHub?",
+      helpIntro: "It is not a built-in Skill store. It manages real Skills from GitHub, zip files, and local folders, then links them to installed AI coding tools.",
+      helpSourceTitle: "Sources",
+      helpSourceBody: "A folder must contain SKILL.md to be treated as a Skill. Prompt repositories are kept as reference material.",
+      helpAgentTitle: "Tools",
+      helpAgentBody: "Missing Codex or Antigravity is not an error. AI SkillHub skips missing tools and does not create fake folders.",
+      helpShareTitle: "Sharing",
+      helpShareBody: "Run Share Check before sending the app to others. If something fails, ask them to export diagnostics.",
       openSkills: "Open Skills",
       openSources: "Open Sources",
       tipTitle: "Tip",
@@ -326,6 +366,26 @@
       openReport: "보고서 열기",
       exportDiagnostics: "진단 패키지 내보내기",
       shareCheck: "공유 전 점검",
+      quickStart: "빠른 시작",
+      onboardingEyebrow: "처음 사용자 안내",
+      onboardingTitle: "세 단계로 첫 설정 완료",
+      onboardingDesc: "소스를 추가하고 동기화한 뒤 설치된 AI 코딩 도구에 연결합니다. 없는 도구는 건너뜁니다.",
+      guideStepSourceTitle: "Skill 소스 추가",
+      guideStepSourceBody: "GitHub 주소를 붙여넣거나 로컬 폴더 / zip을 가져옵니다.",
+      guideStepSyncTitle: "공유 폴더로 동기화",
+      guideStepSyncBody: "SKILL.md가 있는 폴더만 활성화합니다.",
+      guideStepAgentTitle: "AI 도구 연결",
+      guideStepAgentBody: "Claude Code, Codex, Antigravity가 감지될 때만 연결합니다.",
+      hideGuide: "알겠습니다",
+      gotIt: "알겠습니다",
+      helpTitle: "AI SkillHub는 어떻게 쓰나요?",
+      helpIntro: "내장 Skill 상점이 아니라 GitHub, zip, 로컬 폴더의 실제 Skill을 모아 설치된 AI 코딩 도구에 연결하는 앱입니다.",
+      helpSourceTitle: "소스",
+      helpSourceBody: "SKILL.md가 있는 폴더만 Skill로 처리합니다. Prompt 저장소는 참고 자료로 보관합니다.",
+      helpAgentTitle: "도구",
+      helpAgentBody: "Codex나 Antigravity가 없어도 오류가 아닙니다. 없는 도구는 건너뛰고 가짜 폴더를 만들지 않습니다.",
+      helpShareTitle: "공유",
+      helpShareBody: "다른 사람에게 보내기 전 공유 전 점검을 실행합니다. 문제가 있으면 진단 패키지를 내보내면 됩니다.",
       openSkills: "Skill 폴더 열기",
       openSources: "소스 폴더 열기",
       tipTitle: "사용 팁",
@@ -454,6 +514,7 @@
   let activeTagFilter = "all";
   let selectedRepo = null;
   let importPreview = null;
+  let guideHidden = localStorage.getItem("skillhub.guideHidden") === "true";
   let busy = false;
 
   const dom = {};
@@ -476,11 +537,13 @@
       "brandLogo", "versionLabel", "miniStatus", "skillCount", "repoCount", "lastSync", "linkStatus",
       "healthSummary", "healthOk", "healthWarn", "healthError", "healthInfo", "agentMatrix", "healthChecks",
       "dailyToggle", "linksToggle", "healthButton", "syncButton", "reportButton", "diagnosticsButton", "shareCheckButton", "skillsButton",
-      "sourcesButton", "chooseFolderButton", "chooseZipButton", "importPreview", "repoUrl", "repoType", "repoCategory", "repoNote", "repoTags", "addButton",
+      "helpButton", "sourcesButton", "chooseFolderButton", "chooseZipButton", "importPreview", "repoUrl", "repoType", "repoCategory", "repoNote", "repoTags", "addButton",
       "saveButton", "deleteButton", "skillsView", "reposView", "promptsView", "searchInput", "categoryFilter", "sortSelect", "listMeta", "presetStrip",
       "insightPanel", "detailPanel", "historyTimeline", "logBox",
       "clearLog", "selectedChip", "composerTitle", "toastHost", "confirmDialog",
-      "confirmTitle", "confirmBody", "cancelConfirm", "acceptConfirm"
+      "confirmTitle", "confirmBody", "cancelConfirm", "acceptConfirm", "onboardingCard",
+      "guideStepSource", "guideStepSync", "guideStepAgent", "hideGuideButton", "helpDialog",
+      "closeHelpButton", "acceptHelpButton"
     ].forEach(id => { dom[id] = document.getElementById(id); });
   }
 
@@ -538,11 +601,19 @@
     dom.reportButton.addEventListener("click", () => send("openReport"));
     dom.diagnosticsButton.addEventListener("click", () => send("exportDiagnostics"));
     dom.shareCheckButton.addEventListener("click", () => send("shareCheck"));
+    dom.helpButton.addEventListener("click", () => dom.helpDialog.showModal());
     dom.skillsButton.addEventListener("click", () => send("openSkills"));
     dom.sourcesButton.addEventListener("click", () => send("openSources"));
     dom.chooseFolderButton.addEventListener("click", () => send("chooseLocalSource"));
     dom.chooseZipButton.addEventListener("click", () => send("chooseZipSource"));
     dom.clearLog.addEventListener("click", () => { dom.logBox.textContent = ""; });
+    dom.hideGuideButton.addEventListener("click", () => {
+      guideHidden = true;
+      localStorage.setItem("skillhub.guideHidden", "true");
+      renderOnboarding();
+    });
+    dom.closeHelpButton.addEventListener("click", () => dom.helpDialog.close());
+    dom.acceptHelpButton.addEventListener("click", () => dom.helpDialog.close());
     dom.dailyToggle.addEventListener("click", () => send("setDailyUpdate", { enabled: !state.dailyUpdateEnabled }));
     dom.linksToggle.addEventListener("click", () => send("setManageLinks", { enabled: !state.manageAgentLinks }));
 
@@ -611,6 +682,7 @@
     renderMetrics();
     renderControls();
     renderHealth();
+    renderOnboarding();
     renderImportPreview();
     renderFormOptions();
     renderListControls();
@@ -694,6 +766,28 @@
       item.append(dot, body);
       dom.healthChecks.appendChild(item);
     });
+  }
+
+  function renderOnboarding() {
+    if (!dom.onboardingCard) return;
+    const repoCount = Number(state.repoCount || (state.repositories || []).length || 0);
+    const skillCount = Number(state.skillCount || (state.skills || []).length || 0);
+    const link = state.linkStatus || {};
+    const anyAgentDetected = Boolean(link.claudeDetected || link.codexDetected || link.antigravityDetected);
+    const anyAgentLinked = Boolean(link.claude || link.codexSkills || link.agentsSkills || link.antigravity);
+
+    const shouldShow = !guideHidden || repoCount === 0 || skillCount === 0;
+    dom.onboardingCard.hidden = !shouldShow;
+
+    setGuideStep(dom.guideStepSource, repoCount > 0);
+    setGuideStep(dom.guideStepSync, skillCount > 0);
+    setGuideStep(dom.guideStepAgent, anyAgentDetected && (state.manageAgentLinks || anyAgentLinked));
+  }
+
+  function setGuideStep(node, done) {
+    if (!node) return;
+    node.classList.toggle("done", !!done);
+    node.classList.toggle("todo", !done);
   }
 
   function renderImportPreview() {

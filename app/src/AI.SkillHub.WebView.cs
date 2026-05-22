@@ -192,7 +192,7 @@ namespace AISkillHubWeb
 
     public sealed class SkillHubWindow : Form
     {
-        private const string AppVersion = "1.1.0";
+        private const string AppVersion = "1.1.1";
         private const int WM_NCHITTEST = 0x84;
         private const int WM_NCLBUTTONDOWN = 0xA1;
         private const int HTCLIENT = 1;

@@ -110,6 +110,7 @@
           <button class="soft-action" id="reportButton" data-i18n="openReport">打开报告</button>
           <button class="soft-action" id="diagnosticsButton" data-i18n="exportDiagnostics">导出诊断包</button>
           <button class="soft-action" id="shareCheckButton" data-i18n="shareCheck">分享前检查</button>
+          <button class="soft-action" id="helpButton" data-i18n="quickStart">快速上手</button>
           <button class="soft-action" id="skillsButton" data-i18n="openSkills">打开技能目录</button>
           <button class="soft-action" id="sourcesButton" data-i18n="openSources">打开来源目录</button>
         </section>
@@ -121,6 +122,32 @@
       </aside>
 
       <section class="content-panel">
+        <section class="onboarding-card" id="onboardingCard">
+          <div class="onboarding-copy">
+            <span class="eyebrow" data-i18n="onboardingEyebrow">新用户引导</span>
+            <h2 data-i18n="onboardingTitle">三步完成第一次配置</h2>
+            <p data-i18n="onboardingDesc">先添加来源，再同步，最后接管已安装的 AI Coding 工具。没有安装的工具会自动跳过。</p>
+          </div>
+          <div class="onboarding-steps">
+            <div class="guide-step" id="guideStepSource">
+              <span class="guide-index">1</span>
+              <strong data-i18n="guideStepSourceTitle">添加 Skill 来源</strong>
+              <small data-i18n="guideStepSourceBody">粘贴 GitHub 地址，或导入本地文件夹 / zip。</small>
+            </div>
+            <div class="guide-step" id="guideStepSync">
+              <span class="guide-index">2</span>
+              <strong data-i18n="guideStepSyncTitle">同步到共享目录</strong>
+              <small data-i18n="guideStepSyncBody">只会启用包含 SKILL.md 的目录。</small>
+            </div>
+            <div class="guide-step" id="guideStepAgent">
+              <span class="guide-index">3</span>
+              <strong data-i18n="guideStepAgentTitle">接管 AI 软件链接</strong>
+              <small data-i18n="guideStepAgentBody">Claude Code、Codex、Antigravity 检测到才会链接。</small>
+            </div>
+          </div>
+          <button class="text-action compact" id="hideGuideButton" data-i18n="hideGuide">我知道了</button>
+        </section>
+
         <section class="composer-card">
           <div class="composer-head">
             <div>
@@ -223,6 +250,38 @@
       <div class="dialog-actions">
         <button class="soft-action compact" id="cancelConfirm">取消</button>
         <button class="danger-action compact" id="acceptConfirm">删除</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="helpDialog" class="help-dialog">
+    <div class="dialog-surface help-surface">
+      <div class="help-head">
+        <div>
+          <span class="eyebrow" data-i18n="quickStart">快速上手</span>
+          <h3 data-i18n="helpTitle">AI SkillHub 应该怎么用？</h3>
+        </div>
+        <button class="window-button" id="closeHelpButton" aria-label="Close">
+          <svg viewBox="0 0 20 20"><path d="M6 6l8 8M14 6l-8 8"/></svg>
+        </button>
+      </div>
+      <p data-i18n="helpIntro">它不是内置 Skill 商店，而是帮你把 GitHub、zip、本地文件夹里的真实 Skill 统一管理，然后链接给已安装的 AI Coding 工具。</p>
+      <div class="help-grid">
+        <div>
+          <strong data-i18n="helpSourceTitle">来源</strong>
+          <p data-i18n="helpSourceBody">只有目录里有 SKILL.md，才会被当作 Skill。Prompt 仓库会保留为资料，不会强行安装。</p>
+        </div>
+        <div>
+          <strong data-i18n="helpAgentTitle">工具</strong>
+          <p data-i18n="helpAgentBody">没安装 Codex 或 Antigravity 不算错误。AI SkillHub 会跳过缺失工具，不创建假目录。</p>
+        </div>
+        <div>
+          <strong data-i18n="helpShareTitle">分享</strong>
+          <p data-i18n="helpShareBody">给别人前运行“分享前检查”。如果出错，让对方导出诊断包发回来。</p>
+        </div>
+      </div>
+      <div class="dialog-actions">
+        <button class="primary-action compact" id="acceptHelpButton" data-i18n="gotIt">明白了</button>
       </div>
     </div>
   </dialog>

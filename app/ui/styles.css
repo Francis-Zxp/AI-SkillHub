@@ -396,7 +396,7 @@ body[data-theme="dark"] .titlebar {
 
 .content-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(210px, 1fr) 178px;
+  grid-template-rows: auto auto auto minmax(210px, 1fr) 178px;
   gap: 14px;
   overflow-x: hidden;
   overflow-y: auto;
@@ -410,12 +410,106 @@ body[data-theme="dark"] .titlebar {
 .health-card,
 .hint-card,
 .composer-card,
+.onboarding-card,
 .import-card,
 .list-card,
 .log-card {
   border: 1px solid var(--line);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+}
+
+.onboarding-card {
+  display: grid;
+  grid-template-columns: minmax(210px, .9fr) minmax(360px, 1.6fr) auto;
+  gap: 18px;
+  align-items: center;
+  padding: 18px;
+  border-radius: var(--radius-xl);
+  background:
+    radial-gradient(circle at 4% 12%, color-mix(in srgb, var(--primary-soft), transparent 28%), transparent 42%),
+    linear-gradient(135deg, var(--surface), color-mix(in srgb, var(--surface-soft), var(--surface) 55%));
+}
+
+.onboarding-card[hidden] {
+  display: none;
+}
+
+.onboarding-copy h2 {
+  margin: 10px 0 7px;
+  font-size: 21px;
+  line-height: 1.18;
+}
+
+.onboarding-copy p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.onboarding-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.guide-step {
+  position: relative;
+  min-height: 98px;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 6px;
+  padding: 14px 14px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, .66);
+  transition: transform .18s var(--ease), border-color .18s var(--ease), box-shadow .18s var(--ease);
+}
+
+.guide-step:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.guide-index {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--surface);
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.guide-step.done {
+  border-color: color-mix(in srgb, var(--success), transparent 58%);
+  background: color-mix(in srgb, var(--primary-soft), var(--surface) 58%);
+}
+
+.guide-step.done .guide-index::after {
+  content: "";
+  width: 8px;
+  height: 4px;
+  margin-left: -1px;
+  border-left: 2px solid var(--surface);
+  border-bottom: 2px solid var(--surface);
+  transform: rotate(-45deg);
+}
+
+.guide-step.done .guide-index {
+  font-size: 0;
+  background: var(--success);
+}
+
+.guide-step strong {
+  font-size: 13.5px;
+}
+
+.guide-step small {
+  color: var(--muted);
+  line-height: 1.45;
 }
 
 .hero-card {
@@ -1797,14 +1891,20 @@ body.resizing-columns .resize-handle::after {
   border-color: rgba(217, 67, 95, .26);
 }
 
-.confirm-dialog {
+.confirm-dialog,
+.help-dialog {
   width: min(420px, calc(100vw - 48px));
   padding: 0;
   border: 0;
   background: transparent;
 }
 
-.confirm-dialog::backdrop {
+.help-dialog {
+  width: min(760px, calc(100vw - 56px));
+}
+
+.confirm-dialog::backdrop,
+.help-dialog::backdrop {
   background: rgba(20, 49, 47, .28);
   backdrop-filter: blur(5px);
 }
@@ -1825,6 +1925,43 @@ body.resizing-columns .resize-handle::after {
   margin: 0;
   color: var(--muted);
   line-height: 1.55;
+}
+
+.help-surface {
+  padding: 24px;
+}
+
+.help-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.help-head h3 {
+  margin: 10px 0 0;
+  font-size: 23px;
+}
+
+.help-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.help-grid > div {
+  min-height: 132px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-soft), var(--surface) 58%);
+}
+
+.help-grid strong {
+  display: block;
+  margin-bottom: 8px;
 }
 
 .dialog-actions {
@@ -1923,6 +2060,14 @@ body.busy #miniStatus::before {
     grid-template-columns: minmax(260px, 1fr) minmax(120px, .36fr) minmax(140px, .42fr);
   }
 
+  .onboarding-card {
+    grid-template-columns: 1fr;
+  }
+
+  .onboarding-steps {
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+  }
+
   .field.wide {
     grid-column: 1 / -1;
   }
@@ -1988,6 +2133,11 @@ body.busy #miniStatus::before {
 
   .content-panel {
     min-height: 720px;
+  }
+
+  .onboarding-steps,
+  .help-grid {
+    grid-template-columns: 1fr;
   }
 }
 

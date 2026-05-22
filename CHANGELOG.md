@@ -2,6 +2,17 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## Unreleased - v1.1.1
+
+### Added
+
+- First-run guide panel with three setup steps: add source, sync, and link detected AI coding tools.
+- Quick Start help dialog in Chinese, English, and Korean.
+
+### Changed
+
+- App version label is prepared as `v1.1.1`.
+
 ## v1.1.0 - Public Sharing Release
 
 This is the first public GitHub-ready release of AI SkillHub.
@@ -32,4 +43,3 @@ This is the first public GitHub-ready release of AI SkillHub.
 ### Download
 
 Use the GitHub Releases page and download `AI-SkillHub-v1.1.0.zip`.
-
