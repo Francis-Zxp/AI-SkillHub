@@ -8,6 +8,8 @@ All notable changes to AI SkillHub are documented here.
 
 - First-run guide panel with three setup steps: add source, sync, and link detected AI coding tools.
 - Quick Start help dialog in Chinese, English, and Korean.
+- Troubleshooting bundle export for sharing sanitized operation, import, sync, diagnostics, and zip-preview reports.
+- Reports folder shortcut and `--troubleshooting-test` smoke test.
 
 ### Changed
 

@@ -38,6 +38,12 @@ namespace AISkillHubWeb
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "--troubleshooting-test")
+            {
+                Diagnostics.RunTroubleshootingTest();
+                return;
+            }
+
             Application.Run(new SkillHubWindow());
         }
 
@@ -188,6 +194,60 @@ namespace AISkillHubWeb
             sb.AppendLine("说明：该测试只使用临时 zip，不会写入正式 `skills` 或 `app\\github_sources`。");
             return sb.ToString();
         }
+
+        public static void RunTroubleshootingTest()
+        {
+            string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+            string app = Path.Combine(root, "app");
+            string reportDir = Path.Combine(app, "reports", "troubleshooting");
+            Directory.CreateDirectory(reportDir);
+
+            string jsonReport = Path.Combine(reportDir, "latest-troubleshooting-test.json");
+            string mdReport = Path.Combine(reportDir, "latest-troubleshooting-test.md");
+            var serializer = new JavaScriptSerializer { MaxJsonLength = 1024 * 1024 * 10 };
+            var payload = new Dictionary<string, object>();
+
+            try
+            {
+                string zipPath;
+                using (var form = new SkillHubWindow(true))
+                {
+                    zipPath = form.RunTroubleshootingBundleSmokeTest();
+                }
+
+                payload["ok"] = File.Exists(zipPath);
+                payload["generatedAt"] = DateTime.Now.ToString("o");
+                payload["zipPath"] = zipPath;
+                payload["length"] = File.Exists(zipPath) ? new FileInfo(zipPath).Length : 0;
+
+                File.WriteAllText(jsonReport, serializer.Serialize(payload), new UTF8Encoding(false));
+                File.WriteAllText(mdReport, BuildTroubleshootingTestMarkdown(payload), new UTF8Encoding(false));
+                if (!Convert.ToBoolean(payload["ok"])) Environment.ExitCode = 1;
+            }
+            catch (Exception ex)
+            {
+                payload["ok"] = false;
+                payload["generatedAt"] = DateTime.Now.ToString("o");
+                payload["error"] = ex.Message;
+                File.WriteAllText(jsonReport, serializer.Serialize(payload), new UTF8Encoding(false));
+                File.WriteAllText(mdReport, "# 排错包自动测试" + Environment.NewLine + Environment.NewLine + "状态：失败" + Environment.NewLine + Environment.NewLine + ex.Message, new UTF8Encoding(false));
+                Environment.ExitCode = 1;
+            }
+        }
+
+        private static string BuildTroubleshootingTestMarkdown(Dictionary<string, object> payload)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# 排错包自动测试");
+            sb.AppendLine();
+            sb.AppendLine("- 状态：" + (Convert.ToBoolean(payload["ok"]) ? "通过" : "失败"));
+            sb.AppendLine("- 时间：" + Convert.ToString(payload["generatedAt"]));
+            sb.AppendLine("- 输出：" + Convert.ToString(payload["zipPath"]));
+            sb.AppendLine("- 大小：" + Convert.ToString(payload["length"]) + " bytes");
+            sb.AppendLine();
+            sb.AppendLine("说明：该测试只打包 `app\\reports` 中的脱敏报告，不会包含 `skills` 或 `app\\github_sources` 的实际内容。");
+            return sb.ToString();
+        }
     }
 
     public sealed class SkillHubWindow : Form
@@ -302,9 +362,11 @@ namespace AISkillHubWeb
                 else if (action == "setManageLinks") SetManageLinks(GetBool(message, "enabled"));
                 else if (action == "openReport") OpenPath(Path.Combine(reportsRoot, "last-sync.md"));
                 else if (action == "exportDiagnostics" || action == "runHealthCheck") ExportDiagnostics();
+                else if (action == "exportTroubleshooting") ExportTroubleshootingBundle();
                 else if (action == "shareCheck") RunShareCheck();
                 else if (action == "openSkills") OpenPath(skillsRoot);
                 else if (action == "openSources") OpenPath(sourceRoot);
+                else if (action == "openReports") OpenPath(reportsRoot);
                 else if (action == "openSourcePath") OpenSourcePath(message);
                 else if (action == "openRoot") OpenPath(root);
                 else if (action == "window.minimize") WindowState = FormWindowState.Minimized;
@@ -898,6 +960,126 @@ namespace AISkillHubWeb
         private void ExportDiagnostics()
         {
             RunScriptAsync(diagnosticsScript, "");
+        }
+
+        private void ExportTroubleshootingBundle()
+        {
+            try
+            {
+                Busy(true, "troubleshooting");
+                string zipPath = CreateTroubleshootingBundle();
+                AppendOperationHistory("troubleshooting.export", "导出排错包", Path.GetFileName(zipPath), "success");
+                Toast("success", "已导出排错包");
+                Log("info", "排错包已生成：" + zipPath);
+                OpenPath(zipPath);
+            }
+            catch (Exception ex)
+            {
+                string clean = CompactError(ex.Message);
+                Toast("error", "导出排错包失败：" + clean);
+                Log("error", "导出排错包失败：" + clean);
+                AppendOperationHistory("troubleshooting.error", "导出排错包失败", clean, "error");
+            }
+            finally
+            {
+                Busy(false, "");
+                SendState();
+            }
+        }
+
+        public string RunTroubleshootingBundleSmokeTest()
+        {
+            return CreateTroubleshootingBundle();
+        }
+
+        private string CreateTroubleshootingBundle()
+        {
+            Directory.CreateDirectory(reportsRoot);
+            string bundleDir = Path.Combine(reportsRoot, "troubleshooting");
+            Directory.CreateDirectory(bundleDir);
+            string runId = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+            string zipPath = Path.Combine(bundleDir, "skillhub-troubleshooting_" + runId + ".zip");
+
+            using (var archive = ZipFile.Open(zipPath, ZipArchiveMode.Create))
+            {
+                AddTextEntry(archive, "README.md", BuildTroubleshootingReadme(runId));
+                AddSanitizedFile(archive, Path.Combine(reportsRoot, "operation-history.jsonl"), "reports/operation-history.jsonl");
+                AddSanitizedFile(archive, Path.Combine(reportsRoot, "import-history.jsonl"), "reports/import-history.jsonl");
+                AddSanitizedFile(archive, Path.Combine(reportsRoot, "last-sync.md"), "reports/last-sync.md");
+                AddSanitizedFile(archive, Path.Combine(reportsRoot, "latest-diagnostics.json"), "reports/latest-diagnostics.json");
+                AddSanitizedFile(archive, Path.Combine(reportsRoot, "zip-preview-test", "latest-zip-preview-test.json"), "reports/zip-preview-test/latest-zip-preview-test.json");
+                AddSanitizedFile(archive, Path.Combine(reportsRoot, "zip-preview-test", "latest-zip-preview-test.md"), "reports/zip-preview-test/latest-zip-preview-test.md");
+                AddLatestSanitizedFile(archive, Path.Combine(reportsRoot, "diagnostics"), "skillhub-diagnostics_*.md", "reports/diagnostics/latest-diagnostics.md");
+                AddLatestSanitizedFile(archive, Path.Combine(reportsRoot, "diagnostics"), "sanitized-config_*.json", "reports/diagnostics/sanitized-config.json");
+                AddLatestSanitizedFile(archive, Path.Combine(reportsRoot, "diagnostics"), "sanitized-last-sync_*.md", "reports/diagnostics/sanitized-last-sync.md");
+            }
+
+            return zipPath;
+        }
+
+        private string BuildTroubleshootingReadme(string runId)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("# AI SkillHub 排错包");
+            sb.AppendLine();
+            sb.AppendLine("- 生成时间：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+            sb.AppendLine("- 软件版本：v" + AppVersion);
+            sb.AppendLine("- 运行编号：" + runId);
+            sb.AppendLine();
+            sb.AppendLine("这个 zip 用于排查别人电脑上同步、导入、本地 AI 工具接管等问题。它只收集 `app\\reports` 里的报告副本，不包含你的 `skills`、`app\\github_sources`、WebView 缓存或 release 包。");
+            sb.AppendLine();
+            sb.AppendLine("路径会做基础脱敏：AI SkillHub 根目录会替换为 `{AI_SKILLHUB_ROOT}`，用户目录会替换为 `{USERPROFILE}`，其它 Windows 绝对路径会替换为 `{WINDOWS_PATH}`。");
+            sb.AppendLine();
+            sb.AppendLine("建议反馈问题时，把这个 zip 连同问题截图一起发送。");
+            return sb.ToString();
+        }
+
+        private void AddLatestSanitizedFile(ZipArchive archive, string dir, string pattern, string entryName)
+        {
+            if (!Directory.Exists(dir)) return;
+            string latest = Directory.GetFiles(dir, pattern)
+                .OrderByDescending(delegate(string path) { return File.GetLastWriteTimeUtc(path); })
+                .FirstOrDefault();
+            AddSanitizedFile(archive, latest, entryName);
+        }
+
+        private void AddSanitizedFile(ZipArchive archive, string sourcePath, string entryName)
+        {
+            if (String.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath)) return;
+            string text = File.ReadAllText(sourcePath, Encoding.UTF8);
+            AddTextEntry(archive, entryName, SanitizeTroubleshootingText(text));
+        }
+
+        private void AddTextEntry(ZipArchive archive, string entryName, string text)
+        {
+            var entry = archive.CreateEntry(entryName, CompressionLevel.Optimal);
+            using (var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false)))
+            {
+                writer.Write(text ?? "");
+            }
+        }
+
+        private string SanitizeTroubleshootingText(string text)
+        {
+            if (String.IsNullOrEmpty(text)) return "";
+            string sanitized = text;
+            string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            sanitized = ReplacePathVariants(sanitized, root, "{AI_SKILLHUB_ROOT}");
+            sanitized = ReplacePathVariants(sanitized, profile, "{USERPROFILE}");
+            sanitized = Regex.Replace(sanitized, "[A-Za-z]:\\\\\\\\[^\"'\\r\\n]+", "{WINDOWS_PATH}");
+            sanitized = Regex.Replace(sanitized, "[A-Za-z]:\\\\[^\"'\\r\\n]+", "{WINDOWS_PATH}");
+            sanitized = Regex.Replace(sanitized, "[A-Za-z]:/[^\"'\\r\\n]+", "{WINDOWS_PATH}");
+            return sanitized;
+        }
+
+        private string ReplacePathVariants(string text, string path, string token)
+        {
+            if (String.IsNullOrWhiteSpace(path)) return text;
+            string clean = path.TrimEnd('\\', '/');
+            string result = text.Replace(clean, token);
+            result = result.Replace(clean.Replace("\\", "/"), token);
+            result = result.Replace(clean.Replace("\\", "\\\\"), token);
+            return result;
         }
 
         private void RunShareCheck()

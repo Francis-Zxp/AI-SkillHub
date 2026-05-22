@@ -76,6 +76,7 @@
       syncNow: "立即同步",
       openReport: "打开报告",
       exportDiagnostics: "导出诊断包",
+      exportTroubleshooting: "导出排错包",
       shareCheck: "分享前检查",
       quickStart: "快速上手",
       onboardingEyebrow: "新用户引导",
@@ -96,9 +97,10 @@
       helpAgentTitle: "工具",
       helpAgentBody: "没安装 Codex 或 Antigravity 不算错误。AI SkillHub 会跳过缺失工具，不创建假目录。",
       helpShareTitle: "分享",
-      helpShareBody: "给别人前运行“分享前检查”。如果出错，让对方导出诊断包发回来。",
+      helpShareBody: "给别人前运行“分享前检查”。如果出错，让对方导出排错包发回来。",
       openSkills: "打开技能目录",
       openSources: "打开来源目录",
+      openReports: "打开报告目录",
       tipTitle: "使用提示",
       tipBody: "选择仓库来源后，可修改类型、分类和备注。Prompt 来源只保存资料，不会安装为 Skill。",
       addRepo: "添加仓库",
@@ -246,6 +248,7 @@
       syncNow: "Sync Now",
       openReport: "Open Report",
       exportDiagnostics: "Export Diagnostics",
+      exportTroubleshooting: "Export Troubleshooting",
       shareCheck: "Share Check",
       quickStart: "Quick Start",
       onboardingEyebrow: "First-run guide",
@@ -266,9 +269,10 @@
       helpAgentTitle: "Tools",
       helpAgentBody: "Missing Codex or Antigravity is not an error. AI SkillHub skips missing tools and does not create fake folders.",
       helpShareTitle: "Sharing",
-      helpShareBody: "Run Share Check before sending the app to others. If something fails, ask them to export diagnostics.",
+      helpShareBody: "Run Share Check before sending the app to others. If something fails, ask them to export a troubleshooting bundle.",
       openSkills: "Open Skills",
       openSources: "Open Sources",
+      openReports: "Open Reports Folder",
       tipTitle: "Tip",
       tipBody: "Select a source to edit type, category, and note. Prompt sources are kept as material and are not installed as Skills.",
       addRepo: "Add Source",
@@ -416,6 +420,7 @@
       syncNow: "지금 동기화",
       openReport: "보고서 열기",
       exportDiagnostics: "진단 패키지 내보내기",
+      exportTroubleshooting: "문제 해결 패키지 내보내기",
       shareCheck: "공유 전 점검",
       quickStart: "빠른 시작",
       onboardingEyebrow: "처음 사용자 안내",
@@ -436,9 +441,10 @@
       helpAgentTitle: "도구",
       helpAgentBody: "Codex나 Antigravity가 없어도 오류가 아닙니다. 없는 도구는 건너뛰고 가짜 폴더를 만들지 않습니다.",
       helpShareTitle: "공유",
-      helpShareBody: "다른 사람에게 보내기 전 공유 전 점검을 실행합니다. 문제가 있으면 진단 패키지를 내보내면 됩니다.",
+      helpShareBody: "다른 사람에게 보내기 전 공유 전 점검을 실행합니다. 문제가 있으면 문제 해결 패키지를 내보내면 됩니다.",
       openSkills: "Skill 폴더 열기",
       openSources: "소스 폴더 열기",
+      openReports: "보고서 폴더 열기",
       tipTitle: "사용 팁",
       tipBody: "저장소를 선택하면 유형, 분류, 메모를 수정할 수 있습니다. Prompt 소스는 자료로만 보관됩니다.",
       addRepo: "저장소 추가",
@@ -587,8 +593,8 @@
     [
       "brandLogo", "versionLabel", "miniStatus", "skillCount", "repoCount", "lastSync", "linkStatus",
       "healthSummary", "healthOk", "healthWarn", "healthError", "healthInfo", "agentMatrix", "healthChecks",
-      "dailyToggle", "linksToggle", "healthButton", "agentDetailsButton", "syncButton", "reportButton", "diagnosticsButton", "shareCheckButton", "skillsButton",
-      "helpButton", "sourcesButton", "chooseFolderButton", "chooseZipButton", "importPreview", "repoUrl", "repoType", "repoCategory", "repoNote", "repoTags", "addButton",
+      "dailyToggle", "linksToggle", "healthButton", "agentDetailsButton", "syncButton", "reportButton", "diagnosticsButton", "troubleshootingButton", "shareCheckButton", "skillsButton",
+      "helpButton", "sourcesButton", "reportsButton", "chooseFolderButton", "chooseZipButton", "importPreview", "repoUrl", "repoType", "repoCategory", "repoNote", "repoTags", "addButton",
       "saveButton", "deleteButton", "skillsView", "reposView", "promptsView", "searchInput", "categoryFilter", "sortSelect", "listMeta", "presetStrip",
       "insightPanel", "detailPanel", "historyTimeline", "logBox",
       "clearLog", "selectedChip", "composerTitle", "toastHost", "confirmDialog",
@@ -656,10 +662,12 @@
     });
     dom.reportButton.addEventListener("click", () => send("openReport"));
     dom.diagnosticsButton.addEventListener("click", () => send("exportDiagnostics"));
+    dom.troubleshootingButton.addEventListener("click", () => send("exportTroubleshooting"));
     dom.shareCheckButton.addEventListener("click", () => send("shareCheck"));
     dom.helpButton.addEventListener("click", () => dom.helpDialog.showModal());
     dom.skillsButton.addEventListener("click", () => send("openSkills"));
     dom.sourcesButton.addEventListener("click", () => send("openSources"));
+    dom.reportsButton.addEventListener("click", () => send("openReports"));
     dom.chooseFolderButton.addEventListener("click", () => send("chooseLocalSource"));
     dom.chooseZipButton.addEventListener("click", () => send("chooseZipSource"));
     dom.clearLog.addEventListener("click", () => { dom.logBox.textContent = ""; });
