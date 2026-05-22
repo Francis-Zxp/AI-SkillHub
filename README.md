@@ -15,6 +15,8 @@ Recommended for normal users:
 
 If no release asset is available yet, you can still use the green `Code` button on GitHub and choose `Download ZIP`. After unzipping the repository, run `AI SkillHub.exe`.
 
+See `CHANGELOG.md` and `docs/release-notes/v1.1.0.md` for version details.
+
 ## What It Does
 
 - Manage GitHub Skill repositories, local Skill folders, and zip imports.
