@@ -2070,6 +2070,10 @@ body.resizing-columns .resize-handle::after {
   margin-top: 18px;
 }
 
+.developer-card.wide {
+  grid-column: 1 / -1;
+}
+
 .developer-card {
   padding: 15px;
   border: 1px solid var(--line);

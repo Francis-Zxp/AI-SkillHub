@@ -88,6 +88,9 @@
       developerCard_share: "分享验收",
       developerCard_release: "发布预检",
       developerCard_troubleshooting: "排错包",
+      devSuiteTitle: "完整验收",
+      devSuiteBody: "按顺序运行系统体检、分享验收、排错包和发布预检，适合打包前一键确认。",
+      runAcceptanceSuite: "运行完整验收",
       devDiagnosticsTitle: "系统体检",
       devDiagnosticsBody: "重新生成当前电脑的诊断报告，确认 Git、WebView2、配置、skills 和 AI 工具状态。",
       devShareTitle: "分享验收",
@@ -281,6 +284,9 @@
       developerCard_share: "Share Validation",
       developerCard_release: "Release Preflight",
       developerCard_troubleshooting: "Troubleshooting Bundle",
+      devSuiteTitle: "Full Acceptance",
+      devSuiteBody: "Run system check, share validation, troubleshooting bundle, and release preflight in order before packaging.",
+      runAcceptanceSuite: "Run Full Acceptance",
       devDiagnosticsTitle: "System Check",
       devDiagnosticsBody: "Regenerate diagnostics for Git, WebView2, config, skills, and AI tool status.",
       devShareTitle: "Share Validation",
@@ -474,6 +480,9 @@
       developerCard_share: "공유 검증",
       developerCard_release: "릴리스 사전 점검",
       developerCard_troubleshooting: "문제 해결 패키지",
+      devSuiteTitle: "전체 검증",
+      devSuiteBody: "패키징 전에 시스템 점검, 공유 검증, 문제 해결 패키지, 릴리스 사전 점검을 순서대로 실행합니다.",
+      runAcceptanceSuite: "전체 검증 실행",
       devDiagnosticsTitle: "시스템 점검",
       devDiagnosticsBody: "Git, WebView2, 설정, skills, AI 도구 상태 진단을 다시 생성합니다.",
       devShareTitle: "공유 검증",
@@ -667,7 +676,7 @@
       "closeAgentButton", "acceptAgentButton", "agentRunCheckButton", "developerDialog",
       "closeDeveloperButton", "acceptDeveloperButton", "devRunDiagnosticsButton",
       "devRunShareButton", "devRunTroubleButton", "devRunReleaseButton",
-      "devOpenReportsButton", "devOpenReleaseButton", "developerStatusGrid"
+      "devRunAllButton", "devOpenReportsButton", "devOpenReleaseButton", "developerStatusGrid"
     ].forEach(id => { dom[id] = document.getElementById(id); });
   }
 
@@ -757,6 +766,7 @@
     dom.devRunShareButton.addEventListener("click", () => send("runShareRecipientTest"));
     dom.devRunTroubleButton.addEventListener("click", () => send("exportTroubleshooting"));
     dom.devRunReleaseButton.addEventListener("click", () => send("runReleasePreflight"));
+    dom.devRunAllButton.addEventListener("click", () => send("runAcceptanceSuite"));
     dom.devOpenReportsButton.addEventListener("click", () => send("openReports"));
     dom.devOpenReleaseButton.addEventListener("click", () => send("openRelease"));
     dom.dailyToggle.addEventListener("click", () => send("setDailyUpdate", { enabled: !state.dailyUpdateEnabled }));

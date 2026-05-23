@@ -14,6 +14,7 @@ All notable changes to AI SkillHub are documented here.
 - Release package builder plus `--release-preflight`, generating an allowlisted zip, SHA256 file, and privacy audit report before publishing.
 - In-app Release Center for system checks, share-recipient validation, troubleshooting export, release preflight, and report/release folder shortcuts.
 - Latest-result cards inside the Release Center, showing recent diagnostics, share validation, release preflight, and troubleshooting bundle status.
+- One-click full acceptance action inside the Release Center, running system check, share validation, troubleshooting bundle export, and release preflight in order.
 
 ### Changed
 

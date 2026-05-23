@@ -453,6 +453,7 @@ namespace AISkillHubWeb
                 else if (action == "exportDiagnostics" || action == "runHealthCheck") ExportDiagnostics();
                 else if (action == "exportTroubleshooting") ExportTroubleshootingBundle();
                 else if (action == "shareCheck") RunShareCheck();
+                else if (action == "runAcceptanceSuite") RunAcceptanceSuiteAsync();
                 else if (action == "runShareRecipientTest") RunScriptAsync(Path.Combine(appRoot, "Test-ShareRecipientExperience.ps1"), "-Quiet");
                 else if (action == "runReleasePreflight") RunScriptAsync(releaseScript, "-Quiet");
                 else if (action == "openSkills") OpenPath(skillsRoot);
@@ -1080,6 +1081,42 @@ namespace AISkillHubWeb
             }
         }
 
+        private async void RunAcceptanceSuiteAsync()
+        {
+            try
+            {
+                Busy(true, "acceptance");
+                Log("info", "开始完整验收：系统体检 -> 分享验收 -> 排错包 -> 发布预检");
+
+                string diagnosticsOutput = await Task.Run(delegate { return RunProjectScript(diagnosticsScript, ""); });
+                Log("info", diagnosticsOutput.Trim());
+
+                string shareOutput = await Task.Run(delegate { return RunProjectScript(Path.Combine(appRoot, "Test-ShareRecipientExperience.ps1"), "-Quiet"); });
+                Log("info", shareOutput.Trim());
+
+                string zipPath = await Task.Run(delegate { return CreateTroubleshootingBundle(); });
+                Log("info", "排错包已生成：" + zipPath);
+
+                string releaseOutput = await Task.Run(delegate { return RunProjectScript(releaseScript, "-Quiet"); });
+                Log("info", releaseOutput.Trim());
+
+                AppendOperationHistory("acceptance.suite", "完整验收完成", "系统体检、分享验收、排错包、发布预检", "success");
+                Toast("success", "完整验收完成");
+            }
+            catch (Exception ex)
+            {
+                string clean = CompactError(ex.Message);
+                Toast("error", "完整验收失败：" + clean);
+                Log("error", "完整验收失败：" + clean);
+                AppendOperationHistory("acceptance.error", "完整验收失败", clean, "error");
+            }
+            finally
+            {
+                Busy(false, "");
+                SendState();
+            }
+        }
+
         public string RunTroubleshootingBundleSmokeTest()
         {
             return CreateTroubleshootingBundle();
@@ -1221,13 +1258,8 @@ namespace AISkillHubWeb
             try
             {
                 string fullScript = Path.GetFullPath(script);
-                string appFull = Path.GetFullPath(appRoot).TrimEnd('\\') + "\\";
-                if (!fullScript.StartsWith(appFull, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("拒绝运行项目目录外的脚本。");
-                if (!File.Exists(fullScript)) throw new FileNotFoundException("脚本不存在", fullScript);
-
                 Busy(true, Path.GetFileName(fullScript));
-                string output = await Task.Run(delegate { return RunProcess(PowerShellPath(), "-NoProfile -ExecutionPolicy Bypass -File \"" + fullScript + "\"" + (String.IsNullOrWhiteSpace(extraArgs) ? "" : " " + extraArgs)); });
+                string output = await Task.Run(delegate { return RunProjectScript(script, extraArgs); });
                 Log("info", output.Trim());
                 AppendOperationHistory("script.success", "操作完成", Path.GetFileName(fullScript), "success");
                 Toast("success", "操作完成");
@@ -1243,6 +1275,16 @@ namespace AISkillHubWeb
                 Busy(false, "");
                 SendState();
             }
+        }
+
+        private string RunProjectScript(string script, string extraArgs)
+        {
+            string fullScript = Path.GetFullPath(script);
+            string appFull = Path.GetFullPath(appRoot).TrimEnd('\\') + "\\";
+            if (!fullScript.StartsWith(appFull, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("拒绝运行项目目录外的脚本。");
+            if (!File.Exists(fullScript)) throw new FileNotFoundException("脚本不存在", fullScript);
+            return RunProcess(PowerShellPath(), "-NoProfile -ExecutionPolicy Bypass -File \"" + fullScript + "\"" + (String.IsNullOrWhiteSpace(extraArgs) ? "" : " " + extraArgs));
         }
 
         private string RunProcess(string fileName, string arguments)
