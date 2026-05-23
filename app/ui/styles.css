@@ -2063,6 +2063,40 @@ body.resizing-columns .resize-handle::after {
   white-space: nowrap;
 }
 
+.roadmap-card {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--primary), transparent 70%);
+  border-radius: 20px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--primary-soft), white 24%), transparent 55%),
+    var(--surface-strong);
+}
+
+.roadmap-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.roadmap-top span {
+  flex: none;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary), white 84%);
+  color: var(--primary-strong);
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.roadmap-card small {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+}
+
 .developer-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
