@@ -114,6 +114,7 @@
           <button class="soft-action" id="diagnosticsButton" data-i18n="exportDiagnostics">导出诊断包</button>
           <button class="soft-action" id="troubleshootingButton" data-i18n="exportTroubleshooting">导出排错包</button>
           <button class="soft-action" id="shareCheckButton" data-i18n="shareCheck">分享前检查</button>
+          <button class="soft-action" id="developerButton" data-i18n="developerCenter">发布中心</button>
           <button class="soft-action" id="helpButton" data-i18n="quickStart">快速上手</button>
           <button class="soft-action" id="skillsButton" data-i18n="openSkills">打开技能目录</button>
           <button class="soft-action" id="sourcesButton" data-i18n="openSources">打开来源目录</button>
@@ -307,6 +308,48 @@
       <div class="dialog-actions">
         <button class="soft-action compact" id="agentRunCheckButton" data-i18n="runHealthCheck">立即体检</button>
         <button class="primary-action compact" id="acceptAgentButton" data-i18n="gotIt">明白了</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="developerDialog" class="developer-dialog">
+    <div class="dialog-surface developer-surface">
+      <div class="help-head">
+        <div>
+          <span class="eyebrow" data-i18n="developerCenter">发布中心</span>
+          <h3 data-i18n="developerTitle">开发者与发布检查</h3>
+        </div>
+        <button class="window-button" id="closeDeveloperButton" aria-label="Close">
+          <svg viewBox="0 0 20 20"><path d="M6 6l8 8M14 6l-8 8"/></svg>
+        </button>
+      </div>
+      <p data-i18n="developerIntro">这些动作只用于开发、分享前验收和发布前检查。正式上传 GitHub Release 前，先让这里全部通过。</p>
+      <div class="developer-grid">
+        <article class="developer-card">
+          <strong data-i18n="devDiagnosticsTitle">系统体检</strong>
+          <p data-i18n="devDiagnosticsBody">重新生成当前电脑的诊断报告，确认 Git、WebView2、配置、skills 和 AI 工具状态。</p>
+          <button class="soft-action compact" id="devRunDiagnosticsButton" data-i18n="runHealthCheck">立即体检</button>
+        </article>
+        <article class="developer-card">
+          <strong data-i18n="devShareTitle">分享验收</strong>
+          <p data-i18n="devShareBody">模拟干净下载用户、中文路径、缺 Codex、无 AI 工具、缺 Git 和缺 WebView2。</p>
+          <button class="soft-action compact" id="devRunShareButton" data-i18n="runShareValidation">运行分享验收</button>
+        </article>
+        <article class="developer-card">
+          <strong data-i18n="devTroubleTitle">排错包</strong>
+          <p data-i18n="devTroubleBody">导出脱敏报告包，方便别人电脑出错后发回来分析。</p>
+          <button class="soft-action compact" id="devRunTroubleButton" data-i18n="exportTroubleshooting">导出排错包</button>
+        </article>
+        <article class="developer-card accent">
+          <strong data-i18n="devReleaseTitle">发布预检</strong>
+          <p data-i18n="devReleaseBody">生成白名单 zip 和 SHA256，并检查包内没有个人 skills、来源、配置、报告或缓存。</p>
+          <button class="primary-action compact" id="devRunReleaseButton" data-i18n="runReleasePreflight">运行发布预检</button>
+        </article>
+      </div>
+      <div class="developer-footer">
+        <button class="soft-action compact" id="devOpenReportsButton" data-i18n="openReports">打开报告目录</button>
+        <button class="soft-action compact" id="devOpenReleaseButton" data-i18n="openReleaseFolder">打开发布目录</button>
+        <button class="primary-action compact" id="acceptDeveloperButton" data-i18n="gotIt">明白了</button>
       </div>
     </div>
   </dialog>

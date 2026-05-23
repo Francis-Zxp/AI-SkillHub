@@ -363,6 +363,7 @@ namespace AISkillHubWeb
         private readonly string skillHubScript;
         private readonly string linksScript;
         private readonly string diagnosticsScript;
+        private readonly string releaseScript;
         private readonly string installTaskScript;
         private readonly string uninstallTaskScript;
         private readonly bool diagnosticMode;
@@ -383,6 +384,7 @@ namespace AISkillHubWeb
             skillHubScript = Path.Combine(appRoot, "SkillHub.ps1");
             linksScript = Path.Combine(appRoot, "Manage-AgentSkillLinks.ps1");
             diagnosticsScript = Path.Combine(appRoot, "Export-SkillHubDiagnostics.ps1");
+            releaseScript = Path.Combine(appRoot, "Build-SkillHubReleasePackage.ps1");
             installTaskScript = Path.Combine(appRoot, "安装每日自动更新任务.ps1");
             uninstallTaskScript = Path.Combine(appRoot, "卸载每日自动更新任务.ps1");
 
@@ -451,9 +453,12 @@ namespace AISkillHubWeb
                 else if (action == "exportDiagnostics" || action == "runHealthCheck") ExportDiagnostics();
                 else if (action == "exportTroubleshooting") ExportTroubleshootingBundle();
                 else if (action == "shareCheck") RunShareCheck();
+                else if (action == "runShareRecipientTest") RunScriptAsync(Path.Combine(appRoot, "Test-ShareRecipientExperience.ps1"), "-Quiet");
+                else if (action == "runReleasePreflight") RunScriptAsync(releaseScript, "-Quiet");
                 else if (action == "openSkills") OpenPath(skillsRoot);
                 else if (action == "openSources") OpenPath(sourceRoot);
                 else if (action == "openReports") OpenPath(reportsRoot);
+                else if (action == "openRelease") OpenReleaseFolder();
                 else if (action == "openSourcePath") OpenSourcePath(message);
                 else if (action == "openRoot") OpenPath(root);
                 else if (action == "window.minimize") WindowState = FormWindowState.Minimized;
@@ -1172,6 +1177,13 @@ namespace AISkillHubWeb
         private void RunShareCheck()
         {
             RunScriptAsync(diagnosticsScript, "-Quiet -SimulateMissingCodex");
+        }
+
+        private void OpenReleaseFolder()
+        {
+            string releaseRoot = Path.Combine(root, "release");
+            Directory.CreateDirectory(releaseRoot);
+            OpenPath(releaseRoot);
         }
 
         private void OpenSourcePath(Dictionary<string, object> message)

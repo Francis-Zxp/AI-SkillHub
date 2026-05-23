@@ -1900,7 +1900,8 @@ body.resizing-columns .resize-handle::after {
 
 .confirm-dialog,
 .help-dialog,
-.agent-dialog {
+.agent-dialog,
+.developer-dialog {
   width: min(420px, calc(100vw - 48px));
   padding: 0;
   border: 0;
@@ -1908,13 +1909,15 @@ body.resizing-columns .resize-handle::after {
 }
 
 .help-dialog,
-.agent-dialog {
+.agent-dialog,
+.developer-dialog {
   width: min(760px, calc(100vw - 56px));
 }
 
 .confirm-dialog::backdrop,
 .help-dialog::backdrop,
-.agent-dialog::backdrop {
+.agent-dialog::backdrop,
+.developer-dialog::backdrop {
   background: rgba(20, 49, 47, .28);
   backdrop-filter: blur(5px);
 }
@@ -1972,6 +1975,49 @@ body.resizing-columns .resize-handle::after {
 .help-grid strong {
   display: block;
   margin-bottom: 8px;
+}
+
+.developer-surface {
+  padding: 24px;
+}
+
+.developer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.developer-card {
+  padding: 15px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-strong), var(--primary-soft) 14%), var(--surface-strong));
+  box-shadow: 0 12px 26px color-mix(in srgb, var(--ink), transparent 94%);
+}
+
+.developer-card.accent {
+  border-color: color-mix(in srgb, var(--primary), transparent 56%);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--primary-soft), white 32%), var(--surface-strong));
+}
+
+.developer-card strong {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--ink);
+}
+
+.developer-card p {
+  min-height: 48px;
+  margin-bottom: 12px;
+}
+
+.developer-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 .agent-surface {
@@ -2226,6 +2272,7 @@ body.busy #miniStatus::before {
 
   .onboarding-steps,
   .help-grid,
+  .developer-grid,
   .agent-detail-grid {
     grid-template-columns: 1fr;
   }

@@ -26,6 +26,7 @@ See `CHANGELOG.md` and `docs/release-notes/v1.1.0.md` for version details.
 - Skip missing AI coding tools instead of creating fake tool folders.
 - Support source categories, tags, notes, search, sorting, duplicate-name hints, and recent operation history.
 - Provide system checks, share checks, diagnostics export, troubleshooting bundles, zip-import safety checks, and clean-recipient validation.
+- Use the in-app Release Center to run share validation, release preflight, and open generated reports/packages.
 - Support Chinese, English, and Korean UI text, with multiple visual themes.
 
 ## Quick Start

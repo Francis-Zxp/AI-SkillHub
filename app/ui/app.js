@@ -78,6 +78,20 @@
       exportDiagnostics: "导出诊断包",
       exportTroubleshooting: "导出排错包",
       shareCheck: "分享前检查",
+      developerCenter: "发布中心",
+      developerTitle: "开发者与发布检查",
+      developerIntro: "这些动作只用于开发、分享前验收和发布前检查。正式上传 GitHub Release 前，先让这里全部通过。",
+      devDiagnosticsTitle: "系统体检",
+      devDiagnosticsBody: "重新生成当前电脑的诊断报告，确认 Git、WebView2、配置、skills 和 AI 工具状态。",
+      devShareTitle: "分享验收",
+      devShareBody: "模拟干净下载用户、中文路径、缺 Codex、无 AI 工具、缺 Git 和缺 WebView2。",
+      devTroubleTitle: "排错包",
+      devTroubleBody: "导出脱敏报告包，方便别人电脑出错后发回来分析。",
+      devReleaseTitle: "发布预检",
+      devReleaseBody: "生成白名单 zip 和 SHA256，并检查包内没有个人 skills、来源、配置、报告或缓存。",
+      runShareValidation: "运行分享验收",
+      runReleasePreflight: "运行发布预检",
+      openReleaseFolder: "打开发布目录",
       quickStart: "快速上手",
       onboardingEyebrow: "新用户引导",
       onboardingTitle: "三步完成第一次配置",
@@ -250,6 +264,20 @@
       exportDiagnostics: "Export Diagnostics",
       exportTroubleshooting: "Export Troubleshooting",
       shareCheck: "Share Check",
+      developerCenter: "Release Center",
+      developerTitle: "Developer and release checks",
+      developerIntro: "Use these actions for development, share validation, and release preflight. Before uploading a GitHub Release, make sure they pass.",
+      devDiagnosticsTitle: "System Check",
+      devDiagnosticsBody: "Regenerate diagnostics for Git, WebView2, config, skills, and AI tool status.",
+      devShareTitle: "Share Validation",
+      devShareBody: "Simulate a clean recipient, Chinese path, missing Codex, no AI tools, missing Git, and missing WebView2.",
+      devTroubleTitle: "Troubleshooting Bundle",
+      devTroubleBody: "Export a sanitized report bundle for another computer's failure report.",
+      devReleaseTitle: "Release Preflight",
+      devReleaseBody: "Build an allowlisted zip and SHA256, then audit for personal skills, sources, config, reports, and caches.",
+      runShareValidation: "Run Share Validation",
+      runReleasePreflight: "Run Release Preflight",
+      openReleaseFolder: "Open Release Folder",
       quickStart: "Quick Start",
       onboardingEyebrow: "First-run guide",
       onboardingTitle: "Finish the first setup in three steps",
@@ -422,6 +450,20 @@
       exportDiagnostics: "진단 패키지 내보내기",
       exportTroubleshooting: "문제 해결 패키지 내보내기",
       shareCheck: "공유 전 점검",
+      developerCenter: "릴리스 센터",
+      developerTitle: "개발자 및 릴리스 점검",
+      developerIntro: "개발, 공유 전 검증, 릴리스 전 점검에 사용하는 기능입니다. GitHub Release에 올리기 전에 모두 통과시키세요.",
+      devDiagnosticsTitle: "시스템 점검",
+      devDiagnosticsBody: "Git, WebView2, 설정, skills, AI 도구 상태 진단을 다시 생성합니다.",
+      devShareTitle: "공유 검증",
+      devShareBody: "깨끗한 사용자, 한글 경로, Codex 없음, AI 도구 없음, Git 없음, WebView2 없음을 시뮬레이션합니다.",
+      devTroubleTitle: "문제 해결 패키지",
+      devTroubleBody: "다른 컴퓨터의 오류 분석을 위한 비식별 보고서 패키지를 내보냅니다.",
+      devReleaseTitle: "릴리스 사전 점검",
+      devReleaseBody: "허용 목록 zip과 SHA256을 만들고 개인 skills, 소스, 설정, 보고서, 캐시가 들어가지 않았는지 점검합니다.",
+      runShareValidation: "공유 검증 실행",
+      runReleasePreflight: "릴리스 사전 점검 실행",
+      openReleaseFolder: "릴리스 폴더 열기",
       quickStart: "빠른 시작",
       onboardingEyebrow: "처음 사용자 안내",
       onboardingTitle: "세 단계로 첫 설정 완료",
@@ -593,7 +635,7 @@
     [
       "brandLogo", "versionLabel", "miniStatus", "skillCount", "repoCount", "lastSync", "linkStatus",
       "healthSummary", "healthOk", "healthWarn", "healthError", "healthInfo", "agentMatrix", "healthChecks",
-      "dailyToggle", "linksToggle", "healthButton", "agentDetailsButton", "syncButton", "reportButton", "diagnosticsButton", "troubleshootingButton", "shareCheckButton", "skillsButton",
+      "dailyToggle", "linksToggle", "healthButton", "agentDetailsButton", "syncButton", "reportButton", "diagnosticsButton", "troubleshootingButton", "shareCheckButton", "developerButton", "skillsButton",
       "helpButton", "sourcesButton", "reportsButton", "chooseFolderButton", "chooseZipButton", "importPreview", "repoUrl", "repoType", "repoCategory", "repoNote", "repoTags", "addButton",
       "saveButton", "deleteButton", "skillsView", "reposView", "promptsView", "searchInput", "categoryFilter", "sortSelect", "listMeta", "presetStrip",
       "insightPanel", "detailPanel", "historyTimeline", "logBox",
@@ -601,7 +643,10 @@
       "confirmTitle", "confirmBody", "cancelConfirm", "acceptConfirm", "onboardingCard",
       "guideStepSource", "guideStepSync", "guideStepAgent", "hideGuideButton", "helpDialog",
       "closeHelpButton", "acceptHelpButton", "agentDialog", "agentDetailList",
-      "closeAgentButton", "acceptAgentButton", "agentRunCheckButton"
+      "closeAgentButton", "acceptAgentButton", "agentRunCheckButton", "developerDialog",
+      "closeDeveloperButton", "acceptDeveloperButton", "devRunDiagnosticsButton",
+      "devRunShareButton", "devRunTroubleButton", "devRunReleaseButton",
+      "devOpenReportsButton", "devOpenReleaseButton"
     ].forEach(id => { dom[id] = document.getElementById(id); });
   }
 
@@ -664,6 +709,7 @@
     dom.diagnosticsButton.addEventListener("click", () => send("exportDiagnostics"));
     dom.troubleshootingButton.addEventListener("click", () => send("exportTroubleshooting"));
     dom.shareCheckButton.addEventListener("click", () => send("shareCheck"));
+    dom.developerButton.addEventListener("click", () => dom.developerDialog.showModal());
     dom.helpButton.addEventListener("click", () => dom.helpDialog.showModal());
     dom.skillsButton.addEventListener("click", () => send("openSkills"));
     dom.sourcesButton.addEventListener("click", () => send("openSources"));
@@ -684,6 +730,14 @@
       dom.agentDialog.close();
       send("runHealthCheck");
     });
+    dom.closeDeveloperButton.addEventListener("click", () => dom.developerDialog.close());
+    dom.acceptDeveloperButton.addEventListener("click", () => dom.developerDialog.close());
+    dom.devRunDiagnosticsButton.addEventListener("click", () => send("runHealthCheck"));
+    dom.devRunShareButton.addEventListener("click", () => send("runShareRecipientTest"));
+    dom.devRunTroubleButton.addEventListener("click", () => send("exportTroubleshooting"));
+    dom.devRunReleaseButton.addEventListener("click", () => send("runReleasePreflight"));
+    dom.devOpenReportsButton.addEventListener("click", () => send("openReports"));
+    dom.devOpenReleaseButton.addEventListener("click", () => send("openRelease"));
     dom.dailyToggle.addEventListener("click", () => send("setDailyUpdate", { enabled: !state.dailyUpdateEnabled }));
     dom.linksToggle.addEventListener("click", () => send("setManageLinks", { enabled: !state.manageAgentLinks }));
 

@@ -12,6 +12,7 @@ All notable changes to AI SkillHub are documented here.
 - Reports folder shortcut and `--troubleshooting-test` smoke test.
 - Share-recipient validation script plus `--share-recipient-test`, covering a clean downloaded copy, first-run empty config, paths with spaces/Chinese, missing Codex, no detected AI tools, missing Git, and missing WebView2.
 - Release package builder plus `--release-preflight`, generating an allowlisted zip, SHA256 file, and privacy audit report before publishing.
+- In-app Release Center for system checks, share-recipient validation, troubleshooting export, release preflight, and report/release folder shortcuts.
 
 ### Changed
 
