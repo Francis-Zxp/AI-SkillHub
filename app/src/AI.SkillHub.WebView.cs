@@ -498,6 +498,7 @@ namespace AISkillHubWeb
                 state["promptCount"] = repos.Count(delegate(RepoView r) { return r.type == "prompt"; });
                 state["linkStatus"] = LoadLinkStatus(skills.Count);
                 state["diagnostics"] = LoadDiagnosticsOverview();
+                state["releaseCenter"] = LoadReleaseCenterOverview();
                 state["operationHistory"] = LoadOperationHistory();
                 state["logo"] = Path.Combine(appRoot, "assets", "AI SkillHub.logo.ui.png");
                 state["version"] = "v" + AppVersion;
@@ -1497,6 +1498,134 @@ namespace AISkillHubWeb
             }
 
             return overview;
+        }
+
+        private Dictionary<string, object> LoadReleaseCenterOverview()
+        {
+            var overview = new Dictionary<string, object>();
+            var cards = new List<Dictionary<string, object>>();
+
+            cards.Add(LoadJsonStatusCard(
+                "diagnostics",
+                "系统体检",
+                Path.Combine(reportsRoot, "latest-diagnostics.json"),
+                "overallStatus",
+                "generatedAt",
+                delegate(Dictionary<string, object> raw)
+                {
+                    var summary = Dict(raw, "summary");
+                    if (summary == null) return "尚未生成完整摘要。";
+                    return "OK " + DictInt(summary, "ok") + " / WARN " + DictInt(summary, "warn") + " / ERROR " + DictInt(summary, "error") + " / INFO " + DictInt(summary, "info");
+                }));
+
+            cards.Add(LoadJsonStatusCard(
+                "share",
+                "分享验收",
+                Path.Combine(reportsRoot, "share-recipient-test", "latest-share-recipient-test.json"),
+                "ok",
+                "generatedAt",
+                delegate(Dictionary<string, object> raw)
+                {
+                    int total = 0;
+                    int passed = 0;
+                    foreach (object item in List(raw, "cases"))
+                    {
+                        var c = item as Dictionary<string, object>;
+                        if (c == null) continue;
+                        total++;
+                        if (DictBool(c, "ok")) passed++;
+                    }
+                    return total > 0 ? ("通过 " + passed + " / " + total + " 个场景") : "尚未记录场景结果。";
+                }));
+
+            cards.Add(LoadJsonStatusCard(
+                "release",
+                "发布预检",
+                Path.Combine(reportsRoot, "release-preflight", "latest-release-preflight.json"),
+                "overallStatus",
+                "generatedAt",
+                delegate(Dictionary<string, object> raw)
+                {
+                    string version = DictString(raw, "version", "");
+                    string sha = DictString(raw, "sha256", "");
+                    if (sha.Length > 12) sha = sha.Substring(0, 12) + "...";
+                    string prefix = version.Length > 0 ? version + " · " : "";
+                    return prefix + (sha.Length > 0 ? ("SHA256 " + sha) : "尚未生成 SHA256。");
+                }));
+
+            cards.Add(LoadTroubleshootingCard());
+
+            overview["cards"] = cards;
+            return overview;
+        }
+
+        private delegate string StatusSummaryBuilder(Dictionary<string, object> raw);
+
+        private Dictionary<string, object> LoadJsonStatusCard(string id, string title, string path, string statusKey, string timeKey, StatusSummaryBuilder summaryBuilder)
+        {
+            var card = new Dictionary<string, object>();
+            card["id"] = id;
+            card["title"] = title;
+            card["available"] = false;
+            card["status"] = "info";
+            card["time"] = "";
+            card["summary"] = "尚未运行。";
+            card["path"] = path;
+
+            if (!File.Exists(path)) return card;
+
+            try
+            {
+                var raw = json.Deserialize<Dictionary<string, object>>(File.ReadAllText(path, Encoding.UTF8));
+                card["available"] = true;
+                if (statusKey == "ok")
+                {
+                    card["status"] = DictBool(raw, "ok") ? "ok" : "error";
+                }
+                else
+                {
+                    card["status"] = DictString(raw, statusKey, "info");
+                }
+                card["time"] = DictString(raw, timeKey, File.GetLastWriteTime(path).ToString("o"));
+                card["summary"] = summaryBuilder != null ? summaryBuilder(raw) : "";
+            }
+            catch (Exception ex)
+            {
+                card["available"] = true;
+                card["status"] = "warn";
+                card["time"] = File.GetLastWriteTime(path).ToString("o");
+                card["summary"] = "读取失败：" + ex.Message;
+            }
+
+            return card;
+        }
+
+        private Dictionary<string, object> LoadTroubleshootingCard()
+        {
+            var card = new Dictionary<string, object>();
+            card["id"] = "troubleshooting";
+            card["title"] = "排错包";
+            card["available"] = false;
+            card["status"] = "info";
+            card["time"] = "";
+            card["summary"] = "尚未导出。";
+            card["path"] = Path.Combine(reportsRoot, "troubleshooting");
+
+            string dir = Path.Combine(reportsRoot, "troubleshooting");
+            if (!Directory.Exists(dir)) return card;
+            var latest = Directory.GetFiles(dir, "skillhub-troubleshooting_*.zip")
+                .Select(p => new FileInfo(p))
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .FirstOrDefault();
+            if (latest == null) return card;
+
+            card["available"] = true;
+            card["status"] = latest.Length > 0 ? "ok" : "warn";
+            card["time"] = latest.LastWriteTime.ToString("o");
+            long kb = Math.Max(1L, latest.Length / 1024L);
+            card["summary"] = latest.Name + " · " + kb + " KB";
+            card["path"] = latest.FullName;
+            return card;
         }
 
         private List<Dictionary<string, object>> LoadOperationHistory()

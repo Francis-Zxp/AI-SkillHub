@@ -81,6 +81,13 @@
       developerCenter: "发布中心",
       developerTitle: "开发者与发布检查",
       developerIntro: "这些动作只用于开发、分享前验收和发布前检查。正式上传 GitHub Release 前，先让这里全部通过。",
+      developerStatusTitle: "最近检查结果",
+      developerStatusHint: "运行后会自动刷新。",
+      developerStatusEmpty: "还没有检查记录。",
+      developerCard_diagnostics: "系统体检",
+      developerCard_share: "分享验收",
+      developerCard_release: "发布预检",
+      developerCard_troubleshooting: "排错包",
       devDiagnosticsTitle: "系统体检",
       devDiagnosticsBody: "重新生成当前电脑的诊断报告，确认 Git、WebView2、配置、skills 和 AI 工具状态。",
       devShareTitle: "分享验收",
@@ -267,6 +274,13 @@
       developerCenter: "Release Center",
       developerTitle: "Developer and release checks",
       developerIntro: "Use these actions for development, share validation, and release preflight. Before uploading a GitHub Release, make sure they pass.",
+      developerStatusTitle: "Latest Results",
+      developerStatusHint: "Refreshes after each run.",
+      developerStatusEmpty: "No check records yet.",
+      developerCard_diagnostics: "System Check",
+      developerCard_share: "Share Validation",
+      developerCard_release: "Release Preflight",
+      developerCard_troubleshooting: "Troubleshooting Bundle",
       devDiagnosticsTitle: "System Check",
       devDiagnosticsBody: "Regenerate diagnostics for Git, WebView2, config, skills, and AI tool status.",
       devShareTitle: "Share Validation",
@@ -453,6 +467,13 @@
       developerCenter: "릴리스 센터",
       developerTitle: "개발자 및 릴리스 점검",
       developerIntro: "개발, 공유 전 검증, 릴리스 전 점검에 사용하는 기능입니다. GitHub Release에 올리기 전에 모두 통과시키세요.",
+      developerStatusTitle: "최근 점검 결과",
+      developerStatusHint: "실행 후 자동으로 갱신됩니다.",
+      developerStatusEmpty: "아직 점검 기록이 없습니다.",
+      developerCard_diagnostics: "시스템 점검",
+      developerCard_share: "공유 검증",
+      developerCard_release: "릴리스 사전 점검",
+      developerCard_troubleshooting: "문제 해결 패키지",
       devDiagnosticsTitle: "시스템 점검",
       devDiagnosticsBody: "Git, WebView2, 설정, skills, AI 도구 상태 진단을 다시 생성합니다.",
       devShareTitle: "공유 검증",
@@ -646,7 +667,7 @@
       "closeAgentButton", "acceptAgentButton", "agentRunCheckButton", "developerDialog",
       "closeDeveloperButton", "acceptDeveloperButton", "devRunDiagnosticsButton",
       "devRunShareButton", "devRunTroubleButton", "devRunReleaseButton",
-      "devOpenReportsButton", "devOpenReleaseButton"
+      "devOpenReportsButton", "devOpenReleaseButton", "developerStatusGrid"
     ].forEach(id => { dom[id] = document.getElementById(id); });
   }
 
@@ -808,6 +829,7 @@
     renderHealth();
     renderOnboarding();
     renderImportPreview();
+    renderDeveloperStatus();
     renderFormOptions();
     renderListControls();
     renderPresets();
@@ -832,6 +854,31 @@
     const codexText = link.codexDetected ? `Codex ${codexCount > 0 ? formatText("managedCount", { count: codexCount }) : t("detectedNotManaged")}` : `Codex ${t("optionalMissing")}`;
     const antigravityText = link.antigravityDetected ? `Antigravity ${link.antigravity ? t("linked") : t("detectedNotManaged")}` : `Antigravity ${t("optionalMissing")}`;
     dom.linkStatus.textContent = `${linkStatus} · ${claudeText} · ${codexText} · ${antigravityText}`;
+  }
+
+  function renderDeveloperStatus() {
+    if (!dom.developerStatusGrid) return;
+    dom.developerStatusGrid.replaceChildren();
+    const cards = ((state.releaseCenter || {}).cards || []);
+    if (!cards.length) {
+      const empty = el("div", "developer-status-empty");
+      empty.textContent = t("developerStatusEmpty");
+      dom.developerStatusGrid.appendChild(empty);
+      return;
+    }
+    cards.forEach(card => {
+      const node = el("div", "developer-status-card " + (card.status || "info"));
+      const top = el("div", "developer-status-top");
+      const title = el("strong");
+      title.textContent = card.id ? t(`developerCard_${card.id}`) : (card.title || "-");
+      top.append(title, badge(statusLabel(card.status), card.status || "info"));
+      const summary = el("p");
+      summary.textContent = card.summary || "-";
+      const time = el("small");
+      time.textContent = formatCheckTime(card.time || "");
+      node.append(top, summary, time);
+      dom.developerStatusGrid.appendChild(node);
+    });
   }
 
   function renderControls() {

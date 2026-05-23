@@ -1981,6 +1981,88 @@ body.resizing-columns .resize-handle::after {
   padding: 24px;
 }
 
+.developer-status-block {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--surface-soft), var(--surface) 58%);
+}
+
+.developer-status-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.developer-status-head small {
+  color: var(--muted);
+}
+
+.developer-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.developer-status-empty,
+.developer-status-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-strong);
+}
+
+.developer-status-empty {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+.developer-status-card.ok {
+  border-color: color-mix(in srgb, var(--success), transparent 62%);
+}
+
+.developer-status-card.warn {
+  border-color: color-mix(in srgb, var(--lemon), transparent 58%);
+}
+
+.developer-status-card.error {
+  border-color: color-mix(in srgb, var(--danger), transparent 58%);
+}
+
+.developer-status-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.developer-status-top strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.developer-status-card p {
+  min-height: 34px;
+  margin: 8px 0;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.developer-status-card small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .developer-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2272,6 +2354,7 @@ body.busy #miniStatus::before {
 
   .onboarding-steps,
   .help-grid,
+  .developer-status-grid,
   .developer-grid,
   .agent-detail-grid {
     grid-template-columns: 1fr;
