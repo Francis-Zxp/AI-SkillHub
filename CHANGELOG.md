@@ -11,6 +11,7 @@ All notable changes to AI SkillHub are documented here.
 - Troubleshooting bundle export for sharing sanitized operation, import, sync, diagnostics, and zip-preview reports.
 - Reports folder shortcut and `--troubleshooting-test` smoke test.
 - Share-recipient validation script plus `--share-recipient-test`, covering a clean downloaded copy, first-run empty config, paths with spaces/Chinese, missing Codex, no detected AI tools, missing Git, and missing WebView2.
+- Release package builder plus `--release-preflight`, generating an allowlisted zip, SHA256 file, and privacy audit report before publishing.
 
 ### Changed
 

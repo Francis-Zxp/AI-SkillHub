@@ -153,6 +153,7 @@ try {
     'Manage-AgentSkillLinks.ps1',
     'Export-SkillHubDiagnostics.ps1',
     'Test-ShareRecipientExperience.ps1',
+    'Build-SkillHubReleasePackage.ps1',
     'skillhub.config.example.json',
     '安装每日自动更新任务.ps1',
     '更新GitHub来源并同步Skills.ps1',

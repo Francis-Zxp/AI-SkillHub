@@ -50,6 +50,12 @@ namespace AISkillHubWeb
                 return;
             }
 
+            if (args.Length > 0 && args[0] == "--release-preflight")
+            {
+                Diagnostics.RunReleasePreflight();
+                return;
+            }
+
             Application.Run(new SkillHubWindow());
         }
 
@@ -88,6 +94,7 @@ namespace AISkillHubWeb
                 Require(Path.Combine(app, "SkillHub.ps1"));
                 Require(Path.Combine(app, "Export-SkillHubDiagnostics.ps1"));
                 Require(Path.Combine(app, "Test-ShareRecipientExperience.ps1"));
+                Require(Path.Combine(app, "Build-SkillHubReleasePackage.ps1"));
                 Require(Path.Combine(app, "runtime", "Microsoft.Web.WebView2.Core.dll"));
                 Require(Path.Combine(app, "runtime", "Microsoft.Web.WebView2.WinForms.dll"));
                 Require(Path.Combine(app, "runtime", "WebView2Loader.dll"));
@@ -122,6 +129,28 @@ namespace AISkillHubWeb
             string script = Path.Combine(app, "Test-ShareRecipientExperience.ps1");
             Directory.CreateDirectory(reportDir);
             string hostLog = Path.Combine(reportDir, "latest-share-recipient-host.txt");
+
+            try
+            {
+                Require(script);
+                string output = RunProcess(PowerShellPath(), "-NoProfile -ExecutionPolicy Bypass -File \"" + script + "\" -Quiet", app);
+                File.WriteAllText(hostLog, output, new UTF8Encoding(false));
+            }
+            catch (Exception ex)
+            {
+                File.WriteAllText(hostLog, "FAILED " + ex.Message, new UTF8Encoding(false));
+                Environment.ExitCode = 1;
+            }
+        }
+
+        public static void RunReleasePreflight()
+        {
+            string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
+            string app = Path.Combine(root, "app");
+            string reportDir = Path.Combine(app, "reports", "release-preflight");
+            string script = Path.Combine(app, "Build-SkillHubReleasePackage.ps1");
+            Directory.CreateDirectory(reportDir);
+            string hostLog = Path.Combine(reportDir, "latest-release-preflight-host.txt");
 
             try
             {

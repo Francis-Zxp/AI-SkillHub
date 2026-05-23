@@ -71,6 +71,7 @@ AI-SkillHub/
     Manage-AgentSkillLinks.ps1
     Export-SkillHubDiagnostics.ps1
     Test-ShareRecipientExperience.ps1
+    Build-SkillHubReleasePackage.ps1
     skillhub.config.example.json
 ```
 
@@ -107,9 +108,12 @@ AI SkillHub.exe --self-test
 AI SkillHub.exe --zip-preview-test
 AI SkillHub.exe --troubleshooting-test
 AI SkillHub.exe --share-recipient-test
+AI SkillHub.exe --release-preflight
 ```
 
 The share-recipient test creates a temporary clean copy in a path with spaces and Chinese characters, confirms no personal Skills/config/reports are bundled, and simulates missing Codex, no detected AI tools, missing Git, and missing WebView2.
+
+The release preflight builds a clean allowlisted zip under `release/`, writes a SHA256 file, and audits the package for personal Skills, cloned sources, local config, reports, and caches.
 
 ## Developer Notes
 Current v1 stack:
