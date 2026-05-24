@@ -1,6 +1,6 @@
 # v2 toolchain setup
 
-Checked on: 2026-05-24
+Checked on: 2026-05-25
 
 This file records the tools needed to run the AI SkillHub v2 `app-next` Tauri project.
 
@@ -9,19 +9,19 @@ This file records the tools needed to run the AI SkillHub v2 `app-next` Tauri pr
 | Tool | Version to use | Status on this computer | Download / official page |
 |---|---:|---|---|
 | Node.js | Already installed: `v24.16.0` | OK | https://nodejs.org/en/download |
-| pnpm | `11.2.2` | Missing | https://pnpm.io/installation |
-| Rust stable | `1.95.0` via rustup | Missing | https://www.rust-lang.org/tools/install |
+| pnpm | `11.2.2` | OK | https://pnpm.io/installation |
+| Rust stable | `1.95.0` via rustup | OK | https://www.rust-lang.org/tools/install |
 | Visual Studio Build Tools 2026 | Installed: `18.4.1`; current stable channel: `18.6.1` | OK | https://visualstudio.microsoft.com/downloads/ |
 | Microsoft Edge WebView2 Runtime | Evergreen runtime | Already installed for v1 | https://developer.microsoft.com/microsoft-edge/webview2/ |
 
-This computer only needs pnpm and Rust/Cargo before the first real Tauri run.
+This computer is ready for the first real Tauri run.
 
 ## Recommended install order
 
 1. Keep the current Node.js `v24.16.0`.
-2. Skip Visual Studio Build Tools if `npm run check:toolchain` says it is detected.
-3. Install Rust with rustup and accept the MSVC default toolchain.
-4. Install pnpm.
+2. Keep pnpm pinned to `11.2.2` for this project.
+3. Keep Rust stable `1.95.0` / Cargo `1.95.0`.
+4. Skip Visual Studio Build Tools if `npm run check:toolchain` says it is detected.
 5. Restart the terminal or restart the computer if commands are still not found.
 
 ## Visual Studio Build Tools workload
@@ -79,7 +79,8 @@ cargo --version
 cd "D:\My Files\AI_global_skills\app-next"
 npm run check:toolchain
 pnpm install
-pnpm tauri dev
+pnpm build
+pnpm tauri info
 ```
 
 If `npm` reports cache permission errors, use a local cache temporarily:
@@ -101,3 +102,13 @@ The npm registry reported these versions on 2026-05-24:
 - `react`: `19.2.6`
 
 These are pinned in `package.json` so v2 development is reproducible.
+
+## Verification on 2026-05-25
+
+- `npm run check:toolchain`: passed.
+- `pnpm install`: passed.
+- `pnpm build`: passed.
+- `pnpm tauri info`: passed after refreshing the current process PATH.
+- `cargo check` in `src-tauri`: passed.
+
+Note: a terminal, editor, or Codex session opened before Rust was installed may not see `rustc` and `cargo` until restarted. The self-check script also checks the standard Rust path under `%USERPROFILE%\.cargo\bin` to reduce false alarms.

@@ -1,5 +1,27 @@
 $ErrorActionPreference = "Stop"
 
+function Add-PathEntries {
+  param([string]$Value)
+
+  if ([string]::IsNullOrWhiteSpace($Value)) {
+    return
+  }
+
+  $current = $env:Path -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  foreach ($entry in ($Value -split ';')) {
+    if ([string]::IsNullOrWhiteSpace($entry)) {
+      continue
+    }
+    if ($current -notcontains $entry) {
+      $env:Path = "$env:Path;$entry"
+      $current += $entry
+    }
+  }
+}
+
+Add-PathEntries ([Environment]::GetEnvironmentVariable('Path', 'User'))
+Add-PathEntries ([Environment]::GetEnvironmentVariable('Path', 'Machine'))
+
 function Get-CommandVersion {
   param(
     [Parameter(Mandatory = $true)][string]$Name,
@@ -7,18 +29,39 @@ function Get-CommandVersion {
   )
 
   $command = Get-Command $Name -ErrorAction SilentlyContinue
+  $source = ""
+  $invokePath = $Name
+
   if (-not $command) {
-    return [pscustomobject]@{
-      Tool = $Name
-      Found = $false
-      Version = ""
-      Path = ""
+    $fallbacks = @()
+    if ($Name -in @("rustc", "cargo")) {
+      $fallbacks += Join-Path $env:USERPROFILE ".cargo\bin\$Name.exe"
     }
+    if ($Name -eq "pnpm") {
+      $fallbacks += Join-Path $env:APPDATA "npm\pnpm.ps1"
+      $fallbacks += Join-Path $env:APPDATA "npm\pnpm.cmd"
+    }
+
+    $fallback = $fallbacks | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    if (-not $fallback) {
+      return [pscustomobject]@{
+        Tool = $Name
+        Found = $false
+        Version = ""
+        Path = ""
+      }
+    }
+
+    $source = $fallback
+    $invokePath = $fallback
+  } else {
+    $source = $command.Source
+    $invokePath = $command.Source
   }
 
   $version = ""
   try {
-    $version = (& $Name @CommandArgs 2>$null | Select-Object -First 1)
+    $version = (& $invokePath @CommandArgs 2>$null | Select-Object -First 1)
   } catch {
     $version = "found, version command failed"
   }
@@ -27,7 +70,7 @@ function Get-CommandVersion {
     Tool = $Name
     Found = $true
     Version = [string]$version
-    Path = $command.Source
+    Path = $source
   }
 }
 
