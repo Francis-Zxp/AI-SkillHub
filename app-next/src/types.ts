@@ -11,6 +11,7 @@ export type LegacySnapshot = {
   sources: SourceCard[];
   agents: AgentCard[];
   diagnostics: DiagnosticSummary;
+  index: IndexReport;
 };
 
 export type LegacySummary = {
@@ -63,4 +64,14 @@ export type DiagnosticSummary = {
   warn: number;
   error: number;
   info: number;
+};
+
+export type IndexReport = {
+  persisted: boolean;
+  databaseFile: string;
+  indexedAt: string;
+  sourcesIndexed: number;
+  skillsIndexed: number;
+  agentsIndexed: number;
+  snapshotId: string;
 };

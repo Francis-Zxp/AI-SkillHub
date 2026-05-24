@@ -123,6 +123,12 @@ button {
   margin-bottom: 24px;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   font-size: 12px;
@@ -160,6 +166,26 @@ h3 {
   font-size: 13px;
   font-weight: 800;
   background: #e3f7ef;
+}
+
+.ghost-button {
+  padding: 8px 13px;
+  border: 1px solid rgba(34, 67, 61, .18);
+  border-radius: 999px;
+  color: #31584e;
+  font-size: 13px;
+  font-weight: 800;
+  background: rgba(255, 255, 255, .72);
+  cursor: pointer;
+}
+
+.ghost-button:hover {
+  background: #eef8f4;
+}
+
+.ghost-button:disabled {
+  cursor: default;
+  opacity: .62;
 }
 
 .view {
@@ -214,6 +240,34 @@ h3 {
 
 .panel {
   padding: 22px;
+}
+
+.index-panel {
+  display: grid;
+  grid-template-columns: minmax(260px, .8fr) minmax(320px, 1fr);
+  gap: 22px;
+}
+
+.index-panel p {
+  line-height: 1.65;
+}
+
+.index-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: #44535c;
+}
+
+.index-list li {
+  overflow: hidden;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #f5faf7;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .check-list {

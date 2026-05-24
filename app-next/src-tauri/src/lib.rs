@@ -1,8 +1,10 @@
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,6 +19,7 @@ struct LegacySnapshot {
     sources: Vec<SourceCard>,
     agents: Vec<AgentCard>,
     diagnostics: DiagnosticSummary,
+    index: IndexReport,
 }
 
 #[derive(Serialize)]
@@ -81,6 +84,18 @@ struct DiagnosticSummary {
     info: u64,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct IndexReport {
+    persisted: bool,
+    database_file: String,
+    indexed_at: String,
+    sources_indexed: usize,
+    skills_indexed: usize,
+    agents_indexed: usize,
+    snapshot_id: String,
+}
+
 #[derive(Default)]
 struct SkillDiagnostic {
     name: String,
@@ -120,10 +135,10 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
 
     let mut source_counts: HashMap<String, usize> = HashMap::new();
     for skill in &skills {
-        *source_counts.entry(skill.source.clone()).or_insert(0) += 1;
+        *source_counts.entry(skill.source.to_lowercase()).or_insert(0) += 1;
     }
     for source in &mut sources {
-        source.skill_count = *source_counts.get(&source.name).unwrap_or(&0);
+        source.skill_count = *source_counts.get(&source.name.to_lowercase()).unwrap_or(&0);
     }
 
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -139,7 +154,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         .count();
     let agents_detected = agents.iter().filter(|agent| agent.detected).count();
 
-    Ok(LegacySnapshot {
+    let mut snapshot = LegacySnapshot {
         root: root.display().to_string(),
         skills_dir: skills_dir.display().to_string(),
         sources_dir: sources_dir.display().to_string(),
@@ -157,7 +172,19 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         sources,
         agents,
         diagnostics,
-    })
+        index: IndexReport {
+            persisted: false,
+            database_file: database_file(&root).display().to_string(),
+            indexed_at: String::new(),
+            sources_indexed: 0,
+            skills_indexed: 0,
+            agents_indexed: 0,
+            snapshot_id: String::new(),
+        },
+    };
+
+    snapshot.index = persist_snapshot(&root, &snapshot)?;
+    Ok(snapshot)
 }
 
 fn resolve_legacy_root() -> Result<PathBuf, String> {
@@ -170,7 +197,217 @@ fn resolve_legacy_root() -> Result<PathBuf, String> {
 
 fn read_json(path: &Path) -> Option<Value> {
     let raw = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
+    serde_json::from_str(raw.trim_start_matches('\u{feff}')).ok()
+}
+
+fn app_next_root(root: &Path) -> PathBuf {
+    root.join("app-next")
+}
+
+fn database_file(root: &Path) -> PathBuf {
+    app_next_root(root)
+        .join(".skillhub-next")
+        .join("skillhub-next.sqlite3")
+}
+
+fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexReport, String> {
+    let db_file = database_file(root);
+    let db_parent = db_file
+        .parent()
+        .ok_or_else(|| "Cannot resolve v2 database folder.".to_string())?;
+    fs::create_dir_all(db_parent).map_err(|error| {
+        format!(
+            "Cannot create v2 database folder {}: {}",
+            db_parent.display(),
+            error
+        )
+    })?;
+
+    let mut connection = Connection::open(&db_file)
+        .map_err(|error| format!("Cannot open v2 SQLite database {}: {}", db_file.display(), error))?;
+    connection
+        .execute_batch(include_str!("../migrations/001_initial.sql"))
+        .map_err(|error| format!("Cannot apply v2 SQLite migration: {}", error))?;
+
+    let indexed_at = unix_timestamp_string();
+    let snapshot_id = format!("legacy-import-{}", indexed_at);
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot start v2 SQLite transaction: {}", error))?;
+
+    transaction
+        .execute("DELETE FROM skill_tags", [])
+        .map_err(|error| format!("Cannot clear skill tag index: {}", error))?;
+    transaction
+        .execute("DELETE FROM skills", [])
+        .map_err(|error| format!("Cannot clear skill index: {}", error))?;
+    transaction
+        .execute("DELETE FROM sources", [])
+        .map_err(|error| format!("Cannot clear source index: {}", error))?;
+    transaction
+        .execute("DELETE FROM agents", [])
+        .map_err(|error| format!("Cannot clear agent index: {}", error))?;
+
+    let mut source_ids: HashMap<String, String> = HashMap::new();
+    for source in &snapshot.sources {
+        let source_id = stable_id("source", &source.name);
+        source_ids.insert(source.name.to_lowercase(), source_id.clone());
+        transaction
+            .execute(
+                "INSERT INTO sources (
+                    id, name, source_type, url, local_path, install_mode,
+                    category_id, note, enabled, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9)",
+                params![
+                    source_id,
+                    source.name,
+                    source.source_type,
+                    source.url,
+                    source.local_path,
+                    source.mode,
+                    source.category_id,
+                    source.note,
+                    indexed_at
+                ],
+            )
+            .map_err(|error| format!("Cannot index source {}: {}", source.name, error))?;
+    }
+
+    for skill in &snapshot.skills {
+        let skill_id = stable_id("skill", &skill.folder_name);
+        let source_id = source_ids.get(&skill.source.to_lowercase()).cloned();
+        transaction
+            .execute(
+                "INSERT INTO skills (
+                    id, source_id, name, folder_name, description, category_id,
+                    health_status, health_summary, enabled, relative_path,
+                    created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, '', ?8, ?9, ?10, ?10)",
+                params![
+                    skill_id,
+                    source_id,
+                    skill.name,
+                    skill.folder_name,
+                    skill.description,
+                    skill.category,
+                    skill.health,
+                    if skill.enabled { 1 } else { 0 },
+                    skill.relative_path,
+                    indexed_at
+                ],
+            )
+            .map_err(|error| format!("Cannot index skill {}: {}", skill.name, error))?;
+    }
+
+    for agent in &snapshot.agents {
+        transaction
+            .execute(
+                "INSERT INTO agents (
+                    id, name, skills_path, detected, managed, enabled, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    stable_id("agent", &agent.id),
+                    agent.name,
+                    agent.path,
+                    if agent.detected { 1 } else { 0 },
+                    if agent.managed { 1 } else { 0 },
+                    if agent.detected { 1 } else { 0 },
+                    indexed_at
+                ],
+            )
+            .map_err(|error| format!("Cannot index agent {}: {}", agent.name, error))?;
+    }
+
+    let manifest_json = serde_json::to_string(&serde_json::json!({
+        "root": snapshot.root,
+        "summary": snapshot.summary,
+        "diagnostics": snapshot.diagnostics,
+        "mode": snapshot.mode,
+    }))
+    .map_err(|error| format!("Cannot serialize v2 snapshot manifest: {}", error))?;
+    transaction
+        .execute(
+            "INSERT OR REPLACE INTO snapshots (
+                id, name, summary, manifest_json, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                snapshot_id,
+                "Latest v1 read-only import",
+                format!(
+                    "{} skills, {} sources, {} agents",
+                    snapshot.skills.len(),
+                    snapshot.sources.len(),
+                    snapshot.agents.len()
+                ),
+                manifest_json,
+                indexed_at
+            ],
+        )
+        .map_err(|error| format!("Cannot write v2 snapshot record: {}", error))?;
+
+    transaction
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'legacy_scan_indexed', ?2, ?3, ?4)",
+            params![
+                format!("audit-{}", indexed_at),
+                "Indexed v1 data into v2 SQLite",
+                serde_json::to_string(&serde_json::json!({
+                    "skills": snapshot.skills.len(),
+                    "sources": snapshot.sources.len(),
+                    "agents": snapshot.agents.len(),
+                    "databaseFile": db_file.display().to_string(),
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                indexed_at
+            ],
+        )
+        .map_err(|error| format!("Cannot write v2 audit event: {}", error))?;
+
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit v2 SQLite index: {}", error))?;
+
+    Ok(IndexReport {
+        persisted: true,
+        database_file: db_file.display().to_string(),
+        indexed_at,
+        sources_indexed: snapshot.sources.len(),
+        skills_indexed: snapshot.skills.len(),
+        agents_indexed: snapshot.agents.len(),
+        snapshot_id,
+    })
+}
+
+fn stable_id(prefix: &str, value: &str) -> String {
+    let slug = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if slug.is_empty() {
+        prefix.to_string()
+    } else {
+        format!("{}-{}", prefix, slug)
+    }
+}
+
+fn unix_timestamp_string() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
 }
 
 fn parse_diagnostic_summary(diagnostics: Option<&Value>) -> DiagnosticSummary {
@@ -523,5 +760,9 @@ mod tests {
         assert!(snapshot.skills_dir.ends_with("skills"));
         assert!(snapshot.sources_dir.ends_with("github_sources"));
         assert!(snapshot.diagnostics_file.ends_with("latest-diagnostics.json"));
+        assert!(snapshot.index.persisted);
+        assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
+        assert_eq!(snapshot.index.sources_indexed, snapshot.sources.len());
+        assert_eq!(snapshot.index.agents_indexed, snapshot.agents.len());
     }
 }

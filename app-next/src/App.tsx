@@ -14,6 +14,7 @@ export function App() {
   const [active, setActive] = useState<NavKey>("dashboard");
   const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
   const [loadError, setLoadError] = useState<string>("");
+  const [loading, setLoading] = useState<boolean>(true);
 
   const summary = useMemo(() => {
     return (
@@ -28,28 +29,21 @@ export function App() {
     );
   }, [snapshot]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadSnapshot() {
-      try {
-        const result = await invoke<LegacySnapshot>("scan_legacy_snapshot");
-        if (!cancelled) {
-          setSnapshot(result);
-          setLoadError("");
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setLoadError(error instanceof Error ? error.message : String(error));
-        }
-      }
+  async function loadSnapshot() {
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("scan_legacy_snapshot");
+      setSnapshot(result);
+      setLoadError("");
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
     }
+  }
 
+  useEffect(() => {
     void loadSnapshot();
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   return (
@@ -84,7 +78,12 @@ export function App() {
             <p className="eyebrow">V2 原型线</p>
             <h1>{navItems.find(item => item.key === active)?.label}</h1>
           </div>
-          <div className="status-pill">只读迁移模式</div>
+          <div className="topbar-actions">
+            <button className="ghost-button" disabled={loading} onClick={() => void loadSnapshot()} type="button">
+              {loading ? "正在刷新" : "刷新索引"}
+            </button>
+            <div className="status-pill">只读 v1 · 写入 v2 SQLite</div>
+          </div>
         </header>
 
         {loadError && (
@@ -94,7 +93,7 @@ export function App() {
           </section>
         )}
 
-        {active === "dashboard" && <Dashboard snapshot={snapshot} summary={summary} />}
+        {active === "dashboard" && <Dashboard loading={loading} snapshot={snapshot} summary={summary} />}
         {active === "library" && <Library snapshot={snapshot} />}
         {active === "sources" && <Sources snapshot={snapshot} />}
         {active === "agents" && <Agents snapshot={snapshot} />}
@@ -104,7 +103,15 @@ export function App() {
   );
 }
 
-function Dashboard({ snapshot, summary }: { snapshot: LegacySnapshot | null; summary: LegacySummary }) {
+function Dashboard({
+  loading,
+  snapshot,
+  summary
+}: {
+  loading: boolean;
+  snapshot: LegacySnapshot | null;
+  summary: LegacySummary;
+}) {
   return (
     <div className="view">
       <section className="hero-panel">
@@ -131,7 +138,24 @@ function Dashboard({ snapshot, summary }: { snapshot: LegacySnapshot | null; sum
           <li>根目录：{snapshot?.root ?? "正在读取..."}</li>
           <li>诊断状态：{summary.diagnosticsStatus}</li>
           <li>诊断版本：{snapshot?.diagnostics.appVersion || "尚未读取"}</li>
-          <li>读取模式：{snapshot?.mode ?? "read-only"}</li>
+          <li>读取模式：{snapshot?.mode ?? "read-only"}，写入范围仅限 v2 SQLite</li>
+        </ul>
+      </section>
+
+      <section className="panel index-panel">
+        <div>
+          <p className="eyebrow">v2 SQLite 索引</p>
+          <h3>{snapshot?.index.persisted ? "已写入 v2 索引库" : loading ? "正在建立索引" : "尚未写入索引"}</h3>
+          <p>
+            v2 会把扫描结果写到自己的 SQLite 文件里，后续工作区、标签、历史记录和回滚都会基于这个索引继续做。
+          </p>
+        </div>
+        <ul className="index-list">
+          <li>Skills：{snapshot?.index.skillsIndexed ?? 0}</li>
+          <li>来源：{snapshot?.index.sourcesIndexed ?? 0}</li>
+          <li>AI 工具：{snapshot?.index.agentsIndexed ?? 0}</li>
+          <li>快照：{snapshot?.index.snapshotId || "等待生成"}</li>
+          <li>数据库：{snapshot?.index.databaseFile || "等待生成"}</li>
         </ul>
       </section>
     </div>

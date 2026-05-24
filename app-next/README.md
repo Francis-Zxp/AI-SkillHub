@@ -20,6 +20,7 @@ This is the first read-only scanner milestone. It is intentionally safe:
 - It does not modify `../app/github_sources`
 - It does not take over Claude, Codex, or Antigravity links
 - It reads real v1 Skills, sources, agents, and diagnostics for display
+- It writes only to the v2 SQLite index under `.skillhub-next/`
 
 ## Before running
 
@@ -39,6 +40,7 @@ cd app-next
 npm run check:toolchain
 pnpm install
 pnpm build
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
 After tools are ready:
