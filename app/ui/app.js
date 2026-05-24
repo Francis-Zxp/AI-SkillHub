@@ -64,6 +64,24 @@
       healthWarn: "提醒",
       healthError: "错误",
       healthInfo: "信息",
+      problemLocatorTitle: "下一步建议",
+      problemLocatorEmpty: "当前没有需要优先处理的问题。",
+      problemRunCheck: "先运行系统体检",
+      problemRunCheckBody: "还没有诊断报告，先生成一份，软件才能判断下一步。",
+      problemOpenReport: "查看体检报告",
+      problemOpenReportBody: "报告里有需要处理的提醒，先打开完整报告定位原因。",
+      problemAgentLinks: "接管 AI 软件链接",
+      problemAgentLinksBody: "检测到 AI 工具但尚未接管，打开接管开关后同步。",
+      problemNoAgents: "未识别到 AI 工具",
+      problemNoAgentsBody: "如果对方只装了 Claude 桌面版但没装 Claude Code，这是正常提示。",
+      problemSource: "检查仓库来源",
+      problemSourceBody: "有来源未下载或没有 SKILL.md，先到仓库来源页确认。",
+      problemSkillHealth: "整理 Skill 健康提醒",
+      problemSkillHealthBody: "按健康排序，优先处理有错误或需检查的 Skill。",
+      problemAllGood: "当前状态正常",
+      problemAllGoodBody: "可以继续同步、添加来源，或分享给别人前再跑一次检查。",
+      problemGoSources: "看来源",
+      problemGoSkills: "看 Skill",
       detected: "已检测",
       notDetected: "未检测",
       linked: "已链接",
@@ -269,6 +287,24 @@
       healthWarn: "Warn",
       healthError: "Error",
       healthInfo: "Info",
+      problemLocatorTitle: "Next steps",
+      problemLocatorEmpty: "No priority issue right now.",
+      problemRunCheck: "Run System Check first",
+      problemRunCheckBody: "No diagnostic report yet. Generate one so the app can suggest next steps.",
+      problemOpenReport: "Review the check report",
+      problemOpenReportBody: "The report contains warnings that need attention. Open it to locate the cause.",
+      problemAgentLinks: "Connect AI tool links",
+      problemAgentLinksBody: "An AI tool was detected but is not managed yet. Turn on Agent Links, then sync.",
+      problemNoAgents: "No AI tool detected",
+      problemNoAgentsBody: "If the other computer only has Claude Desktop, not Claude Code, this is expected.",
+      problemSource: "Check sources",
+      problemSourceBody: "Some sources are missing or contain no SKILL.md. Review the Sources tab first.",
+      problemSkillHealth: "Review Skill health",
+      problemSkillHealthBody: "Sort by health and fix error or warning Skills first.",
+      problemAllGood: "Everything looks good",
+      problemAllGoodBody: "You can keep syncing, add sources, or run one more check before sharing.",
+      problemGoSources: "Sources",
+      problemGoSkills: "Skills",
       detected: "Detected",
       notDetected: "Missing",
       linked: "Linked",
@@ -474,6 +510,24 @@
       healthWarn: "주의",
       healthError: "오류",
       healthInfo: "정보",
+      problemLocatorTitle: "다음 단계",
+      problemLocatorEmpty: "우선 처리할 문제가 없습니다.",
+      problemRunCheck: "먼저 시스템 점검 실행",
+      problemRunCheckBody: "아직 진단 보고서가 없습니다. 보고서를 만들어야 다음 단계를 판단할 수 있습니다.",
+      problemOpenReport: "점검 보고서 보기",
+      problemOpenReportBody: "보고서에 확인할 경고가 있습니다. 먼저 열어서 원인을 확인하세요.",
+      problemAgentLinks: "AI 도구 링크 연결",
+      problemAgentLinksBody: "AI 도구가 감지되었지만 아직 연결되지 않았습니다. 연결 스위치를 켜고 동기화하세요.",
+      problemNoAgents: "AI 도구를 찾지 못함",
+      problemNoAgentsBody: "상대 컴퓨터에 Claude Desktop만 있고 Claude Code가 없다면 정상 안내입니다.",
+      problemSource: "소스 확인",
+      problemSourceBody: "일부 소스가 없거나 SKILL.md가 없습니다. 먼저 소스 탭을 확인하세요.",
+      problemSkillHealth: "Skill 상태 확인",
+      problemSkillHealthBody: "상태순으로 정렬해 오류나 주의 Skill부터 처리하세요.",
+      problemAllGood: "현재 상태 정상",
+      problemAllGoodBody: "계속 동기화하거나 소스를 추가하고, 공유 전 한 번 더 점검하세요.",
+      problemGoSources: "소스 보기",
+      problemGoSkills: "Skill 보기",
       detected: "감지됨",
       notDetected: "미감지",
       linked: "연결됨",
@@ -691,7 +745,7 @@
   function bindDom() {
     [
       "brandLogo", "versionLabel", "miniStatus", "skillCount", "repoCount", "lastSync", "linkStatus",
-      "healthSummary", "healthOk", "healthWarn", "healthError", "healthInfo", "agentMatrix", "healthChecks",
+      "healthSummary", "healthOk", "healthWarn", "healthError", "healthInfo", "agentMatrix", "healthChecks", "problemLocator",
       "dailyToggle", "linksToggle", "healthButton", "agentDetailsButton", "syncButton", "reportButton", "diagnosticsButton", "troubleshootingButton", "shareCheckButton", "developerButton", "skillsButton",
       "helpButton", "sourcesButton", "reportsButton", "chooseFolderButton", "chooseZipButton", "importPreview", "repoUrl", "repoType", "repoCategory", "repoNote", "repoTags", "addButton",
       "saveButton", "deleteButton", "skillsView", "reposView", "promptsView", "searchInput", "categoryFilter", "sortSelect", "listMeta", "presetStrip",
@@ -984,6 +1038,183 @@
       item.append(dot, body);
       dom.healthChecks.appendChild(item);
     });
+
+    renderProblemLocator(diagnostics);
+  }
+
+  function renderProblemLocator(diagnostics) {
+    if (!dom.problemLocator) return;
+    const actions = buildProblemActions(diagnostics || {});
+    dom.problemLocator.replaceChildren();
+
+    const head = el("div", "problem-head");
+    const title = el("strong");
+    title.textContent = t("problemLocatorTitle");
+    head.appendChild(title);
+    dom.problemLocator.appendChild(head);
+
+    if (!actions.length) {
+      const empty = el("small", "problem-empty");
+      empty.textContent = t("problemLocatorEmpty");
+      dom.problemLocator.appendChild(empty);
+      return;
+    }
+
+    actions.forEach(action => {
+      const item = el("article", "problem-item " + (action.tone || "info"));
+      const body = el("div", "problem-body");
+      const itemTitle = el("strong");
+      const itemBody = el("small");
+      itemTitle.textContent = action.title || t(action.titleKey);
+      itemBody.textContent = action.body || t(action.bodyKey);
+      body.append(itemTitle, itemBody);
+      item.appendChild(body);
+
+      if (action.buttonKey && action.action) {
+        const button = el("button", "text-action compact problem-button");
+        button.type = "button";
+        button.textContent = t(action.buttonKey);
+        button.addEventListener("click", () => runProblemAction(action.action));
+        item.appendChild(button);
+      }
+
+      dom.problemLocator.appendChild(item);
+    });
+  }
+
+  function buildProblemActions(diagnostics) {
+    const actions = [];
+    const add = action => {
+      if (!action || actions.some(item => item.id === action.id)) return;
+      actions.push(action);
+    };
+
+    if (!diagnostics.available) {
+      add({
+        id: "run-check",
+        tone: "info",
+        titleKey: "problemRunCheck",
+        bodyKey: "problemRunCheckBody",
+        buttonKey: "runHealthCheck",
+        action: "runHealthCheck"
+      });
+      return actions;
+    }
+
+    const importantCheck = (diagnostics.checks || []).find(check => check.status === "error")
+      || (diagnostics.checks || []).find(check => check.status === "warn");
+    if (importantCheck) {
+      add({
+        id: "open-report",
+        tone: importantCheck.status || "warn",
+        title: importantCheck.name || t("problemOpenReport"),
+        body: importantCheck.fix || importantCheck.summary || t("problemOpenReportBody"),
+        buttonKey: "openReport",
+        action: "openReport"
+      });
+    }
+
+    const agentRows = buildAgentRows();
+    const detectedAgents = agentRows.filter(agent => agent.detected);
+    const unlinkedAgents = detectedAgents.filter(agent => !agent.linked);
+    if (unlinkedAgents.length) {
+      add({
+        id: "agent-links",
+        tone: "warn",
+        titleKey: "problemAgentLinks",
+        bodyKey: "problemAgentLinksBody",
+        buttonKey: "agentDetails",
+        action: "agentDetails"
+      });
+    } else if (agentRows.length && detectedAgents.length === 0) {
+      add({
+        id: "no-agents",
+        tone: "info",
+        titleKey: "problemNoAgents",
+        bodyKey: "problemNoAgentsBody",
+        buttonKey: "agentDetails",
+        action: "agentDetails"
+      });
+    }
+
+    const sourceIssue = (state.repositories || []).find(repo => {
+      if (!itemHasSourceHealth(repo)) return false;
+      if (!repo.exists) return true;
+      if (repo.type !== "prompt" && Number(repo.skillCount || 0) <= 0) return true;
+      return false;
+    });
+    if (sourceIssue) {
+      add({
+        id: "source-health",
+        tone: sourceHealthClass(sourceIssue),
+        titleKey: "problemSource",
+        bodyKey: "problemSourceBody",
+        buttonKey: "problemGoSources",
+        action: "sources"
+      });
+    }
+
+    const skillIssue = (state.skills || []).find(skill => {
+      const status = String(skill.healthStatus || "");
+      return status === "error" || status === "warn";
+    });
+    if (skillIssue) {
+      add({
+        id: "skill-health",
+        tone: skillIssue.healthStatus || "warn",
+        titleKey: "problemSkillHealth",
+        bodyKey: "problemSkillHealthBody",
+        buttonKey: "problemGoSkills",
+        action: "skillHealth"
+      });
+    }
+
+    if (!actions.length) {
+      add({
+        id: "all-good",
+        tone: "ok",
+        titleKey: "problemAllGood",
+        bodyKey: "problemAllGoodBody",
+        buttonKey: "runHealthCheck",
+        action: "runHealthCheck"
+      });
+    }
+
+    return actions.slice(0, 3);
+  }
+
+  function runProblemAction(action) {
+    if (action === "runHealthCheck") {
+      send("runHealthCheck");
+      return;
+    }
+    if (action === "openReport") {
+      send("openReport");
+      return;
+    }
+    if (action === "agentDetails") {
+      renderAgentDetails();
+      dom.agentDialog.showModal();
+      return;
+    }
+    if (action === "sources") {
+      activeTab = "repos";
+      activePreset = "all";
+      activeTagFilter = "all";
+      dom.searchInput.value = "";
+      dom.categoryFilter.value = "all";
+      renderAll();
+      return;
+    }
+    if (action === "skillHealth") {
+      activeTab = "skills";
+      activePreset = "all";
+      activeTagFilter = "all";
+      dom.searchInput.value = "";
+      dom.categoryFilter.value = "all";
+      dom.sortSelect.value = "health";
+      renderAll();
+    }
   }
 
   function renderOnboarding() {

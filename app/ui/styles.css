@@ -775,13 +775,15 @@ body[data-theme="dark"] .hero-card {
 }
 
 .agent-matrix,
-.health-checks {
+.health-checks,
+.problem-locator {
   display: grid;
   gap: 7px;
 }
 
 .agent-item,
-.health-check {
+.health-check,
+.problem-item {
   min-width: 0;
   padding: 9px 10px;
   border: 1px solid var(--line);
@@ -790,7 +792,8 @@ body[data-theme="dark"] .hero-card {
 }
 
 .agent-item small,
-.health-check small {
+.health-check small,
+.problem-item small {
   display: block;
   margin-top: 4px;
   color: var(--muted);
@@ -802,12 +805,60 @@ body[data-theme="dark"] .hero-card {
 }
 
 .agent-title strong,
-.health-check strong {
+.health-check strong,
+.problem-item strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12.5px;
+}
+
+.problem-locator {
+  padding-top: 2px;
+}
+
+.problem-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 18px;
+}
+
+.problem-head strong {
+  color: color-mix(in srgb, var(--ink), var(--accent) 18%);
+  font-size: 12px;
+}
+
+.problem-empty {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.problem-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-color: color-mix(in srgb, var(--line), var(--accent) 16%);
+}
+
+.problem-item.ok {
+  background: color-mix(in srgb, var(--success), var(--surface-strong) 90%);
+}
+
+.problem-item.warn {
+  background: color-mix(in srgb, var(--lemon), var(--surface-strong) 88%);
+}
+
+.problem-item.error {
+  background: color-mix(in srgb, var(--danger), var(--surface-strong) 92%);
+}
+
+.problem-button {
+  min-height: 30px;
+  padding-inline: 10px;
+  white-space: nowrap;
 }
 
 .health-check {
