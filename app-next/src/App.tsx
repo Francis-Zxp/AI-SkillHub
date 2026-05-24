@@ -257,21 +257,49 @@ function Sources({ snapshot }: { snapshot: LegacySnapshot | null }) {
 
 function Agents({ snapshot }: { snapshot: LegacySnapshot | null }) {
   const agents = snapshot?.agents ?? [];
+  const adapters = snapshot?.agentAdapters ?? [];
 
   return (
-    <div className="card-grid">
-      {agents.map(agent => (
-        <article className="agent-card" key={agent.name}>
-          <strong>{agent.name}</strong>
-          <p>{agent.path}</p>
-          <footer>
-            <span>{agent.detected ? "已检测" : "未检测"}</span>
-            <span>{agent.managed ? "已接管" : "未接管"}</span>
-            <span>{agent.skillCount} Skills</span>
-          </footer>
-        </article>
-      ))}
-      {agents.length === 0 && <EmptyState text="正在等待 AI 工具检测结果。" />}
+    <div className="view">
+      <section className="panel">
+        <p className="eyebrow">Agent Adapter Registry</p>
+        <h3>统一 AI 工具适配器</h3>
+        <p>
+          v2 会先维护“支持哪些工具”的清单，再读取本机检测结果。这样未安装的工具会显示为未检测，而不是报错。
+        </p>
+      </section>
+
+      <div className="adapter-grid">
+        {adapters.map(adapter => (
+          <article className="adapter-card" key={adapter.id}>
+            <div className="card-head">
+              <strong>{adapter.name}</strong>
+              <span className={`adapter-status ${adapter.status}`}>{adapterStatusLabel(adapter.status)}</span>
+            </div>
+            <p>{adapter.skillsPathHint || "此工具暂未提供默认 Skills 目录。"}</p>
+            <footer>
+              <span>{adapter.vendor}</span>
+              <span>{adapter.detected ? "已检测" : "未检测"}</span>
+              <span>{adapter.managed ? "已接管" : "未接管"}</span>
+            </footer>
+          </article>
+        ))}
+      </div>
+
+      <section className="panel">
+        <h3>本机检测结果</h3>
+        <div className="agent-list">
+          {agents.map(agent => (
+            <div className="agent-row" key={agent.name}>
+              <strong>{agent.name}</strong>
+              <span>{agent.detected ? "已检测" : "未检测"}</span>
+              <span>{agent.managed ? "已接管" : "未接管"}</span>
+              <small>{agent.path}</small>
+            </div>
+          ))}
+          {agents.length === 0 && <p>正在等待 AI 工具检测结果。</p>}
+        </div>
+      </section>
     </div>
   );
 }
@@ -304,6 +332,12 @@ function scopeLabel(scope: string) {
   if (scope === "agent") return "Agent";
   if (scope === "project") return "项目";
   return scope;
+}
+
+function adapterStatusLabel(status: string) {
+  if (status === "ready") return "可用";
+  if (status === "detected-unmanaged") return "待接管";
+  return "未检测";
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

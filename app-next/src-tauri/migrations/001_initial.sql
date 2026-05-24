@@ -38,6 +38,23 @@ CREATE TABLE IF NOT EXISTS agents (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS agent_adapters (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  vendor TEXT NOT NULL DEFAULT '',
+  skills_path_hint TEXT NOT NULL DEFAULT '',
+  detection_kind TEXT NOT NULL DEFAULT 'folder',
+  install_scope TEXT NOT NULL DEFAULT 'global',
+  capability_level TEXT NOT NULL DEFAULT 'skills',
+  docs_url TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'not-detected',
+  detected INTEGER NOT NULL DEFAULT 0,
+  managed INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS workspaces (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,

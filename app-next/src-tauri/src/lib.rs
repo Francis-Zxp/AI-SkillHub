@@ -19,6 +19,7 @@ struct LegacySnapshot {
     skills: Vec<SkillCard>,
     sources: Vec<SourceCard>,
     agents: Vec<AgentCard>,
+    agent_adapters: Vec<AgentAdapterCard>,
     workspaces: Vec<WorkspaceCard>,
     presets: Vec<PresetCard>,
     diagnostics: DiagnosticSummary,
@@ -72,6 +73,23 @@ struct AgentCard {
     detected: bool,
     managed: bool,
     skill_count: usize,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AgentAdapterCard {
+    id: String,
+    name: String,
+    vendor: String,
+    skills_path_hint: String,
+    detection_kind: String,
+    install_scope: String,
+    capability_level: String,
+    docs_url: String,
+    status: String,
+    detected: bool,
+    managed: bool,
+    enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -163,6 +181,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         &configured_sources,
     );
     let agents = parse_agents(diagnostics_json.as_ref());
+    let agent_adapters = derive_agent_adapters(&agents);
     let diagnostics = parse_diagnostic_summary(diagnostics_json.as_ref());
 
     let mut source_counts: HashMap<String, usize> = HashMap::new();
@@ -202,6 +221,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         skills,
         sources,
         agents,
+        agent_adapters,
         workspaces: Vec::new(),
         presets: Vec::new(),
         diagnostics,
@@ -236,7 +256,9 @@ fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
         read_snapshot_from_database(&root, &connection).or_else(|_| scan_legacy_snapshot())?;
 
     if !snapshot.skills.is_empty()
-        && (snapshot.workspaces.is_empty() || snapshot.presets.is_empty())
+        && (snapshot.workspaces.is_empty()
+            || snapshot.presets.is_empty()
+            || snapshot.agent_adapters.is_empty())
     {
         return scan_legacy_snapshot();
     }
@@ -301,6 +323,7 @@ fn read_snapshot_from_database(
     let skills = read_indexed_skills(connection)?;
     let sources = read_indexed_sources(connection)?;
     let agents = read_indexed_agents(connection)?;
+    let agent_adapters = read_indexed_agent_adapters(connection)?;
     let workspaces = read_indexed_workspaces(connection)?;
     let presets = read_indexed_presets(connection)?;
     let diagnostics = read_indexed_diagnostics(connection);
@@ -342,6 +365,7 @@ fn read_snapshot_from_database(
         skills,
         sources,
         agents,
+        agent_adapters,
         workspaces,
         presets,
         diagnostics,
@@ -377,6 +401,9 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
     transaction
         .execute("DELETE FROM agents", [])
         .map_err(|error| format!("Cannot clear agent index: {}", error))?;
+    transaction
+        .execute("DELETE FROM agent_adapters", [])
+        .map_err(|error| format!("Cannot clear agent adapter registry: {}", error))?;
     transaction
         .execute("DELETE FROM workspaces", [])
         .map_err(|error| format!("Cannot clear workspace index: {}", error))?;
@@ -461,6 +488,7 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
             .map_err(|error| format!("Cannot index agent {}: {}", agent.name, error))?;
     }
 
+    seed_agent_adapters(&transaction, &snapshot.agent_adapters, &indexed_at)?;
     seed_workspaces(
         &transaction,
         root,
@@ -641,6 +669,57 @@ fn read_indexed_agents(connection: &Connection) -> Result<Vec<AgentCard>, String
     collect_rows(rows, "agent")
 }
 
+fn read_indexed_agent_adapters(connection: &Connection) -> Result<Vec<AgentAdapterCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                id,
+                name,
+                vendor,
+                skills_path_hint,
+                detection_kind,
+                install_scope,
+                capability_level,
+                docs_url,
+                status,
+                detected,
+                managed,
+                enabled
+            FROM agent_adapters
+            ORDER BY
+                detected DESC,
+                CASE id
+                    WHEN 'claude' THEN 0
+                    WHEN 'codex' THEN 1
+                    WHEN 'antigravity' THEN 2
+                    ELSE 3
+                END,
+                lower(name)",
+        )
+        .map_err(|error| format!("Cannot prepare agent adapter query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(AgentAdapterCard {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                vendor: row.get(2)?,
+                skills_path_hint: row.get(3)?,
+                detection_kind: row.get(4)?,
+                install_scope: row.get(5)?,
+                capability_level: row.get(6)?,
+                docs_url: row.get(7)?,
+                status: row.get(8)?,
+                detected: row.get::<_, i64>(9)? != 0,
+                managed: row.get::<_, i64>(10)? != 0,
+                enabled: row.get::<_, i64>(11)? != 0,
+            })
+        })
+        .map_err(|error| format!("Cannot read agent adapters: {}", error))?;
+
+    collect_rows(rows, "agent adapter")
+}
+
 fn read_indexed_workspaces(connection: &Connection) -> Result<Vec<WorkspaceCard>, String> {
     let total_skills = connection
         .query_row("SELECT COUNT(*) FROM skills WHERE enabled = 1", [], |row| {
@@ -793,6 +872,41 @@ fn collect_rows<T>(
     Ok(items)
 }
 
+fn seed_agent_adapters(
+    transaction: &rusqlite::Transaction<'_>,
+    adapters: &[AgentAdapterCard],
+    timestamp: &str,
+) -> Result<(), String> {
+    for adapter in adapters {
+        transaction
+            .execute(
+                "INSERT INTO agent_adapters (
+                    id, name, vendor, skills_path_hint, detection_kind,
+                    install_scope, capability_level, docs_url, status,
+                    detected, managed, enabled, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
+                params![
+                    adapter.id,
+                    adapter.name,
+                    adapter.vendor,
+                    adapter.skills_path_hint,
+                    adapter.detection_kind,
+                    adapter.install_scope,
+                    adapter.capability_level,
+                    adapter.docs_url,
+                    adapter.status,
+                    if adapter.detected { 1 } else { 0 },
+                    if adapter.managed { 1 } else { 0 },
+                    if adapter.enabled { 1 } else { 0 },
+                    timestamp
+                ],
+            )
+            .map_err(|error| format!("Cannot seed agent adapter {}: {}", adapter.name, error))?;
+    }
+
+    Ok(())
+}
+
 fn seed_workspaces(
     transaction: &rusqlite::Transaction<'_>,
     root: &Path,
@@ -897,6 +1011,152 @@ fn insert_preset(
     }
 
     Ok(())
+}
+
+fn derive_agent_adapters(agents: &[AgentCard]) -> Vec<AgentAdapterCard> {
+    agent_adapter_catalog()
+        .into_iter()
+        .map(|mut adapter| {
+            if let Some(agent) = agents
+                .iter()
+                .find(|agent| agent_matches_adapter(&adapter.id, agent))
+            {
+                adapter.detected = agent.detected;
+                adapter.managed = agent.managed;
+                adapter.enabled = agent.detected && agent.managed;
+                adapter.status = if agent.detected && agent.managed {
+                    "ready".to_string()
+                } else if agent.detected {
+                    "detected-unmanaged".to_string()
+                } else {
+                    "not-detected".to_string()
+                };
+                if !agent.path.is_empty() {
+                    adapter.skills_path_hint = agent.path.clone();
+                }
+            }
+            adapter
+        })
+        .collect()
+}
+
+fn agent_adapter_catalog() -> Vec<AgentAdapterCard> {
+    vec![
+        agent_adapter(
+            "claude",
+            "Claude / Claude Code",
+            "Anthropic",
+            "~\\.claude\\skills",
+            "global",
+        ),
+        agent_adapter(
+            "codex",
+            "OpenAI Codex",
+            "OpenAI",
+            "~\\.codex\\skills",
+            "global",
+        ),
+        agent_adapter(
+            "antigravity",
+            "Antigravity",
+            "Google",
+            "~\\.gemini\\antigravity\\skills",
+            "global",
+        ),
+        agent_adapter(
+            "cursor",
+            "Cursor",
+            "Anysphere",
+            "~\\.cursor\\skills",
+            "global",
+        ),
+        agent_adapter(
+            "gemini-cli",
+            "Gemini CLI",
+            "Google",
+            "~\\.gemini\\skills",
+            "global",
+        ),
+        agent_adapter(
+            "opencode",
+            "OpenCode",
+            "OpenCode",
+            "~\\.config\\opencode\\skills",
+            "global",
+        ),
+        agent_adapter(
+            "github-copilot",
+            "GitHub Copilot",
+            "GitHub",
+            "~\\.copilot\\skills",
+            "global",
+        ),
+        agent_adapter(
+            "windsurf",
+            "Windsurf",
+            "Codeium",
+            "~\\.codeium\\windsurf\\skills",
+            "global",
+        ),
+        agent_adapter("kiro", "Kiro CLI", "Kiro", "~\\.kiro\\skills", "global"),
+        agent_adapter(
+            "hermes",
+            "Hermes Agent",
+            "Hermes",
+            "~\\.hermes\\skills",
+            "global",
+        ),
+        agent_adapter(
+            "openclaw",
+            "OpenClaw",
+            "OpenClaw",
+            "~\\.openclaw\\skills",
+            "global",
+        ),
+        agent_adapter("amp", "Amp", "Sourcegraph", "", "global"),
+    ]
+}
+
+fn agent_adapter(
+    id: &str,
+    name: &str,
+    vendor: &str,
+    skills_path_hint: &str,
+    install_scope: &str,
+) -> AgentAdapterCard {
+    AgentAdapterCard {
+        id: id.to_string(),
+        name: name.to_string(),
+        vendor: vendor.to_string(),
+        skills_path_hint: skills_path_hint.to_string(),
+        detection_kind: "skills-folder".to_string(),
+        install_scope: install_scope.to_string(),
+        capability_level: "skills".to_string(),
+        docs_url: String::new(),
+        status: "not-detected".to_string(),
+        detected: false,
+        managed: false,
+        enabled: false,
+    }
+}
+
+fn agent_matches_adapter(adapter_id: &str, agent: &AgentCard) -> bool {
+    let haystack = format!("{} {}", agent.id, agent.name).to_lowercase();
+    match adapter_id {
+        "claude" => haystack.contains("claude"),
+        "codex" => haystack.contains("codex"),
+        "antigravity" => haystack.contains("antigravity"),
+        "cursor" => haystack.contains("cursor"),
+        "gemini-cli" => haystack.contains("gemini"),
+        "opencode" => haystack.contains("opencode") || haystack.contains("open code"),
+        "github-copilot" => haystack.contains("copilot"),
+        "windsurf" => haystack.contains("windsurf"),
+        "kiro" => haystack.contains("kiro"),
+        "hermes" => haystack.contains("hermes"),
+        "openclaw" => haystack.contains("openclaw"),
+        "amp" => haystack.split_whitespace().any(|part| part == "amp"),
+        _ => haystack.contains(adapter_id),
+    }
 }
 
 fn derive_workspaces(root: &Path, agents: &[AgentCard], total_skills: usize) -> Vec<WorkspaceCard> {
@@ -1368,6 +1628,7 @@ mod tests {
             .diagnostics_file
             .ends_with("latest-diagnostics.json"));
         assert!(snapshot.index.persisted);
+        assert!(!snapshot.agent_adapters.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
         assert_eq!(snapshot.index.sources_indexed, snapshot.sources.len());
         assert_eq!(snapshot.index.agents_indexed, snapshot.agents.len());
@@ -1382,6 +1643,7 @@ mod tests {
         assert!(snapshot.index.persisted);
         assert!(!snapshot.workspaces.is_empty());
         assert!(!snapshot.presets.is_empty());
+        assert!(!snapshot.agent_adapters.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
     }
 
@@ -1393,5 +1655,19 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.starts_with("preset-"));
         assert!(second.starts_with("preset-"));
+    }
+
+    #[test]
+    fn agent_adapter_registry_has_core_agents() {
+        let adapters = agent_adapter_catalog();
+        let ids = adapters
+            .iter()
+            .map(|adapter| adapter.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(ids.contains(&"claude"));
+        assert!(ids.contains(&"codex"));
+        assert!(ids.contains(&"antigravity"));
+        assert!(ids.contains(&"cursor"));
     }
 }

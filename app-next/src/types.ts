@@ -17,6 +17,7 @@ export type LegacySnapshot = {
   skills: SkillCard[];
   sources: SourceCard[];
   agents: AgentCard[];
+  agentAdapters: AgentAdapterCard[];
   workspaces: WorkspaceCard[];
   presets: PresetCard[];
   diagnostics: DiagnosticSummary;
@@ -62,6 +63,21 @@ export type AgentCard = {
   detected: boolean;
   managed: boolean;
   skillCount: number;
+};
+
+export type AgentAdapterCard = {
+  id: string;
+  name: string;
+  vendor: string;
+  skillsPathHint: string;
+  detectionKind: string;
+  installScope: string;
+  capabilityLevel: string;
+  docsUrl: string;
+  status: "ready" | "detected-unmanaged" | "not-detected" | string;
+  detected: boolean;
+  managed: boolean;
+  enabled: boolean;
 };
 
 export type WorkspaceCard = {

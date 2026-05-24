@@ -72,6 +72,7 @@ button {
 .skill-card p,
 .agent-card p,
 .workspace-card p,
+.adapter-card p,
 .preset-card p,
 .panel p,
 .source-row small {
@@ -201,6 +202,7 @@ h3 {
 .skill-card,
 .agent-card,
 .workspace-card,
+.adapter-card,
 .preset-card,
 .table-panel {
   border: 1px solid rgba(28, 68, 58, .12);
@@ -294,9 +296,16 @@ h3 {
   gap: 14px;
 }
 
+.adapter-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(260px, 1fr));
+  gap: 16px;
+}
+
 .skill-card,
 .agent-card,
 .workspace-card,
+.adapter-card,
 .preset-card {
   padding: 18px;
 }
@@ -305,6 +314,7 @@ h3 {
 .skill-card footer,
 .agent-card footer,
 .workspace-card footer,
+.adapter-card footer,
 .source-row,
 .setting-row {
   display: flex;
@@ -316,6 +326,7 @@ h3 {
 .skill-card p,
 .agent-card p,
 .workspace-card p,
+.adapter-card p,
 .preset-card p {
   margin-top: 12px;
   min-height: 48px;
@@ -324,14 +335,67 @@ h3 {
 
 .skill-card footer,
 .agent-card footer,
-.workspace-card footer {
+.workspace-card footer,
+.adapter-card footer {
   margin-top: 16px;
   color: #557168;
   font-size: 13px;
 }
 
-.workspace-card p {
+.workspace-card p,
+.adapter-card p {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adapter-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .92), rgba(249, 253, 251, .82)),
+    rgba(255, 255, 255, .82);
+}
+
+.adapter-status {
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.adapter-status.ready {
+  color: #0e7c63;
+  background: #ddf5ec;
+}
+
+.adapter-status.detected-unmanaged {
+  color: #a4620a;
+  background: #fff1d7;
+}
+
+.adapter-status.not-detected {
+  color: #6f7a83;
+  background: #eef2f3;
+}
+
+.agent-list {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-row {
+  display: grid;
+  grid-template-columns: minmax(180px, .8fr) 90px 90px minmax(220px, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid rgba(34, 67, 61, .1);
+  border-radius: 14px;
+  background: #f8fcfa;
+}
+
+.agent-row small {
+  overflow: hidden;
+  color: #71808a;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
