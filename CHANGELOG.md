@@ -16,6 +16,7 @@ All notable changes to AI SkillHub are documented here.
 - Latest-result cards inside the Release Center, showing recent diagnostics, share validation, release preflight, and troubleshooting bundle status.
 - One-click full acceptance action inside the Release Center, running system check, share validation, troubleshooting bundle export, and release preflight in order.
 - V2 benchmark roadmap card in the Release Center, plus `docs/v2-roadmap-status.md` explaining the current 12% estimate and active reference projects.
+- Skill health indicators in the Active Skills list, checking missing `SKILL.md`, missing description, hidden/control characters, short files, large folders, and risky script patterns.
 
 ### Changed
 

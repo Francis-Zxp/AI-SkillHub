@@ -703,6 +703,7 @@ namespace AISkillHubWeb
                         skill.mode = "managed";
                         skill.localPath = Path.Combine(skillsRoot, skill.name);
                         skill.tags = repoTags.ContainsKey(skill.repo) ? repoTags[skill.repo] : new List<string>();
+                        ApplySkillHealth(skill);
                         if (skill.name.Length > 0) result[skill.name] = skill;
                     }
                 }
@@ -728,6 +729,7 @@ namespace AISkillHubWeb
                     skill.localPath = dir;
                     skill.mode = "local";
                     skill.tags = new List<string>();
+                    ApplySkillHealth(skill);
                     result[skill.name] = skill;
                 }
             }
@@ -738,15 +740,122 @@ namespace AISkillHubWeb
         private SkillMeta ReadSkillMeta(string skillMd)
         {
             var meta = new SkillMeta();
-            foreach (string raw in File.ReadLines(skillMd, Encoding.UTF8).Take(120))
+            if (!File.Exists(skillMd)) return meta;
+
+            string[] lines = new string[0];
+            try
             {
-                string line = raw.Trim();
+                lines = File.ReadLines(skillMd, Encoding.UTF8).Take(300).ToArray();
+                meta.lineCount = lines.Length;
+                string sample = String.Join("\n", lines);
+                meta.hasFrontMatter = lines.Length > 1 && lines[0].Trim() == "---" && lines.Skip(1).Take(80).Any(line => line.Trim() == "---");
+                meta.hasHiddenUnicode = Regex.IsMatch(sample, "[\u200B-\u200D\u2060\uFEFF\u202A-\u202E\u2066-\u2069]");
+                meta.hasControlChars = sample.Any(ch => Char.IsControl(ch) && ch != '\r' && ch != '\n' && ch != '\t');
+            }
+            catch (Exception ex)
+            {
+                meta.readError = ex.Message;
+                return meta;
+            }
+
+            for (int index = 0; index < lines.Length; index++)
+            {
+                string line = lines[index].Trim();
                 if (line.StartsWith("name:"))
                     meta.name = line.Substring(5).Trim().Trim('"').Trim('\'');
                 if (line.StartsWith("description:"))
-                    meta.description = line.Substring(12).Trim().Trim('"').Trim('\'');
+                {
+                    string value = line.Substring(12).Trim().Trim('"').Trim('\'');
+                    if ((value == ">-" || value == "|" || value == ">") && index + 1 < lines.Length)
+                        value = lines.Skip(index + 1).Select(item => item.Trim()).FirstOrDefault(item => item.Length > 0 && item != "---") ?? "";
+                    meta.description = value;
+                }
             }
             return meta;
+        }
+
+        private void ApplySkillHealth(SkillView skill)
+        {
+            var errors = new List<string>();
+            var warnings = new List<string>();
+            var infos = new List<string>();
+
+            string dir = skill.localPath;
+            if (String.IsNullOrWhiteSpace(dir)) dir = skill.target;
+            string skillMd = String.IsNullOrWhiteSpace(dir) ? "" : Path.Combine(dir, "SKILL.md");
+
+            if (String.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
+            {
+                errors.Add("目录不存在");
+            }
+            else if (!File.Exists(skillMd))
+            {
+                errors.Add("缺少 SKILL.md");
+            }
+            else
+            {
+                SkillMeta meta = ReadSkillMeta(skillMd);
+                if (meta.readError.Length > 0) errors.Add("SKILL.md 无法读取");
+                if (!meta.hasFrontMatter) infos.Add("未发现 frontmatter");
+                if (String.IsNullOrWhiteSpace(CleanDescription(skill.description)) && String.IsNullOrWhiteSpace(CleanDescription(meta.description))) warnings.Add("缺少 description");
+                if (meta.lineCount > 0 && meta.lineCount < 3) warnings.Add("SKILL.md 内容过短");
+                if (meta.hasHiddenUnicode || meta.hasControlChars) warnings.Add("可能含隐藏字符或乱码");
+
+                int fileCount = CountSkillFolderFiles(dir, 181);
+                if (fileCount >= 181) infos.Add("文件数量较多");
+                if (HasSkillRiskHint(dir, skillMd)) warnings.Add("含需人工确认的脚本或敏感模式");
+            }
+
+            var issues = new List<string>();
+            issues.AddRange(errors);
+            issues.AddRange(warnings);
+            issues.AddRange(infos);
+            skill.healthIssueCount = issues.Count;
+            skill.healthStatus = errors.Count > 0 ? "error" : (warnings.Count > 0 ? "warn" : (infos.Count > 0 ? "info" : "ok"));
+            skill.healthSummary = issues.Count > 0 ? String.Join("；", issues.Take(4)) : "未发现明显问题";
+        }
+
+        private int CountSkillFolderFiles(string dir, int limit)
+        {
+            if (!Directory.Exists(dir)) return 0;
+            int count = 0;
+            foreach (string file in EnumerateSafeFiles(dir))
+            {
+                count++;
+                if (count >= limit) return count;
+            }
+            return count;
+        }
+
+        private bool HasSkillRiskHint(string dir, string skillMd)
+        {
+            var files = new List<string>();
+            if (File.Exists(skillMd)) files.Add(skillMd);
+            if (Directory.Exists(dir))
+            {
+                foreach (string file in EnumerateSafeFiles(dir))
+                {
+                    string ext = Path.GetExtension(file).ToLowerInvariant();
+                    if (ext == ".ps1" || ext == ".sh" || ext == ".js" || ext == ".ts" || ext == ".py" || ext == ".cmd" || ext == ".bat")
+                    {
+                        files.Add(file);
+                        if (files.Count >= 24) break;
+                    }
+                }
+            }
+
+            string pattern = "(?i)(Invoke-Expression|\\biex\\b|Remove-Item\\s+.*-Recurse|rm\\s+-rf|curl\\s+.+\\|\\s*(sh|bash|powershell|pwsh)|wget\\s+.+\\|\\s*(sh|bash|powershell|pwsh)|powershell\\s+-enc|eval\\(|child_process|execSync|api[_-]?key\\s*[:=]|secret\\s*[:=]|token\\s*[:=])";
+            foreach (string file in files.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    string text = File.ReadAllText(file, Encoding.UTF8);
+                    if (text.Length > 65536) text = text.Substring(0, 65536);
+                    if (Regex.IsMatch(text, pattern)) return true;
+                }
+                catch { }
+            }
+            return false;
         }
 
         private string CleanDescription(string value)
@@ -2261,6 +2370,9 @@ namespace AISkillHubWeb
         public string target { get; set; }
         public string localPath { get; set; }
         public string mode { get; set; }
+        public string healthStatus { get; set; }
+        public string healthSummary { get; set; }
+        public int healthIssueCount { get; set; }
     }
 
     public class ManagedSkill
@@ -2277,6 +2389,11 @@ namespace AISkillHubWeb
     {
         public string name = "";
         public string description = "";
+        public bool hasFrontMatter = false;
+        public int lineCount = 0;
+        public bool hasHiddenUnicode = false;
+        public bool hasControlChars = false;
+        public string readError = "";
     }
 
     public class ImportPreview

@@ -18,7 +18,7 @@
 
   const APP_VERSION = "v1.1.1";
   const defaultColumns = {
-    skills: [200, 132, 168, 320, 330],
+    skills: [200, 132, 118, 168, 300, 330],
     repos: [210, 92, 132, 136, 118, 250, 300],
     prompts: [220, 150, 360, 320, 160]
   };
@@ -196,6 +196,11 @@
       repo: "仓库",
       source: "来源位置",
       sourceHealth: "健康",
+      skillHealth: "健康",
+      skillHealthOk: "正常",
+      skillHealthWarn: "需检查",
+      skillHealthError: "有错误",
+      skillHealthInfo: "有提示",
       sourceOk: "可用",
       sourceMissing: "未下载",
       sourcePromptOnly: "资料保留",
@@ -396,6 +401,11 @@
       repo: "Repository",
       source: "Source Path",
       sourceHealth: "Health",
+      skillHealth: "Health",
+      skillHealthOk: "OK",
+      skillHealthWarn: "Check",
+      skillHealthError: "Error",
+      skillHealthInfo: "Info",
       sourceOk: "Ready",
       sourceMissing: "Missing",
       sourcePromptOnly: "Reference only",
@@ -596,6 +606,11 @@
       repo: "저장소",
       source: "소스 위치",
       sourceHealth: "상태",
+      skillHealth: "상태",
+      skillHealthOk: "정상",
+      skillHealthWarn: "확인 필요",
+      skillHealthError: "오류",
+      skillHealthInfo: "안내",
       sourceOk: "사용 가능",
       sourceMissing: "없음",
       sourcePromptOnly: "자료 보관",
@@ -1260,11 +1275,14 @@
 
     const table = el("div", "data-table skills-table");
     applyTableColumns("skills", table);
-    table.appendChild(headerRow(["name", "category", "repo", "description", "source"].map(t), "skills"));
+    table.appendChild(headerRow(["name", "category", "skillHealth", "repo", "description", "source"].map(t), "skills"));
     rows.forEach(skill => {
+      const health = badge(skillHealthLabel(skill), skillHealthClass(skill));
+      health.title = skill.healthSummary || "";
       const cells = [
         cellWithTags(skill.name, skill.tags, "name-cell"),
         badge(categoryLabel(skill.categoryId), categoryClass(skill.categoryId, skill.mode)),
+        health,
         cell(skill.repo || t("localRepo")),
         cell(skill.description || skill.note || "-"),
         cell(skill.target || skill.localPath || "-")
@@ -1420,7 +1438,7 @@
     if (!query) return true;
     const haystack = Object.keys(item)
       .map(key => String(item[key] || ""))
-      .concat(categoryLabel(item.categoryId || "auto"), itemHasSourceHealth(item) ? sourceHealthLabel(item) : "")
+      .concat(categoryLabel(item.categoryId || "auto"), itemHasSourceHealth(item) ? sourceHealthLabel(item) : "", itemHasSkillHealth(item) ? skillHealthLabel(item) : "")
       .join(" ")
       .toLowerCase();
     return haystack.includes(query);
@@ -1444,7 +1462,7 @@
       if (sort === "category") return categoryLabel(item.categoryId || "auto");
       if (sort === "repo") return item.repo || item.name || "";
       if (sort === "type") return item.type || item.mode || "";
-      if (sort === "health") return sourceHealthLabel(item);
+      if (sort === "health") return itemHasSkillHealth(item) ? `${healthSortRank(item.healthStatus)} ${item.healthIssueCount || 0} ${item.name || ""}` : sourceHealthLabel(item);
       return item.name || "";
     };
     copy.sort((a, b) => textValue(a).localeCompare(textValue(b), lang === "zh" ? "zh-Hans-CN" : lang, { sensitivity: "base" }));
@@ -1739,6 +1757,35 @@
     if (repo.type === "prompt") return "info";
     if ((repo.skillCount || 0) <= 0) return "warn";
     return "ok";
+  }
+
+  function skillHealthLabel(skill) {
+    const status = skill && skill.healthStatus ? skill.healthStatus : "info";
+    const count = Number(skill && skill.healthIssueCount || 0);
+    let label = t("skillHealthInfo");
+    if (status === "ok") label = t("skillHealthOk");
+    if (status === "warn") label = t("skillHealthWarn");
+    if (status === "error") label = t("skillHealthError");
+    if (status === "info") label = t("skillHealthInfo");
+    return count > 0 ? `${label} · ${count}` : label;
+  }
+
+  function skillHealthClass(skill) {
+    const status = skill && skill.healthStatus ? skill.healthStatus : "info";
+    if (status === "ok" || status === "warn" || status === "error" || status === "info") return status;
+    return "info";
+  }
+
+  function itemHasSkillHealth(item) {
+    return !!item && Object.prototype.hasOwnProperty.call(item, "healthStatus");
+  }
+
+  function healthSortRank(status) {
+    if (status === "error") return "0";
+    if (status === "warn") return "1";
+    if (status === "info") return "2";
+    if (status === "ok") return "3";
+    return "4";
   }
 
   function itemHasSourceHealth(item) {

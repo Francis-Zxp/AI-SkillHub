@@ -331,6 +331,8 @@ function Test-RiskScanFile($File) {
 
 function Test-RiskLineIgnored([string]$RelativePath, [string]$LineText) {
   if ($RelativePath -eq 'app\Export-SkillHubDiagnostics.ps1' -and $LineText -match "regex='") { return $true }
+  if ($RelativePath -eq 'app\Export-SkillHubDiagnostics.ps1' -and $LineText -match '\$LineText -match') { return $true }
+  if ($RelativePath -eq 'app\src\AI.SkillHub.WebView.cs' -and $LineText -match 'string pattern = "\(\?i\)\(Invoke-Expression') { return $true }
   return $false
 }
 
