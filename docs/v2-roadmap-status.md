@@ -4,26 +4,26 @@ Updated: 2026-05-25
 
 ## Current Estimate
 
-V2 overall completion is conservatively estimated at **about 32%**.
+V2 overall completion is conservatively estimated at **about 38%**.
 
-This does **not** mean a usable V2 application is 32% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, and the scan now persists into v2 SQLite without changing v1 data.
+This does **not** mean a usable V2 application is 38% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, and the UI can now open from SQLite before scanning v1.
 
 ## Why 32%
 
 | Area | Status | Estimate |
 |---|---:|---:|
 | Reference project analysis | skills-manager, asm, OpenSkills, SkillKit analyzed and still active as references | 70% |
-| Product model | central library, sources, agents, diagnostics, release center are defined through v1 behavior | 35% |
+| Product model | central library, sources, agents, diagnostics, workspaces, presets, and release center are defined through v1 behavior and v2 seed data | 45% |
 | V1 behavior specs for V2 | sharing, diagnostics, import preview, release preflight, troubleshooting, Skill health, and problem locator are repeatable specs | 60% |
 | V2 technical environment | Node LTS, pnpm, Rust/Cargo, rustup, WebView2, and Visual Studio Build Tools are ready | 85% |
-| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Tauri info, Rust tests, read-only v1 scanner, and SQLite indexing pass | 32% |
-| SQLite data model | initial migration created; real v1 sources, skills, agents, snapshots, and audit events are persisted | 35% |
-| Workspaces and presets | planned, v1 only has partial categories/tags/presets | 10% |
+| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, and SQLite-first loading pass | 40% |
+| SQLite data model | real v1 sources, skills, agents, workspaces, presets, snapshots, and audit events are persisted | 45% |
+| Workspaces and presets | first global/agent workspaces and category presets are seeded from the index | 25% |
 | Multi-agent adapter registry | planned, v1 has partial Claude/Codex/Antigravity detection | 15% |
 | CLI and automation | planned, not implemented | 0% |
 | Marketplace/recommended index | planned, not implemented | 0% |
 
-Weighted together, the honest number is about **32%**.
+Weighted together, the honest number is about **38%**.
 
 ## Reference Projects Still In Use
 
@@ -54,12 +54,13 @@ The v2 source line has started and the toolchain is ready:
 3. Visual Studio Build Tools / MSVC requirements stay detected by `npm run check:toolchain`.
 4. `pnpm install`, `pnpm build`, `pnpm tauri info`, Rust `cargo check`, and Rust tests pass.
 5. The first read-only scanner can read existing AI SkillHub data, show it in the React/Tauri shell, and persist it into v2 SQLite.
+6. The v2 UI can load from SQLite first and manually refresh the v1 scan when needed.
 
 ## Next Practical Step
 
 Continue v2 milestone 1:
 
-1. Add a SQLite read layer so the UI can load from the v2 database instead of scanning every time.
-2. Add workspace and preset tables to the UI model without enabling write/sync behavior yet.
-3. Run the first Tauri dev window and inspect the real UI once SQLite read layer is in place.
+1. Add real enable/disable state for workspaces, presets, and agents in SQLite without touching v1 links yet.
+2. Add a proper agent adapter registry so Claude, Codex, Antigravity, Cursor, and future tools can be represented consistently.
+3. Run the first Tauri dev window and inspect the real UI after the workspace/preset views are in place.
 4. Keep v1 as the maintenance app until v2 can cover its core workflows.

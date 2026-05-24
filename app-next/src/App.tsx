@@ -5,6 +5,8 @@ import type { LegacySnapshot, LegacySummary, NavKey } from "./types";
 const navItems: Array<{ key: NavKey; label: string; hint: string }> = [
   { key: "dashboard", label: "总览", hint: "健康、同步、风险" },
   { key: "library", label: "技能库", hint: "中央 Skill Library" },
+  { key: "workspaces", label: "工作区", hint: "全局、Agent、项目" },
+  { key: "presets", label: "预设", hint: "分类组合与场景" },
   { key: "sources", label: "来源", hint: "GitHub、本地、Prompt" },
   { key: "agents", label: "AI 工具", hint: "Claude、Codex、Antigravity" },
   { key: "settings", label: "设置", hint: "路径、主题、迁移" }
@@ -29,10 +31,11 @@ export function App() {
     );
   }, [snapshot]);
 
-  async function loadSnapshot() {
+  async function loadSnapshot(mode: "indexed" | "refresh" = "indexed") {
     setLoading(true);
     try {
-      const result = await invoke<LegacySnapshot>("scan_legacy_snapshot");
+      const command = mode === "refresh" ? "scan_legacy_snapshot" : "load_indexed_snapshot";
+      const result = await invoke<LegacySnapshot>(command);
       setSnapshot(result);
       setLoadError("");
     } catch (error) {
@@ -79,10 +82,15 @@ export function App() {
             <h1>{navItems.find(item => item.key === active)?.label}</h1>
           </div>
           <div className="topbar-actions">
-            <button className="ghost-button" disabled={loading} onClick={() => void loadSnapshot()} type="button">
-              {loading ? "正在刷新" : "刷新索引"}
+            <button
+              className="ghost-button"
+              disabled={loading}
+              onClick={() => void loadSnapshot("refresh")}
+              type="button"
+            >
+              {loading ? "正在刷新" : "刷新 v1 并入库"}
             </button>
-            <div className="status-pill">只读 v1 · 写入 v2 SQLite</div>
+            <div className="status-pill">SQLite 优先 · 手动刷新才扫描 v1</div>
           </div>
         </header>
 
@@ -95,6 +103,8 @@ export function App() {
 
         {active === "dashboard" && <Dashboard loading={loading} snapshot={snapshot} summary={summary} />}
         {active === "library" && <Library snapshot={snapshot} />}
+        {active === "workspaces" && <Workspaces snapshot={snapshot} />}
+        {active === "presets" && <Presets snapshot={snapshot} />}
         {active === "sources" && <Sources snapshot={snapshot} />}
         {active === "agents" && <Agents snapshot={snapshot} />}
         {active === "settings" && <Settings snapshot={snapshot} />}
@@ -116,10 +126,10 @@ function Dashboard({
     <div className="view">
       <section className="hero-panel">
         <div>
-          <p className="eyebrow">真实 v1 只读扫描</p>
-          <h2>v2 正在读取现有 AI SkillHub 数据</h2>
+          <p className="eyebrow">SQLite 优先读取</p>
+          <h2>v2 已经开始从索引库加载 AI SkillHub 数据</h2>
           <p>
-            当前阶段只读取 v1 的 Skills、来源、AI 工具和诊断结果，不修改用户 skills、GitHub 来源、配置或 AI 工具链接。
+            默认打开时优先读取 v2 SQLite 索引；只有点击刷新时才重新扫描 v1 的 Skills、来源、AI 工具和诊断结果。
           </p>
         </div>
       </section>
@@ -138,7 +148,7 @@ function Dashboard({
           <li>根目录：{snapshot?.root ?? "正在读取..."}</li>
           <li>诊断状态：{summary.diagnosticsStatus}</li>
           <li>诊断版本：{snapshot?.diagnostics.appVersion || "尚未读取"}</li>
-          <li>读取模式：{snapshot?.mode ?? "read-only"}，写入范围仅限 v2 SQLite</li>
+          <li>读取模式：{snapshot?.mode ?? "sqlite-index"}，v1 数据仍保持只读</li>
         </ul>
       </section>
 
@@ -181,6 +191,48 @@ function Library({ snapshot }: { snapshot: LegacySnapshot | null }) {
         </article>
       ))}
       {skills.length === 0 && <EmptyState text="正在等待 v1 Skill 扫描结果。" />}
+    </div>
+  );
+}
+
+function Workspaces({ snapshot }: { snapshot: LegacySnapshot | null }) {
+  const workspaces = snapshot?.workspaces ?? [];
+
+  return (
+    <div className="card-grid">
+      {workspaces.map(workspace => (
+        <article className="workspace-card" key={workspace.id}>
+          <div className="card-head">
+            <strong>{workspace.name}</strong>
+            <span className={`scope ${workspace.scope}`}>{scopeLabel(workspace.scope)}</span>
+          </div>
+          <p>{workspace.path}</p>
+          <footer>
+            <span>{workspace.agentCount} 个 AI 工具</span>
+            <span>{workspace.skillCount} 个 Skills</span>
+          </footer>
+        </article>
+      ))}
+      {workspaces.length === 0 && <EmptyState text="正在等待工作区索引结果。" />}
+    </div>
+  );
+}
+
+function Presets({ snapshot }: { snapshot: LegacySnapshot | null }) {
+  const presets = snapshot?.presets ?? [];
+
+  return (
+    <div className="preset-grid">
+      {presets.map(preset => (
+        <article className={`preset-card ${preset.color}`} key={preset.id}>
+          <div className="card-head">
+            <strong>{preset.name}</strong>
+            <span>{preset.skillCount}</span>
+          </div>
+          <p>{preset.description}</p>
+        </article>
+      ))}
+      {presets.length === 0 && <EmptyState text="正在等待 Preset 索引结果。" />}
     </div>
   );
 }
@@ -245,6 +297,13 @@ function Settings({ snapshot }: { snapshot: LegacySnapshot | null }) {
       </div>
     </section>
   );
+}
+
+function scopeLabel(scope: string) {
+  if (scope === "global") return "全局";
+  if (scope === "agent") return "Agent";
+  if (scope === "project") return "项目";
+  return scope;
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

@@ -1,15 +1,24 @@
-export type NavKey = "dashboard" | "library" | "sources" | "agents" | "settings";
+export type NavKey =
+  | "dashboard"
+  | "library"
+  | "workspaces"
+  | "presets"
+  | "sources"
+  | "agents"
+  | "settings";
 
 export type LegacySnapshot = {
   root: string;
   skillsDir: string;
   sourcesDir: string;
   diagnosticsFile: string;
-  mode: "read-only";
+  mode: "read-only" | "sqlite-index";
   summary: LegacySummary;
   skills: SkillCard[];
   sources: SourceCard[];
   agents: AgentCard[];
+  workspaces: WorkspaceCard[];
+  presets: PresetCard[];
   diagnostics: DiagnosticSummary;
   index: IndexReport;
 };
@@ -52,6 +61,23 @@ export type AgentCard = {
   path: string;
   detected: boolean;
   managed: boolean;
+  skillCount: number;
+};
+
+export type WorkspaceCard = {
+  id: string;
+  name: string;
+  scope: "global" | "agent" | "project" | string;
+  path: string;
+  agentCount: number;
+  skillCount: number;
+};
+
+export type PresetCard = {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
   skillCount: number;
 };
 

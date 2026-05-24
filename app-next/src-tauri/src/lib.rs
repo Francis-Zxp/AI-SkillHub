@@ -1,8 +1,9 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{hash_map::DefaultHasher, BTreeMap, HashMap};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -18,6 +19,8 @@ struct LegacySnapshot {
     skills: Vec<SkillCard>,
     sources: Vec<SourceCard>,
     agents: Vec<AgentCard>,
+    workspaces: Vec<WorkspaceCard>,
+    presets: Vec<PresetCard>,
     diagnostics: DiagnosticSummary,
     index: IndexReport,
 }
@@ -73,6 +76,27 @@ struct AgentCard {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct WorkspaceCard {
+    id: String,
+    name: String,
+    scope: String,
+    path: String,
+    agent_count: usize,
+    skill_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PresetCard {
+    id: String,
+    name: String,
+    description: String,
+    color: String,
+    skill_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct DiagnosticSummary {
     available: bool,
     app_version: String,
@@ -121,7 +145,10 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
 
     let skills_dir = root.join("skills");
     let sources_dir = root.join("app").join("github_sources");
-    let diagnostics_file = root.join("app").join("reports").join("latest-diagnostics.json");
+    let diagnostics_file = root
+        .join("app")
+        .join("reports")
+        .join("latest-diagnostics.json");
     let config_file = root.join("app").join("skillhub.config.json");
 
     let diagnostics_json = read_json(&diagnostics_file);
@@ -129,13 +156,20 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
     let diagnostic_skills = parse_diagnostic_skills(diagnostics_json.as_ref());
     let configured_sources = parse_configured_sources(config_json.as_ref());
     let mut sources = scan_sources(&sources_dir, &configured_sources);
-    let mut skills = scan_skills(&skills_dir, &sources_dir, &diagnostic_skills, &configured_sources);
+    let mut skills = scan_skills(
+        &skills_dir,
+        &sources_dir,
+        &diagnostic_skills,
+        &configured_sources,
+    );
     let agents = parse_agents(diagnostics_json.as_ref());
     let diagnostics = parse_diagnostic_summary(diagnostics_json.as_ref());
 
     let mut source_counts: HashMap<String, usize> = HashMap::new();
     for skill in &skills {
-        *source_counts.entry(skill.source.to_lowercase()).or_insert(0) += 1;
+        *source_counts
+            .entry(skill.source.to_lowercase())
+            .or_insert(0) += 1;
     }
     for source in &mut sources {
         source.skill_count = *source_counts.get(&source.name.to_lowercase()).unwrap_or(&0);
@@ -148,10 +182,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         .iter()
         .filter(|source| source.source_type.eq_ignore_ascii_case("prompt"))
         .count();
-    let warnings = skills
-        .iter()
-        .filter(|skill| skill.health != "ok")
-        .count();
+    let warnings = skills.iter().filter(|skill| skill.health != "ok").count();
     let agents_detected = agents.iter().filter(|agent| agent.detected).count();
 
     let mut snapshot = LegacySnapshot {
@@ -171,6 +202,8 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         skills,
         sources,
         agents,
+        workspaces: Vec::new(),
+        presets: Vec::new(),
         diagnostics,
         index: IndexReport {
             persisted: false,
@@ -183,7 +216,31 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         },
     };
 
+    snapshot.workspaces = derive_workspaces(&root, &snapshot.agents, snapshot.skills.len());
+    snapshot.presets = derive_presets(&snapshot.skills);
     snapshot.index = persist_snapshot(&root, &snapshot)?;
+    Ok(snapshot)
+}
+
+#[tauri::command]
+fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
+    let root = resolve_legacy_root()?;
+    let db_file = database_file(&root);
+
+    if !db_file.exists() {
+        return scan_legacy_snapshot();
+    }
+
+    let connection = open_index_database(&root)?;
+    let snapshot =
+        read_snapshot_from_database(&root, &connection).or_else(|_| scan_legacy_snapshot())?;
+
+    if !snapshot.skills.is_empty()
+        && (snapshot.workspaces.is_empty() || snapshot.presets.is_empty())
+    {
+        return scan_legacy_snapshot();
+    }
+
     Ok(snapshot)
 }
 
@@ -210,7 +267,7 @@ fn database_file(root: &Path) -> PathBuf {
         .join("skillhub-next.sqlite3")
 }
 
-fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexReport, String> {
+fn open_index_database(root: &Path) -> Result<Connection, String> {
     let db_file = database_file(root);
     let db_parent = db_file
         .parent()
@@ -223,11 +280,78 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
         )
     })?;
 
-    let mut connection = Connection::open(&db_file)
-        .map_err(|error| format!("Cannot open v2 SQLite database {}: {}", db_file.display(), error))?;
+    let connection = Connection::open(&db_file).map_err(|error| {
+        format!(
+            "Cannot open v2 SQLite database {}: {}",
+            db_file.display(),
+            error
+        )
+    })?;
     connection
         .execute_batch(include_str!("../migrations/001_initial.sql"))
         .map_err(|error| format!("Cannot apply v2 SQLite migration: {}", error))?;
+
+    Ok(connection)
+}
+
+fn read_snapshot_from_database(
+    root: &Path,
+    connection: &Connection,
+) -> Result<LegacySnapshot, String> {
+    let skills = read_indexed_skills(connection)?;
+    let sources = read_indexed_sources(connection)?;
+    let agents = read_indexed_agents(connection)?;
+    let workspaces = read_indexed_workspaces(connection)?;
+    let presets = read_indexed_presets(connection)?;
+    let diagnostics = read_indexed_diagnostics(connection);
+    let index = read_index_report(
+        connection,
+        &database_file(root),
+        sources.len(),
+        skills.len(),
+        agents.len(),
+    )?;
+
+    let prompts = sources
+        .iter()
+        .filter(|source| source.source_type.eq_ignore_ascii_case("prompt"))
+        .count();
+    let warnings = skills.iter().filter(|skill| skill.health != "ok").count();
+    let agents_detected = agents.iter().filter(|agent| agent.detected).count();
+    let skills_dir = root.join("skills");
+    let sources_dir = root.join("app").join("github_sources");
+    let diagnostics_file = root
+        .join("app")
+        .join("reports")
+        .join("latest-diagnostics.json");
+
+    Ok(LegacySnapshot {
+        root: root.display().to_string(),
+        skills_dir: skills_dir.display().to_string(),
+        sources_dir: sources_dir.display().to_string(),
+        diagnostics_file: diagnostics_file.display().to_string(),
+        mode: "sqlite-index".to_string(),
+        summary: LegacySummary {
+            skills: skills.len(),
+            sources: sources.len(),
+            prompts,
+            agents_detected,
+            warnings,
+            diagnostics_status: diagnostics.overall_status.clone(),
+        },
+        skills,
+        sources,
+        agents,
+        workspaces,
+        presets,
+        diagnostics,
+        index,
+    })
+}
+
+fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexReport, String> {
+    let db_file = database_file(root);
+    let mut connection = open_index_database(root)?;
 
     let indexed_at = unix_timestamp_string();
     let snapshot_id = format!("legacy-import-{}", indexed_at);
@@ -239,6 +363,12 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
         .execute("DELETE FROM skill_tags", [])
         .map_err(|error| format!("Cannot clear skill tag index: {}", error))?;
     transaction
+        .execute("DELETE FROM preset_skills", [])
+        .map_err(|error| format!("Cannot clear preset skill index: {}", error))?;
+    transaction
+        .execute("DELETE FROM workspace_agents", [])
+        .map_err(|error| format!("Cannot clear workspace agent index: {}", error))?;
+    transaction
         .execute("DELETE FROM skills", [])
         .map_err(|error| format!("Cannot clear skill index: {}", error))?;
     transaction
@@ -247,6 +377,12 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
     transaction
         .execute("DELETE FROM agents", [])
         .map_err(|error| format!("Cannot clear agent index: {}", error))?;
+    transaction
+        .execute("DELETE FROM workspaces", [])
+        .map_err(|error| format!("Cannot clear workspace index: {}", error))?;
+    transaction
+        .execute("DELETE FROM presets", [])
+        .map_err(|error| format!("Cannot clear preset index: {}", error))?;
 
     let mut source_ids: HashMap<String, String> = HashMap::new();
     for source in &snapshot.sources {
@@ -273,9 +409,16 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
             .map_err(|error| format!("Cannot index source {}: {}", source.name, error))?;
     }
 
+    let mut skill_ids_by_category: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut all_skill_ids: Vec<String> = Vec::new();
     for skill in &snapshot.skills {
         let skill_id = stable_id("skill", &skill.folder_name);
         let source_id = source_ids.get(&skill.source.to_lowercase()).cloned();
+        all_skill_ids.push(skill_id.clone());
+        skill_ids_by_category
+            .entry(category_label(&skill.category))
+            .or_default()
+            .push(skill_id.clone());
         transaction
             .execute(
                 "INSERT INTO skills (
@@ -317,6 +460,20 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
             )
             .map_err(|error| format!("Cannot index agent {}: {}", agent.name, error))?;
     }
+
+    seed_workspaces(
+        &transaction,
+        root,
+        &snapshot.agents,
+        snapshot.skills.len(),
+        &indexed_at,
+    )?;
+    seed_presets(
+        &transaction,
+        &all_skill_ids,
+        &skill_ids_by_category,
+        &indexed_at,
+    )?;
 
     let manifest_json = serde_json::to_string(&serde_json::json!({
         "root": snapshot.root,
@@ -380,6 +537,435 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
     })
 }
 
+fn read_indexed_sources(connection: &Connection) -> Result<Vec<SourceCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                sources.name,
+                sources.source_type,
+                sources.url,
+                sources.local_path,
+                sources.install_mode,
+                sources.category_id,
+                sources.note,
+                CASE
+                    WHEN sources.source_type = 'prompt' THEN 'info'
+                    WHEN COUNT(skills.id) > 0 THEN 'ok'
+                    ELSE 'warn'
+                END AS health_status,
+                COUNT(skills.id) AS skill_count
+            FROM sources
+            LEFT JOIN skills ON skills.source_id = sources.id
+            GROUP BY sources.id
+            ORDER BY lower(sources.name)",
+        )
+        .map_err(|error| format!("Cannot prepare indexed source query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(SourceCard {
+                name: row.get(0)?,
+                source_type: row.get(1)?,
+                url: row.get(2)?,
+                local_path: row.get(3)?,
+                mode: row.get(4)?,
+                category_id: row.get(5)?,
+                note: row.get(6)?,
+                health: row.get(7)?,
+                skill_count: row.get::<_, i64>(8)? as usize,
+            })
+        })
+        .map_err(|error| format!("Cannot read indexed sources: {}", error))?;
+
+    collect_rows(rows, "source")
+}
+
+fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                skills.name,
+                skills.folder_name,
+                skills.category_id,
+                skills.description,
+                COALESCE(sources.name, 'local') AS source_name,
+                skills.health_status,
+                skills.enabled,
+                skills.relative_path
+            FROM skills
+            LEFT JOIN sources ON sources.id = skills.source_id
+            ORDER BY lower(skills.name)",
+        )
+        .map_err(|error| format!("Cannot prepare indexed skill query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(SkillCard {
+                name: row.get(0)?,
+                folder_name: row.get(1)?,
+                category: row.get(2)?,
+                description: row.get(3)?,
+                source: row.get(4)?,
+                health: row.get(5)?,
+                enabled: row.get::<_, i64>(6)? != 0,
+                relative_path: row.get(7)?,
+            })
+        })
+        .map_err(|error| format!("Cannot read indexed skills: {}", error))?;
+
+    collect_rows(rows, "skill")
+}
+
+fn read_indexed_agents(connection: &Connection) -> Result<Vec<AgentCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, skills_path, detected, managed
+            FROM agents
+            ORDER BY lower(name)",
+        )
+        .map_err(|error| format!("Cannot prepare indexed agent query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(AgentCard {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                path: row.get(2)?,
+                detected: row.get::<_, i64>(3)? != 0,
+                managed: row.get::<_, i64>(4)? != 0,
+                skill_count: 0,
+            })
+        })
+        .map_err(|error| format!("Cannot read indexed agents: {}", error))?;
+
+    collect_rows(rows, "agent")
+}
+
+fn read_indexed_workspaces(connection: &Connection) -> Result<Vec<WorkspaceCard>, String> {
+    let total_skills = connection
+        .query_row("SELECT COUNT(*) FROM skills WHERE enabled = 1", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap_or(0) as usize;
+
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                workspaces.id,
+                workspaces.name,
+                workspaces.scope,
+                COALESCE(workspaces.path, ''),
+                COUNT(workspace_agents.agent_id)
+            FROM workspaces
+            LEFT JOIN workspace_agents ON workspace_agents.workspace_id = workspaces.id
+            GROUP BY workspaces.id
+            ORDER BY
+                CASE workspaces.scope WHEN 'global' THEN 0 WHEN 'agent' THEN 1 ELSE 2 END,
+                lower(workspaces.name)",
+        )
+        .map_err(|error| format!("Cannot prepare indexed workspace query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            let scope: String = row.get(2)?;
+            Ok(WorkspaceCard {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                scope: scope.clone(),
+                path: row.get(3)?,
+                agent_count: row.get::<_, i64>(4)? as usize,
+                skill_count: if scope == "global" { total_skills } else { 0 },
+            })
+        })
+        .map_err(|error| format!("Cannot read indexed workspaces: {}", error))?;
+
+    collect_rows(rows, "workspace")
+}
+
+fn read_indexed_presets(connection: &Connection) -> Result<Vec<PresetCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                presets.id,
+                presets.name,
+                presets.description,
+                presets.color,
+                COUNT(preset_skills.skill_id)
+            FROM presets
+            LEFT JOIN preset_skills ON preset_skills.preset_id = presets.id
+            GROUP BY presets.id
+            ORDER BY
+                CASE presets.id WHEN 'preset-all' THEN 0 ELSE 1 END,
+                lower(presets.name)",
+        )
+        .map_err(|error| format!("Cannot prepare indexed preset query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(PresetCard {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                color: row.get(3)?,
+                skill_count: row.get::<_, i64>(4)? as usize,
+            })
+        })
+        .map_err(|error| format!("Cannot read indexed presets: {}", error))?;
+
+    collect_rows(rows, "preset")
+}
+
+fn read_index_report(
+    connection: &Connection,
+    db_file: &Path,
+    source_count: usize,
+    skill_count: usize,
+    agent_count: usize,
+) -> Result<IndexReport, String> {
+    let latest = connection
+        .query_row(
+            "SELECT id, created_at FROM snapshots ORDER BY CAST(created_at AS INTEGER) DESC LIMIT 1",
+            [],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read latest v2 snapshot: {}", error))?;
+
+    let (snapshot_id, indexed_at) =
+        latest.unwrap_or_else(|| ("sqlite-index-empty".to_string(), String::new()));
+
+    Ok(IndexReport {
+        persisted: true,
+        database_file: db_file.display().to_string(),
+        indexed_at,
+        sources_indexed: source_count,
+        skills_indexed: skill_count,
+        agents_indexed: agent_count,
+        snapshot_id,
+    })
+}
+
+fn read_indexed_diagnostics(connection: &Connection) -> DiagnosticSummary {
+    let manifest = connection
+        .query_row(
+            "SELECT manifest_json FROM snapshots ORDER BY CAST(created_at AS INTEGER) DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+
+    let Some(diagnostics) = manifest.as_ref().and_then(|value| value.get("diagnostics")) else {
+        return DiagnosticSummary {
+            available: false,
+            app_version: String::new(),
+            generated_at: String::new(),
+            overall_status: "indexed".to_string(),
+            ok: 0,
+            warn: 0,
+            error: 0,
+            info: 0,
+        };
+    };
+
+    DiagnosticSummary {
+        available: json_bool(diagnostics, "available"),
+        app_version: json_string(diagnostics, "appVersion"),
+        generated_at: json_string(diagnostics, "generatedAt"),
+        overall_status: json_string(diagnostics, "overallStatus"),
+        ok: json_u64(diagnostics, "ok"),
+        warn: json_u64(diagnostics, "warn"),
+        error: json_u64(diagnostics, "error"),
+        info: json_u64(diagnostics, "info"),
+    }
+}
+
+fn collect_rows<T>(
+    rows: impl Iterator<Item = rusqlite::Result<T>>,
+    label: &str,
+) -> Result<Vec<T>, String> {
+    let mut items = Vec::new();
+    for row in rows {
+        items.push(row.map_err(|error| format!("Cannot decode indexed {}: {}", label, error))?);
+    }
+    Ok(items)
+}
+
+fn seed_workspaces(
+    transaction: &rusqlite::Transaction<'_>,
+    root: &Path,
+    agents: &[AgentCard],
+    total_skills: usize,
+    timestamp: &str,
+) -> Result<(), String> {
+    let workspaces = derive_workspaces(root, agents, total_skills);
+
+    for workspace in &workspaces {
+        transaction
+            .execute(
+                "INSERT INTO workspaces (
+                    id, name, scope, path, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                params![
+                    workspace.id,
+                    workspace.name,
+                    workspace.scope,
+                    workspace.path,
+                    timestamp
+                ],
+            )
+            .map_err(|error| format!("Cannot seed workspace {}: {}", workspace.name, error))?;
+    }
+
+    for agent in agents.iter().filter(|agent| agent.detected) {
+        let agent_workspace_id = stable_id("workspace-agent", &agent.id);
+        let agent_id = stable_id("agent", &agent.id);
+        transaction
+            .execute(
+                "INSERT INTO workspace_agents (
+                    workspace_id, agent_id, enabled
+                ) VALUES (?1, ?2, 1)",
+                params![agent_workspace_id, agent_id],
+            )
+            .map_err(|error| format!("Cannot link workspace agent {}: {}", agent.name, error))?;
+    }
+
+    Ok(())
+}
+
+fn seed_presets(
+    transaction: &rusqlite::Transaction<'_>,
+    all_skill_ids: &[String],
+    skill_ids_by_category: &BTreeMap<String, Vec<String>>,
+    timestamp: &str,
+) -> Result<(), String> {
+    insert_preset(
+        transaction,
+        "preset-all",
+        "全部技能",
+        "中央技能库中的全部已索引 Skill。",
+        "mint",
+        all_skill_ids,
+        timestamp,
+    )?;
+
+    for (index, (category, skill_ids)) in skill_ids_by_category.iter().enumerate() {
+        let preset_id = stable_id("preset", category);
+        insert_preset(
+            transaction,
+            &preset_id,
+            category,
+            &format!("自动从分类“{}”生成的 Preset。", category),
+            preset_color(index),
+            skill_ids,
+            timestamp,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn insert_preset(
+    transaction: &rusqlite::Transaction<'_>,
+    preset_id: &str,
+    name: &str,
+    description: &str,
+    color: &str,
+    skill_ids: &[String],
+    timestamp: &str,
+) -> Result<(), String> {
+    transaction
+        .execute(
+            "INSERT INTO presets (
+                id, name, description, color, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            params![preset_id, name, description, color, timestamp],
+        )
+        .map_err(|error| format!("Cannot seed preset {}: {}", name, error))?;
+
+    for skill_id in skill_ids {
+        transaction
+            .execute(
+                "INSERT OR IGNORE INTO preset_skills (
+                    preset_id, skill_id
+                ) VALUES (?1, ?2)",
+                params![preset_id, skill_id],
+            )
+            .map_err(|error| format!("Cannot link preset skill {}: {}", name, error))?;
+    }
+
+    Ok(())
+}
+
+fn derive_workspaces(root: &Path, agents: &[AgentCard], total_skills: usize) -> Vec<WorkspaceCard> {
+    let mut workspaces = vec![WorkspaceCard {
+        id: "workspace-global".to_string(),
+        name: "全局工作区".to_string(),
+        scope: "global".to_string(),
+        path: root.display().to_string(),
+        agent_count: agents.iter().filter(|agent| agent.detected).count(),
+        skill_count: total_skills,
+    }];
+
+    for agent in agents.iter().filter(|agent| agent.detected) {
+        workspaces.push(WorkspaceCard {
+            id: stable_id("workspace-agent", &agent.id),
+            name: format!("{} 工作区", agent.name),
+            scope: "agent".to_string(),
+            path: agent.path.clone(),
+            agent_count: 1,
+            skill_count: if agent.managed { total_skills } else { 0 },
+        });
+    }
+
+    workspaces
+}
+
+fn derive_presets(skills: &[SkillCard]) -> Vec<PresetCard> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for skill in skills {
+        *counts.entry(category_label(&skill.category)).or_insert(0) += 1;
+    }
+
+    let mut presets = vec![PresetCard {
+        id: "preset-all".to_string(),
+        name: "全部技能".to_string(),
+        description: "中央技能库中的全部已索引 Skill。".to_string(),
+        color: "mint".to_string(),
+        skill_count: skills.len(),
+    }];
+
+    for (index, (category, count)) in counts.into_iter().enumerate() {
+        presets.push(PresetCard {
+            id: stable_id("preset", &category),
+            name: category.clone(),
+            description: format!("自动从分类“{}”生成的 Preset。", category),
+            color: preset_color(index).to_string(),
+            skill_count: count,
+        });
+    }
+
+    presets
+}
+
+fn category_label(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        "自动分类".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn preset_color(index: usize) -> &'static str {
+    const COLORS: [&str; 8] = [
+        "mint", "sky", "violet", "peach", "rose", "amber", "slate", "teal",
+    ];
+    COLORS[index % COLORS.len()]
+}
+
 fn stable_id(prefix: &str, value: &str) -> String {
     let slug = value
         .chars()
@@ -396,17 +982,22 @@ fn stable_id(prefix: &str, value: &str) -> String {
         .collect::<Vec<_>>()
         .join("-");
 
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    let hash = format!("{:016x}", hasher.finish());
+    let suffix = &hash[..10];
+
     if slug.is_empty() {
-        prefix.to_string()
+        format!("{}-{}", prefix, suffix)
     } else {
-        format!("{}-{}", prefix, slug)
+        format!("{}-{}-{}", prefix, slug, suffix)
     }
 }
 
 fn unix_timestamp_string() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs().to_string())
+        .map(|duration| duration.as_millis().to_string())
         .unwrap_or_else(|_| "0".to_string())
 }
 
@@ -494,7 +1085,10 @@ fn parse_configured_sources(config: Option<&Value>) -> HashMap<String, SourceCon
     result
 }
 
-fn scan_sources(sources_dir: &Path, configured_sources: &HashMap<String, SourceConfig>) -> Vec<SourceCard> {
+fn scan_sources(
+    sources_dir: &Path,
+    configured_sources: &HashMap<String, SourceConfig>,
+) -> Vec<SourceCard> {
     let mut sources = Vec::new();
 
     if let Ok(entries) = fs::read_dir(sources_dir) {
@@ -562,7 +1156,11 @@ fn scan_skills(
         let target = diagnostic
             .map(|item| item.target.clone())
             .filter(|value| !value.is_empty())
-            .or_else(|| fs::read_link(entry.path()).ok().map(|path| path.display().to_string()))
+            .or_else(|| {
+                fs::read_link(entry.path())
+                    .ok()
+                    .map(|path| path.display().to_string())
+            })
             .unwrap_or_default();
         let source = infer_source_name(&target, sources_dir).unwrap_or_else(|| "local".to_string());
         let category = configured_sources
@@ -632,7 +1230,11 @@ fn infer_source_name(target: &str, sources_dir: &Path) -> Option<String> {
         return None;
     }
     let normalized_target = target.replace('/', "\\").to_lowercase();
-    let normalized_sources = sources_dir.display().to_string().replace('/', "\\").to_lowercase();
+    let normalized_sources = sources_dir
+        .display()
+        .to_string()
+        .replace('/', "\\")
+        .to_lowercase();
     let prefix = format!("{}\\", normalized_sources);
     let relative = normalized_target.strip_prefix(&prefix)?;
     relative.split('\\').next().map(|part| part.to_string())
@@ -742,7 +1344,10 @@ fn json_u64(value: &Value, key: &str) -> u64 {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![scan_legacy_snapshot])
+        .invoke_handler(tauri::generate_handler![
+            load_indexed_snapshot,
+            scan_legacy_snapshot
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run AI SkillHub v2 app");
 }
@@ -759,10 +1364,34 @@ mod tests {
         assert!(Path::new(&snapshot.root).exists());
         assert!(snapshot.skills_dir.ends_with("skills"));
         assert!(snapshot.sources_dir.ends_with("github_sources"));
-        assert!(snapshot.diagnostics_file.ends_with("latest-diagnostics.json"));
+        assert!(snapshot
+            .diagnostics_file
+            .ends_with("latest-diagnostics.json"));
         assert!(snapshot.index.persisted);
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
         assert_eq!(snapshot.index.sources_indexed, snapshot.sources.len());
         assert_eq!(snapshot.index.agents_indexed, snapshot.agents.len());
+    }
+
+    #[test]
+    fn load_indexed_snapshot_reads_from_sqlite() {
+        scan_legacy_snapshot().expect("legacy snapshot should seed sqlite");
+        let snapshot = load_indexed_snapshot().expect("indexed snapshot should load");
+
+        assert_eq!(snapshot.mode, "sqlite-index");
+        assert!(snapshot.index.persisted);
+        assert!(!snapshot.workspaces.is_empty());
+        assert!(!snapshot.presets.is_empty());
+        assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
+    }
+
+    #[test]
+    fn stable_id_handles_non_ascii_values() {
+        let first = stable_id("preset", "论文科研");
+        let second = stable_id("preset", "界面设计");
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("preset-"));
+        assert!(second.starts_with("preset-"));
     }
 }

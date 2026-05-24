@@ -71,6 +71,8 @@ button {
 .nav-item span,
 .skill-card p,
 .agent-card p,
+.workspace-card p,
+.preset-card p,
 .panel p,
 .source-row small {
   color: #71808a;
@@ -198,6 +200,8 @@ h3 {
 .metric,
 .skill-card,
 .agent-card,
+.workspace-card,
+.preset-card,
 .table-panel {
   border: 1px solid rgba(28, 68, 58, .12);
   border-radius: 20px;
@@ -284,14 +288,23 @@ h3 {
   gap: 16px;
 }
 
+.preset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(190px, 1fr));
+  gap: 14px;
+}
+
 .skill-card,
-.agent-card {
+.agent-card,
+.workspace-card,
+.preset-card {
   padding: 18px;
 }
 
 .card-head,
 .skill-card footer,
 .agent-card footer,
+.workspace-card footer,
 .source-row,
 .setting-row {
   display: flex;
@@ -301,17 +314,93 @@ h3 {
 }
 
 .skill-card p,
-.agent-card p {
+.agent-card p,
+.workspace-card p,
+.preset-card p {
   margin-top: 12px;
   min-height: 48px;
   line-height: 1.55;
 }
 
 .skill-card footer,
-.agent-card footer {
+.agent-card footer,
+.workspace-card footer {
   margin-top: 16px;
   color: #557168;
   font-size: 13px;
+}
+
+.workspace-card p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preset-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.preset-card::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 5px;
+  content: "";
+  background: #2fbd92;
+}
+
+.preset-card.mint::before {
+  background: #28b88d;
+}
+
+.preset-card.sky::before {
+  background: #5aa7f7;
+}
+
+.preset-card.violet::before {
+  background: #8b72e9;
+}
+
+.preset-card.peach::before {
+  background: #f0a36b;
+}
+
+.preset-card.rose::before {
+  background: #e981a4;
+}
+
+.preset-card.amber::before {
+  background: #dca93b;
+}
+
+.preset-card.slate::before {
+  background: #748292;
+}
+
+.preset-card.teal::before {
+  background: #1fa6a0;
+}
+
+.scope {
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.scope.global {
+  color: #0e7c63;
+  background: #ddf5ec;
+}
+
+.scope.agent {
+  color: #5870b0;
+  background: #edf1ff;
+}
+
+.scope.project {
+  color: #a4620a;
+  background: #fff1d7;
 }
 
 .health {

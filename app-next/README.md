@@ -14,13 +14,15 @@ Build the next AI SkillHub with:
 
 ## Current status
 
-This is the first read-only scanner milestone. It is intentionally safe:
+This is the SQLite-first indexing milestone. It is intentionally safe:
 
 - It does not write to `../skills`
 - It does not modify `../app/github_sources`
 - It does not take over Claude, Codex, or Antigravity links
-- It reads real v1 Skills, sources, agents, and diagnostics for display
+- It opens from the v2 SQLite index first
+- It scans real v1 Skills, sources, agents, and diagnostics only when the index is missing or manually refreshed
 - It writes only to the v2 SQLite index under `.skillhub-next/`
+- It seeds the first workspace and preset model from the indexed data
 
 ## Before running
 
@@ -53,4 +55,4 @@ pnpm tauri dev
 
 ## v2 principle
 
-v1 stays usable while v2 grows. The first v2 milestone is a read-only dashboard that can scan the current AI SkillHub library and show Skills, sources, agents, diagnostics, and settings without changing anything.
+v1 stays usable while v2 grows. V2 now treats v1 as a read-only source and builds its own SQLite model for Skills, sources, agents, workspaces, presets, snapshots, and audit events.

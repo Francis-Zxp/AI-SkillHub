@@ -47,6 +47,32 @@ CREATE TABLE IF NOT EXISTS workspaces (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS workspace_agents (
+  workspace_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY(workspace_id, agent_id),
+  FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
+  FOREIGN KEY(agent_id) REFERENCES agents(id)
+);
+
+CREATE TABLE IF NOT EXISTS presets (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  color TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS preset_skills (
+  preset_id TEXT NOT NULL,
+  skill_id TEXT NOT NULL,
+  PRIMARY KEY(preset_id, skill_id),
+  FOREIGN KEY(preset_id) REFERENCES presets(id),
+  FOREIGN KEY(skill_id) REFERENCES skills(id)
+);
+
 CREATE TABLE IF NOT EXISTS tags (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
