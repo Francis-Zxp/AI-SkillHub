@@ -4,18 +4,18 @@ Updated: 2026-05-24
 
 ## Current Estimate
 
-V2 overall completion is conservatively estimated at **about 18%**.
+V2 overall completion is conservatively estimated at **about 20%**.
 
-This does **not** mean a usable V2 application is 18% coded. It means v1 is now stable enough to become the maintenance line, and the first v2 `app-next` scaffold exists. The Tauri app has not been compiled yet because Rust/Cargo and pnpm are not detected on this computer.
+This does **not** mean a usable V2 application is 20% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, and the toolchain setup path is now documented and self-checkable. The Tauri app has not been compiled yet because Rust/Cargo and pnpm are not detected on this computer.
 
-## Why 12%
+## Why 20%
 
 | Area | Status | Estimate |
 |---|---:|---:|
 | Reference project analysis | skills-manager, asm, OpenSkills, SkillKit analyzed and still active as references | 70% |
 | Product model | central library, sources, agents, diagnostics, release center are defined through v1 behavior | 35% |
 | V1 behavior specs for V2 | sharing, diagnostics, import preview, release preflight, troubleshooting, Skill health, and problem locator are repeatable specs | 60% |
-| V2 technical environment | Node LTS is ready; pnpm, Rust/Cargo, MSVC Build Tools still need setup before real Tauri compilation | 25% |
+| V2 technical environment | Node LTS and Visual Studio Build Tools are ready; pnpm and Rust/Cargo still need setup before real Tauri compilation | 40% |
 | Tauri/React/Rust/SQLite code | `app-next` scaffold created with React UI, Tauri config, Rust command stub, and SQLite migration | 12% |
 | SQLite data model | initial migration created for sources, skills, agents, workspaces, tags, audit events, and snapshots | 15% |
 | Workspaces and presets | planned, v1 only has partial categories/tags/presets | 10% |
@@ -23,7 +23,7 @@ This does **not** mean a usable V2 application is 18% coded. It means v1 is now 
 | CLI and automation | planned, not implemented | 0% |
 | Marketplace/recommended index | planned, not implemented | 0% |
 
-Weighted together, the honest number is about **18%**.
+Weighted together, the honest number is about **20%**.
 
 ## Reference Projects Still In Use
 
@@ -51,14 +51,14 @@ The v2 source line has started, but real Tauri compilation still needs these:
 
 1. pnpm is installed and stable.
 2. Rust/Cargo is installed.
-3. Visual Studio Build Tools / MSVC requirements are satisfied.
+3. Visual Studio Build Tools / MSVC requirements stay detected by `npm run check:toolchain`.
 4. The first V2 goal remains read-only: scan existing AI SkillHub data into SQLite and show it in a React/Tauri shell.
 
 ## Next Practical Step
 
 Continue v2 milestone 1:
 
-1. Install pnpm and Rust/Cargo.
+1. Install pnpm and Rust/Cargo using `app-next/docs/toolchain-setup.md`.
 2. Run `pnpm install` and `pnpm tauri dev` inside `app-next`.
 3. Replace sample data with a read-only scanner for `../skills`, `../app/github_sources`, and `../app/reports/latest-diagnostics.json`.
 4. Keep v1 as the maintenance app until v2 can cover its core workflows.

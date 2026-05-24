@@ -23,17 +23,20 @@ This is the initial scaffold. It is intentionally safe:
 
 ## Before running
 
-Install these tools later:
+Install or verify these tools first:
 
 - Node.js LTS is already available on this computer.
 - pnpm is not detected yet.
 - Rust/Cargo is not detected yet.
+- Visual Studio Build Tools / MSVC is required for Tauri on Windows.
 
-Recommended setup later:
+See [docs/toolchain-setup.md](docs/toolchain-setup.md) for download links and exact versions checked on 2026-05-24.
+
+After installing tools, run:
 
 ```powershell
-corepack enable
-corepack prepare pnpm@latest --activate
+cd app-next
+npm run check:toolchain
 ```
 
 Install Rust from:
