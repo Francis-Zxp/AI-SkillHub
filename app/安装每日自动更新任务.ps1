@@ -8,8 +8,6 @@ if (-not (Test-Path -LiteralPath $SkillHub)) {
 }
 
 $DailyTask = 'AISkillHubDailyUpdate'
-$LauncherDir = 'D:\AISkillHubLauncher'
-$Launcher = Join-Path $LauncherDir 'run-skillhub.cmd'
 $PowerShellExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $SchtasksExe = Join-Path $env:WINDIR 'System32\schtasks.exe'
 
@@ -20,13 +18,21 @@ if (-not (Test-Path -LiteralPath $SchtasksExe)) {
   throw "Missing schtasks: $SchtasksExe"
 }
 
-New-Item -ItemType Directory -Force -Path $LauncherDir | Out-Null
-$cmd = "@echo off`r`n`"$PowerShellExe`" -NoProfile -ExecutionPolicy Bypass -File `"$SkillHub`"`r`n"
-[System.IO.File]::WriteAllText($Launcher, $cmd, [System.Text.Encoding]::ASCII)
+$taskCommand = "`"$PowerShellExe`" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$SkillHub`""
+$taskArguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$SkillHub`""
 
 Write-Host "Installing scheduled task: $DailyTask"
-& $SchtasksExe /Create /TN $DailyTask /SC DAILY /ST 09:00 /TR $Launcher /F
-$dailyExit = $LASTEXITCODE
+if (Get-Command New-ScheduledTaskAction -ErrorAction SilentlyContinue) {
+  $action = New-ScheduledTaskAction -Execute $PowerShellExe -Argument $taskArguments
+  $trigger = New-ScheduledTaskTrigger -Daily -At 09:00
+  $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew
+  Register-ScheduledTask -TaskName $DailyTask -Action $action -Trigger $trigger -Settings $settings -Description 'AI SkillHub daily source sync' -Force | Out-Null
+  $dailyExit = 0
+} else {
+  $escapedTaskCommand = ('\"{0}\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{1}\"' -f $PowerShellExe, $SkillHub)
+  & $SchtasksExe /Create /TN $DailyTask /SC DAILY /ST 09:00 /TR $escapedTaskCommand /F
+  $dailyExit = $LASTEXITCODE
+}
 
 Write-Host ''
 Write-Host 'Installed SkillHub auto update:'
@@ -35,5 +41,5 @@ if ($dailyExit -eq 0) {
 } else {
   Write-Host "- ${DailyTask}: failed to install"
 }
-Write-Host "Launcher: $Launcher"
+Write-Host "Task command: $taskCommand"
 exit $dailyExit

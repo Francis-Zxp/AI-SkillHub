@@ -1278,7 +1278,7 @@
     table.appendChild(headerRow(["name", "category", "skillHealth", "repo", "description", "source"].map(t), "skills"));
     rows.forEach(skill => {
       const health = badge(skillHealthLabel(skill), skillHealthClass(skill));
-      health.title = skill.healthSummary || "";
+      health.title = [skill.healthSummary, skill.healthFix].filter(Boolean).join("\n");
       const cells = [
         cellWithTags(skill.name, skill.tags, "name-cell"),
         badge(categoryLabel(skill.categoryId), categoryClass(skill.categoryId, skill.mode)),
@@ -1438,7 +1438,7 @@
     if (!query) return true;
     const haystack = Object.keys(item)
       .map(key => String(item[key] || ""))
-      .concat(categoryLabel(item.categoryId || "auto"), itemHasSourceHealth(item) ? sourceHealthLabel(item) : "", itemHasSkillHealth(item) ? skillHealthLabel(item) : "")
+      .concat(categoryLabel(item.categoryId || "auto"), itemHasSourceHealth(item) ? sourceHealthLabel(item) : "", itemHasSkillHealth(item) ? skillHealthLabel(item) : "", item.healthFix || "")
       .join(" ")
       .toLowerCase();
     return haystack.includes(query);

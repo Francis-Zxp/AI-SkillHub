@@ -27,3 +27,18 @@ foreach ($startupFile in $startupFiles) {
     Write-Host "Removed startup file: $startupFile"
   }
 }
+
+$legacyLauncher = 'D:\AISkillHubLauncher\run-skillhub.cmd'
+if (Test-Path -LiteralPath $legacyLauncher -PathType Leaf) {
+  Remove-Item -LiteralPath $legacyLauncher -Force
+  Write-Host "Removed legacy launcher: $legacyLauncher"
+}
+$legacyLauncherDir = Split-Path -Parent $legacyLauncher
+if (Test-Path -LiteralPath $legacyLauncherDir -PathType Container) {
+  try {
+    Remove-Item -LiteralPath $legacyLauncherDir -Force -ErrorAction Stop
+    Write-Host "Removed legacy launcher folder: $legacyLauncherDir"
+  } catch {
+    Write-Host "Legacy launcher folder kept because it is not empty: $legacyLauncherDir"
+  }
+}

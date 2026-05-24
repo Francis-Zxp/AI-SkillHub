@@ -21,9 +21,16 @@ All notable changes to AI SkillHub are documented here.
 ### Changed
 
 - App version label is prepared as `v1.1.1`.
+- Skill health tooltips now include next-step guidance, not just the warning label.
+- Daily auto-update now registers a hidden PowerShell scheduled task directly, avoiding visible `.cmd` windows on startup or at 09:00.
 - Clean first-run diagnostics now treat an empty `skills` directory as `info` instead of `warn`, so new users are not scared by an expected empty library.
 - Codex detection wording now distinguishes "detected but not managed" from "managed per Skill", avoiding the confusing "detected / not linked / writable" state.
 - Added an AI Tool Details dialog that separates detection, managed state, folder permission, path, and next-step guidance.
+
+### Fixed
+
+- Stale managed-link cleanup no longer triggers interactive PowerShell delete confirmation for junction folders.
+- Link cleanup now refuses to delete real folders while removing stale links.
 
 ## v1.1.0 - Public Sharing Release
 

@@ -779,6 +779,7 @@ namespace AISkillHubWeb
             var errors = new List<string>();
             var warnings = new List<string>();
             var infos = new List<string>();
+            var fixes = new List<string>();
 
             string dir = skill.localPath;
             if (String.IsNullOrWhiteSpace(dir)) dir = skill.target;
@@ -787,23 +788,53 @@ namespace AISkillHubWeb
             if (String.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
             {
                 errors.Add("目录不存在");
+                fixes.Add("重新同步来源，或在仓库来源里删除失效来源");
             }
             else if (!File.Exists(skillMd))
             {
                 errors.Add("缺少 SKILL.md");
+                fixes.Add("确认该目录是否真的是 Skill；不是 Skill 的来源可改为 Prompt/资料");
             }
             else
             {
                 SkillMeta meta = ReadSkillMeta(skillMd);
-                if (meta.readError.Length > 0) errors.Add("SKILL.md 无法读取");
-                if (!meta.hasFrontMatter) infos.Add("未发现 frontmatter");
-                if (String.IsNullOrWhiteSpace(CleanDescription(skill.description)) && String.IsNullOrWhiteSpace(CleanDescription(meta.description))) warnings.Add("缺少 description");
-                if (meta.lineCount > 0 && meta.lineCount < 3) warnings.Add("SKILL.md 内容过短");
-                if (meta.hasHiddenUnicode || meta.hasControlChars) warnings.Add("可能含隐藏字符或乱码");
+                if (meta.readError.Length > 0)
+                {
+                    errors.Add("SKILL.md 无法读取");
+                    fixes.Add("检查文件编码和权限，然后重新同步");
+                }
+                if (!meta.hasFrontMatter)
+                {
+                    infos.Add("未发现 frontmatter");
+                    fixes.Add("后续可补充 name 和 description frontmatter");
+                }
+                if (String.IsNullOrWhiteSpace(CleanDescription(skill.description)) && String.IsNullOrWhiteSpace(CleanDescription(meta.description)))
+                {
+                    warnings.Add("缺少 description");
+                    fixes.Add("建议在 SKILL.md 里补一句 description，方便 AI 正确选择");
+                }
+                if (meta.lineCount > 0 && meta.lineCount < 3)
+                {
+                    warnings.Add("SKILL.md 内容过短");
+                    fixes.Add("补充适用场景、输入要求和输出方式");
+                }
+                if (meta.hasHiddenUnicode || meta.hasControlChars)
+                {
+                    warnings.Add("可能含隐藏字符或乱码");
+                    fixes.Add("用 UTF-8 重新保存，或重新下载来源");
+                }
 
                 int fileCount = CountSkillFolderFiles(dir, 181);
-                if (fileCount >= 181) infos.Add("文件数量较多");
-                if (HasSkillRiskHint(dir, skillMd)) warnings.Add("含需人工确认的脚本或敏感模式");
+                if (fileCount >= 181)
+                {
+                    infos.Add("文件数量较多");
+                    fixes.Add("确认是否误把整个仓库都当成单个 Skill");
+                }
+                if (HasSkillRiskHint(dir, skillMd))
+                {
+                    warnings.Add("含需人工确认的脚本或敏感模式");
+                    fixes.Add("运行前先阅读脚本；不确定时先停用来源");
+                }
             }
 
             var issues = new List<string>();
@@ -813,6 +844,7 @@ namespace AISkillHubWeb
             skill.healthIssueCount = issues.Count;
             skill.healthStatus = errors.Count > 0 ? "error" : (warnings.Count > 0 ? "warn" : (infos.Count > 0 ? "info" : "ok"));
             skill.healthSummary = issues.Count > 0 ? String.Join("；", issues.Take(4)) : "未发现明显问题";
+            skill.healthFix = fixes.Count > 0 ? String.Join("；", fixes.Distinct().Take(4)) : "无需处理";
         }
 
         private int CountSkillFolderFiles(string dir, int limit)
@@ -2372,6 +2404,7 @@ namespace AISkillHubWeb
         public string mode { get; set; }
         public string healthStatus { get; set; }
         public string healthSummary { get; set; }
+        public string healthFix { get; set; }
         public int healthIssueCount { get; set; }
     }
 

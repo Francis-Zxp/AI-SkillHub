@@ -56,6 +56,19 @@ function Write-Step([string]$Message) {
   if (-not $Quiet) { Write-Host $Message }
 }
 
+function Remove-ReparsePointPath([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  $item = Get-Item -LiteralPath $Path -Force
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
+    throw "Refusing to remove a real folder while cleaning links: $Path"
+  }
+  if ($item.PSIsContainer) {
+    [System.IO.Directory]::Delete($item.FullName, $false)
+  } else {
+    [System.IO.File]::Delete($item.FullName)
+  }
+}
+
 function Set-JunctionPath([string]$Path, [string]$Target) {
   $parent = Split-Path -Parent $Path
   New-Item -ItemType Directory -Force -Path $parent | Out-Null
@@ -65,7 +78,7 @@ function Set-JunctionPath([string]$Path, [string]$Target) {
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
       $currentTarget = [string]$item.Target
       if ($currentTarget -eq $Target) { return 'OK' }
-      Remove-Item -LiteralPath $Path -Force
+      Remove-ReparsePointPath $Path
     } else {
       $backup = Join-Path $parent ((Split-Path -Leaf $Path) + '_AI_global接管前备份_' + $Stamp)
       Move-Item -LiteralPath $Path -Destination $backup
@@ -133,7 +146,7 @@ if (Test-CodexPresent) {
     if (Test-Path -LiteralPath $oldPath) {
       $oldItem = Get-Item -LiteralPath $oldPath -Force
       if (($oldItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        Remove-Item -LiteralPath $oldPath -Force
+        Remove-ReparsePointPath $oldPath
       }
     }
   }
@@ -145,7 +158,7 @@ if (Test-CodexPresent) {
       if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         $currentTarget = [string]$item.Target
         if ($currentTarget -eq $skill.FullName) { continue }
-        Remove-Item -LiteralPath $dest -Force
+        Remove-ReparsePointPath $dest
       } elseif ($item.Name -ne '.system') {
         $backupRoot = Join-Path $codexRoot ('AI_global接管前备份_' + $Stamp)
         New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null

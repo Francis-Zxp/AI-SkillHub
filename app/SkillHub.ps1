@@ -164,6 +164,30 @@ function Get-IsReparsePoint($Item) {
   return (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
 }
 
+function Remove-ManagedReparsePoint([string]$Path, [string]$Root, [string]$Skill, [string]$Action, [string]$Target) {
+  if (-not (Test-Path -LiteralPath $Path)) { return $false }
+  if (-not (Test-UnderRoot $Path $Root)) { throw "Refusing to remove path outside skills root: $Path" }
+
+  $item = Get-Item -LiteralPath $Path -Force
+  if (-not (Get-IsReparsePoint $item)) {
+    $actions.Add([PSCustomObject]@{ Skill = $Skill; Action = 'Skipped real folder'; Target = $Path }) | Out-Null
+    return $false
+  }
+
+  try {
+    if ($item.PSIsContainer) {
+      [System.IO.Directory]::Delete($item.FullName, $false)
+    } else {
+      [System.IO.File]::Delete($item.FullName)
+    }
+    $actions.Add([PSCustomObject]@{ Skill = $Skill; Action = $Action; Target = $Target }) | Out-Null
+    return $true
+  } catch {
+    $actions.Add([PSCustomObject]@{ Skill = $Skill; Action = 'Skipped link cleanup: ' + $_.Exception.Message; Target = $Target }) | Out-Null
+    return $false
+  }
+}
+
 function Get-ConfiguredRepo([string]$Name) {
   return $Config.repositories | Where-Object { $_.name -eq $Name } | Select-Object -First 1
 }
@@ -350,8 +374,7 @@ if (-not $ReportOnly) {
     if (Test-Path -LiteralPath $dest) {
       $item = Get-Item -LiteralPath $dest -Force
       if (Get-IsReparsePoint $item) {
-        Remove-Item -LiteralPath $dest -Force
-        $actions.Add([PSCustomObject]@{ Skill = $prevSkill; Action = 'Removed stale managed link'; Target = $prevTarget }) | Out-Null
+        Remove-ManagedReparsePoint $dest $SkillsRoot $prevSkill 'Removed stale managed link' $prevTarget | Out-Null
       }
     }
   }
@@ -362,8 +385,7 @@ if (-not $ReportOnly) {
       $target = [string]$_.Target
       $isUnderSources = $target -and ((Convert-ToFullPath $target).StartsWith((Convert-ToFullPath $SourceRoot), [System.StringComparison]::OrdinalIgnoreCase))
       if ($isUnderSources -and -not $selectedByName.ContainsKey($_.Name)) {
-        Remove-Item -LiteralPath $_.FullName -Force
-        $actions.Add([PSCustomObject]@{ Skill = $_.Name; Action = 'Removed unselected GitHub-source link'; Target = $target }) | Out-Null
+        Remove-ManagedReparsePoint $_.FullName $SkillsRoot $_.Name 'Removed unselected GitHub-source link' $target | Out-Null
       }
     }
 
@@ -380,9 +402,12 @@ if (-not $ReportOnly) {
       if (Get-IsReparsePoint $item) {
         $currentTarget = [string]$item.Target
         if ($currentTarget -ne $src) {
-          Remove-Item -LiteralPath $dest -Force
-          New-Item -ItemType Junction -Path $dest -Target $src | Out-Null
-          $action = 'Relinked'
+          if (Remove-ManagedReparsePoint $dest $SkillsRoot $skill.Skill 'Removed outdated link before relink' $currentTarget) {
+            New-Item -ItemType Junction -Path $dest -Target $src | Out-Null
+            $action = 'Relinked'
+          } else {
+            $action = 'Skipped relink'
+          }
         }
       } else {
         New-Item -ItemType Directory -Force -Path $ArchiveRoot | Out-Null
