@@ -45,6 +45,19 @@ export function App() {
     }
   }
 
+  async function updateEnabled(command: string, id: string, enabled: boolean) {
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>(command, { id, enabled });
+      setSnapshot(result);
+      setLoadError("");
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
     void loadSnapshot();
   }, []);
@@ -103,10 +116,10 @@ export function App() {
 
         {active === "dashboard" && <Dashboard loading={loading} snapshot={snapshot} summary={summary} />}
         {active === "library" && <Library snapshot={snapshot} />}
-        {active === "workspaces" && <Workspaces snapshot={snapshot} />}
-        {active === "presets" && <Presets snapshot={snapshot} />}
+        {active === "workspaces" && <Workspaces disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
+        {active === "presets" && <Presets disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "sources" && <Sources snapshot={snapshot} />}
-        {active === "agents" && <Agents snapshot={snapshot} />}
+        {active === "agents" && <Agents disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "settings" && <Settings snapshot={snapshot} />}
       </section>
     </main>
@@ -195,7 +208,15 @@ function Library({ snapshot }: { snapshot: LegacySnapshot | null }) {
   );
 }
 
-function Workspaces({ snapshot }: { snapshot: LegacySnapshot | null }) {
+function Workspaces({
+  disabled,
+  onToggle,
+  snapshot
+}: {
+  disabled: boolean;
+  onToggle: (command: string, id: string, enabled: boolean) => Promise<void>;
+  snapshot: LegacySnapshot | null;
+}) {
   const workspaces = snapshot?.workspaces ?? [];
 
   return (
@@ -210,6 +231,12 @@ function Workspaces({ snapshot }: { snapshot: LegacySnapshot | null }) {
           <footer>
             <span>{workspace.agentCount} 个 AI 工具</span>
             <span>{workspace.skillCount} 个 Skills</span>
+            <ToggleSwitch
+              disabled={disabled}
+              enabled={workspace.enabled}
+              label={workspace.enabled ? "已启用" : "已停用"}
+              onClick={() => onToggle("set_workspace_enabled", workspace.id, !workspace.enabled)}
+            />
           </footer>
         </article>
       ))}
@@ -218,7 +245,15 @@ function Workspaces({ snapshot }: { snapshot: LegacySnapshot | null }) {
   );
 }
 
-function Presets({ snapshot }: { snapshot: LegacySnapshot | null }) {
+function Presets({
+  disabled,
+  onToggle,
+  snapshot
+}: {
+  disabled: boolean;
+  onToggle: (command: string, id: string, enabled: boolean) => Promise<void>;
+  snapshot: LegacySnapshot | null;
+}) {
   const presets = snapshot?.presets ?? [];
 
   return (
@@ -230,6 +265,14 @@ function Presets({ snapshot }: { snapshot: LegacySnapshot | null }) {
             <span>{preset.skillCount}</span>
           </div>
           <p>{preset.description}</p>
+          <footer>
+            <ToggleSwitch
+              disabled={disabled}
+              enabled={preset.enabled}
+              label={preset.enabled ? "已启用" : "已停用"}
+              onClick={() => onToggle("set_preset_enabled", preset.id, !preset.enabled)}
+            />
+          </footer>
         </article>
       ))}
       {presets.length === 0 && <EmptyState text="正在等待 Preset 索引结果。" />}
@@ -255,9 +298,18 @@ function Sources({ snapshot }: { snapshot: LegacySnapshot | null }) {
   );
 }
 
-function Agents({ snapshot }: { snapshot: LegacySnapshot | null }) {
+function Agents({
+  disabled,
+  onToggle,
+  snapshot
+}: {
+  disabled: boolean;
+  onToggle: (command: string, id: string, enabled: boolean) => Promise<void>;
+  snapshot: LegacySnapshot | null;
+}) {
   const agents = snapshot?.agents ?? [];
   const adapters = snapshot?.agentAdapters ?? [];
+  const safetyChecks = snapshot?.adapterSafetyChecks ?? [];
 
   return (
     <div className="view">
@@ -281,7 +333,23 @@ function Agents({ snapshot }: { snapshot: LegacySnapshot | null }) {
               <span>{adapter.vendor}</span>
               <span>{adapter.detected ? "已检测" : "未检测"}</span>
               <span>{adapter.managed ? "已接管" : "未接管"}</span>
+              <ToggleSwitch
+                disabled={disabled || !adapter.detected}
+                enabled={adapter.enabled}
+                label={adapter.enabled ? "已启用" : "已停用"}
+                onClick={() => onToggle("set_agent_adapter_enabled", adapter.id, !adapter.enabled)}
+              />
             </footer>
+            <ul className="safety-list">
+              {safetyChecks
+                .filter(check => check.adapterId === adapter.id)
+                .slice(0, 3)
+                .map(check => (
+                  <li className={`safety-item ${check.status}`} key={check.id}>
+                    {check.summary}
+                  </li>
+                ))}
+            </ul>
           </article>
         ))}
       </div>
@@ -294,6 +362,7 @@ function Agents({ snapshot }: { snapshot: LegacySnapshot | null }) {
               <strong>{agent.name}</strong>
               <span>{agent.detected ? "已检测" : "未检测"}</span>
               <span>{agent.managed ? "已接管" : "未接管"}</span>
+              <span>{agent.enabled ? "v2 启用" : "v2 停用"}</span>
               <small>{agent.path}</small>
             </div>
           ))}
@@ -338,6 +407,31 @@ function adapterStatusLabel(status: string) {
   if (status === "ready") return "可用";
   if (status === "detected-unmanaged") return "待接管";
   return "未检测";
+}
+
+function ToggleSwitch({
+  disabled,
+  enabled,
+  label,
+  onClick
+}: {
+  disabled: boolean;
+  enabled: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      aria-pressed={enabled}
+      className={enabled ? "switch is-on" : "switch"}
+      disabled={disabled}
+      onClick={onClick}
+      type="button"
+    >
+      <span aria-hidden="true" />
+      <strong>{label}</strong>
+    </button>
+  );
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

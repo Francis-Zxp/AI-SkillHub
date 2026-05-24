@@ -20,6 +20,7 @@ struct LegacySnapshot {
     sources: Vec<SourceCard>,
     agents: Vec<AgentCard>,
     agent_adapters: Vec<AgentAdapterCard>,
+    adapter_safety_checks: Vec<AdapterSafetyCheckCard>,
     workspaces: Vec<WorkspaceCard>,
     presets: Vec<PresetCard>,
     diagnostics: DiagnosticSummary,
@@ -72,6 +73,7 @@ struct AgentCard {
     path: String,
     detected: bool,
     managed: bool,
+    enabled: bool,
     skill_count: usize,
 }
 
@@ -92,6 +94,16 @@ struct AgentAdapterCard {
     enabled: bool,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AdapterSafetyCheckCard {
+    id: String,
+    adapter_id: String,
+    check_key: String,
+    status: String,
+    summary: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WorkspaceCard {
@@ -99,6 +111,7 @@ struct WorkspaceCard {
     name: String,
     scope: String,
     path: String,
+    enabled: bool,
     agent_count: usize,
     skill_count: usize,
 }
@@ -110,6 +123,7 @@ struct PresetCard {
     name: String,
     description: String,
     color: String,
+    enabled: bool,
     skill_count: usize,
 }
 
@@ -157,6 +171,14 @@ struct SourceConfig {
     note: String,
 }
 
+#[derive(Default)]
+struct EnabledState {
+    agents: HashMap<String, bool>,
+    agent_adapters: HashMap<String, bool>,
+    workspaces: HashMap<String, bool>,
+    presets: HashMap<String, bool>,
+}
+
 #[tauri::command]
 fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
     let root = resolve_legacy_root()?;
@@ -182,6 +204,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
     );
     let agents = parse_agents(diagnostics_json.as_ref());
     let agent_adapters = derive_agent_adapters(&agents);
+    let adapter_safety_checks = derive_adapter_safety_checks(&agent_adapters);
     let diagnostics = parse_diagnostic_summary(diagnostics_json.as_ref());
 
     let mut source_counts: HashMap<String, usize> = HashMap::new();
@@ -222,6 +245,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         sources,
         agents,
         agent_adapters,
+        adapter_safety_checks,
         workspaces: Vec::new(),
         presets: Vec::new(),
         diagnostics,
@@ -238,6 +262,10 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
 
     snapshot.workspaces = derive_workspaces(&root, &snapshot.agents, snapshot.skills.len());
     snapshot.presets = derive_presets(&snapshot.skills);
+    if let Ok(connection) = open_index_database(&root) {
+        let enabled_state = load_enabled_state(&connection);
+        apply_enabled_state(&mut snapshot, &enabled_state);
+    }
     snapshot.index = persist_snapshot(&root, &snapshot)?;
     Ok(snapshot)
 }
@@ -264,6 +292,24 @@ fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
     }
 
     Ok(snapshot)
+}
+
+#[tauri::command]
+fn set_agent_adapter_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
+    set_enabled_state("agent_adapters", &id, enabled)?;
+    load_indexed_snapshot()
+}
+
+#[tauri::command]
+fn set_workspace_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
+    set_enabled_state("workspaces", &id, enabled)?;
+    load_indexed_snapshot()
+}
+
+#[tauri::command]
+fn set_preset_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
+    set_enabled_state("presets", &id, enabled)?;
+    load_indexed_snapshot()
 }
 
 fn resolve_legacy_root() -> Result<PathBuf, String> {
@@ -312,8 +358,62 @@ fn open_index_database(root: &Path) -> Result<Connection, String> {
     connection
         .execute_batch(include_str!("../migrations/001_initial.sql"))
         .map_err(|error| format!("Cannot apply v2 SQLite migration: {}", error))?;
+    ensure_runtime_schema(&connection)?;
 
     Ok(connection)
+}
+
+fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
+    ensure_column(
+        connection,
+        "workspaces",
+        "enabled",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+    ensure_column(
+        connection,
+        "presets",
+        "enabled",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+    Ok(())
+}
+
+fn ensure_column(
+    connection: &Connection,
+    table_name: &str,
+    column_name: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let mut statement = connection
+        .prepare(&format!("PRAGMA table_info({})", table_name))
+        .map_err(|error| format!("Cannot inspect table {}: {}", table_name, error))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| format!("Cannot read columns for {}: {}", table_name, error))?;
+
+    for column in columns {
+        if column.map_err(|error| format!("Cannot decode column name: {}", error))? == column_name {
+            return Ok(());
+        }
+    }
+
+    connection
+        .execute(
+            &format!(
+                "ALTER TABLE {} ADD COLUMN {} {}",
+                table_name, column_name, definition
+            ),
+            [],
+        )
+        .map_err(|error| {
+            format!(
+                "Cannot add column {}.{} to v2 database: {}",
+                table_name, column_name, error
+            )
+        })?;
+
+    Ok(())
 }
 
 fn read_snapshot_from_database(
@@ -324,6 +424,7 @@ fn read_snapshot_from_database(
     let sources = read_indexed_sources(connection)?;
     let agents = read_indexed_agents(connection)?;
     let agent_adapters = read_indexed_agent_adapters(connection)?;
+    let adapter_safety_checks = read_indexed_adapter_safety_checks(connection)?;
     let workspaces = read_indexed_workspaces(connection)?;
     let presets = read_indexed_presets(connection)?;
     let diagnostics = read_indexed_diagnostics(connection);
@@ -366,6 +467,7 @@ fn read_snapshot_from_database(
         sources,
         agents,
         agent_adapters,
+        adapter_safety_checks,
         workspaces,
         presets,
         diagnostics,
@@ -373,9 +475,54 @@ fn read_snapshot_from_database(
     })
 }
 
+fn set_enabled_state(table_name: &str, id: &str, enabled: bool) -> Result<(), String> {
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let statement = match table_name {
+        "agent_adapters" => "UPDATE agent_adapters SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
+        "workspaces" => "UPDATE workspaces SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
+        "presets" => "UPDATE presets SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
+        _ => return Err("Unsupported enable state target.".to_string()),
+    };
+    let timestamp = unix_timestamp_string();
+    let changed = connection
+        .execute(
+            statement,
+            params![if enabled { 1 } else { 0 }, timestamp, id],
+        )
+        .map_err(|error| format!("Cannot update enabled state for {}: {}", id, error))?;
+
+    if changed == 0 {
+        return Err(format!("Cannot find v2 state target {}.", id));
+    }
+
+    connection
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'state_updated', ?2, ?3, ?4)",
+            params![
+                format!("audit-state-{}-{}", timestamp, stable_id("target", id)),
+                format!("Updated {} enabled state", table_name),
+                serde_json::to_string(&serde_json::json!({
+                    "table": table_name,
+                    "id": id,
+                    "enabled": enabled,
+                    "scope": "v2-sqlite-only"
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot write v2 state audit event: {}", error))?;
+
+    Ok(())
+}
+
 fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexReport, String> {
     let db_file = database_file(root);
     let mut connection = open_index_database(root)?;
+    let enabled_state = load_enabled_state(&connection);
 
     let indexed_at = unix_timestamp_string();
     let snapshot_id = format!("legacy-import-{}", indexed_at);
@@ -392,6 +539,9 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
     transaction
         .execute("DELETE FROM workspace_agents", [])
         .map_err(|error| format!("Cannot clear workspace agent index: {}", error))?;
+    transaction
+        .execute("DELETE FROM adapter_safety_checks", [])
+        .map_err(|error| format!("Cannot clear adapter safety checks: {}", error))?;
     transaction
         .execute("DELETE FROM skills", [])
         .map_err(|error| format!("Cannot clear skill index: {}", error))?;
@@ -481,25 +631,42 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
                     agent.path,
                     if agent.detected { 1 } else { 0 },
                     if agent.managed { 1 } else { 0 },
-                    if agent.detected { 1 } else { 0 },
+                    if enabled_state
+                        .agents
+                        .get(&stable_id("agent", &agent.id))
+                        .copied()
+                        .unwrap_or(agent.detected)
+                    {
+                        1
+                    } else {
+                        0
+                    },
                     indexed_at
                 ],
             )
             .map_err(|error| format!("Cannot index agent {}: {}", agent.name, error))?;
     }
 
-    seed_agent_adapters(&transaction, &snapshot.agent_adapters, &indexed_at)?;
+    seed_agent_adapters(
+        &transaction,
+        &snapshot.agent_adapters,
+        &snapshot.adapter_safety_checks,
+        &enabled_state,
+        &indexed_at,
+    )?;
     seed_workspaces(
         &transaction,
         root,
         &snapshot.agents,
         snapshot.skills.len(),
+        &enabled_state,
         &indexed_at,
     )?;
     seed_presets(
         &transaction,
         &all_skill_ids,
         &skill_ids_by_category,
+        &enabled_state,
         &indexed_at,
     )?;
 
@@ -647,7 +814,7 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
 fn read_indexed_agents(connection: &Connection) -> Result<Vec<AgentCard>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT id, name, skills_path, detected, managed
+            "SELECT id, name, skills_path, detected, managed, enabled
             FROM agents
             ORDER BY lower(name)",
         )
@@ -661,6 +828,7 @@ fn read_indexed_agents(connection: &Connection) -> Result<Vec<AgentCard>, String
                 path: row.get(2)?,
                 detected: row.get::<_, i64>(3)? != 0,
                 managed: row.get::<_, i64>(4)? != 0,
+                enabled: row.get::<_, i64>(5)? != 0,
                 skill_count: 0,
             })
         })
@@ -720,6 +888,32 @@ fn read_indexed_agent_adapters(connection: &Connection) -> Result<Vec<AgentAdapt
     collect_rows(rows, "agent adapter")
 }
 
+fn read_indexed_adapter_safety_checks(
+    connection: &Connection,
+) -> Result<Vec<AdapterSafetyCheckCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, adapter_id, check_key, status, summary
+            FROM adapter_safety_checks
+            ORDER BY adapter_id, check_key",
+        )
+        .map_err(|error| format!("Cannot prepare adapter safety check query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(AdapterSafetyCheckCard {
+                id: row.get(0)?,
+                adapter_id: row.get(1)?,
+                check_key: row.get(2)?,
+                status: row.get(3)?,
+                summary: row.get(4)?,
+            })
+        })
+        .map_err(|error| format!("Cannot read adapter safety checks: {}", error))?;
+
+    collect_rows(rows, "adapter safety check")
+}
+
 fn read_indexed_workspaces(connection: &Connection) -> Result<Vec<WorkspaceCard>, String> {
     let total_skills = connection
         .query_row("SELECT COUNT(*) FROM skills WHERE enabled = 1", [], |row| {
@@ -734,6 +928,7 @@ fn read_indexed_workspaces(connection: &Connection) -> Result<Vec<WorkspaceCard>
                 workspaces.name,
                 workspaces.scope,
                 COALESCE(workspaces.path, ''),
+                workspaces.enabled,
                 COUNT(workspace_agents.agent_id)
             FROM workspaces
             LEFT JOIN workspace_agents ON workspace_agents.workspace_id = workspaces.id
@@ -752,7 +947,8 @@ fn read_indexed_workspaces(connection: &Connection) -> Result<Vec<WorkspaceCard>
                 name: row.get(1)?,
                 scope: scope.clone(),
                 path: row.get(3)?,
-                agent_count: row.get::<_, i64>(4)? as usize,
+                enabled: row.get::<_, i64>(4)? != 0,
+                agent_count: row.get::<_, i64>(5)? as usize,
                 skill_count: if scope == "global" { total_skills } else { 0 },
             })
         })
@@ -769,6 +965,7 @@ fn read_indexed_presets(connection: &Connection) -> Result<Vec<PresetCard>, Stri
                 presets.name,
                 presets.description,
                 presets.color,
+                presets.enabled,
                 COUNT(preset_skills.skill_id)
             FROM presets
             LEFT JOIN preset_skills ON preset_skills.preset_id = presets.id
@@ -786,7 +983,8 @@ fn read_indexed_presets(connection: &Connection) -> Result<Vec<PresetCard>, Stri
                 name: row.get(1)?,
                 description: row.get(2)?,
                 color: row.get(3)?,
-                skill_count: row.get::<_, i64>(4)? as usize,
+                enabled: row.get::<_, i64>(4)? != 0,
+                skill_count: row.get::<_, i64>(5)? as usize,
             })
         })
         .map_err(|error| format!("Cannot read indexed presets: {}", error))?;
@@ -872,12 +1070,72 @@ fn collect_rows<T>(
     Ok(items)
 }
 
+fn load_enabled_state(connection: &Connection) -> EnabledState {
+    EnabledState {
+        agents: read_enabled_map(connection, "agents"),
+        agent_adapters: read_enabled_map(connection, "agent_adapters"),
+        workspaces: read_enabled_map(connection, "workspaces"),
+        presets: read_enabled_map(connection, "presets"),
+    }
+}
+
+fn apply_enabled_state(snapshot: &mut LegacySnapshot, enabled_state: &EnabledState) {
+    for agent in &mut snapshot.agents {
+        let agent_id = stable_id("agent", &agent.id);
+        if let Some(enabled) = enabled_state.agents.get(&agent_id) {
+            agent.enabled = *enabled;
+        }
+    }
+    for adapter in &mut snapshot.agent_adapters {
+        if let Some(enabled) = enabled_state.agent_adapters.get(&adapter.id) {
+            adapter.enabled = *enabled;
+        }
+    }
+    for workspace in &mut snapshot.workspaces {
+        if let Some(enabled) = enabled_state.workspaces.get(&workspace.id) {
+            workspace.enabled = *enabled;
+        }
+    }
+    for preset in &mut snapshot.presets {
+        if let Some(enabled) = enabled_state.presets.get(&preset.id) {
+            preset.enabled = *enabled;
+        }
+    }
+}
+
+fn read_enabled_map(connection: &Connection, table_name: &str) -> HashMap<String, bool> {
+    let statement = match table_name {
+        "agents" => "SELECT id, enabled FROM agents",
+        "agent_adapters" => "SELECT id, enabled FROM agent_adapters",
+        "workspaces" => "SELECT id, enabled FROM workspaces",
+        "presets" => "SELECT id, enabled FROM presets",
+        _ => return HashMap::new(),
+    };
+    let Ok(mut query) = connection.prepare(statement) else {
+        return HashMap::new();
+    };
+    let Ok(rows) = query.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0))
+    }) else {
+        return HashMap::new();
+    };
+
+    rows.filter_map(Result::ok).collect()
+}
+
 fn seed_agent_adapters(
     transaction: &rusqlite::Transaction<'_>,
     adapters: &[AgentAdapterCard],
+    safety_checks: &[AdapterSafetyCheckCard],
+    enabled_state: &EnabledState,
     timestamp: &str,
 ) -> Result<(), String> {
     for adapter in adapters {
+        let enabled = enabled_state
+            .agent_adapters
+            .get(&adapter.id)
+            .copied()
+            .unwrap_or(adapter.enabled);
         transaction
             .execute(
                 "INSERT INTO agent_adapters (
@@ -897,11 +1155,34 @@ fn seed_agent_adapters(
                     adapter.status,
                     if adapter.detected { 1 } else { 0 },
                     if adapter.managed { 1 } else { 0 },
-                    if adapter.enabled { 1 } else { 0 },
+                    if enabled { 1 } else { 0 },
                     timestamp
                 ],
             )
             .map_err(|error| format!("Cannot seed agent adapter {}: {}", adapter.name, error))?;
+    }
+
+    for check in safety_checks {
+        transaction
+            .execute(
+                "INSERT INTO adapter_safety_checks (
+                    id, adapter_id, check_key, status, summary, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    check.id,
+                    check.adapter_id,
+                    check.check_key,
+                    check.status,
+                    check.summary,
+                    timestamp
+                ],
+            )
+            .map_err(|error| {
+                format!(
+                    "Cannot seed adapter safety check {} for {}: {}",
+                    check.check_key, check.adapter_id, error
+                )
+            })?;
     }
 
     Ok(())
@@ -912,21 +1193,28 @@ fn seed_workspaces(
     root: &Path,
     agents: &[AgentCard],
     total_skills: usize,
+    enabled_state: &EnabledState,
     timestamp: &str,
 ) -> Result<(), String> {
     let workspaces = derive_workspaces(root, agents, total_skills);
 
     for workspace in &workspaces {
+        let enabled = enabled_state
+            .workspaces
+            .get(&workspace.id)
+            .copied()
+            .unwrap_or(workspace.enabled);
         transaction
             .execute(
                 "INSERT INTO workspaces (
-                    id, name, scope, path, created_at, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                    id, name, scope, path, enabled, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
                 params![
                     workspace.id,
                     workspace.name,
                     workspace.scope,
                     workspace.path,
+                    if enabled { 1 } else { 0 },
                     timestamp
                 ],
             )
@@ -953,6 +1241,7 @@ fn seed_presets(
     transaction: &rusqlite::Transaction<'_>,
     all_skill_ids: &[String],
     skill_ids_by_category: &BTreeMap<String, Vec<String>>,
+    enabled_state: &EnabledState,
     timestamp: &str,
 ) -> Result<(), String> {
     insert_preset(
@@ -962,6 +1251,7 @@ fn seed_presets(
         "中央技能库中的全部已索引 Skill。",
         "mint",
         all_skill_ids,
+        enabled_state,
         timestamp,
     )?;
 
@@ -974,6 +1264,7 @@ fn seed_presets(
             &format!("自动从分类“{}”生成的 Preset。", category),
             preset_color(index),
             skill_ids,
+            enabled_state,
             timestamp,
         )?;
     }
@@ -988,14 +1279,27 @@ fn insert_preset(
     description: &str,
     color: &str,
     skill_ids: &[String],
+    enabled_state: &EnabledState,
     timestamp: &str,
 ) -> Result<(), String> {
+    let enabled = enabled_state
+        .presets
+        .get(preset_id)
+        .copied()
+        .unwrap_or(true);
     transaction
         .execute(
             "INSERT INTO presets (
-                id, name, description, color, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![preset_id, name, description, color, timestamp],
+                id, name, description, color, enabled, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![
+                preset_id,
+                name,
+                description,
+                color,
+                if enabled { 1 } else { 0 },
+                timestamp
+            ],
         )
         .map_err(|error| format!("Cannot seed preset {}: {}", name, error))?;
 
@@ -1038,6 +1342,72 @@ fn derive_agent_adapters(agents: &[AgentCard]) -> Vec<AgentAdapterCard> {
             adapter
         })
         .collect()
+}
+
+fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSafetyCheckCard> {
+    let mut checks = Vec::new();
+
+    for adapter in adapters {
+        checks.push(adapter_safety_check(
+            adapter,
+            "detection",
+            if adapter.detected { "ok" } else { "info" },
+            if adapter.detected {
+                "本机已检测到该 AI 工具。"
+            } else {
+                "本机未检测到该 AI 工具；保持未启用，不创建假目录。"
+            },
+        ));
+        checks.push(adapter_safety_check(
+            adapter,
+            "skills-path",
+            if adapter.skills_path_hint.is_empty() {
+                "warn"
+            } else {
+                "ok"
+            },
+            if adapter.skills_path_hint.is_empty() {
+                "该适配器暂未声明默认 Skills 目录；后续必须由用户手动指定。"
+            } else {
+                "已声明默认 Skills 目录，仅作为路径提示，不会自动写入。"
+            },
+        ));
+        checks.push(adapter_safety_check(
+            adapter,
+            "write-gate",
+            if adapter.detected && adapter.managed {
+                "ok"
+            } else if adapter.detected {
+                "warn"
+            } else {
+                "info"
+            },
+            if adapter.detected && adapter.managed {
+                "本机检测与接管状态完整；未来同步前仍需快照和回滚。"
+            } else if adapter.detected {
+                "本机已检测但尚未接管；未来写入前需要用户确认。"
+            } else {
+                "未检测到工具；禁止执行接管写入。"
+            },
+        ));
+    }
+
+    checks
+}
+
+fn adapter_safety_check(
+    adapter: &AgentAdapterCard,
+    check_key: &str,
+    status: &str,
+    summary: &str,
+) -> AdapterSafetyCheckCard {
+    AdapterSafetyCheckCard {
+        id: stable_id("adapter-check", &format!("{}-{}", adapter.id, check_key)),
+        adapter_id: adapter.id.clone(),
+        check_key: check_key.to_string(),
+        status: status.to_string(),
+        summary: summary.to_string(),
+    }
 }
 
 fn agent_adapter_catalog() -> Vec<AgentAdapterCard> {
@@ -1165,6 +1535,7 @@ fn derive_workspaces(root: &Path, agents: &[AgentCard], total_skills: usize) -> 
         name: "全局工作区".to_string(),
         scope: "global".to_string(),
         path: root.display().to_string(),
+        enabled: true,
         agent_count: agents.iter().filter(|agent| agent.detected).count(),
         skill_count: total_skills,
     }];
@@ -1175,6 +1546,7 @@ fn derive_workspaces(root: &Path, agents: &[AgentCard], total_skills: usize) -> 
             name: format!("{} 工作区", agent.name),
             scope: "agent".to_string(),
             path: agent.path.clone(),
+            enabled: agent.detected,
             agent_count: 1,
             skill_count: if agent.managed { total_skills } else { 0 },
         });
@@ -1194,6 +1566,7 @@ fn derive_presets(skills: &[SkillCard]) -> Vec<PresetCard> {
         name: "全部技能".to_string(),
         description: "中央技能库中的全部已索引 Skill。".to_string(),
         color: "mint".to_string(),
+        enabled: true,
         skill_count: skills.len(),
     }];
 
@@ -1203,6 +1576,7 @@ fn derive_presets(skills: &[SkillCard]) -> Vec<PresetCard> {
             name: category.clone(),
             description: format!("自动从分类“{}”生成的 Preset。", category),
             color: preset_color(index).to_string(),
+            enabled: true,
             skill_count: count,
         });
     }
@@ -1257,7 +1631,7 @@ fn stable_id(prefix: &str, value: &str) -> String {
 fn unix_timestamp_string() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().to_string())
+        .map(|duration| duration.as_nanos().to_string())
         .unwrap_or_else(|_| "0".to_string())
 }
 
@@ -1479,6 +1853,7 @@ fn parse_agents(diagnostics: Option<&Value>) -> Vec<AgentCard> {
                     .unwrap_or_default(),
                 detected: json_bool(agent, "detected"),
                 managed,
+                enabled: json_bool(agent, "detected") && managed,
                 skill_count: 0,
             }
         })
@@ -1606,7 +1981,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             load_indexed_snapshot,
-            scan_legacy_snapshot
+            scan_legacy_snapshot,
+            set_agent_adapter_enabled,
+            set_workspace_enabled,
+            set_preset_enabled
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AI SkillHub v2 app");
@@ -1629,6 +2007,7 @@ mod tests {
             .ends_with("latest-diagnostics.json"));
         assert!(snapshot.index.persisted);
         assert!(!snapshot.agent_adapters.is_empty());
+        assert!(!snapshot.adapter_safety_checks.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
         assert_eq!(snapshot.index.sources_indexed, snapshot.sources.len());
         assert_eq!(snapshot.index.agents_indexed, snapshot.agents.len());
@@ -1644,6 +2023,7 @@ mod tests {
         assert!(!snapshot.workspaces.is_empty());
         assert!(!snapshot.presets.is_empty());
         assert!(!snapshot.agent_adapters.is_empty());
+        assert!(!snapshot.adapter_safety_checks.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
     }
 

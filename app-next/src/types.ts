@@ -18,6 +18,7 @@ export type LegacySnapshot = {
   sources: SourceCard[];
   agents: AgentCard[];
   agentAdapters: AgentAdapterCard[];
+  adapterSafetyChecks: AdapterSafetyCheckCard[];
   workspaces: WorkspaceCard[];
   presets: PresetCard[];
   diagnostics: DiagnosticSummary;
@@ -62,6 +63,7 @@ export type AgentCard = {
   path: string;
   detected: boolean;
   managed: boolean;
+  enabled: boolean;
   skillCount: number;
 };
 
@@ -80,11 +82,20 @@ export type AgentAdapterCard = {
   enabled: boolean;
 };
 
+export type AdapterSafetyCheckCard = {
+  id: string;
+  adapterId: string;
+  checkKey: string;
+  status: "ok" | "warn" | "error" | "info" | string;
+  summary: string;
+};
+
 export type WorkspaceCard = {
   id: string;
   name: string;
   scope: "global" | "agent" | "project" | string;
   path: string;
+  enabled: boolean;
   agentCount: number;
   skillCount: number;
 };
@@ -94,6 +105,7 @@ export type PresetCard = {
   name: string;
   description: string;
   color: string;
+  enabled: boolean;
   skillCount: number;
 };
 

@@ -314,6 +314,7 @@ h3 {
 .skill-card footer,
 .agent-card footer,
 .workspace-card footer,
+.preset-card footer,
 .adapter-card footer,
 .source-row,
 .setting-row {
@@ -336,6 +337,7 @@ h3 {
 .skill-card footer,
 .agent-card footer,
 .workspace-card footer,
+.preset-card footer,
 .adapter-card footer {
   margin-top: 16px;
   color: #557168;
@@ -384,7 +386,7 @@ h3 {
 
 .agent-row {
   display: grid;
-  grid-template-columns: minmax(180px, .8fr) 90px 90px minmax(220px, 1fr);
+  grid-template-columns: minmax(180px, .8fr) 90px 90px 90px minmax(220px, 1fr);
   gap: 12px;
   align-items: center;
   padding: 12px 14px;
@@ -398,6 +400,73 @@ h3 {
   color: #71808a;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.safety-list {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.safety-item {
+  padding: 8px 10px;
+  border-radius: 10px;
+  color: #52606a;
+  font-size: 12px;
+  line-height: 1.45;
+  background: #f1f5f4;
+}
+
+.safety-item.ok {
+  color: #0e7c63;
+  background: #e4f7ef;
+}
+
+.safety-item.warn {
+  color: #9a610b;
+  background: #fff2d8;
+}
+
+.safety-item.info {
+  color: #52606a;
+  background: #eef3f4;
+}
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 86px;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid rgba(75, 92, 102, .18);
+  border-radius: 999px;
+  color: #6f7a83;
+  font-size: 12px;
+  font-weight: 800;
+  background: #f2f5f4;
+  cursor: pointer;
+}
+
+.switch span {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(38, 55, 64, .18);
+}
+
+.switch.is-on {
+  border-color: rgba(30, 184, 138, .32);
+  color: #0e7c63;
+  background: #dff6ee;
+}
+
+.switch:disabled {
+  cursor: default;
+  opacity: .58;
 }
 
 .preset-card {

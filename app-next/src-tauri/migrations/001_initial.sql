@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
   name TEXT NOT NULL,
   scope TEXT NOT NULL,
   path TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS presets (
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
   color TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -118,4 +120,14 @@ CREATE TABLE IF NOT EXISTS snapshots (
   summary TEXT NOT NULL DEFAULT '',
   manifest_json TEXT NOT NULL,
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS adapter_safety_checks (
+  id TEXT PRIMARY KEY,
+  adapter_id TEXT NOT NULL,
+  check_key TEXT NOT NULL,
+  status TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(adapter_id) REFERENCES agent_adapters(id)
 );

@@ -24,6 +24,8 @@ This is the SQLite-first indexing milestone. It is intentionally safe:
 - It writes only to the v2 SQLite index under `.skillhub-next/`
 - It seeds the first workspace and preset model from the indexed data
 - It keeps a first Agent Adapter Registry so supported tools and locally detected tools are not confused
+- It stores enable/disable state in v2 SQLite only, without changing v1 links
+- It records adapter safety checks before any future write/sync behavior is allowed
 
 ## Before running
 
@@ -56,4 +58,4 @@ pnpm tauri dev
 
 ## v2 principle
 
-v1 stays usable while v2 grows. V2 now treats v1 as a read-only source and builds its own SQLite model for Skills, sources, agents, agent adapters, workspaces, presets, snapshots, and audit events.
+v1 stays usable while v2 grows. V2 now treats v1 as a read-only source and builds its own SQLite model for Skills, sources, agents, agent adapters, adapter safety checks, workspaces, presets, snapshots, and audit events.
