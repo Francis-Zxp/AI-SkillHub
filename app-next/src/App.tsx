@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
-import { agents, skills, sources } from "./data/sample";
-import type { NavKey } from "./types";
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useMemo, useState } from "react";
+import type { LegacySnapshot, LegacySummary, NavKey } from "./types";
 
 const navItems: Array<{ key: NavKey; label: string; hint: string }> = [
   { key: "dashboard", label: "总览", hint: "健康、同步、风险" },
@@ -12,13 +12,43 @@ const navItems: Array<{ key: NavKey; label: string; hint: string }> = [
 
 export function App() {
   const [active, setActive] = useState<NavKey>("dashboard");
+  const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
+  const [loadError, setLoadError] = useState<string>("");
 
   const summary = useMemo(() => {
-    return {
-      skills: skills.length,
-      sources: sources.length,
-      agents: agents.filter(agent => agent.detected).length,
-      warnings: skills.filter(skill => skill.health !== "ok").length
+    return (
+      snapshot?.summary ?? {
+        skills: 0,
+        sources: 0,
+        prompts: 0,
+        agentsDetected: 0,
+        warnings: 0,
+        diagnosticsStatus: "loading"
+      }
+    );
+  }, [snapshot]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSnapshot() {
+      try {
+        const result = await invoke<LegacySnapshot>("scan_legacy_snapshot");
+        if (!cancelled) {
+          setSnapshot(result);
+          setLoadError("");
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    }
+
+    void loadSnapshot();
+
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -57,50 +87,60 @@ export function App() {
           <div className="status-pill">只读迁移模式</div>
         </header>
 
-        {active === "dashboard" && <Dashboard summary={summary} />}
-        {active === "library" && <Library />}
-        {active === "sources" && <Sources />}
-        {active === "agents" && <Agents />}
-        {active === "settings" && <Settings />}
+        {loadError && (
+          <section className="panel warning-panel">
+            <h3>读取 v1 数据失败</h3>
+            <p>{loadError}</p>
+          </section>
+        )}
+
+        {active === "dashboard" && <Dashboard snapshot={snapshot} summary={summary} />}
+        {active === "library" && <Library snapshot={snapshot} />}
+        {active === "sources" && <Sources snapshot={snapshot} />}
+        {active === "agents" && <Agents snapshot={snapshot} />}
+        {active === "settings" && <Settings snapshot={snapshot} />}
       </section>
     </main>
   );
 }
 
-function Dashboard({ summary }: { summary: { skills: number; sources: number; agents: number; warnings: number } }) {
+function Dashboard({ snapshot, summary }: { snapshot: LegacySnapshot | null; summary: LegacySummary }) {
   return (
     <div className="view">
       <section className="hero-panel">
         <div>
-          <p className="eyebrow">下一阶段目标</p>
-          <h2>从文件夹链接工具升级为 AI Agent 能力中枢</h2>
+          <p className="eyebrow">真实 v1 只读扫描</p>
+          <h2>v2 正在读取现有 AI SkillHub 数据</h2>
           <p>
-            v2 会先以只读方式扫描 v1 的 Skills、来源、AI 工具和诊断结果，确认模型稳定后再加入写入、同步、快照和回滚。
+            当前阶段只读取 v1 的 Skills、来源、AI 工具和诊断结果，不修改用户 skills、GitHub 来源、配置或 AI 工具链接。
           </p>
         </div>
       </section>
 
       <section className="metrics">
-        <Metric label="示例 Skills" value={summary.skills} />
-        <Metric label="示例来源" value={summary.sources} />
-        <Metric label="示例 AI 工具" value={summary.agents} />
+        <Metric label="已启用 Skills" value={summary.skills} />
+        <Metric label="仓库来源" value={summary.sources} />
+        <Metric label="Prompt 资料" value={summary.prompts} />
+        <Metric label="已检测 AI 工具" value={summary.agentsDetected} />
         <Metric label="需关注" value={summary.warnings} />
       </section>
 
       <section className="panel">
-        <h3>v2 第一阶段验收</h3>
+        <h3>扫描状态</h3>
         <ul className="check-list">
-          <li>建立 Tauri + React + TypeScript + Rust + SQLite 工程边界。</li>
-          <li>只读读取 v1 数据，不修改用户 skills 或 AI 工具链接。</li>
-          <li>复刻 v1 已验证行为：诊断、来源、技能、Agent、设置。</li>
-          <li>后续加入 SQLite schema、真实扫描和视觉回归测试。</li>
+          <li>根目录：{snapshot?.root ?? "正在读取..."}</li>
+          <li>诊断状态：{summary.diagnosticsStatus}</li>
+          <li>诊断版本：{snapshot?.diagnostics.appVersion || "尚未读取"}</li>
+          <li>读取模式：{snapshot?.mode ?? "read-only"}</li>
         </ul>
       </section>
     </div>
   );
 }
 
-function Library() {
+function Library({ snapshot }: { snapshot: LegacySnapshot | null }) {
+  const skills = snapshot?.skills ?? [];
+
   return (
     <div className="card-grid">
       {skills.map(skill => (
@@ -116,26 +156,32 @@ function Library() {
           </footer>
         </article>
       ))}
+      {skills.length === 0 && <EmptyState text="正在等待 v1 Skill 扫描结果。" />}
     </div>
   );
 }
 
-function Sources() {
+function Sources({ snapshot }: { snapshot: LegacySnapshot | null }) {
+  const sources = snapshot?.sources ?? [];
+
   return (
     <div className="table-panel">
       {sources.map(source => (
         <div className="source-row" key={source.name}>
           <strong>{source.name}</strong>
-          <span>{source.type}</span>
+          <span>{source.sourceType}</span>
           <span>{source.skillCount} Skills</span>
-          <small>{source.url}</small>
+          <small>{source.url || source.localPath}</small>
         </div>
       ))}
+      {sources.length === 0 && <EmptyState text="正在等待来源扫描结果。" />}
     </div>
   );
 }
 
-function Agents() {
+function Agents({ snapshot }: { snapshot: LegacySnapshot | null }) {
+  const agents = snapshot?.agents ?? [];
+
   return (
     <div className="card-grid">
       {agents.map(agent => (
@@ -149,11 +195,12 @@ function Agents() {
           </footer>
         </article>
       ))}
+      {agents.length === 0 && <EmptyState text="正在等待 AI 工具检测结果。" />}
     </div>
   );
 }
 
-function Settings() {
+function Settings({ snapshot }: { snapshot: LegacySnapshot | null }) {
   return (
     <section className="panel">
       <h3>迁移策略</h3>
@@ -162,15 +209,15 @@ function Settings() {
       </p>
       <div className="setting-row">
         <span>中央目录</span>
-        <code>../skills</code>
+        <code>{snapshot?.skillsDir ?? "../skills"}</code>
       </div>
       <div className="setting-row">
         <span>来源目录</span>
-        <code>../app/github_sources</code>
+        <code>{snapshot?.sourcesDir ?? "../app/github_sources"}</code>
       </div>
       <div className="setting-row">
         <span>诊断报告</span>
-        <code>../app/reports/latest-diagnostics.json</code>
+        <code>{snapshot?.diagnosticsFile ?? "../app/reports/latest-diagnostics.json"}</code>
       </div>
     </section>
   );
@@ -182,5 +229,13 @@ function Metric({ label, value }: { label: string; value: number }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </article>
+  );
+}
+
+function EmptyState({ text }: { text: string }) {
+  return (
+    <section className="panel empty-state">
+      <p>{text}</p>
+    </section>
   );
 }

@@ -14,35 +14,31 @@ Build the next AI SkillHub with:
 
 ## Current status
 
-This is the initial scaffold. It is intentionally safe:
+This is the first read-only scanner milestone. It is intentionally safe:
 
 - It does not write to `../skills`
 - It does not modify `../app/github_sources`
 - It does not take over Claude, Codex, or Antigravity links
-- It only defines the future app shape and a read-only backend command stub
+- It reads real v1 Skills, sources, agents, and diagnostics for display
 
 ## Before running
 
 Install or verify these tools first:
 
 - Node.js LTS is already available on this computer.
-- pnpm is not detected yet.
-- Rust/Cargo is not detected yet.
+- pnpm 11.2.2 is available on this computer.
+- Rust/Cargo 1.95.0 is available on this computer.
 - Visual Studio Build Tools / MSVC is required for Tauri on Windows.
 
-See [docs/toolchain-setup.md](docs/toolchain-setup.md) for download links and exact versions checked on 2026-05-24.
+See [docs/toolchain-setup.md](docs/toolchain-setup.md) for download links and exact versions checked on 2026-05-25.
 
 After installing tools, run:
 
 ```powershell
 cd app-next
 npm run check:toolchain
-```
-
-Install Rust from:
-
-```text
-https://rustup.rs/
+pnpm install
+pnpm build
 ```
 
 After tools are ready:

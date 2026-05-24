@@ -192,7 +192,7 @@ h3 {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 14px;
 }
 
@@ -275,6 +275,26 @@ h3 {
 .health.info {
   color: #5870b0;
   background: #edf1ff;
+}
+
+.health.warn {
+  color: #a4620a;
+  background: #fff1d7;
+}
+
+.health.error {
+  color: #af2f45;
+  background: #ffe4ea;
+}
+
+.warning-panel {
+  margin-bottom: 18px;
+  border-color: rgba(207, 91, 105, .24);
+  background: #fff7f8;
+}
+
+.empty-state {
+  grid-column: 1 / -1;
 }
 
 .table-panel {
