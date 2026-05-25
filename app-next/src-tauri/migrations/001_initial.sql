@@ -122,6 +122,18 @@ CREATE TABLE IF NOT EXISTS snapshots (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS rollback_plan_steps (
+  id TEXT PRIMARY KEY,
+  snapshot_id TEXT NOT NULL,
+  step_order INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  risk_level TEXT NOT NULL DEFAULT 'low',
+  status TEXT NOT NULL DEFAULT 'planned',
+  summary TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(snapshot_id) REFERENCES snapshots(id)
+);
+
 CREATE TABLE IF NOT EXISTS adapter_safety_checks (
   id TEXT PRIMARY KEY,
   adapter_id TEXT NOT NULL,

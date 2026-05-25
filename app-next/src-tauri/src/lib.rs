@@ -25,6 +25,8 @@ struct LegacySnapshot {
     workspaces: Vec<WorkspaceCard>,
     project_scans: Vec<ProjectScanCard>,
     presets: Vec<PresetCard>,
+    snapshots: Vec<SnapshotCard>,
+    rollback_plan: Vec<RollbackPlanStepCard>,
     diagnostics: DiagnosticSummary,
     index: IndexReport,
 }
@@ -156,6 +158,28 @@ struct PresetCard {
     skill_count: usize,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SnapshotCard {
+    id: String,
+    name: String,
+    summary: String,
+    created_at: String,
+    is_latest: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct RollbackPlanStepCard {
+    id: String,
+    snapshot_id: String,
+    step_order: usize,
+    title: String,
+    risk_level: String,
+    status: String,
+    summary: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiagnosticSummary {
@@ -280,6 +304,8 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         workspaces: Vec::new(),
         project_scans: Vec::new(),
         presets: Vec::new(),
+        snapshots: Vec::new(),
+        rollback_plan: Vec::new(),
         diagnostics,
         index: IndexReport {
             persisted: false,
@@ -300,6 +326,10 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         apply_enabled_state(&mut snapshot, &enabled_state);
     }
     snapshot.index = persist_snapshot(&root, &snapshot)?;
+    if let Ok(connection) = open_index_database(&root) {
+        snapshot.snapshots = read_indexed_snapshots(&connection).unwrap_or_default();
+        snapshot.rollback_plan = read_indexed_rollback_plan(&connection).unwrap_or_default();
+    }
     Ok(snapshot)
 }
 
@@ -321,7 +351,8 @@ fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
             || snapshot.presets.is_empty()
             || snapshot.agent_adapters.is_empty()
             || snapshot.adapter_capabilities.is_empty()
-            || snapshot.project_scans.is_empty())
+            || snapshot.project_scans.is_empty()
+            || snapshot.rollback_plan.is_empty())
     {
         return scan_legacy_snapshot();
     }
@@ -482,6 +513,8 @@ fn read_snapshot_from_database(
     let workspaces = read_indexed_workspaces(connection)?;
     let project_scans = read_indexed_project_scans(connection)?;
     let presets = read_indexed_presets(connection)?;
+    let snapshots = read_indexed_snapshots(connection)?;
+    let rollback_plan = read_indexed_rollback_plan(connection)?;
     let diagnostics = read_indexed_diagnostics(connection);
     let index = read_index_report(
         connection,
@@ -527,6 +560,8 @@ fn read_snapshot_from_database(
         workspaces,
         project_scans,
         presets,
+        snapshots,
+        rollback_plan,
         diagnostics,
         index,
     })
@@ -761,6 +796,8 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
             ],
         )
         .map_err(|error| format!("Cannot write v2 snapshot record: {}", error))?;
+
+    seed_rollback_plan(&transaction, snapshot, &snapshot_id, &indexed_at)?;
 
     transaction
         .execute(
@@ -1126,6 +1163,77 @@ fn read_indexed_presets(connection: &Connection) -> Result<Vec<PresetCard>, Stri
     collect_rows(rows, "preset")
 }
 
+fn read_indexed_snapshots(connection: &Connection) -> Result<Vec<SnapshotCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, summary, created_at
+            FROM snapshots
+            ORDER BY CAST(created_at AS INTEGER) DESC
+            LIMIT 8",
+        )
+        .map_err(|error| format!("Cannot prepare snapshot query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(SnapshotCard {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                summary: row.get(2)?,
+                created_at: row.get(3)?,
+                is_latest: false,
+            })
+        })
+        .map_err(|error| format!("Cannot read snapshots: {}", error))?;
+
+    let mut snapshots = collect_rows(rows, "snapshot")?;
+    for (index, snapshot) in snapshots.iter_mut().enumerate() {
+        snapshot.is_latest = index == 0;
+    }
+    Ok(snapshots)
+}
+
+fn read_indexed_rollback_plan(
+    connection: &Connection,
+) -> Result<Vec<RollbackPlanStepCard>, String> {
+    let latest_snapshot_id = connection
+        .query_row(
+            "SELECT id FROM snapshots ORDER BY CAST(created_at AS INTEGER) DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read rollback plan snapshot id: {}", error))?;
+
+    let Some(snapshot_id) = latest_snapshot_id else {
+        return Ok(Vec::new());
+    };
+
+    let mut statement = connection
+        .prepare(
+            "SELECT id, snapshot_id, step_order, title, risk_level, status, summary
+            FROM rollback_plan_steps
+            WHERE snapshot_id = ?1
+            ORDER BY step_order",
+        )
+        .map_err(|error| format!("Cannot prepare rollback plan query: {}", error))?;
+
+    let rows = statement
+        .query_map(params![snapshot_id], |row| {
+            Ok(RollbackPlanStepCard {
+                id: row.get(0)?,
+                snapshot_id: row.get(1)?,
+                step_order: row.get::<_, i64>(2)? as usize,
+                title: row.get(3)?,
+                risk_level: row.get(4)?,
+                status: row.get(5)?,
+                summary: row.get(6)?,
+            })
+        })
+        .map_err(|error| format!("Cannot read rollback plan: {}", error))?;
+
+    collect_rows(rows, "rollback plan step")
+}
+
 fn read_index_report(
     connection: &Connection,
     db_file: &Path,
@@ -1423,6 +1531,37 @@ fn seed_project_scans(
                 ],
             )
             .map_err(|error| format!("Cannot seed project scan {}: {}", scan.path, error))?;
+    }
+
+    Ok(())
+}
+
+fn seed_rollback_plan(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &LegacySnapshot,
+    snapshot_id: &str,
+    timestamp: &str,
+) -> Result<(), String> {
+    let steps = rollback_plan_steps(snapshot, snapshot_id);
+
+    for step in steps {
+        transaction
+            .execute(
+                "INSERT OR REPLACE INTO rollback_plan_steps (
+                    id, snapshot_id, step_order, title, risk_level, status, summary, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    step.id,
+                    step.snapshot_id,
+                    step.step_order as i64,
+                    step.title,
+                    step.risk_level,
+                    step.status,
+                    step.summary,
+                    timestamp
+                ],
+            )
+            .map_err(|error| format!("Cannot seed rollback plan step: {}", error))?;
     }
 
     Ok(())
@@ -1933,6 +2072,67 @@ fn derive_presets(skills: &[SkillCard]) -> Vec<PresetCard> {
     presets
 }
 
+fn rollback_plan_steps(snapshot: &LegacySnapshot, snapshot_id: &str) -> Vec<RollbackPlanStepCard> {
+    let detected_agents = snapshot.agents.iter().filter(|agent| agent.detected).count();
+    let managed_agents = snapshot.agents.iter().filter(|agent| agent.managed).count();
+
+    vec![
+        RollbackPlanStepCard {
+            id: stable_id("rollback-step", &format!("{}-sqlite-baseline", snapshot_id)),
+            snapshot_id: snapshot_id.to_string(),
+            step_order: 1,
+            title: "冻结 v2 SQLite 基线".to_string(),
+            risk_level: "low".to_string(),
+            status: "ready".to_string(),
+            summary: format!(
+                "已记录 {} 个 Skill、{} 个来源、{} 个 AI 工具，可作为当前只读索引基线。",
+                snapshot.skills.len(),
+                snapshot.sources.len(),
+                snapshot.agents.len()
+            ),
+        },
+        RollbackPlanStepCard {
+            id: stable_id("rollback-step", &format!("{}-write-boundary", snapshot_id)),
+            snapshot_id: snapshot_id.to_string(),
+            step_order: 2,
+            title: "确认写入边界仍关闭".to_string(),
+            risk_level: "low".to_string(),
+            status: "ready".to_string(),
+            summary: "当前 v2 只写自己的 SQLite；不会创建、删除或替换 Claude/Codex/Antigravity 的真实 Skills 目录。".to_string(),
+        },
+        RollbackPlanStepCard {
+            id: stable_id("rollback-step", &format!("{}-target-backup", snapshot_id)),
+            snapshot_id: snapshot_id.to_string(),
+            step_order: 3,
+            title: "备份目标 AI 工具目录".to_string(),
+            risk_level: "medium".to_string(),
+            status: if detected_agents > 0 { "planned" } else { "locked" }.to_string(),
+            summary: format!(
+                "检测到 {} 个 AI 工具，其中 {} 个已接管；真实同步前必须把目标目录备份到可恢复位置。",
+                detected_agents, managed_agents
+            ),
+        },
+        RollbackPlanStepCard {
+            id: stable_id("rollback-step", &format!("{}-dry-run-restore", snapshot_id)),
+            snapshot_id: snapshot_id.to_string(),
+            step_order: 4,
+            title: "恢复流程 dry-run".to_string(),
+            risk_level: "medium".to_string(),
+            status: "planned".to_string(),
+            summary: "先做 dry-run：只打印将恢复哪些路径、删除哪些链接、复制哪些备份，不执行真实文件操作。".to_string(),
+        },
+        RollbackPlanStepCard {
+            id: stable_id("rollback-step", &format!("{}-real-rollback", snapshot_id)),
+            snapshot_id: snapshot_id.to_string(),
+            step_order: 5,
+            title: "真实回滚执行".to_string(),
+            risk_level: "high".to_string(),
+            status: "locked".to_string(),
+            summary: "只有在备份、dry-run、路径安全检查全部通过后，才允许开放真实回滚按钮。".to_string(),
+        },
+    ]
+}
+
 fn category_label(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
@@ -2359,6 +2559,8 @@ mod tests {
         assert!(!snapshot.adapter_safety_checks.is_empty());
         assert!(!snapshot.adapter_capabilities.is_empty());
         assert!(!snapshot.project_scans.is_empty());
+        assert!(!snapshot.snapshots.is_empty());
+        assert!(!snapshot.rollback_plan.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
         assert_eq!(snapshot.index.sources_indexed, snapshot.sources.len());
         assert_eq!(snapshot.index.agents_indexed, snapshot.agents.len());
@@ -2377,6 +2579,8 @@ mod tests {
         assert!(!snapshot.adapter_safety_checks.is_empty());
         assert!(!snapshot.adapter_capabilities.is_empty());
         assert!(!snapshot.project_scans.is_empty());
+        assert!(!snapshot.snapshots.is_empty());
+        assert!(!snapshot.rollback_plan.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
     }
 
@@ -2436,5 +2640,19 @@ mod tests {
         assert!(app_next.has_tauri_config);
         assert!(app_next.has_readme_md);
         assert!(app_next.file_count > 0);
+    }
+
+    #[test]
+    fn rollback_plan_locks_real_restore_until_backup_exists() {
+        let snapshot = scan_legacy_snapshot().expect("legacy snapshot should scan");
+        let steps = rollback_plan_steps(&snapshot, "test-snapshot");
+
+        assert_eq!(steps.len(), 5);
+        assert!(steps
+            .iter()
+            .any(|step| step.title.contains("SQLite") && step.status == "ready"));
+        assert!(steps
+            .iter()
+            .any(|step| step.title.contains("真实回滚") && step.status == "locked"));
     }
 }

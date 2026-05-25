@@ -9,6 +9,7 @@ const navItems: Array<{ key: NavKey; label: string; hint: string }> = [
   { key: "presets", label: "预设", hint: "分类组合与场景" },
   { key: "sources", label: "来源", hint: "GitHub、本地、Prompt" },
   { key: "agents", label: "AI 工具", hint: "Claude、Codex、Antigravity" },
+  { key: "snapshots", label: "快照", hint: "备份、回滚、保险" },
   { key: "settings", label: "设置", hint: "路径、主题、迁移" }
 ];
 
@@ -142,6 +143,7 @@ export function App() {
         {active === "presets" && <Presets disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "sources" && <Sources snapshot={snapshot} />}
         {active === "agents" && <Agents disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
+        {active === "snapshots" && <Snapshots snapshot={snapshot} />}
         {active === "settings" && <Settings snapshot={snapshot} />}
       </section>
     </main>
@@ -433,6 +435,83 @@ function Agents({
             </div>
           ))}
           {agents.length === 0 && <p>正在等待 AI 工具检测结果。</p>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
+  const snapshots = snapshot?.snapshots ?? [];
+  const rollbackPlan = snapshot?.rollbackPlan ?? [];
+  const latest = snapshots.find(item => item.isLatest) ?? snapshots[0];
+
+  return (
+    <div className="view">
+      <section className="hero-panel snapshot-hero">
+        <div>
+          <p className="eyebrow">Snapshot / Rollback Gate</p>
+          <h2>先把退路修好，再开放真实同步</h2>
+          <p>
+            当前阶段只记录 v2 SQLite 索引快照和回滚计划。真实恢复按钮会保持锁定，直到备份、dry-run
+            和路径安全检查全部完成。
+          </p>
+        </div>
+      </section>
+
+      <section className="snapshot-layout">
+        <article className="panel">
+          <p className="eyebrow">最新快照</p>
+          <h3>{latest?.name ?? "等待生成快照"}</h3>
+          <p>{latest?.summary ?? "点击刷新后，v2 会把当前只读索引写入 SQLite 快照记录。"}</p>
+          <div className="snapshot-meta">
+            <span>{latest ? formatScanTime(latest.createdAt) : "未生成"}</span>
+            <span>{snapshot?.index.snapshotId ?? "无快照 ID"}</span>
+          </div>
+        </article>
+
+        <article className="panel rollback-gate">
+          <p className="eyebrow">写入闸门</p>
+          <h3>真实恢复仍然锁定</h3>
+          <p>
+            现在能做的是看见风险和准备步骤；不能直接删除链接、覆盖目录或恢复文件。这个闸门以后会保护分享版用户。
+          </p>
+        </article>
+      </section>
+
+      <section className="panel">
+        <p className="eyebrow">回滚计划</p>
+        <h3>执行前必须逐步通过</h3>
+        <div className="rollback-steps">
+          {rollbackPlan.map(step => (
+            <article className={`rollback-step ${step.status}`} key={step.id}>
+              <div className="step-number">{step.stepOrder}</div>
+              <div>
+                <div className="rollback-step-head">
+                  <strong>{step.title}</strong>
+                  <span className={`risk ${step.riskLevel}`}>{riskLabel(step.riskLevel)}</span>
+                  <span className={`step-status ${step.status}`}>{stepStatusLabel(step.status)}</span>
+                </div>
+                <p>{step.summary}</p>
+              </div>
+            </article>
+          ))}
+          {rollbackPlan.length === 0 && <p>等待下一次刷新生成回滚计划。</p>}
+        </div>
+      </section>
+
+      <section className="panel">
+        <p className="eyebrow">历史快照</p>
+        <h3>最近记录</h3>
+        <div className="snapshot-list">
+          {snapshots.map(item => (
+            <article className={item.isLatest ? "snapshot-row latest" : "snapshot-row"} key={item.id}>
+              <strong>{item.name}</strong>
+              <span>{item.summary}</span>
+              <small>{formatScanTime(item.createdAt)}</small>
+            </article>
+          ))}
+          {snapshots.length === 0 && <p>暂无历史快照。</p>}
         </div>
       </section>
     </div>
@@ -775,6 +854,44 @@ function createPreviewSnapshot(): LegacySnapshot {
         skillCount: 4
       }
     ],
+    snapshots: [
+      {
+        id: "preview-snapshot",
+        name: "浏览器预览快照",
+        summary: "48 skills, 9 sources, 3 agents",
+        createdAt: new Date().toISOString(),
+        isLatest: true
+      }
+    ],
+    rollbackPlan: [
+      {
+        id: "preview-step-1",
+        snapshotId: "preview-snapshot",
+        stepOrder: 1,
+        title: "冻结 v2 SQLite 基线",
+        riskLevel: "low",
+        status: "ready",
+        summary: "预览模式已生成示例基线；真实数据请在 Tauri 桌面窗口查看。"
+      },
+      {
+        id: "preview-step-2",
+        snapshotId: "preview-snapshot",
+        stepOrder: 2,
+        title: "备份目标 AI 工具目录",
+        riskLevel: "medium",
+        status: "planned",
+        summary: "真实同步前必须备份 Claude、Codex、Antigravity 等目标目录。"
+      },
+      {
+        id: "preview-step-3",
+        snapshotId: "preview-snapshot",
+        stepOrder: 3,
+        title: "真实回滚执行",
+        riskLevel: "high",
+        status: "locked",
+        summary: "恢复按钮保持锁定，直到备份和 dry-run 通过。"
+      }
+    ],
     diagnostics: {
       available: false,
       appVersion: "v2 preview",
@@ -836,6 +953,20 @@ function scopeLabel(scope: string) {
 
 function ScanFlag({ enabled, label }: { enabled: boolean; label: string }) {
   return <span className={enabled ? "scan-flag is-on" : "scan-flag"}>{enabled ? "有" : "缺"} {label}</span>;
+}
+
+function riskLabel(riskLevel: string) {
+  if (riskLevel === "low") return "低风险";
+  if (riskLevel === "medium") return "中风险";
+  if (riskLevel === "high") return "高风险";
+  return riskLevel;
+}
+
+function stepStatusLabel(status: string) {
+  if (status === "ready") return "已准备";
+  if (status === "planned") return "待实现";
+  if (status === "locked") return "已锁定";
+  return status;
 }
 
 function formatScanTime(value: string) {

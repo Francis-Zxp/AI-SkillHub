@@ -722,6 +722,163 @@ h3 {
   white-space: pre-wrap;
 }
 
+.snapshot-hero::after {
+  background:
+    linear-gradient(135deg, rgba(123, 103, 220, .18), rgba(32, 180, 134, .14)),
+    radial-gradient(circle at 35% 32%, rgba(255, 255, 255, .94), transparent 30%);
+}
+
+.snapshot-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(280px, .8fr);
+  gap: 18px;
+}
+
+.snapshot-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.snapshot-meta span {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 7px 11px;
+  border-radius: 999px;
+  color: var(--mint-dark);
+  font-size: 13px;
+  font-weight: 900;
+  background: #e1f7ef;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rollback-gate {
+  border-color: rgba(216, 154, 43, .26);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .98), rgba(255, 248, 235, .95)),
+    #ffffff;
+}
+
+.rollback-steps {
+  display: grid;
+  gap: 12px;
+}
+
+.rollback-step {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 14px;
+  padding: 15px;
+  border: 1px solid rgba(34, 67, 61, .1);
+  border-radius: 18px;
+  background: #f9fcfa;
+}
+
+.rollback-step.locked {
+  background: #fff8f3;
+}
+
+.step-number {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  color: white;
+  font-size: 15px;
+  font-weight: 950;
+  background: linear-gradient(135deg, var(--mint), var(--sky));
+}
+
+.rollback-step.locked .step-number {
+  background: linear-gradient(135deg, var(--peach), var(--rose));
+}
+
+.rollback-step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.rollback-step-head strong {
+  margin-right: auto;
+  color: #1f2c34;
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.risk,
+.step-status {
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.risk.low,
+.step-status.ready {
+  color: var(--mint-dark);
+  background: #e1f7ef;
+}
+
+.risk.medium,
+.step-status.planned {
+  color: #8a6b20;
+  background: #fff3d8;
+}
+
+.risk.high,
+.step-status.locked {
+  color: #a73950;
+  background: #ffe6ec;
+}
+
+.snapshot-list {
+  display: grid;
+  gap: 10px;
+}
+
+.snapshot-row {
+  display: grid;
+  grid-template-columns: minmax(180px, .5fr) minmax(220px, 1fr) minmax(120px, max-content);
+  gap: 12px;
+  align-items: center;
+  padding: 13px 15px;
+  border: 1px solid rgba(34, 67, 61, .1);
+  border-radius: 16px;
+  background: #f9fcfa;
+}
+
+.snapshot-row.latest {
+  border-color: rgba(32, 180, 134, .28);
+  background: #f2fbf7;
+}
+
+.snapshot-row strong,
+.snapshot-row span,
+.snapshot-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.snapshot-row strong {
+  color: #1f2c34;
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.snapshot-row span,
+.snapshot-row small {
+  color: #687982;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .safety-list {
   display: flex;
   flex-wrap: wrap;

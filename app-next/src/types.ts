@@ -5,6 +5,7 @@ export type NavKey =
   | "presets"
   | "sources"
   | "agents"
+  | "snapshots"
   | "settings";
 
 export type LegacySnapshot = {
@@ -23,6 +24,8 @@ export type LegacySnapshot = {
   workspaces: WorkspaceCard[];
   projectScans: ProjectScanCard[];
   presets: PresetCard[];
+  snapshots: SnapshotCard[];
+  rollbackPlan: RollbackPlanStepCard[];
   diagnostics: DiagnosticSummary;
   index: IndexReport;
 };
@@ -132,6 +135,24 @@ export type PresetCard = {
   color: string;
   enabled: boolean;
   skillCount: number;
+};
+
+export type SnapshotCard = {
+  id: string;
+  name: string;
+  summary: string;
+  createdAt: string;
+  isLatest: boolean;
+};
+
+export type RollbackPlanStepCard = {
+  id: string;
+  snapshotId: string;
+  stepOrder: number;
+  title: string;
+  riskLevel: "low" | "medium" | "high" | string;
+  status: "ready" | "planned" | "locked" | string;
+  summary: string;
 };
 
 export type DiagnosticSummary = {
