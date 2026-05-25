@@ -12,7 +12,7 @@ export type LegacySnapshot = {
   skillsDir: string;
   sourcesDir: string;
   diagnosticsFile: string;
-  mode: "read-only" | "sqlite-index";
+  mode: "read-only" | "sqlite-index" | "browser-preview";
   summary: LegacySummary;
   skills: SkillCard[];
   sources: SourceCard[];

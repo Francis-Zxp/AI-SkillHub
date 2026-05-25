@@ -4,11 +4,11 @@ Updated: 2026-05-25
 
 ## Current Estimate
 
-V2 overall completion is conservatively estimated at **about 49%**.
+V2 overall completion is conservatively estimated at **about 51%**.
 
-This does **not** mean a usable V2 application is 49% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, and the first project workspace scan exists.
+This does **not** mean a usable V2 application is 51% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, and the first visual-density pass has landed.
 
-## Why 32%
+## Why 51%
 
 | Area | Status | Estimate |
 |---|---:|---:|
@@ -16,14 +16,14 @@ This does **not** mean a usable V2 application is 49% coded. It means v1 is now 
 | Product model | central library, sources, agents, adapter registry, diagnostics, workspaces, presets, safety checks, project scans, and release center are defined through v1 behavior and v2 seed data | 58% |
 | V1 behavior specs for V2 | sharing, diagnostics, import preview, release preflight, troubleshooting, Skill health, and problem locator are repeatable specs | 60% |
 | V2 technical environment | Node LTS, pnpm, Rust/Cargo, rustup, WebView2, and Visual Studio Build Tools are ready | 85% |
-| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, and project scan pass | 53% |
+| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, project scan, browser preview fallback, and first UI density pass pass | 56% |
 | SQLite data model | real v1 sources, skills, agents, agent adapters, adapter capabilities, safety checks, workspaces, project scans, presets, snapshots, and audit events are persisted | 60% |
 | Workspaces and presets | first global/agent/project workspaces and category presets are seeded and can be enabled/disabled in v2 SQLite | 42% |
 | Multi-agent adapter registry | first registry implemented with 12 supported tools, detected/managed status overlay, capability metadata, enable state, and safety checks | 52% |
 | CLI and automation | planned, not implemented | 0% |
 | Marketplace/recommended index | planned, not implemented | 0% |
 
-Weighted together, the honest number is about **49%**.
+Weighted together, the honest number is about **51%**.
 
 ## Reference Projects Still In Use
 
@@ -64,6 +64,7 @@ The v2 source line has started and the toolchain is ready:
 Continue v2 milestone 1:
 
 1. Run the first Tauri dev window and inspect the real UI after the workspace/preset/adapter pages are in place.
-2. Add project workspace detail view: project files, candidate AGENTS.md/CLAUDE.md status, and read-only generated instructions preview.
-3. Start snapshot/rollback design before enabling any real sync/write behavior.
-4. Keep v1 as the maintenance app until v2 can cover its core workflows.
+2. Continue the visual pass inside the real Tauri window, not only the browser preview.
+3. Add project workspace detail view: project files, candidate AGENTS.md/CLAUDE.md status, and read-only generated instructions preview.
+4. Start snapshot/rollback design before enabling any real sync/write behavior.
+5. Keep v1 as the maintenance app until v2 can cover its core workflows.
