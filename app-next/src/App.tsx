@@ -76,7 +76,7 @@ export function App() {
   }, []);
 
   return (
-    <main className="shell">
+    <main className={runtimeAvailable ? "shell" : "shell browser-preview-shell"}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">AI</div>

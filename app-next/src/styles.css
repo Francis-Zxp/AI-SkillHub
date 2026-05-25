@@ -187,6 +187,23 @@ button {
   padding: 34px 42px 56px;
 }
 
+.browser-preview-shell .workspace {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding-right: clamp(42px, 4vw, 96px);
+}
+
+.browser-preview-shell .hero-panel,
+.browser-preview-shell .panel,
+.browser-preview-shell .metrics,
+.browser-preview-shell .card-grid,
+.browser-preview-shell .adapter-grid,
+.browser-preview-shell .preset-grid,
+.browser-preview-shell .table-panel {
+  max-width: 1760px;
+}
+
 .topbar {
   display: flex;
   align-items: center;
