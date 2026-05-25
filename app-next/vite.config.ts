@@ -6,7 +6,15 @@ export default defineConfig({
   clearScreen: false,
   server: {
     port: 1420,
-    strictPort: true
+    strictPort: true,
+    watch: {
+      ignored: [
+        "**/src-tauri/target/**",
+        "**/.skillhub-next/**",
+        "**/.pnpm-store/**",
+        "**/.npm-cache/**"
+      ]
+    }
   },
   envPrefix: ["VITE_", "TAURI_"]
 });
