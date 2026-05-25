@@ -131,3 +131,26 @@ CREATE TABLE IF NOT EXISTS adapter_safety_checks (
   created_at TEXT NOT NULL,
   FOREIGN KEY(adapter_id) REFERENCES agent_adapters(id)
 );
+
+CREATE TABLE IF NOT EXISTS adapter_capabilities (
+  id TEXT PRIMARY KEY,
+  adapter_id TEXT NOT NULL,
+  capability_key TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  summary TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(adapter_id) REFERENCES agent_adapters(id)
+);
+
+CREATE TABLE IF NOT EXISTS project_scans (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  has_git INTEGER NOT NULL DEFAULT 0,
+  has_package_json INTEGER NOT NULL DEFAULT 0,
+  has_cargo_toml INTEGER NOT NULL DEFAULT 0,
+  has_tauri_config INTEGER NOT NULL DEFAULT 0,
+  file_count INTEGER NOT NULL DEFAULT 0,
+  scanned_at TEXT NOT NULL,
+  FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
+);

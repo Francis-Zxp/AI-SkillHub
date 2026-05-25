@@ -218,29 +218,50 @@ function Workspaces({
   snapshot: LegacySnapshot | null;
 }) {
   const workspaces = snapshot?.workspaces ?? [];
+  const projectScans = snapshot?.projectScans ?? [];
 
   return (
-    <div className="card-grid">
-      {workspaces.map(workspace => (
-        <article className="workspace-card" key={workspace.id}>
-          <div className="card-head">
-            <strong>{workspace.name}</strong>
-            <span className={`scope ${workspace.scope}`}>{scopeLabel(workspace.scope)}</span>
-          </div>
-          <p>{workspace.path}</p>
-          <footer>
-            <span>{workspace.agentCount} 个 AI 工具</span>
-            <span>{workspace.skillCount} 个 Skills</span>
-            <ToggleSwitch
-              disabled={disabled}
-              enabled={workspace.enabled}
-              label={workspace.enabled ? "已启用" : "已停用"}
-              onClick={() => onToggle("set_workspace_enabled", workspace.id, !workspace.enabled)}
-            />
-          </footer>
-        </article>
-      ))}
-      {workspaces.length === 0 && <EmptyState text="正在等待工作区索引结果。" />}
+    <div className="view">
+      <div className="card-grid">
+        {workspaces.map(workspace => (
+          <article className="workspace-card" key={workspace.id}>
+            <div className="card-head">
+              <strong>{workspace.name}</strong>
+              <span className={`scope ${workspace.scope}`}>{scopeLabel(workspace.scope)}</span>
+            </div>
+            <p>{workspace.path}</p>
+            <footer>
+              <span>{workspace.agentCount} 个 AI 工具</span>
+              <span>{workspace.skillCount} 个 Skills</span>
+              <ToggleSwitch
+                disabled={disabled}
+                enabled={workspace.enabled}
+                label={workspace.enabled ? "已启用" : "已停用"}
+                onClick={() => onToggle("set_workspace_enabled", workspace.id, !workspace.enabled)}
+              />
+            </footer>
+          </article>
+        ))}
+        {workspaces.length === 0 && <EmptyState text="正在等待工作区索引结果。" />}
+      </div>
+
+      <section className="panel">
+        <p className="eyebrow">Project Workspace Scanner</p>
+        <h3>只读项目扫描</h3>
+        <div className="project-scan-list">
+          {projectScans.map(scan => (
+            <article className="project-scan-row" key={scan.id}>
+              <strong>{scan.path}</strong>
+              <span>{scan.fileCount} 个文件</span>
+              <span>{scan.hasGit ? "Git" : "无 Git"}</span>
+              <span>{scan.hasPackageJson ? "React/Vite" : "无 package.json"}</span>
+              <span>{scan.hasCargoToml ? "Rust" : "无 Cargo"}</span>
+              <span>{scan.hasTauriConfig ? "Tauri" : "无 Tauri"}</span>
+            </article>
+          ))}
+          {projectScans.length === 0 && <p>暂未发现项目级工作区。</p>}
+        </div>
+      </section>
     </div>
   );
 }
@@ -310,6 +331,7 @@ function Agents({
   const agents = snapshot?.agents ?? [];
   const adapters = snapshot?.agentAdapters ?? [];
   const safetyChecks = snapshot?.adapterSafetyChecks ?? [];
+  const capabilities = snapshot?.adapterCapabilities ?? [];
 
   return (
     <div className="view">
@@ -341,6 +363,14 @@ function Agents({
               />
             </footer>
             <ul className="safety-list">
+              {capabilities
+                .filter(capability => capability.adapterId === adapter.id)
+                .slice(0, 4)
+                .map(capability => (
+                  <li className={capability.enabled ? "capability-item is-on" : "capability-item"} key={capability.id}>
+                    {capabilityLabel(capability.capabilityKey)}
+                  </li>
+                ))}
               {safetyChecks
                 .filter(check => check.adapterId === adapter.id)
                 .slice(0, 3)
@@ -407,6 +437,14 @@ function adapterStatusLabel(status: string) {
   if (status === "ready") return "可用";
   if (status === "detected-unmanaged") return "待接管";
   return "未检测";
+}
+
+function capabilityLabel(key: string) {
+  if (key === "global-scope") return "全局";
+  if (key === "project-scope") return "项目";
+  if (key === "copy-fallback") return "复制兜底";
+  if (key === "instructions-generation") return "生成说明";
+  return key;
 }
 
 function ToggleSwitch({

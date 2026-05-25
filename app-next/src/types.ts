@@ -19,7 +19,9 @@ export type LegacySnapshot = {
   agents: AgentCard[];
   agentAdapters: AgentAdapterCard[];
   adapterSafetyChecks: AdapterSafetyCheckCard[];
+  adapterCapabilities: AdapterCapabilityCard[];
   workspaces: WorkspaceCard[];
+  projectScans: ProjectScanCard[];
   presets: PresetCard[];
   diagnostics: DiagnosticSummary;
   index: IndexReport;
@@ -90,6 +92,14 @@ export type AdapterSafetyCheckCard = {
   summary: string;
 };
 
+export type AdapterCapabilityCard = {
+  id: string;
+  adapterId: string;
+  capabilityKey: string;
+  enabled: boolean;
+  summary: string;
+};
+
 export type WorkspaceCard = {
   id: string;
   name: string;
@@ -98,6 +108,18 @@ export type WorkspaceCard = {
   enabled: boolean;
   agentCount: number;
   skillCount: number;
+};
+
+export type ProjectScanCard = {
+  id: string;
+  workspaceId: string;
+  path: string;
+  hasGit: boolean;
+  hasPackageJson: boolean;
+  hasCargoToml: boolean;
+  hasTauriConfig: boolean;
+  fileCount: number;
+  scannedAt: string;
 };
 
 export type PresetCard = {

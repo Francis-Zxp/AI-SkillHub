@@ -21,7 +21,9 @@ struct LegacySnapshot {
     agents: Vec<AgentCard>,
     agent_adapters: Vec<AgentAdapterCard>,
     adapter_safety_checks: Vec<AdapterSafetyCheckCard>,
+    adapter_capabilities: Vec<AdapterCapabilityCard>,
     workspaces: Vec<WorkspaceCard>,
+    project_scans: Vec<ProjectScanCard>,
     presets: Vec<PresetCard>,
     diagnostics: DiagnosticSummary,
     index: IndexReport,
@@ -104,6 +106,16 @@ struct AdapterSafetyCheckCard {
     summary: String,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AdapterCapabilityCard {
+    id: String,
+    adapter_id: String,
+    capability_key: String,
+    enabled: bool,
+    summary: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WorkspaceCard {
@@ -114,6 +126,20 @@ struct WorkspaceCard {
     enabled: bool,
     agent_count: usize,
     skill_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectScanCard {
+    id: String,
+    workspace_id: String,
+    path: String,
+    has_git: bool,
+    has_package_json: bool,
+    has_cargo_toml: bool,
+    has_tauri_config: bool,
+    file_count: usize,
+    scanned_at: String,
 }
 
 #[derive(Serialize)]
@@ -205,6 +231,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
     let agents = parse_agents(diagnostics_json.as_ref());
     let agent_adapters = derive_agent_adapters(&agents);
     let adapter_safety_checks = derive_adapter_safety_checks(&agent_adapters);
+    let adapter_capabilities = derive_adapter_capabilities(&agent_adapters);
     let diagnostics = parse_diagnostic_summary(diagnostics_json.as_ref());
 
     let mut source_counts: HashMap<String, usize> = HashMap::new();
@@ -246,7 +273,9 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         agents,
         agent_adapters,
         adapter_safety_checks,
+        adapter_capabilities,
         workspaces: Vec::new(),
+        project_scans: Vec::new(),
         presets: Vec::new(),
         diagnostics,
         index: IndexReport {
@@ -261,6 +290,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
     };
 
     snapshot.workspaces = derive_workspaces(&root, &snapshot.agents, snapshot.skills.len());
+    snapshot.project_scans = derive_project_scans(&root, &snapshot.workspaces);
     snapshot.presets = derive_presets(&snapshot.skills);
     if let Ok(connection) = open_index_database(&root) {
         let enabled_state = load_enabled_state(&connection);
@@ -286,7 +316,9 @@ fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
     if !snapshot.skills.is_empty()
         && (snapshot.workspaces.is_empty()
             || snapshot.presets.is_empty()
-            || snapshot.agent_adapters.is_empty())
+            || snapshot.agent_adapters.is_empty()
+            || snapshot.adapter_capabilities.is_empty()
+            || snapshot.project_scans.is_empty())
     {
         return scan_legacy_snapshot();
     }
@@ -425,7 +457,9 @@ fn read_snapshot_from_database(
     let agents = read_indexed_agents(connection)?;
     let agent_adapters = read_indexed_agent_adapters(connection)?;
     let adapter_safety_checks = read_indexed_adapter_safety_checks(connection)?;
+    let adapter_capabilities = read_indexed_adapter_capabilities(connection)?;
     let workspaces = read_indexed_workspaces(connection)?;
+    let project_scans = read_indexed_project_scans(connection)?;
     let presets = read_indexed_presets(connection)?;
     let diagnostics = read_indexed_diagnostics(connection);
     let index = read_index_report(
@@ -468,7 +502,9 @@ fn read_snapshot_from_database(
         agents,
         agent_adapters,
         adapter_safety_checks,
+        adapter_capabilities,
         workspaces,
+        project_scans,
         presets,
         diagnostics,
         index,
@@ -542,6 +578,12 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
     transaction
         .execute("DELETE FROM adapter_safety_checks", [])
         .map_err(|error| format!("Cannot clear adapter safety checks: {}", error))?;
+    transaction
+        .execute("DELETE FROM adapter_capabilities", [])
+        .map_err(|error| format!("Cannot clear adapter capabilities: {}", error))?;
+    transaction
+        .execute("DELETE FROM project_scans", [])
+        .map_err(|error| format!("Cannot clear project scans: {}", error))?;
     transaction
         .execute("DELETE FROM skills", [])
         .map_err(|error| format!("Cannot clear skill index: {}", error))?;
@@ -651,6 +693,7 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
         &transaction,
         &snapshot.agent_adapters,
         &snapshot.adapter_safety_checks,
+        &snapshot.adapter_capabilities,
         &enabled_state,
         &indexed_at,
     )?;
@@ -662,6 +705,7 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
         &enabled_state,
         &indexed_at,
     )?;
+    seed_project_scans(&transaction, &snapshot.project_scans)?;
     seed_presets(
         &transaction,
         &all_skill_ids,
@@ -914,6 +958,32 @@ fn read_indexed_adapter_safety_checks(
     collect_rows(rows, "adapter safety check")
 }
 
+fn read_indexed_adapter_capabilities(
+    connection: &Connection,
+) -> Result<Vec<AdapterCapabilityCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, adapter_id, capability_key, enabled, summary
+            FROM adapter_capabilities
+            ORDER BY adapter_id, capability_key",
+        )
+        .map_err(|error| format!("Cannot prepare adapter capability query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(AdapterCapabilityCard {
+                id: row.get(0)?,
+                adapter_id: row.get(1)?,
+                capability_key: row.get(2)?,
+                enabled: row.get::<_, i64>(3)? != 0,
+                summary: row.get(4)?,
+            })
+        })
+        .map_err(|error| format!("Cannot read adapter capabilities: {}", error))?;
+
+    collect_rows(rows, "adapter capability")
+}
+
 fn read_indexed_workspaces(connection: &Connection) -> Result<Vec<WorkspaceCard>, String> {
     let total_skills = connection
         .query_row("SELECT COUNT(*) FROM skills WHERE enabled = 1", [], |row| {
@@ -955,6 +1025,43 @@ fn read_indexed_workspaces(connection: &Connection) -> Result<Vec<WorkspaceCard>
         .map_err(|error| format!("Cannot read indexed workspaces: {}", error))?;
 
     collect_rows(rows, "workspace")
+}
+
+fn read_indexed_project_scans(connection: &Connection) -> Result<Vec<ProjectScanCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                id,
+                workspace_id,
+                path,
+                has_git,
+                has_package_json,
+                has_cargo_toml,
+                has_tauri_config,
+                file_count,
+                scanned_at
+            FROM project_scans
+            ORDER BY path",
+        )
+        .map_err(|error| format!("Cannot prepare project scan query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(ProjectScanCard {
+                id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                path: row.get(2)?,
+                has_git: row.get::<_, i64>(3)? != 0,
+                has_package_json: row.get::<_, i64>(4)? != 0,
+                has_cargo_toml: row.get::<_, i64>(5)? != 0,
+                has_tauri_config: row.get::<_, i64>(6)? != 0,
+                file_count: row.get::<_, i64>(7)? as usize,
+                scanned_at: row.get(8)?,
+            })
+        })
+        .map_err(|error| format!("Cannot read project scans: {}", error))?;
+
+    collect_rows(rows, "project scan")
 }
 
 fn read_indexed_presets(connection: &Connection) -> Result<Vec<PresetCard>, String> {
@@ -1127,6 +1234,7 @@ fn seed_agent_adapters(
     transaction: &rusqlite::Transaction<'_>,
     adapters: &[AgentAdapterCard],
     safety_checks: &[AdapterSafetyCheckCard],
+    capabilities: &[AdapterCapabilityCard],
     enabled_state: &EnabledState,
     timestamp: &str,
 ) -> Result<(), String> {
@@ -1185,6 +1293,29 @@ fn seed_agent_adapters(
             })?;
     }
 
+    for capability in capabilities {
+        transaction
+            .execute(
+                "INSERT INTO adapter_capabilities (
+                    id, adapter_id, capability_key, enabled, summary, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    capability.id,
+                    capability.adapter_id,
+                    capability.capability_key,
+                    if capability.enabled { 1 } else { 0 },
+                    capability.summary,
+                    timestamp
+                ],
+            )
+            .map_err(|error| {
+                format!(
+                    "Cannot seed adapter capability {} for {}: {}",
+                    capability.capability_key, capability.adapter_id, error
+                )
+            })?;
+    }
+
     Ok(())
 }
 
@@ -1232,6 +1363,35 @@ fn seed_workspaces(
                 params![agent_workspace_id, agent_id],
             )
             .map_err(|error| format!("Cannot link workspace agent {}: {}", agent.name, error))?;
+    }
+
+    Ok(())
+}
+
+fn seed_project_scans(
+    transaction: &rusqlite::Transaction<'_>,
+    project_scans: &[ProjectScanCard],
+) -> Result<(), String> {
+    for scan in project_scans {
+        transaction
+            .execute(
+                "INSERT INTO project_scans (
+                    id, workspace_id, path, has_git, has_package_json,
+                    has_cargo_toml, has_tauri_config, file_count, scanned_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    scan.id,
+                    scan.workspace_id,
+                    scan.path,
+                    if scan.has_git { 1 } else { 0 },
+                    if scan.has_package_json { 1 } else { 0 },
+                    if scan.has_cargo_toml { 1 } else { 0 },
+                    if scan.has_tauri_config { 1 } else { 0 },
+                    scan.file_count as i64,
+                    scan.scanned_at
+                ],
+            )
+            .map_err(|error| format!("Cannot seed project scan {}: {}", scan.path, error))?;
     }
 
     Ok(())
@@ -1410,6 +1570,86 @@ fn adapter_safety_check(
     }
 }
 
+fn derive_adapter_capabilities(adapters: &[AgentAdapterCard]) -> Vec<AdapterCapabilityCard> {
+    let mut capabilities = Vec::new();
+
+    for adapter in adapters {
+        let has_path = !adapter.skills_path_hint.is_empty();
+        let project_scope = matches!(
+            adapter.id.as_str(),
+            "claude"
+                | "codex"
+                | "antigravity"
+                | "cursor"
+                | "gemini-cli"
+                | "opencode"
+                | "windsurf"
+                | "hermes"
+                | "openclaw"
+        );
+        capabilities.push(adapter_capability(
+            adapter,
+            "global-scope",
+            has_path,
+            if has_path {
+                "支持全局 Skills 目录接管。"
+            } else {
+                "暂未声明全局 Skills 目录，需用户手动配置。"
+            },
+        ));
+        capabilities.push(adapter_capability(
+            adapter,
+            "project-scope",
+            project_scope,
+            if project_scope {
+                "支持后续扩展为项目级工作区。"
+            } else {
+                "项目级工作区暂不启用，避免误写未知工具配置。"
+            },
+        ));
+        capabilities.push(adapter_capability(
+            adapter,
+            "copy-fallback",
+            has_path,
+            if has_path {
+                "未来同步时可在软链接失败后降级为复制。"
+            } else {
+                "无默认路径时不允许自动复制。"
+            },
+        ));
+        capabilities.push(adapter_capability(
+            adapter,
+            "instructions-generation",
+            project_scope,
+            if project_scope {
+                "未来可生成 AGENTS.md / 工具说明索引。"
+            } else {
+                "暂不生成工具说明索引。"
+            },
+        ));
+    }
+
+    capabilities
+}
+
+fn adapter_capability(
+    adapter: &AgentAdapterCard,
+    capability_key: &str,
+    enabled: bool,
+    summary: &str,
+) -> AdapterCapabilityCard {
+    AdapterCapabilityCard {
+        id: stable_id(
+            "adapter-capability",
+            &format!("{}-{}", adapter.id, capability_key),
+        ),
+        adapter_id: adapter.id.clone(),
+        capability_key: capability_key.to_string(),
+        enabled,
+        summary: summary.to_string(),
+    }
+}
+
 fn agent_adapter_catalog() -> Vec<AgentAdapterCard> {
     vec![
         agent_adapter(
@@ -1552,7 +1792,82 @@ fn derive_workspaces(root: &Path, agents: &[AgentCard], total_skills: usize) -> 
         });
     }
 
+    let app_next = root.join("app-next");
+    if app_next.exists() {
+        workspaces.push(WorkspaceCard {
+            id: "workspace-project-app-next".to_string(),
+            name: "AI SkillHub v2 项目工作区".to_string(),
+            scope: "project".to_string(),
+            path: app_next.display().to_string(),
+            enabled: true,
+            agent_count: 0,
+            skill_count: 0,
+        });
+    }
+
     workspaces
+}
+
+fn derive_project_scans(root: &Path, workspaces: &[WorkspaceCard]) -> Vec<ProjectScanCard> {
+    workspaces
+        .iter()
+        .filter(|workspace| workspace.scope == "project")
+        .filter_map(|workspace| {
+            let path = PathBuf::from(&workspace.path);
+            if !path.exists() {
+                return None;
+            }
+            Some(ProjectScanCard {
+                id: stable_id("project-scan", &workspace.id),
+                workspace_id: workspace.id.clone(),
+                path: workspace.path.clone(),
+                has_git: has_git_marker(&path, root),
+                has_package_json: path.join("package.json").exists(),
+                has_cargo_toml: path.join("src-tauri").join("Cargo.toml").exists()
+                    || path.join("Cargo.toml").exists(),
+                has_tauri_config: path.join("src-tauri").join("tauri.conf.json").exists(),
+                file_count: count_project_files(&path, 10_000),
+                scanned_at: unix_timestamp_string(),
+            })
+        })
+        .collect()
+}
+
+fn has_git_marker(path: &Path, root: &Path) -> bool {
+    path.join(".git").exists() || root.join(".git").exists()
+}
+
+fn count_project_files(path: &Path, limit: usize) -> usize {
+    fn visit(path: &Path, limit: usize, count: &mut usize) {
+        if *count >= limit {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(path) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if *count >= limit {
+                return;
+            }
+            let entry_path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if entry_path.is_dir() {
+                if matches!(
+                    name.as_str(),
+                    ".git" | "node_modules" | "target" | "dist" | ".pnpm-store" | ".npm-cache"
+                ) {
+                    continue;
+                }
+                visit(&entry_path, limit, count);
+            } else if entry_path.is_file() {
+                *count += 1;
+            }
+        }
+    }
+
+    let mut count = 0;
+    visit(path, limit, &mut count);
+    count
 }
 
 fn derive_presets(skills: &[SkillCard]) -> Vec<PresetCard> {
@@ -2008,6 +2323,8 @@ mod tests {
         assert!(snapshot.index.persisted);
         assert!(!snapshot.agent_adapters.is_empty());
         assert!(!snapshot.adapter_safety_checks.is_empty());
+        assert!(!snapshot.adapter_capabilities.is_empty());
+        assert!(!snapshot.project_scans.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
         assert_eq!(snapshot.index.sources_indexed, snapshot.sources.len());
         assert_eq!(snapshot.index.agents_indexed, snapshot.agents.len());
@@ -2024,6 +2341,8 @@ mod tests {
         assert!(!snapshot.presets.is_empty());
         assert!(!snapshot.agent_adapters.is_empty());
         assert!(!snapshot.adapter_safety_checks.is_empty());
+        assert!(!snapshot.adapter_capabilities.is_empty());
+        assert!(!snapshot.project_scans.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
     }
 
@@ -2049,5 +2368,22 @@ mod tests {
         assert!(ids.contains(&"codex"));
         assert!(ids.contains(&"antigravity"));
         assert!(ids.contains(&"cursor"));
+    }
+
+    #[test]
+    fn adapter_capabilities_include_project_scope_metadata() {
+        let adapters = agent_adapter_catalog();
+        let capabilities = derive_adapter_capabilities(&adapters);
+
+        assert!(capabilities
+            .iter()
+            .any(|capability| capability.adapter_id == "claude"
+                && capability.capability_key == "project-scope"
+                && capability.enabled));
+        assert!(capabilities
+            .iter()
+            .any(|capability| capability.adapter_id == "amp"
+                && capability.capability_key == "project-scope"
+                && !capability.enabled));
     }
 }

@@ -403,7 +403,8 @@ h3 {
 }
 
 .safety-list {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 7px;
   margin: 14px 0 0;
   padding: 0;
@@ -411,6 +412,7 @@ h3 {
 }
 
 .safety-item {
+  width: 100%;
   padding: 8px 10px;
   border-radius: 10px;
   color: #52606a;
@@ -432,6 +434,48 @@ h3 {
 .safety-item.info {
   color: #52606a;
   background: #eef3f4;
+}
+
+.capability-item {
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #7b858c;
+  font-size: 12px;
+  font-weight: 800;
+  background: #eef2f3;
+}
+
+.capability-item.is-on {
+  color: #0e7c63;
+  background: #dff6ee;
+}
+
+.project-scan-list {
+  display: grid;
+  gap: 10px;
+}
+
+.project-scan-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) repeat(5, minmax(90px, max-content));
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid rgba(34, 67, 61, .1);
+  border-radius: 14px;
+  background: #f8fcfa;
+}
+
+.project-scan-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-scan-row span {
+  color: #557168;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .switch {
