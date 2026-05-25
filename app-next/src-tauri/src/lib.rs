@@ -138,6 +138,9 @@ struct ProjectScanCard {
     has_package_json: bool,
     has_cargo_toml: bool,
     has_tauri_config: bool,
+    has_agents_md: bool,
+    has_claude_md: bool,
+    has_readme_md: bool,
     file_count: usize,
     scanned_at: String,
 }
@@ -407,6 +410,24 @@ fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
         "presets",
         "enabled",
         "INTEGER NOT NULL DEFAULT 1",
+    )?;
+    ensure_column(
+        connection,
+        "project_scans",
+        "has_agents_md",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        connection,
+        "project_scans",
+        "has_claude_md",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        connection,
+        "project_scans",
+        "has_readme_md",
+        "INTEGER NOT NULL DEFAULT 0",
     )?;
     Ok(())
 }
@@ -1038,6 +1059,9 @@ fn read_indexed_project_scans(connection: &Connection) -> Result<Vec<ProjectScan
                 has_package_json,
                 has_cargo_toml,
                 has_tauri_config,
+                has_agents_md,
+                has_claude_md,
+                has_readme_md,
                 file_count,
                 scanned_at
             FROM project_scans
@@ -1055,8 +1079,11 @@ fn read_indexed_project_scans(connection: &Connection) -> Result<Vec<ProjectScan
                 has_package_json: row.get::<_, i64>(4)? != 0,
                 has_cargo_toml: row.get::<_, i64>(5)? != 0,
                 has_tauri_config: row.get::<_, i64>(6)? != 0,
-                file_count: row.get::<_, i64>(7)? as usize,
-                scanned_at: row.get(8)?,
+                has_agents_md: row.get::<_, i64>(7)? != 0,
+                has_claude_md: row.get::<_, i64>(8)? != 0,
+                has_readme_md: row.get::<_, i64>(9)? != 0,
+                file_count: row.get::<_, i64>(10)? as usize,
+                scanned_at: row.get(11)?,
             })
         })
         .map_err(|error| format!("Cannot read project scans: {}", error))?;
@@ -1377,8 +1404,9 @@ fn seed_project_scans(
             .execute(
                 "INSERT INTO project_scans (
                     id, workspace_id, path, has_git, has_package_json,
-                    has_cargo_toml, has_tauri_config, file_count, scanned_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    has_cargo_toml, has_tauri_config, has_agents_md,
+                    has_claude_md, has_readme_md, file_count, scanned_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     scan.id,
                     scan.workspace_id,
@@ -1387,6 +1415,9 @@ fn seed_project_scans(
                     if scan.has_package_json { 1 } else { 0 },
                     if scan.has_cargo_toml { 1 } else { 0 },
                     if scan.has_tauri_config { 1 } else { 0 },
+                    if scan.has_agents_md { 1 } else { 0 },
+                    if scan.has_claude_md { 1 } else { 0 },
+                    if scan.has_readme_md { 1 } else { 0 },
                     scan.file_count as i64,
                     scan.scanned_at
                 ],
@@ -1826,6 +1857,9 @@ fn derive_project_scans(root: &Path, workspaces: &[WorkspaceCard]) -> Vec<Projec
                 has_cargo_toml: path.join("src-tauri").join("Cargo.toml").exists()
                     || path.join("Cargo.toml").exists(),
                 has_tauri_config: path.join("src-tauri").join("tauri.conf.json").exists(),
+                has_agents_md: path.join("AGENTS.md").exists(),
+                has_claude_md: path.join("CLAUDE.md").exists(),
+                has_readme_md: path.join("README.md").exists(),
                 file_count: count_project_files(&path, 10_000),
                 scanned_at: unix_timestamp_string(),
             })
@@ -2385,5 +2419,22 @@ mod tests {
             .any(|capability| capability.adapter_id == "amp"
                 && capability.capability_key == "project-scope"
                 && !capability.enabled));
+    }
+
+    #[test]
+    fn project_scan_tracks_workspace_instruction_files() {
+        let root = resolve_legacy_root().expect("legacy root should resolve");
+        let workspaces = derive_workspaces(&root, &[], 0);
+        let scans = derive_project_scans(&root, &workspaces);
+        let app_next = scans
+            .iter()
+            .find(|scan| scan.path.ends_with("app-next"))
+            .expect("app-next project workspace should be scanned");
+
+        assert!(app_next.has_package_json);
+        assert!(app_next.has_cargo_toml);
+        assert!(app_next.has_tauri_config);
+        assert!(app_next.has_readme_md);
+        assert!(app_next.file_count > 0);
     }
 }

@@ -640,6 +640,88 @@ h3 {
   white-space: nowrap;
 }
 
+.project-detail-card {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(34, 67, 61, .1);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .98), rgba(246, 253, 249, .95)),
+    #ffffff;
+}
+
+.project-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.project-detail-head strong,
+.project-detail-head span {
+  display: block;
+}
+
+.project-detail-head strong {
+  overflow: hidden;
+  color: #1f2c34;
+  font-size: 16px;
+  font-weight: 950;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-detail-head div {
+  min-width: 0;
+}
+
+.project-detail-head div > span {
+  margin-top: 5px;
+  color: #71808a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.scan-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.scan-flag {
+  padding: 7px 11px;
+  border-radius: 999px;
+  color: #8a6b20;
+  font-size: 13px;
+  font-weight: 900;
+  background: #fff3d8;
+  box-shadow: inset 0 0 0 1px rgba(216, 154, 43, .2);
+}
+
+.scan-flag.is-on {
+  color: var(--mint-dark);
+  background: #e1f7ef;
+  box-shadow: inset 0 0 0 1px rgba(32, 180, 134, .18);
+}
+
+.instruction-preview {
+  padding: 15px;
+  border-radius: 16px;
+  background: #f7fbf9;
+  box-shadow: inset 0 0 0 1px rgba(32, 180, 134, .1);
+}
+
+.instruction-preview pre {
+  margin: 0;
+  overflow: auto;
+  color: #31424b;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
 .safety-list {
   display: flex;
   flex-wrap: wrap;

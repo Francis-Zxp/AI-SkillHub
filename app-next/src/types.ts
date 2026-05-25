@@ -118,6 +118,9 @@ export type ProjectScanCard = {
   hasPackageJson: boolean;
   hasCargoToml: boolean;
   hasTauriConfig: boolean;
+  hasAgentsMd: boolean;
+  hasClaudeMd: boolean;
+  hasReadmeMd: boolean;
   fileCount: number;
   scannedAt: string;
 };

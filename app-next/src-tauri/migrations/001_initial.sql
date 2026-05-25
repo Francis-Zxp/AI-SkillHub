@@ -150,6 +150,9 @@ CREATE TABLE IF NOT EXISTS project_scans (
   has_package_json INTEGER NOT NULL DEFAULT 0,
   has_cargo_toml INTEGER NOT NULL DEFAULT 0,
   has_tauri_config INTEGER NOT NULL DEFAULT 0,
+  has_agents_md INTEGER NOT NULL DEFAULT 0,
+  has_claude_md INTEGER NOT NULL DEFAULT 0,
+  has_readme_md INTEGER NOT NULL DEFAULT 0,
   file_count INTEGER NOT NULL DEFAULT 0,
   scanned_at TEXT NOT NULL,
   FOREIGN KEY(workspace_id) REFERENCES workspaces(id)

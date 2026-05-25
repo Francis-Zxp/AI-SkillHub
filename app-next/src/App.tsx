@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
-import type { LegacySnapshot, LegacySummary, NavKey } from "./types";
+import type { LegacySnapshot, LegacySummary, NavKey, ProjectScanCard } from "./types";
 
 const navItems: Array<{ key: NavKey; label: string; hint: string }> = [
   { key: "dashboard", label: "总览", hint: "健康、同步、风险" },
@@ -272,13 +272,27 @@ function Workspaces({
         <h3>只读项目扫描</h3>
         <div className="project-scan-list">
           {projectScans.map(scan => (
-            <article className="project-scan-row" key={scan.id}>
-              <strong>{scan.path}</strong>
-              <span>{scan.fileCount} 个文件</span>
-              <span>{scan.hasGit ? "Git" : "无 Git"}</span>
-              <span>{scan.hasPackageJson ? "React/Vite" : "无 package.json"}</span>
-              <span>{scan.hasCargoToml ? "Rust" : "无 Cargo"}</span>
-              <span>{scan.hasTauriConfig ? "Tauri" : "无 Tauri"}</span>
+            <article className="project-detail-card" key={scan.id}>
+              <div className="project-detail-head">
+                <div>
+                  <strong>{scan.path}</strong>
+                  <span>{scan.fileCount} 个文件 · 最近扫描 {formatScanTime(scan.scannedAt)}</span>
+                </div>
+                <span className="scope project">只读</span>
+              </div>
+              <div className="scan-flags">
+                <ScanFlag enabled={scan.hasGit} label="Git" />
+                <ScanFlag enabled={scan.hasPackageJson} label="package.json" />
+                <ScanFlag enabled={scan.hasCargoToml} label="Cargo.toml" />
+                <ScanFlag enabled={scan.hasTauriConfig} label="Tauri" />
+                <ScanFlag enabled={scan.hasAgentsMd} label="AGENTS.md" />
+                <ScanFlag enabled={scan.hasClaudeMd} label="CLAUDE.md" />
+                <ScanFlag enabled={scan.hasReadmeMd} label="README.md" />
+              </div>
+              <div className="instruction-preview">
+                <p className="eyebrow">只读说明预览</p>
+                <pre>{projectInstructionPreview(scan)}</pre>
+              </div>
             </article>
           ))}
           {projectScans.length === 0 && <p>暂未发现项目级工作区。</p>}
@@ -728,6 +742,9 @@ function createPreviewSnapshot(): LegacySnapshot {
         hasPackageJson: true,
         hasCargoToml: true,
         hasTauriConfig: true,
+        hasAgentsMd: false,
+        hasClaudeMd: false,
+        hasReadmeMd: true,
         fileCount: 126,
         scannedAt: new Date().toISOString()
       }
@@ -815,6 +832,45 @@ function scopeLabel(scope: string) {
   if (scope === "agent") return "Agent";
   if (scope === "project") return "项目";
   return scope;
+}
+
+function ScanFlag({ enabled, label }: { enabled: boolean; label: string }) {
+  return <span className={enabled ? "scan-flag is-on" : "scan-flag"}>{enabled ? "有" : "缺"} {label}</span>;
+}
+
+function formatScanTime(value: string) {
+  if (!value) {
+    return "待生成";
+  }
+  if (/^\d{16,}$/.test(value)) {
+    return "刚刚";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "已记录";
+  }
+  return date.toLocaleString();
+}
+
+function projectInstructionPreview(scan: ProjectScanCard) {
+  const stack = [
+    scan.hasPackageJson ? "前端 package.json" : "",
+    scan.hasCargoToml ? "Rust/Cargo" : "",
+    scan.hasTauriConfig ? "Tauri 桌面壳" : ""
+  ].filter(Boolean);
+  const instructionFiles = [
+    scan.hasAgentsMd ? "AGENTS.md 已存在" : "AGENTS.md 待补",
+    scan.hasClaudeMd ? "CLAUDE.md 已存在" : "CLAUDE.md 待补"
+  ];
+
+  return [
+    "# 项目工作区说明草稿",
+    `项目路径：${scan.path}`,
+    `识别技术栈：${stack.length > 0 ? stack.join(" / ") : "暂未识别"}`,
+    `AI 说明文件：${instructionFiles.join("，")}`,
+    "",
+    "建议策略：先保持只读扫描；等快照、备份和回滚完成后，再允许生成或更新项目级说明文件。"
+  ].join("\n");
 }
 
 function adapterStatusLabel(status: string) {
