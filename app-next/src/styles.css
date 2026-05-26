@@ -837,6 +837,76 @@ h3 {
   line-height: 1.55;
 }
 
+.release-hero::after {
+  background:
+    linear-gradient(135deg, rgba(32, 180, 134, .16), rgba(240, 154, 104, .16)),
+    radial-gradient(circle at 38% 28%, rgba(255, 255, 255, .94), transparent 30%);
+}
+
+.release-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.release-gate-panel,
+.release-next-panel {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .99), rgba(244, 253, 249, .96)),
+    #ffffff;
+}
+
+.release-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.release-gate-card {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-height: 152px;
+  padding: 16px;
+  border: 1px solid rgba(34, 67, 61, .1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .78);
+}
+
+.release-gate-card.done {
+  border-color: rgba(32, 180, 134, .22);
+  background: #f4fcf8;
+}
+
+.release-gate-card.planned {
+  border-color: rgba(73, 99, 198, .16);
+  background: #f8faff;
+}
+
+.release-gate-card.blocked {
+  border-color: rgba(216, 154, 43, .2);
+  background: #fffaf2;
+}
+
+.release-gate-card strong,
+.release-gate-card small {
+  display: block;
+}
+
+.release-gate-card strong {
+  color: #20313a;
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.release-gate-card small {
+  color: #6d7e87;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.55;
+}
+
 .snapshot-hero::after {
   background:
     linear-gradient(135deg, rgba(123, 103, 220, .18), rgba(32, 180, 134, .14)),
@@ -1540,6 +1610,11 @@ code {
   }
 
   .workspace-detail-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .release-summary-grid,
+  .release-gate-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

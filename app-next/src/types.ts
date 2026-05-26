@@ -6,6 +6,7 @@ export type NavKey =
   | "sources"
   | "agents"
   | "snapshots"
+  | "release"
   | "settings";
 
 export type LegacySnapshot = {

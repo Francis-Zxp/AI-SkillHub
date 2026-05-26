@@ -10,6 +10,7 @@ const navItems: Array<{ key: NavKey; label: string; hint: string }> = [
   { key: "sources", label: "来源", hint: "GitHub、本地、Prompt" },
   { key: "agents", label: "AI 工具", hint: "Claude、Codex、Antigravity" },
   { key: "snapshots", label: "快照", hint: "备份、回滚、保险" },
+  { key: "release", label: "发布闸门", hint: "预检、QA、分享" },
   { key: "settings", label: "设置", hint: "路径、主题、迁移" }
 ];
 
@@ -144,6 +145,7 @@ export function App() {
         {active === "sources" && <Sources snapshot={snapshot} />}
         {active === "agents" && <Agents disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "snapshots" && <Snapshots snapshot={snapshot} />}
+        {active === "release" && <ReleaseGate snapshot={snapshot} />}
         {active === "settings" && <Settings snapshot={snapshot} />}
       </section>
     </main>
@@ -695,6 +697,131 @@ function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
           ))}
           {snapshots.length === 0 && <p>暂无历史快照。</p>}
         </div>
+      </section>
+    </div>
+  );
+}
+
+function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
+  const diagnostics = snapshot?.diagnostics;
+  const backupDryRun = snapshot?.backupDryRun ?? [];
+  const restoreDryRun = snapshot?.restoreDryRun ?? [];
+  const rollbackPlan = snapshot?.rollbackPlan ?? [];
+  const blockedBackups = countByStatus(backupDryRun, "blocked");
+  const plannedBackups = countByStatus(backupDryRun, "planned");
+  const blockedRestores = countByStatus(restoreDryRun, "blocked");
+  const plannedRestores = countByStatus(restoreDryRun, "planned");
+  const lockedRollbackSteps = rollbackPlan.filter(step => step.status === "locked").length;
+  const diagnosticsReady = Boolean(diagnostics?.available && diagnostics.error === 0);
+
+  const gateItems = [
+    {
+      status: diagnosticsReady ? "done" : "blocked",
+      title: "诊断体检",
+      label: diagnosticsReady ? "已通过" : "待处理",
+      summary: diagnosticsReady
+        ? `诊断可读取：${diagnostics?.ok ?? 0} ok / ${diagnostics?.warn ?? 0} warn / ${diagnostics?.error ?? 0} error。`
+        : "没有可用诊断，或诊断仍包含错误。"
+    },
+    {
+      status: backupDryRun.length > 0 && blockedBackups === 0 && plannedBackups === 0 ? "done" : "planned",
+      title: "备份预演",
+      label: backupDryRun.length > 0 ? "只读预演" : "待生成",
+      summary:
+        backupDryRun.length > 0
+          ? `${backupDryRun.length} 项预演，${plannedBackups} 项仍在计划中，${blockedBackups} 项阻断。`
+          : "等待刷新后生成备份 dry-run。"
+    },
+    {
+      status: restoreDryRun.length > 0 && blockedRestores === 0 && plannedRestores === 0 ? "done" : "planned",
+      title: "恢复预演",
+      label: restoreDryRun.length > 0 ? "只读预演" : "待生成",
+      summary:
+        restoreDryRun.length > 0
+          ? `${restoreDryRun.length} 项预演，${plannedRestores} 项仍在计划中，${blockedRestores} 项阻断。`
+          : "等待刷新后生成恢复 dry-run。"
+    },
+    {
+      status: lockedRollbackSteps === 0 && rollbackPlan.length > 0 ? "done" : "blocked",
+      title: "回滚锁",
+      label: lockedRollbackSteps === 0 ? "未锁定" : "仍锁定",
+      summary:
+        rollbackPlan.length > 0
+          ? `${rollbackPlan.length} 个回滚步骤，${lockedRollbackSteps} 个真实执行步骤仍锁定。`
+          : "等待刷新后生成回滚计划。"
+    },
+    {
+      status: "planned",
+      title: "桌面 QA",
+      label: "待复查",
+      summary: "已建立桌面窗口检查清单；每次打包前仍需真实 Tauri 窗口截图或人工确认。"
+    },
+    {
+      status: "planned",
+      title: "分享验证",
+      label: "待接入",
+      summary: "v2 还没有独立分享验证；暂时继承 v1 的 release preflight 和 share-recipient 流程。"
+    }
+  ];
+  const doneCount = gateItems.filter(item => item.status === "done").length;
+  const blockedCount = gateItems.filter(item => item.status === "blocked").length;
+
+  return (
+    <div className="view">
+      <section className="hero-panel release-hero">
+        <div>
+          <p className="eyebrow">Release Gate</p>
+          <h2>所有安全闸门通过前，不生成可分享版本</h2>
+          <p>
+            这个页面把备份预演、恢复预演、诊断、桌面 QA 和分享验证集中到一个发布前入口。
+            当前仍是只读状态面板，不会执行打包或写入。
+          </p>
+        </div>
+      </section>
+
+      <section className="release-summary-grid">
+        <article className="metric">
+          <span>闸门总数</span>
+          <strong>{gateItems.length}</strong>
+        </article>
+        <article className="metric">
+          <span>已通过</span>
+          <strong>{doneCount}</strong>
+        </article>
+        <article className="metric">
+          <span>待处理</span>
+          <strong>{gateItems.length - doneCount}</strong>
+        </article>
+        <article className="metric">
+          <span>阻断项</span>
+          <strong>{blockedCount}</strong>
+        </article>
+      </section>
+
+      <section className="panel release-gate-panel">
+        <p className="eyebrow">Preflight Status</p>
+        <h3>发布仍保持锁定</h3>
+        <p>
+          只有当诊断、备份预演、恢复预演、回滚、桌面 QA 和分享验证都通过后，v2 才应该开放打包入口。
+        </p>
+        <div className="release-gate-grid">
+          {gateItems.map(item => (
+            <article className={`release-gate-card ${item.status}`} key={item.title}>
+              <span className={`qa-status ${item.status}`}>{item.label}</span>
+              <strong>{item.title}</strong>
+              <small>{item.summary}</small>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel release-next-panel">
+        <p className="eyebrow">Next Safe Step</p>
+        <h3>下一步先补 v2 分享验证入口</h3>
+        <p>
+          现在页面已经能集中展示发布前状态；下一步应把 v1 的分享验证、发布预检和诊断包结果接入 v2，
+          仍然保持只读，直到所有闸门可以解释清楚再考虑真正打包。
+        </p>
       </section>
     </div>
   );
@@ -1372,6 +1499,10 @@ function formatScanTime(value: string) {
     return "已记录";
   }
   return date.toLocaleString();
+}
+
+function countByStatus(items: Array<{ status: string }>, status: string) {
+  return items.filter(item => item.status === status).length;
 }
 
 function projectInstructionPreview(scan: ProjectScanCard) {
