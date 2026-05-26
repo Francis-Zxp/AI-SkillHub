@@ -649,6 +649,36 @@ function Settings({ snapshot }: { snapshot: LegacySnapshot | null }) {
           </article>
         </div>
       </section>
+
+      <section className="panel desktop-qa">
+        <p className="eyebrow">Desktop QA Checklist</p>
+        <h3>桌面窗口发布前检查</h3>
+        <p>
+          每次准备打包前都要用真实 Tauri 桌面窗口检查，不用浏览器预览代替。当前清单只记录人工验收标准，不执行写入。
+        </p>
+        <div className="qa-checklist-grid">
+          <article>
+            <span className="qa-status done">已验证</span>
+            <strong>默认窗口完整可读</strong>
+            <small>侧边栏、总览卡片、滚动条和主标题不能被裁切。</small>
+          </article>
+          <article>
+            <span className="qa-status planned">待复查</span>
+            <strong>快照页安全闸门</strong>
+            <small>备份、回滚、恢复预演必须保持只读提示，不能出现真实执行入口。</small>
+          </article>
+          <article>
+            <span className="qa-status planned">待复查</span>
+            <strong>设置页发布说明</strong>
+            <small>用户必须能看懂开发启动、调试 exe 和正式打包位置的区别。</small>
+          </article>
+          <article>
+            <span className="qa-status blocked">禁止跳过</span>
+            <strong>截图证据</strong>
+            <small>高 DPI Windows 下优先用窗口截图或人工截图，不能只依赖浏览器截图。</small>
+          </article>
+        </div>
+      </section>
     </div>
   );
 }

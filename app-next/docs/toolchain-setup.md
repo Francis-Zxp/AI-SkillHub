@@ -115,6 +115,8 @@ That debug executable is not the final shareable installer. It may still expect 
 
 The v2 app also explains this inside the Settings page, under "Build / Release Guide", so a tester can see the difference without reading this document first.
 
+The Settings page also contains a "Desktop QA Checklist" panel. Before packaging, use the real Tauri desktop window to confirm the default window layout, Snapshot safety gate, Settings release guidance, and screenshot evidence.
+
 ## Where the final v2 exe will be
 
 When v2 is ready to package, use:

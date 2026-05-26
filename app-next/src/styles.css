@@ -1119,6 +1119,72 @@ h3 {
   line-height: 1.5;
 }
 
+.desktop-qa {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .99), rgba(246, 252, 249, .98)),
+    #ffffff;
+}
+
+.qa-checklist-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.qa-checklist-grid article {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  min-height: 142px;
+  padding: 15px;
+  border: 1px solid rgba(34, 67, 61, .1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, .78);
+}
+
+.qa-checklist-grid strong,
+.qa-checklist-grid small {
+  display: block;
+}
+
+.qa-checklist-grid strong {
+  color: #20313a;
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.qa-checklist-grid small {
+  color: #6d7e87;
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.55;
+}
+
+.qa-status {
+  width: fit-content;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 950;
+}
+
+.qa-status.done {
+  color: #0b7058;
+  background: #def7ee;
+}
+
+.qa-status.planned {
+  color: #4963c6;
+  background: #ebefff;
+}
+
+.qa-status.blocked {
+  color: #9b4b12;
+  background: #fff0dd;
+}
+
 .safety-list {
   display: flex;
   flex-wrap: wrap;
@@ -1356,5 +1422,9 @@ code {
 
   .index-panel {
     grid-template-columns: 1fr;
+  }
+
+  .qa-checklist-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
