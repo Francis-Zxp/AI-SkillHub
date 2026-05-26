@@ -40,6 +40,7 @@
 /app/docs/
 
 # Local launcher/build noise
+/AI SkillHub V2 Alpha.exe
 *.log
 *.tmp
 *.nupkg
