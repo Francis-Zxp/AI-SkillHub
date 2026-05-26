@@ -165,6 +165,21 @@ CREATE TABLE IF NOT EXISTS restore_dry_run_items (
   FOREIGN KEY(backup_target_id) REFERENCES backup_targets(id)
 );
 
+CREATE TABLE IF NOT EXISTS backup_dry_run_items (
+  id TEXT PRIMARY KEY,
+  backup_target_id TEXT NOT NULL,
+  adapter_id TEXT NOT NULL,
+  agent_name TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_path TEXT NOT NULL,
+  backup_path TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'planned',
+  risk_level TEXT NOT NULL DEFAULT 'medium',
+  summary TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(backup_target_id) REFERENCES backup_targets(id)
+);
+
 CREATE TABLE IF NOT EXISTS adapter_safety_checks (
   id TEXT PRIMARY KEY,
   adapter_id TEXT NOT NULL,

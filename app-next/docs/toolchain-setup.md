@@ -96,6 +96,15 @@ pnpm tauri dev
 
 That command starts the Vite web UI and then opens the Tauri desktop window.
 
+If the previous desktop window did not close cleanly, use the safer helper:
+
+```powershell
+cd "D:\My Files\AI_global_skills\app-next"
+pnpm dev:desktop
+```
+
+`pnpm dev:desktop` first stops any stale `ai-skillhub-next.exe` development process, then starts Tauri dev mode.
+
 After the first dev run, a debug executable may exist here:
 
 ```text
@@ -120,6 +129,31 @@ D:\My Files\AI_global_skills\app-next\src-tauri\target\release\bundle\
 ```
 
 Do not publish that v2 build yet unless the backup, restore dry-run, release preflight, and share validation steps have passed.
+
+## Troubleshooting: failed to remove debug exe
+
+If `pnpm tauri dev` fails with:
+
+```text
+failed to remove file ...\target\debug\ai-skillhub-next.exe
+拒绝访问。 (os error 5)
+```
+
+Windows is still holding the previous debug executable. Usually this means the old AI SkillHub v2 desktop window is still open, or the process is closing slowly.
+
+Fix:
+
+```powershell
+cd "D:\My Files\AI_global_skills\app-next"
+pnpm stop:dev
+pnpm tauri dev
+```
+
+Or use the combined command:
+
+```powershell
+pnpm dev:desktop
+```
 
 If `npm` reports cache permission errors, use a local cache temporarily:
 

@@ -26,6 +26,7 @@ export type LegacySnapshot = {
   presets: PresetCard[];
   snapshots: SnapshotCard[];
   backupTargets: BackupTargetCard[];
+  backupDryRun: BackupDryRunItemCard[];
   restoreDryRun: RestoreDryRunItemCard[];
   rollbackPlan: RollbackPlanStepCard[];
   diagnostics: DiagnosticSummary;
@@ -159,6 +160,19 @@ export type BackupTargetCard = {
   preflightStatus: "ready" | "required" | "blocked" | "skipped" | string;
   riskLevel: "low" | "medium" | "high" | string;
   blocker: string;
+};
+
+export type BackupDryRunItemCard = {
+  id: string;
+  backupTargetId: string;
+  adapterId: string;
+  agentName: string;
+  action: string;
+  targetPath: string;
+  backupPath: string;
+  status: "ready" | "planned" | "blocked" | "skipped" | string;
+  riskLevel: "low" | "medium" | "high" | string;
+  summary: string;
 };
 
 export type RestoreDryRunItemCard = {

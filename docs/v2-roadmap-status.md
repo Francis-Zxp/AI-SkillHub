@@ -4,26 +4,26 @@ Updated: 2026-05-26
 
 ## Current Estimate
 
-V2 overall completion is conservatively estimated at **about 60%**.
+V2 overall completion is conservatively estimated at **about 62%**.
 
-This does **not** mean a usable V2 application is 60% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, the first visual-density pass has landed, project workspace detail now tracks instruction-file status with a read-only generated instructions preview, and the first snapshot/rollback gate, backup target inventory, and restore dry-run report are visible in the app.
+This does **not** mean a usable V2 application is 62% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, the first visual-density pass has landed, project workspace detail now tracks instruction-file status with a read-only generated instructions preview, and the first snapshot/rollback gate, backup target inventory, backup dry-run plan, and restore dry-run report are visible in the app.
 
-## Why 60%
+## Why 62%
 
 | Area | Status | Estimate |
 |---|---:|---:|
 | Reference project analysis | skills-manager, asm, OpenSkills, SkillKit analyzed and still active as references | 70% |
-| Product model | central library, sources, agents, adapter registry, diagnostics, workspaces, presets, safety checks, project scans, snapshot/rollback gates, backup target inventory, restore dry-run report, and release center are defined through v1 behavior and v2 seed data | 66% |
+| Product model | central library, sources, agents, adapter registry, diagnostics, workspaces, presets, safety checks, project scans, snapshot/rollback gates, backup target inventory, backup dry-run plan, restore dry-run report, and release center are defined through v1 behavior and v2 seed data | 68% |
 | V1 behavior specs for V2 | sharing, diagnostics, import preview, release preflight, troubleshooting, Skill health, and problem locator are repeatable specs | 60% |
 | V2 technical environment | Node LTS, pnpm, Rust/Cargo, rustup, WebView2, and Visual Studio Build Tools are ready | 85% |
-| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, project scan detail, snapshot UI, backup target inventory UI, restore dry-run UI, browser preview fallback, and first UI density pass pass | 65% |
-| SQLite data model | real v1 sources, skills, agents, agent adapters, adapter capabilities, safety checks, workspaces, project scans with instruction-file metadata, presets, snapshots, backup targets, restore dry-run items, rollback plan steps, and audit events are persisted | 71% |
+| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, project scan detail, snapshot UI, backup target inventory UI, backup dry-run UI, restore dry-run UI, browser preview fallback, and first UI density pass pass | 67% |
+| SQLite data model | real v1 sources, skills, agents, agent adapters, adapter capabilities, safety checks, workspaces, project scans with instruction-file metadata, presets, snapshots, backup targets, backup dry-run items, restore dry-run items, rollback plan steps, and audit events are persisted | 73% |
 | Workspaces and presets | first global/agent/project workspaces and category presets are seeded; project workspaces now show AGENTS/CLAUDE/README status and read-only instructions preview | 48% |
 | Multi-agent adapter registry | first registry implemented with 12 supported tools, detected/managed status overlay, capability metadata, enable state, and safety checks | 52% |
 | CLI and automation | planned, not implemented | 0% |
 | Marketplace/recommended index | planned, not implemented | 0% |
 
-Weighted together, the honest number is about **60%**.
+Weighted together, the honest number is about **62%**.
 
 ## Reference Projects Still In Use
 
@@ -64,7 +64,7 @@ The v2 source line has started and the toolchain is ready:
 Continue v2 milestone 1:
 
 1. Continue the visual pass inside the real Tauri window, especially the new Snapshot page.
-2. Turn backup target inventory into a dry-run backup plan with clear pass/block messages.
-3. Add a release/build explanation panel so v2 users understand dev exe vs packaged exe.
+2. Add a release/build explanation panel so v2 users understand dev exe vs packaged exe.
+3. Start real visual QA in the Tauri desktop window and record screenshot issues before any release packaging.
 4. Add workspace detail navigation so project workspaces can become first-class pages instead of only cards.
 5. Keep v1 as the maintenance app until v2 can cover its core workflows.

@@ -27,6 +27,7 @@ struct LegacySnapshot {
     presets: Vec<PresetCard>,
     snapshots: Vec<SnapshotCard>,
     backup_targets: Vec<BackupTargetCard>,
+    backup_dry_run: Vec<BackupDryRunItemCard>,
     restore_dry_run: Vec<RestoreDryRunItemCard>,
     rollback_plan: Vec<RollbackPlanStepCard>,
     diagnostics: DiagnosticSummary,
@@ -134,6 +135,21 @@ struct BackupTargetCard {
     preflight_status: String,
     risk_level: String,
     blocker: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BackupDryRunItemCard {
+    id: String,
+    backup_target_id: String,
+    adapter_id: String,
+    agent_name: String,
+    action: String,
+    target_path: String,
+    backup_path: String,
+    status: String,
+    risk_level: String,
+    summary: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -339,6 +355,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         presets: Vec::new(),
         snapshots: Vec::new(),
         backup_targets: Vec::new(),
+        backup_dry_run: Vec::new(),
         restore_dry_run: Vec::new(),
         rollback_plan: Vec::new(),
         diagnostics,
@@ -361,11 +378,13 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         apply_enabled_state(&mut snapshot, &enabled_state);
     }
     snapshot.backup_targets = derive_backup_targets(&root, &snapshot.agent_adapters);
+    snapshot.backup_dry_run = derive_backup_dry_run(&snapshot.backup_targets);
     snapshot.restore_dry_run = derive_restore_dry_run(&snapshot.backup_targets);
     snapshot.index = persist_snapshot(&root, &snapshot)?;
     if let Ok(connection) = open_index_database(&root) {
         snapshot.snapshots = read_indexed_snapshots(&connection).unwrap_or_default();
         snapshot.backup_targets = read_indexed_backup_targets(&connection).unwrap_or_default();
+        snapshot.backup_dry_run = read_indexed_backup_dry_run(&connection).unwrap_or_default();
         snapshot.restore_dry_run = read_indexed_restore_dry_run(&connection).unwrap_or_default();
         snapshot.rollback_plan = read_indexed_rollback_plan(&connection).unwrap_or_default();
     }
@@ -392,6 +411,7 @@ fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
             || snapshot.adapter_capabilities.is_empty()
             || snapshot.project_scans.is_empty()
             || snapshot.backup_targets.is_empty()
+            || snapshot.backup_dry_run.is_empty()
             || snapshot.restore_dry_run.is_empty()
             || snapshot.rollback_plan.is_empty())
     {
@@ -556,6 +576,7 @@ fn read_snapshot_from_database(
     let presets = read_indexed_presets(connection)?;
     let snapshots = read_indexed_snapshots(connection)?;
     let backup_targets = read_indexed_backup_targets(connection)?;
+    let backup_dry_run = read_indexed_backup_dry_run(connection)?;
     let restore_dry_run = read_indexed_restore_dry_run(connection)?;
     let rollback_plan = read_indexed_rollback_plan(connection)?;
     let diagnostics = read_indexed_diagnostics(connection);
@@ -605,6 +626,7 @@ fn read_snapshot_from_database(
         presets,
         snapshots,
         backup_targets,
+        backup_dry_run,
         restore_dry_run,
         rollback_plan,
         diagnostics,
@@ -685,6 +707,9 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
     transaction
         .execute("DELETE FROM restore_dry_run_items", [])
         .map_err(|error| format!("Cannot clear restore dry-run items: {}", error))?;
+    transaction
+        .execute("DELETE FROM backup_dry_run_items", [])
+        .map_err(|error| format!("Cannot clear backup dry-run items: {}", error))?;
     transaction
         .execute("DELETE FROM backup_targets", [])
         .map_err(|error| format!("Cannot clear backup targets: {}", error))?;
@@ -814,6 +839,7 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
     )?;
     seed_project_scans(&transaction, &snapshot.project_scans)?;
     seed_backup_targets(&transaction, &snapshot.backup_targets, &indexed_at)?;
+    seed_backup_dry_run(&transaction, &snapshot.backup_dry_run, &indexed_at)?;
     seed_restore_dry_run(&transaction, &snapshot.restore_dry_run, &indexed_at)?;
     seed_presets(
         &transaction,
@@ -1294,6 +1320,54 @@ fn read_indexed_backup_targets(connection: &Connection) -> Result<Vec<BackupTarg
     collect_rows(rows, "backup target")
 }
 
+fn read_indexed_backup_dry_run(
+    connection: &Connection,
+) -> Result<Vec<BackupDryRunItemCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                id,
+                backup_target_id,
+                adapter_id,
+                agent_name,
+                action,
+                target_path,
+                backup_path,
+                status,
+                risk_level,
+                summary
+            FROM backup_dry_run_items
+            ORDER BY
+                CASE status
+                    WHEN 'blocked' THEN 0
+                    WHEN 'planned' THEN 1
+                    WHEN 'ready' THEN 2
+                    ELSE 3
+                END,
+                lower(agent_name)",
+        )
+        .map_err(|error| format!("Cannot prepare backup dry-run query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(BackupDryRunItemCard {
+                id: row.get(0)?,
+                backup_target_id: row.get(1)?,
+                adapter_id: row.get(2)?,
+                agent_name: row.get(3)?,
+                action: row.get(4)?,
+                target_path: row.get(5)?,
+                backup_path: row.get(6)?,
+                status: row.get(7)?,
+                risk_level: row.get(8)?,
+                summary: row.get(9)?,
+            })
+        })
+        .map_err(|error| format!("Cannot read backup dry-run items: {}", error))?;
+
+    collect_rows(rows, "backup dry-run item")
+}
+
 fn read_indexed_restore_dry_run(
     connection: &Connection,
 ) -> Result<Vec<RestoreDryRunItemCard>, String> {
@@ -1725,6 +1799,43 @@ fn seed_backup_targets(
     Ok(())
 }
 
+fn seed_backup_dry_run(
+    transaction: &rusqlite::Transaction<'_>,
+    items: &[BackupDryRunItemCard],
+    timestamp: &str,
+) -> Result<(), String> {
+    for item in items {
+        transaction
+            .execute(
+                "INSERT INTO backup_dry_run_items (
+                    id, backup_target_id, adapter_id, agent_name, action,
+                    target_path, backup_path, status, risk_level, summary, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    item.id,
+                    item.backup_target_id,
+                    item.adapter_id,
+                    item.agent_name,
+                    item.action,
+                    item.target_path,
+                    item.backup_path,
+                    item.status,
+                    item.risk_level,
+                    item.summary,
+                    timestamp
+                ],
+            )
+            .map_err(|error| {
+                format!(
+                    "Cannot seed backup dry-run item {} for {}: {}",
+                    item.action, item.agent_name, error
+                )
+            })?;
+    }
+
+    Ok(())
+}
+
 fn seed_restore_dry_run(
     transaction: &rusqlite::Transaction<'_>,
     items: &[RestoreDryRunItemCard],
@@ -2117,6 +2228,58 @@ fn derive_restore_dry_run(backup_targets: &[BackupTargetCard]) -> Vec<RestoreDry
             }
         })
         .collect()
+}
+
+fn derive_backup_dry_run(backup_targets: &[BackupTargetCard]) -> Vec<BackupDryRunItemCard> {
+    backup_targets
+        .iter()
+        .map(|target| {
+            let (action, status, risk_level, summary) = backup_dry_run_plan(target);
+            BackupDryRunItemCard {
+                id: stable_id("backup-dry-run", &target.id),
+                backup_target_id: target.id.clone(),
+                adapter_id: target.adapter_id.clone(),
+                agent_name: target.agent_name.clone(),
+                action: action.to_string(),
+                target_path: target.target_path.clone(),
+                backup_path: target.backup_path.clone(),
+                status: status.to_string(),
+                risk_level: risk_level.to_string(),
+                summary: summary.to_string(),
+            }
+        })
+        .collect()
+}
+
+fn backup_dry_run_plan(
+    target: &BackupTargetCard,
+) -> (&'static str, &'static str, &'static str, &'static str) {
+    match target.preflight_status.as_str() {
+        "skipped" => (
+            "skip",
+            "skipped",
+            "low",
+            "未检测到该工具，备份预演会跳过此目标，不创建备份目录。",
+        ),
+        "blocked" => (
+            "block-backup",
+            "blocked",
+            "high",
+            "当前目标仍被阻断，备份预演只报告原因，不复制任何文件。",
+        ),
+        "ready" => (
+            "verify-backup",
+            "ready",
+            "low",
+            "备份已存在时，未来会先校验备份完整性，再允许进入恢复预演。",
+        ),
+        _ => (
+            "copy-to-backup",
+            "planned",
+            "medium",
+            "真实同步前会先检查目标路径边界，再把目标目录复制到备份位置；当前仍只预演。",
+        ),
+    }
 }
 
 fn restore_dry_run_plan(
@@ -2923,6 +3086,7 @@ mod tests {
         assert!(!snapshot.project_scans.is_empty());
         assert!(!snapshot.snapshots.is_empty());
         assert!(!snapshot.backup_targets.is_empty());
+        assert!(!snapshot.backup_dry_run.is_empty());
         assert!(!snapshot.restore_dry_run.is_empty());
         assert!(!snapshot.rollback_plan.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
@@ -2945,6 +3109,7 @@ mod tests {
         assert!(!snapshot.project_scans.is_empty());
         assert!(!snapshot.snapshots.is_empty());
         assert!(!snapshot.backup_targets.is_empty());
+        assert!(!snapshot.backup_dry_run.is_empty());
         assert!(!snapshot.restore_dry_run.is_empty());
         assert!(!snapshot.rollback_plan.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
@@ -3066,5 +3231,29 @@ mod tests {
         assert_eq!(item.action, "block-restore");
         assert_eq!(item.status, "blocked");
         assert!(item.summary.contains("不能进入真实恢复"));
+    }
+
+    #[test]
+    fn backup_dry_run_never_copies_blocked_targets() {
+        let root = resolve_legacy_root().expect("legacy root should resolve");
+        let mut adapter = agent_adapter(
+            "codex",
+            "OpenAI Codex",
+            "OpenAI",
+            "~\\.codex\\skills",
+            "global",
+        );
+        adapter.detected = true;
+        adapter.managed = false;
+
+        let targets = derive_backup_targets(&root, &[adapter]);
+        let dry_run = derive_backup_dry_run(&targets);
+        let item = dry_run
+            .first()
+            .expect("backup dry-run item should be derived");
+
+        assert_eq!(item.action, "block-backup");
+        assert_eq!(item.status, "blocked");
+        assert!(item.summary.contains("不复制任何文件"));
     }
 }
