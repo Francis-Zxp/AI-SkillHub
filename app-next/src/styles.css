@@ -849,6 +849,48 @@ h3 {
   gap: 18px;
 }
 
+.readiness-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .99), rgba(244, 253, 249, .96)),
+    #ffffff;
+}
+
+.readiness-panel.done {
+  border-color: rgba(32, 180, 134, .22);
+}
+
+.readiness-panel.planned {
+  border-color: rgba(73, 99, 198, .18);
+}
+
+.readiness-panel.blocked {
+  border-color: rgba(216, 154, 43, .24);
+}
+
+.readiness-panel p {
+  margin-bottom: 0;
+}
+
+.readiness-reasons {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.readiness-reasons span {
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: #f4fcf8;
+  color: #587069;
+  font-size: 12px;
+  font-weight: 850;
+}
+
 .release-gate-panel,
 .release-report-panel,
 .release-next-panel {

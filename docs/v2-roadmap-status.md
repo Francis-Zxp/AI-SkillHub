@@ -4,27 +4,27 @@ Updated: 2026-05-27
 
 ## Current Estimate
 
-V2 overall completion is conservatively estimated at **about 75%**.
+V2 overall completion is conservatively estimated at **about 77%**.
 
-This does **not** mean a usable V2 application is 75% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, the first visual-density pass has landed, project workspace detail now tracks instruction-file status with a read-only generated instructions preview, the Workspaces page now has selectable workspace detail navigation, the Release Gate page now combines diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, and zip preview status, the first snapshot/rollback gate, backup target inventory, backup dry-run plan, and restore dry-run report are visible in the app, and the Settings page now explains the difference between the development exe and a future packaged release build plus SQLite-backed desktop QA records.
+This does **not** mean a usable V2 application is 77% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, the first visual-density pass has landed, project workspace detail now tracks instruction-file status with a read-only generated instructions preview, the Workspaces page now has selectable workspace detail navigation, the Release Gate page now combines diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, zip preview status, and one plain-language Release Readiness recommendation, the first snapshot/rollback gate, backup target inventory, backup dry-run plan, and restore dry-run report are visible in the app, and the Settings page now explains the difference between the development exe and a future packaged release build plus SQLite-backed desktop QA records.
 
-## Why 75%
+## Why 77%
 
 | Area | Status | Estimate |
 |---|---:|---:|
 | Reference project analysis | skills-manager, asm, OpenSkills, SkillKit analyzed and still active as references | 70% |
-| Product model | central library, sources, agents, adapter registry, diagnostics, workspaces, workspace detail navigation, presets, safety checks, project scans, snapshot/rollback gates, backup target inventory, backup dry-run plan, restore dry-run report, release gate, release/build explanation, persisted desktop QA, and v1 report inputs are defined through v1 behavior and v2 seed data | 83% |
+| Product model | central library, sources, agents, adapter registry, diagnostics, workspaces, workspace detail navigation, presets, safety checks, project scans, snapshot/rollback gates, backup target inventory, backup dry-run plan, restore dry-run report, release gate, Release Readiness summary, release/build explanation, persisted desktop QA, and v1 report inputs are defined through v1 behavior and v2 seed data | 84% |
 | V1 behavior specs for V2 | sharing, diagnostics, import preview, release preflight, troubleshooting, Skill health, problem locator, and zip preview are repeatable specs and now feed the v2 Release Gate as read-only report inputs | 70% |
 | V2 technical environment | Node LTS, pnpm, Rust/Cargo, rustup, WebView2, and Visual Studio Build Tools are ready | 85% |
-| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, selectable workspace detail UI, project scan detail, snapshot UI, backup target inventory UI, backup dry-run UI, restore dry-run UI, release gate UI, v1 report input cards, browser preview fallback, first UI density pass, release/build guide UI, persisted desktop QA UI, and first real Tauri desktop-window QA pass | 80% |
+| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, selectable workspace detail UI, project scan detail, snapshot UI, backup target inventory UI, backup dry-run UI, restore dry-run UI, release gate UI, Release Readiness card, v1 report input cards, browser preview fallback, first UI density pass, release/build guide UI, persisted desktop QA UI, and first real Tauri desktop-window QA pass | 81% |
 | SQLite data model | real v1 sources, skills, agents, agent adapters, adapter capabilities, safety checks, workspaces, project scans with instruction-file metadata, presets, snapshots, backup targets, backup dry-run items, restore dry-run items, rollback plan steps, desktop QA checks, and audit events are persisted | 80% |
 | Workspaces and presets | first global/agent/project workspaces and category presets are seeded; workspace cards can open a read-only detail panel; project workspaces show AGENTS/CLAUDE/README status and read-only instructions preview | 54% |
-| Release readiness | release gate summarizes diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, and zip preview, but still does not execute packaging | 68% |
+| Release readiness | release gate summarizes diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, and zip preview into one plain-language publish / do-not-publish recommendation, but still does not execute packaging | 74% |
 | Multi-agent adapter registry | first registry implemented with 12 supported tools, detected/managed status overlay, capability metadata, enable state, and safety checks | 52% |
 | CLI and automation | planned, not implemented | 0% |
 | Marketplace/recommended index | planned, not implemented | 0% |
 
-Weighted together, the honest number is about **75%**.
+Weighted together, the honest number is about **77%**.
 
 ## Reference Projects Still In Use
 
@@ -65,7 +65,11 @@ The v2 source line has started and the toolchain is ready:
 Continue v2 milestone 1:
 
 1. Continue visual QA inside the real Tauri window, especially Release Gate, Workspaces, Snapshot, and Settings.
-2. Add a compact Release Readiness summary that combines report inputs, desktop QA, backup dry-run, restore dry-run, and rollback locks into one plain-language recommendation.
-3. Begin system-level UI design pass after this readiness summary is in place; the product skeleton is now stable enough to start detailed UI work without losing the safety model.
+2. Begin the system-level UI design pass; the Release Readiness summary is now in place, so the product skeleton is stable enough to refine visual hierarchy without losing the safety model.
+3. Keep the Release Readiness card as a derived status only: it may explain whether packaging is allowed, but it must not execute packaging or write to AI tool directories.
 4. Later, move workspace detail navigation from in-page selection to route-level detail pages if the product model needs deep links.
 5. Keep v1 as the maintenance app until v2 can cover its core workflows.
+
+## Plan Alignment Check
+
+The Release Readiness card is not a direction change. It directly follows the previous plan: diagnostics, release preflight, sharing validation, zip preview, desktop QA, backup dry-run, restore dry-run, and rollback lock must be visible before any future packaging work. The card is deliberately read-only and only turns those existing gates into a clear user-facing conclusion.

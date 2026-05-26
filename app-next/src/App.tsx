@@ -813,6 +813,24 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
   ];
   const doneCount = gateItems.filter(item => item.status === "done").length;
   const blockedCount = gateItems.filter(item => item.status === "blocked").length;
+  const plannedCount = gateItems.filter(item => item.status === "planned").length;
+  const readinessStatus = blockedCount > 0 ? "blocked" : plannedCount > 0 ? "planned" : "done";
+  const readinessLabel =
+    readinessStatus === "done" ? "候选可复查" : readinessStatus === "blocked" ? "禁止发布" : "暂不发布";
+  const readinessTitle =
+    readinessStatus === "done"
+      ? "所有发布闸门已通过"
+      : readinessStatus === "blocked"
+        ? "现在不能发布"
+        : "现在暂不发布";
+  const readinessReason = releaseReadinessReason(gateItems);
+  const readinessSummary =
+    readinessStatus === "done"
+      ? "可以进入候选打包复查；此页面仍不会直接执行打包。"
+      : readinessReason;
+  const readinessDetails = gateItems
+    .filter(item => item.status !== "done")
+    .slice(0, 4);
 
   return (
     <div className="view">
@@ -825,6 +843,24 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
             当前仍是只读状态面板，不会执行打包或写入。
           </p>
         </div>
+      </section>
+
+      <section className={`panel readiness-panel ${readinessStatus}`}>
+        <div>
+          <p className="eyebrow">Release Readiness</p>
+          <h3>{readinessTitle}</h3>
+          <p>
+            {readinessSummary} 当前进度：{doneCount}/{gateItems.length} 个闸门通过，{plannedCount} 个待复查，{blockedCount} 个阻断。
+          </p>
+        </div>
+        <span className={`qa-status ${readinessStatus}`}>{readinessLabel}</span>
+        {readinessDetails.length > 0 && (
+          <div className="readiness-reasons">
+            {readinessDetails.map(item => (
+              <span key={item.title}>{item.title}：{item.label}</span>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="release-summary-grid">
@@ -1715,6 +1751,20 @@ function releaseReportGateLabel(report?: ReleaseReportCard) {
   if (report.ok && report.status === "ok") return "已通过";
   if (report.status === "warn") return "需复查";
   return "已阻断";
+}
+
+function releaseReadinessReason(items: Array<{ status: string; title: string; label: string }>) {
+  const blocked = items.find(item => item.status === "blocked");
+  if (blocked) {
+    return `因为“${blocked.title}”仍处于${blocked.label}状态，不能生成可分享版本。`;
+  }
+
+  const planned = items.find(item => item.status === "planned");
+  if (planned) {
+    return `因为“${planned.title}”仍处于${planned.label}状态，需要复查后再考虑候选打包。`;
+  }
+
+  return "所有发布闸门已通过，可以进入候选打包复查；此页面仍不会直接执行打包。";
 }
 
 function desktopQaGateStatus(checks: DesktopQaCheckCard[]) {
