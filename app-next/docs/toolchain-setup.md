@@ -113,6 +113,8 @@ D:\My Files\AI_global_skills\app-next\src-tauri\target\debug\ai-skillhub-next.ex
 
 That debug executable is not the final shareable installer. It may still expect the dev server/runtime context and should not be copied to other computers.
 
+The v2 app also explains this inside the Settings page, under "Build / Release Guide", so a tester can see the difference without reading this document first.
+
 ## Where the final v2 exe will be
 
 When v2 is ready to package, use:

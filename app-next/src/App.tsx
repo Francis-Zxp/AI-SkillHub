@@ -602,24 +602,54 @@ function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
 
 function Settings({ snapshot }: { snapshot: LegacySnapshot | null }) {
   return (
-    <section className="panel">
-      <h3>迁移策略</h3>
-      <p>
-        v2 当前只做只读扫描。真正接管 Claude、Codex、Antigravity 前，必须先完成 SQLite schema、备份、快照和回滚。
-      </p>
-      <div className="setting-row">
-        <span>中央目录</span>
-        <code>{snapshot?.skillsDir ?? "../skills"}</code>
-      </div>
-      <div className="setting-row">
-        <span>来源目录</span>
-        <code>{snapshot?.sourcesDir ?? "../app/github_sources"}</code>
-      </div>
-      <div className="setting-row">
-        <span>诊断报告</span>
-        <code>{snapshot?.diagnosticsFile ?? "../app/reports/latest-diagnostics.json"}</code>
-      </div>
-    </section>
+    <div className="view">
+      <section className="panel">
+        <h3>迁移策略</h3>
+        <p>
+          v2 当前只做只读扫描。真正接管 Claude、Codex、Antigravity 前，必须先完成 SQLite schema、备份、快照和回滚。
+        </p>
+        <div className="setting-row">
+          <span>中央目录</span>
+          <code>{snapshot?.skillsDir ?? "../skills"}</code>
+        </div>
+        <div className="setting-row">
+          <span>来源目录</span>
+          <code>{snapshot?.sourcesDir ?? "../app/github_sources"}</code>
+        </div>
+        <div className="setting-row">
+          <span>诊断报告</span>
+          <code>{snapshot?.diagnosticsFile ?? "../app/reports/latest-diagnostics.json"}</code>
+        </div>
+      </section>
+
+      <section className="panel release-guide">
+        <p className="eyebrow">Build / Release Guide</p>
+        <h3>开发版 exe 和正式发布版不是一回事</h3>
+        <p>
+          当前 v2 仍在开发线。日常测试请用开发命令启动桌面窗口；最终给别人使用的安装包，要等安全闸门和分享验证通过后再打包。
+        </p>
+        <div className="release-guide-grid">
+          <article>
+            <strong>现在测试</strong>
+            <span>开发桌面窗口</span>
+            <code>pnpm dev:desktop</code>
+            <small>会先清理残留调试进程，再启动 Tauri dev。</small>
+          </article>
+          <article>
+            <strong>调试 exe</strong>
+            <span>只给开发阶段使用</span>
+            <code>src-tauri\target\debug\ai-skillhub-next.exe</code>
+            <small>它不是可分享安装包，直接复制给别人不稳定。</small>
+          </article>
+          <article>
+            <strong>正式发布</strong>
+            <span>以后才开放</span>
+            <code>pnpm tauri build</code>
+            <small>通过备份、回滚、发布预检和分享验证后再生成。</small>
+          </article>
+        </div>
+      </section>
+    </div>
   );
 }
 
