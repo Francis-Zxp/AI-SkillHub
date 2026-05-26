@@ -443,6 +443,7 @@ function Agents({
 
 function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
   const snapshots = snapshot?.snapshots ?? [];
+  const backupTargets = snapshot?.backupTargets ?? [];
   const rollbackPlan = snapshot?.rollbackPlan ?? [];
   const latest = snapshots.find(item => item.isLatest) ?? snapshots[0];
 
@@ -497,6 +498,37 @@ function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
             </article>
           ))}
           {rollbackPlan.length === 0 && <p>等待下一次刷新生成回滚计划。</p>}
+        </div>
+      </section>
+
+      <section className="panel">
+        <p className="eyebrow">Backup Target Inventory</p>
+        <h3>真实接管前必须先备份的目录</h3>
+        <div className="backup-target-list">
+          {backupTargets.map(target => (
+            <article className={`backup-target-card ${target.preflightStatus}`} key={target.id}>
+              <div className="backup-target-head">
+                <strong>{target.agentName}</strong>
+                <span className={`step-status ${target.preflightStatus}`}>
+                  {backupStatusLabel(target.preflightStatus)}
+                </span>
+                <span className={`risk ${target.riskLevel}`}>{riskLabel(target.riskLevel)}</span>
+              </div>
+              <div className="backup-paths">
+                <span>目标</span>
+                <code>{target.targetPath}</code>
+                <span>备份</span>
+                <code>{target.backupPath}</code>
+              </div>
+              <div className="backup-flags">
+                <span>{target.detected ? "已检测" : "未检测"}</span>
+                <span>{target.managed ? "已接管" : "未接管"}</span>
+                <span>{target.required ? "必须备份" : "暂不需要"}</span>
+              </div>
+              <p>{target.blocker}</p>
+            </article>
+          ))}
+          {backupTargets.length === 0 && <p>等待下一次刷新生成备份目标清单。</p>}
         </div>
       </section>
 
@@ -863,6 +895,47 @@ function createPreviewSnapshot(): LegacySnapshot {
         isLatest: true
       }
     ],
+    backupTargets: [
+      {
+        id: "preview-backup-claude",
+        adapterId: "claude",
+        agentName: "Claude / Claude Code",
+        targetPath: "~\\.claude\\skills",
+        backupPath: "../app-next/.skillhub-next/backups/claude/skills",
+        detected: true,
+        managed: true,
+        required: true,
+        preflightStatus: "required",
+        riskLevel: "medium",
+        blocker: "已接管目标目录；真实同步前必须先生成可恢复备份。"
+      },
+      {
+        id: "preview-backup-codex",
+        adapterId: "codex",
+        agentName: "OpenAI Codex",
+        targetPath: "~\\.codex\\skills",
+        backupPath: "../app-next/.skillhub-next/backups/codex/skills",
+        detected: true,
+        managed: false,
+        required: true,
+        preflightStatus: "blocked",
+        riskLevel: "medium",
+        blocker: "检测到但尚未接管；真实同步前必须先完成备份和接管确认。"
+      },
+      {
+        id: "preview-backup-antigravity",
+        adapterId: "antigravity",
+        agentName: "Antigravity",
+        targetPath: "~\\.gemini\\antigravity\\skills",
+        backupPath: "../app-next/.skillhub-next/backups/antigravity/skills",
+        detected: false,
+        managed: false,
+        required: false,
+        preflightStatus: "skipped",
+        riskLevel: "low",
+        blocker: "未检测到该工具；不会创建假目录，也不会执行接管写入。"
+      }
+    ],
     rollbackPlan: [
       {
         id: "preview-step-1",
@@ -966,6 +1039,14 @@ function stepStatusLabel(status: string) {
   if (status === "ready") return "已准备";
   if (status === "planned") return "待实现";
   if (status === "locked") return "已锁定";
+  return status;
+}
+
+function backupStatusLabel(status: string) {
+  if (status === "ready") return "已备份";
+  if (status === "required") return "必须备份";
+  if (status === "blocked") return "已阻断";
+  if (status === "skipped") return "暂不处理";
   return status;
 }
 

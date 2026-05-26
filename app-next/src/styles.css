@@ -826,15 +826,111 @@ h3 {
 }
 
 .risk.medium,
-.step-status.planned {
+.step-status.planned,
+.step-status.required {
   color: #8a6b20;
   background: #fff3d8;
 }
 
 .risk.high,
-.step-status.locked {
+.step-status.locked,
+.step-status.blocked {
   color: #a73950;
   background: #ffe6ec;
+}
+
+.step-status.skipped {
+  color: #64737c;
+  background: #eef3f4;
+}
+
+.backup-target-list {
+  display: grid;
+  gap: 12px;
+}
+
+.backup-target-card {
+  display: grid;
+  gap: 13px;
+  padding: 16px;
+  border: 1px solid rgba(34, 67, 61, .1);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .98), rgba(247, 252, 249, .96)),
+    #ffffff;
+}
+
+.backup-target-card.blocked {
+  border-color: rgba(230, 109, 148, .22);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .98), rgba(255, 247, 249, .96)),
+    #ffffff;
+}
+
+.backup-target-card.required {
+  border-color: rgba(216, 154, 43, .22);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .98), rgba(255, 251, 239, .96)),
+    #ffffff;
+}
+
+.backup-target-card.skipped {
+  opacity: .78;
+}
+
+.backup-target-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.backup-target-head strong {
+  margin-right: auto;
+  color: #1f2c34;
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.backup-paths {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: start;
+}
+
+.backup-paths span {
+  color: #728189;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.backup-paths code {
+  overflow: hidden;
+  padding: 8px 10px;
+  border-radius: 12px;
+  color: #31424b;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  background: #f2f7f5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.backup-flags span {
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: #557168;
+  font-size: 12px;
+  font-weight: 900;
+  background: #edf6f2;
 }
 
 .snapshot-list {

@@ -134,6 +134,22 @@ CREATE TABLE IF NOT EXISTS rollback_plan_steps (
   FOREIGN KEY(snapshot_id) REFERENCES snapshots(id)
 );
 
+CREATE TABLE IF NOT EXISTS backup_targets (
+  id TEXT PRIMARY KEY,
+  adapter_id TEXT NOT NULL,
+  agent_name TEXT NOT NULL,
+  target_path TEXT NOT NULL,
+  backup_path TEXT NOT NULL,
+  detected INTEGER NOT NULL DEFAULT 0,
+  managed INTEGER NOT NULL DEFAULT 0,
+  required INTEGER NOT NULL DEFAULT 0,
+  preflight_status TEXT NOT NULL DEFAULT 'blocked',
+  risk_level TEXT NOT NULL DEFAULT 'medium',
+  blocker TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(adapter_id) REFERENCES agent_adapters(id)
+);
+
 CREATE TABLE IF NOT EXISTS adapter_safety_checks (
   id TEXT PRIMARY KEY,
   adapter_id TEXT NOT NULL,

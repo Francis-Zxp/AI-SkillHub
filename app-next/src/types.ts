@@ -25,6 +25,7 @@ export type LegacySnapshot = {
   projectScans: ProjectScanCard[];
   presets: PresetCard[];
   snapshots: SnapshotCard[];
+  backupTargets: BackupTargetCard[];
   rollbackPlan: RollbackPlanStepCard[];
   diagnostics: DiagnosticSummary;
   index: IndexReport;
@@ -143,6 +144,20 @@ export type SnapshotCard = {
   summary: string;
   createdAt: string;
   isLatest: boolean;
+};
+
+export type BackupTargetCard = {
+  id: string;
+  adapterId: string;
+  agentName: string;
+  targetPath: string;
+  backupPath: string;
+  detected: boolean;
+  managed: boolean;
+  required: boolean;
+  preflightStatus: "ready" | "required" | "blocked" | "skipped" | string;
+  riskLevel: "low" | "medium" | "high" | string;
+  blocker: string;
 };
 
 export type RollbackPlanStepCard = {

@@ -26,6 +26,7 @@ struct LegacySnapshot {
     project_scans: Vec<ProjectScanCard>,
     presets: Vec<PresetCard>,
     snapshots: Vec<SnapshotCard>,
+    backup_targets: Vec<BackupTargetCard>,
     rollback_plan: Vec<RollbackPlanStepCard>,
     diagnostics: DiagnosticSummary,
     index: IndexReport,
@@ -116,6 +117,22 @@ struct AdapterCapabilityCard {
     capability_key: String,
     enabled: bool,
     summary: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct BackupTargetCard {
+    id: String,
+    adapter_id: String,
+    agent_name: String,
+    target_path: String,
+    backup_path: String,
+    detected: bool,
+    managed: bool,
+    required: bool,
+    preflight_status: String,
+    risk_level: String,
+    blocker: String,
 }
 
 #[derive(Serialize)]
@@ -305,6 +322,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         project_scans: Vec::new(),
         presets: Vec::new(),
         snapshots: Vec::new(),
+        backup_targets: Vec::new(),
         rollback_plan: Vec::new(),
         diagnostics,
         index: IndexReport {
@@ -325,9 +343,11 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         let enabled_state = load_enabled_state(&connection);
         apply_enabled_state(&mut snapshot, &enabled_state);
     }
+    snapshot.backup_targets = derive_backup_targets(&root, &snapshot.agent_adapters);
     snapshot.index = persist_snapshot(&root, &snapshot)?;
     if let Ok(connection) = open_index_database(&root) {
         snapshot.snapshots = read_indexed_snapshots(&connection).unwrap_or_default();
+        snapshot.backup_targets = read_indexed_backup_targets(&connection).unwrap_or_default();
         snapshot.rollback_plan = read_indexed_rollback_plan(&connection).unwrap_or_default();
     }
     Ok(snapshot)
@@ -352,6 +372,7 @@ fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
             || snapshot.agent_adapters.is_empty()
             || snapshot.adapter_capabilities.is_empty()
             || snapshot.project_scans.is_empty()
+            || snapshot.backup_targets.is_empty()
             || snapshot.rollback_plan.is_empty())
     {
         return scan_legacy_snapshot();
@@ -514,6 +535,7 @@ fn read_snapshot_from_database(
     let project_scans = read_indexed_project_scans(connection)?;
     let presets = read_indexed_presets(connection)?;
     let snapshots = read_indexed_snapshots(connection)?;
+    let backup_targets = read_indexed_backup_targets(connection)?;
     let rollback_plan = read_indexed_rollback_plan(connection)?;
     let diagnostics = read_indexed_diagnostics(connection);
     let index = read_index_report(
@@ -561,6 +583,7 @@ fn read_snapshot_from_database(
         project_scans,
         presets,
         snapshots,
+        backup_targets,
         rollback_plan,
         diagnostics,
         index,
@@ -637,6 +660,9 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
     transaction
         .execute("DELETE FROM adapter_capabilities", [])
         .map_err(|error| format!("Cannot clear adapter capabilities: {}", error))?;
+    transaction
+        .execute("DELETE FROM backup_targets", [])
+        .map_err(|error| format!("Cannot clear backup targets: {}", error))?;
     transaction
         .execute("DELETE FROM project_scans", [])
         .map_err(|error| format!("Cannot clear project scans: {}", error))?;
@@ -762,6 +788,7 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
         &indexed_at,
     )?;
     seed_project_scans(&transaction, &snapshot.project_scans)?;
+    seed_backup_targets(&transaction, &snapshot.backup_targets, &indexed_at)?;
     seed_presets(
         &transaction,
         &all_skill_ids,
@@ -1192,6 +1219,55 @@ fn read_indexed_snapshots(connection: &Connection) -> Result<Vec<SnapshotCard>, 
     Ok(snapshots)
 }
 
+fn read_indexed_backup_targets(connection: &Connection) -> Result<Vec<BackupTargetCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                id,
+                adapter_id,
+                agent_name,
+                target_path,
+                backup_path,
+                detected,
+                managed,
+                required,
+                preflight_status,
+                risk_level,
+                blocker
+            FROM backup_targets
+            ORDER BY
+                required DESC,
+                CASE preflight_status
+                    WHEN 'blocked' THEN 0
+                    WHEN 'required' THEN 1
+                    WHEN 'ready' THEN 2
+                    ELSE 3
+                END,
+                lower(agent_name)",
+        )
+        .map_err(|error| format!("Cannot prepare backup target query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(BackupTargetCard {
+                id: row.get(0)?,
+                adapter_id: row.get(1)?,
+                agent_name: row.get(2)?,
+                target_path: row.get(3)?,
+                backup_path: row.get(4)?,
+                detected: row.get::<_, i64>(5)? != 0,
+                managed: row.get::<_, i64>(6)? != 0,
+                required: row.get::<_, i64>(7)? != 0,
+                preflight_status: row.get(8)?,
+                risk_level: row.get(9)?,
+                blocker: row.get(10)?,
+            })
+        })
+        .map_err(|error| format!("Cannot read backup targets: {}", error))?;
+
+    collect_rows(rows, "backup target")
+}
+
 fn read_indexed_rollback_plan(
     connection: &Connection,
 ) -> Result<Vec<RollbackPlanStepCard>, String> {
@@ -1536,6 +1612,45 @@ fn seed_project_scans(
     Ok(())
 }
 
+fn seed_backup_targets(
+    transaction: &rusqlite::Transaction<'_>,
+    backup_targets: &[BackupTargetCard],
+    timestamp: &str,
+) -> Result<(), String> {
+    for target in backup_targets {
+        transaction
+            .execute(
+                "INSERT INTO backup_targets (
+                    id, adapter_id, agent_name, target_path, backup_path,
+                    detected, managed, required, preflight_status,
+                    risk_level, blocker, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    target.id,
+                    target.adapter_id,
+                    target.agent_name,
+                    target.target_path,
+                    target.backup_path,
+                    if target.detected { 1 } else { 0 },
+                    if target.managed { 1 } else { 0 },
+                    if target.required { 1 } else { 0 },
+                    target.preflight_status,
+                    target.risk_level,
+                    target.blocker,
+                    timestamp
+                ],
+            )
+            .map_err(|error| {
+                format!(
+                    "Cannot seed backup target {} for {}: {}",
+                    target.target_path, target.agent_name, error
+                )
+            })?;
+    }
+
+    Ok(())
+}
+
 fn seed_rollback_plan(
     transaction: &rusqlite::Transaction<'_>,
     snapshot: &LegacySnapshot,
@@ -1800,6 +1915,76 @@ fn derive_adapter_capabilities(adapters: &[AgentAdapterCard]) -> Vec<AdapterCapa
     }
 
     capabilities
+}
+
+fn derive_backup_targets(root: &Path, adapters: &[AgentAdapterCard]) -> Vec<BackupTargetCard> {
+    adapters
+        .iter()
+        .map(|adapter| {
+            let has_target = !adapter.skills_path_hint.trim().is_empty();
+            let backup_path = root
+                .join("app-next")
+                .join(".skillhub-next")
+                .join("backups")
+                .join(&adapter.id)
+                .join("skills")
+                .display()
+                .to_string();
+            let required = adapter.detected || adapter.managed || adapter.enabled;
+            let (preflight_status, risk_level, blocker) =
+                backup_target_preflight(adapter, has_target);
+
+            BackupTargetCard {
+                id: stable_id("backup-target", &adapter.id),
+                adapter_id: adapter.id.clone(),
+                agent_name: adapter.name.clone(),
+                target_path: if has_target {
+                    adapter.skills_path_hint.clone()
+                } else {
+                    "未声明默认 Skills 目录".to_string()
+                },
+                backup_path,
+                detected: adapter.detected,
+                managed: adapter.managed,
+                required,
+                preflight_status: preflight_status.to_string(),
+                risk_level: risk_level.to_string(),
+                blocker: blocker.to_string(),
+            }
+        })
+        .collect()
+}
+
+fn backup_target_preflight(
+    adapter: &AgentAdapterCard,
+    has_target: bool,
+) -> (&'static str, &'static str, &'static str) {
+    if !adapter.detected {
+        return (
+            "skipped",
+            "low",
+            "未检测到该工具；不会创建假目录，也不会执行接管写入。",
+        );
+    }
+    if !has_target {
+        return (
+            "blocked",
+            "high",
+            "缺少目标目录，必须由用户手动指定后才能备份或接管。",
+        );
+    }
+    if !adapter.managed {
+        return (
+            "blocked",
+            "medium",
+            "检测到但尚未接管；真实同步前必须先完成备份和接管确认。",
+        );
+    }
+    (
+        "required",
+        "medium",
+        "已接管目标目录；真实同步前必须先生成可恢复备份。",
+    )
 }
 
 fn adapter_capability(
@@ -2073,8 +2258,22 @@ fn derive_presets(skills: &[SkillCard]) -> Vec<PresetCard> {
 }
 
 fn rollback_plan_steps(snapshot: &LegacySnapshot, snapshot_id: &str) -> Vec<RollbackPlanStepCard> {
-    let detected_agents = snapshot.agents.iter().filter(|agent| agent.detected).count();
+    let detected_agents = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.detected)
+        .count();
     let managed_agents = snapshot.agents.iter().filter(|agent| agent.managed).count();
+    let required_backups = snapshot
+        .backup_targets
+        .iter()
+        .filter(|target| target.required)
+        .count();
+    let blocked_backups = snapshot
+        .backup_targets
+        .iter()
+        .filter(|target| target.preflight_status == "blocked")
+        .count();
 
     vec![
         RollbackPlanStepCard {
@@ -2108,8 +2307,8 @@ fn rollback_plan_steps(snapshot: &LegacySnapshot, snapshot_id: &str) -> Vec<Roll
             risk_level: "medium".to_string(),
             status: if detected_agents > 0 { "planned" } else { "locked" }.to_string(),
             summary: format!(
-                "检测到 {} 个 AI 工具，其中 {} 个已接管；真实同步前必须把目标目录备份到可恢复位置。",
-                detected_agents, managed_agents
+                "检测到 {} 个 AI 工具，其中 {} 个已接管；真实同步前必须备份 {} 个目标目录，当前 {} 个目标仍有阻断原因。",
+                detected_agents, managed_agents, required_backups, blocked_backups
             ),
         },
         RollbackPlanStepCard {
@@ -2560,6 +2759,7 @@ mod tests {
         assert!(!snapshot.adapter_capabilities.is_empty());
         assert!(!snapshot.project_scans.is_empty());
         assert!(!snapshot.snapshots.is_empty());
+        assert!(!snapshot.backup_targets.is_empty());
         assert!(!snapshot.rollback_plan.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
         assert_eq!(snapshot.index.sources_indexed, snapshot.sources.len());
@@ -2580,6 +2780,7 @@ mod tests {
         assert!(!snapshot.adapter_capabilities.is_empty());
         assert!(!snapshot.project_scans.is_empty());
         assert!(!snapshot.snapshots.is_empty());
+        assert!(!snapshot.backup_targets.is_empty());
         assert!(!snapshot.rollback_plan.is_empty());
         assert_eq!(snapshot.index.skills_indexed, snapshot.skills.len());
     }
@@ -2654,5 +2855,29 @@ mod tests {
         assert!(steps
             .iter()
             .any(|step| step.title.contains("真实回滚") && step.status == "locked"));
+    }
+
+    #[test]
+    fn backup_targets_block_detected_unmanaged_adapters_until_confirmed() {
+        let root = resolve_legacy_root().expect("legacy root should resolve");
+        let mut adapter = agent_adapter(
+            "codex",
+            "OpenAI Codex",
+            "OpenAI",
+            "~\\.codex\\skills",
+            "global",
+        );
+        adapter.detected = true;
+        adapter.managed = false;
+        adapter.enabled = false;
+
+        let targets = derive_backup_targets(&root, &[adapter]);
+        let target = targets.first().expect("backup target should be derived");
+
+        assert!(target.required);
+        assert_eq!(target.preflight_status, "blocked");
+        assert_eq!(target.risk_level, "medium");
+        assert!(target.blocker.contains("尚未接管"));
+        assert!(target.backup_path.contains(".skillhub-next"));
     }
 }
