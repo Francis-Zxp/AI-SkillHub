@@ -31,6 +31,7 @@ struct LegacySnapshot {
     restore_dry_run: Vec<RestoreDryRunItemCard>,
     rollback_plan: Vec<RollbackPlanStepCard>,
     release_reports: Vec<ReleaseReportCard>,
+    desktop_qa_checks: Vec<DesktopQaCheckCard>,
     diagnostics: DiagnosticSummary,
     index: IndexReport,
 }
@@ -247,6 +248,18 @@ struct ReleaseReportCard {
     summary: String,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DesktopQaCheckCard {
+    id: String,
+    title: String,
+    description: String,
+    status: String,
+    required: bool,
+    evidence: String,
+    updated_at: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiagnosticSummary {
@@ -377,6 +390,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         restore_dry_run: Vec::new(),
         rollback_plan: Vec::new(),
         release_reports: derive_release_reports(&root),
+        desktop_qa_checks: Vec::new(),
         diagnostics,
         index: IndexReport {
             persisted: false,
@@ -406,6 +420,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         snapshot.backup_dry_run = read_indexed_backup_dry_run(&connection).unwrap_or_default();
         snapshot.restore_dry_run = read_indexed_restore_dry_run(&connection).unwrap_or_default();
         snapshot.rollback_plan = read_indexed_rollback_plan(&connection).unwrap_or_default();
+        snapshot.desktop_qa_checks = read_indexed_desktop_qa_checks(&connection).unwrap_or_default();
     }
     Ok(snapshot)
 }
@@ -432,7 +447,8 @@ fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
             || snapshot.backup_targets.is_empty()
             || snapshot.backup_dry_run.is_empty()
             || snapshot.restore_dry_run.is_empty()
-            || snapshot.rollback_plan.is_empty())
+            || snapshot.rollback_plan.is_empty()
+            || snapshot.desktop_qa_checks.is_empty())
     {
         return scan_legacy_snapshot();
     }
@@ -455,6 +471,12 @@ fn set_workspace_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, St
 #[tauri::command]
 fn set_preset_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
     set_enabled_state("presets", &id, enabled)?;
+    load_indexed_snapshot()
+}
+
+#[tauri::command]
+fn set_desktop_qa_check_status(id: String, status: String) -> Result<LegacySnapshot, String> {
+    set_desktop_qa_status(&id, &status)?;
     load_indexed_snapshot()
 }
 
@@ -505,6 +527,7 @@ fn open_index_database(root: &Path) -> Result<Connection, String> {
         .execute_batch(include_str!("../migrations/001_initial.sql"))
         .map_err(|error| format!("Cannot apply v2 SQLite migration: {}", error))?;
     ensure_runtime_schema(&connection)?;
+    seed_desktop_qa_checks(&connection)?;
 
     Ok(connection)
 }
@@ -598,6 +621,7 @@ fn read_snapshot_from_database(
     let backup_dry_run = read_indexed_backup_dry_run(connection)?;
     let restore_dry_run = read_indexed_restore_dry_run(connection)?;
     let rollback_plan = read_indexed_rollback_plan(connection)?;
+    let desktop_qa_checks = read_indexed_desktop_qa_checks(connection)?;
     let diagnostics = read_indexed_diagnostics(connection);
     let index = read_index_report(
         connection,
@@ -649,6 +673,7 @@ fn read_snapshot_from_database(
         restore_dry_run,
         rollback_plan,
         release_reports: derive_release_reports(root),
+        desktop_qa_checks,
         diagnostics,
         index,
     })
@@ -694,6 +719,47 @@ fn set_enabled_state(table_name: &str, id: &str, enabled: bool) -> Result<(), St
             ],
         )
         .map_err(|error| format!("Cannot write v2 state audit event: {}", error))?;
+
+    Ok(())
+}
+
+fn set_desktop_qa_status(id: &str, status: &str) -> Result<(), String> {
+    if !matches!(status, "pending" | "passed" | "failed") {
+        return Err("Unsupported desktop QA status.".to_string());
+    }
+
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let timestamp = unix_timestamp_string();
+    let changed = connection
+        .execute(
+            "UPDATE desktop_qa_checks SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            params![status, timestamp, id],
+        )
+        .map_err(|error| format!("Cannot update desktop QA check {}: {}", id, error))?;
+
+    if changed == 0 {
+        return Err(format!("Cannot find desktop QA check {}.", id));
+    }
+
+    connection
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'desktop_qa_updated', ?2, ?3, ?4)",
+            params![
+                format!("audit-desktop-qa-{}-{}", timestamp, stable_id("qa", id)),
+                "Updated desktop QA check status",
+                serde_json::to_string(&serde_json::json!({
+                    "id": id,
+                    "status": status,
+                    "scope": "v2-sqlite-only"
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot write desktop QA audit event: {}", error))?;
 
     Ok(())
 }
@@ -1478,6 +1544,42 @@ fn read_indexed_rollback_plan(
     collect_rows(rows, "rollback plan step")
 }
 
+fn read_indexed_desktop_qa_checks(
+    connection: &Connection,
+) -> Result<Vec<DesktopQaCheckCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, title, description, status, required, evidence, updated_at
+            FROM desktop_qa_checks
+            ORDER BY
+                required DESC,
+                CASE status
+                    WHEN 'failed' THEN 0
+                    WHEN 'pending' THEN 1
+                    WHEN 'passed' THEN 2
+                    ELSE 3
+                END,
+                id",
+        )
+        .map_err(|error| format!("Cannot prepare desktop QA query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(DesktopQaCheckCard {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                description: row.get(2)?,
+                status: row.get(3)?,
+                required: row.get::<_, i64>(4)? != 0,
+                evidence: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        })
+        .map_err(|error| format!("Cannot read desktop QA checks: {}", error))?;
+
+    collect_rows(rows, "desktop QA check")
+}
+
 fn read_index_report(
     connection: &Connection,
     db_file: &Path,
@@ -1607,6 +1709,73 @@ fn read_enabled_map(connection: &Connection, table_name: &str) -> HashMap<String
     };
 
     rows.filter_map(Result::ok).collect()
+}
+
+fn seed_desktop_qa_checks(connection: &Connection) -> Result<(), String> {
+    let timestamp = unix_timestamp_string();
+    for check in desktop_qa_catalog() {
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO desktop_qa_checks (
+                    id, title, description, status, required, evidence, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    &check.id,
+                    &check.title,
+                    &check.description,
+                    &check.status,
+                    if check.required { 1 } else { 0 },
+                    &check.evidence,
+                    &timestamp
+                ],
+            )
+            .map_err(|error| {
+                format!("Cannot seed desktop QA check {}: {}", check.id, error)
+            })?;
+    }
+    Ok(())
+}
+
+fn desktop_qa_catalog() -> Vec<DesktopQaCheckCard> {
+    vec![
+        desktop_qa_check(
+            "window-readable",
+            "默认窗口完整可读",
+            "侧边栏、主标题、指标卡和滚动条不能被裁切；默认窗口尺寸下必须能直接操作。",
+        ),
+        desktop_qa_check(
+            "dpi-clarity",
+            "高 DPI 清晰度",
+            "真实 Tauri 桌面窗口里的中文、英文、数字和胶囊状态不能发虚，不能用浏览器预览代替。",
+        ),
+        desktop_qa_check(
+            "release-gate-readable",
+            "发布闸门可读",
+            "诊断、发布预检、分享验收、zip 预览和桌面 QA 状态必须能被清楚读到。",
+        ),
+        desktop_qa_check(
+            "snapshot-safety",
+            "快照与恢复仍锁定",
+            "备份、恢复和真实同步必须保持预演/锁定状态，不能出现误触发真实写入的入口。",
+        ),
+        desktop_qa_check(
+            "release-build-guidance",
+            "发布说明清楚",
+            "用户必须能区分开发命令、调试 exe 和未来正式打包产物。",
+        ),
+    ]
+}
+
+fn desktop_qa_check(id: &str, title: &str, description: &str) -> DesktopQaCheckCard {
+    DesktopQaCheckCard {
+        id: id.to_string(),
+        title: title.to_string(),
+        description: description.to_string(),
+        status: "pending".to_string(),
+        required: true,
+        evidence: String::new(),
+        updated_at: String::new(),
+    }
 }
 
 fn seed_agent_adapters(
@@ -3251,7 +3420,8 @@ pub fn run() {
             scan_legacy_snapshot,
             set_agent_adapter_enabled,
             set_workspace_enabled,
-            set_preset_enabled
+            set_preset_enabled,
+            set_desktop_qa_check_status
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AI SkillHub v2 app");
@@ -3506,6 +3676,40 @@ mod tests {
         assert!(release_reports
             .iter()
             .all(|report| !report.summary.contains("D:\\")));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn desktop_qa_checks_seed_and_preserve_sqlite_status() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-desktop-qa-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let checks = read_indexed_desktop_qa_checks(&connection)
+            .expect("desktop QA checks should read");
+
+        assert_eq!(checks.len(), desktop_qa_catalog().len());
+        assert!(checks.iter().all(|check| check.status == "pending"));
+
+        connection
+            .execute(
+                "UPDATE desktop_qa_checks SET status = 'passed', updated_at = 'test' WHERE id = 'window-readable'",
+                [],
+            )
+            .expect("desktop QA status should update");
+        drop(connection);
+
+        let connection = open_index_database(&root).expect("test sqlite should reopen");
+        let checks = read_indexed_desktop_qa_checks(&connection)
+            .expect("desktop QA checks should reread");
+        let window_check = checks
+            .iter()
+            .find(|check| check.id == "window-readable")
+            .expect("window QA check should exist");
+
+        assert_eq!(window_check.status, "passed");
 
         let _ = fs::remove_dir_all(root);
     }

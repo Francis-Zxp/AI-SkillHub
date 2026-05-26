@@ -200,6 +200,16 @@ CREATE TABLE IF NOT EXISTS adapter_capabilities (
   FOREIGN KEY(adapter_id) REFERENCES agent_adapters(id)
 );
 
+CREATE TABLE IF NOT EXISTS desktop_qa_checks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  required INTEGER NOT NULL DEFAULT 1,
+  evidence TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS project_scans (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,

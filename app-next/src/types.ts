@@ -31,6 +31,7 @@ export type LegacySnapshot = {
   restoreDryRun: RestoreDryRunItemCard[];
   rollbackPlan: RollbackPlanStepCard[];
   releaseReports: ReleaseReportCard[];
+  desktopQaChecks: DesktopQaCheckCard[];
   diagnostics: DiagnosticSummary;
   index: IndexReport;
 };
@@ -213,6 +214,16 @@ export type ReleaseReportCard = {
   warn: number;
   error: number;
   summary: string;
+};
+
+export type DesktopQaCheckCard = {
+  id: string;
+  title: string;
+  description: string;
+  status: "pending" | "passed" | "failed" | string;
+  required: boolean;
+  evidence: string;
+  updatedAt: string;
 };
 
 export type DiagnosticSummary = {

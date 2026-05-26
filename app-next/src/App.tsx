@@ -1,6 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
-import type { LegacySnapshot, LegacySummary, NavKey, ProjectScanCard, ReleaseReportCard, WorkspaceCard } from "./types";
+import type {
+  DesktopQaCheckCard,
+  LegacySnapshot,
+  LegacySummary,
+  NavKey,
+  ProjectScanCard,
+  ReleaseReportCard,
+  WorkspaceCard
+} from "./types";
 
 const navItems: Array<{ key: NavKey; label: string; hint: string }> = [
   { key: "dashboard", label: "总览", hint: "健康、同步、风险" },
@@ -64,6 +72,25 @@ export function App() {
       }
 
       const result = await invoke<LegacySnapshot>(command, { id, enabled });
+      setSnapshot(result);
+      setLoadError("");
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateDesktopQaStatus(id: string, status: "pending" | "passed" | "failed") {
+    setLoading(true);
+    try {
+      if (!hasTauriRuntime()) {
+        setSnapshot(previous => updatePreviewDesktopQaStatus(previous ?? createPreviewSnapshot(), id, status));
+        setLoadError("");
+        return;
+      }
+
+      const result = await invoke<LegacySnapshot>("set_desktop_qa_check_status", { id, status });
       setSnapshot(result);
       setLoadError("");
     } catch (error) {
@@ -146,7 +173,7 @@ export function App() {
         {active === "agents" && <Agents disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "snapshots" && <Snapshots snapshot={snapshot} />}
         {active === "release" && <ReleaseGate snapshot={snapshot} />}
-        {active === "settings" && <Settings snapshot={snapshot} />}
+        {active === "settings" && <Settings disabled={loading} onQaStatus={updateDesktopQaStatus} snapshot={snapshot} />}
       </section>
     </main>
   );
@@ -709,6 +736,7 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
   const releasePreflight = releaseReports.find(report => report.id === "release-preflight");
   const shareRecipient = releaseReports.find(report => report.id === "share-recipient");
   const zipPreview = releaseReports.find(report => report.id === "zip-preview");
+  const desktopQaChecks = snapshot?.desktopQaChecks ?? [];
   const backupDryRun = snapshot?.backupDryRun ?? [];
   const restoreDryRun = snapshot?.restoreDryRun ?? [];
   const rollbackPlan = snapshot?.rollbackPlan ?? [];
@@ -759,10 +787,10 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
           : "等待刷新后生成回滚计划。"
     },
     {
-      status: "planned",
+      status: desktopQaGateStatus(desktopQaChecks),
       title: "桌面 QA",
-      label: "待复查",
-      summary: "已建立桌面窗口检查清单；每次打包前仍需真实 Tauri 窗口截图或人工确认。"
+      label: desktopQaGateLabel(desktopQaChecks),
+      summary: desktopQaGateSummary(desktopQaChecks)
     },
     {
       status: releaseReportGateStatus(releasePreflight),
@@ -872,7 +900,17 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
   );
 }
 
-function Settings({ snapshot }: { snapshot: LegacySnapshot | null }) {
+function Settings({
+  disabled,
+  onQaStatus,
+  snapshot
+}: {
+  disabled: boolean;
+  onQaStatus: (id: string, status: "pending" | "passed" | "failed") => void;
+  snapshot: LegacySnapshot | null;
+}) {
+  const desktopQaChecks = snapshot?.desktopQaChecks ?? [];
+
   return (
     <div className="view">
       <section className="panel">
@@ -926,29 +964,44 @@ function Settings({ snapshot }: { snapshot: LegacySnapshot | null }) {
         <p className="eyebrow">Desktop QA Checklist</p>
         <h3>桌面窗口发布前检查</h3>
         <p>
-          每次准备打包前都要用真实 Tauri 桌面窗口检查，不用浏览器预览代替。当前清单只记录人工验收标准，不执行写入。
+          每次准备打包前都要用真实 Tauri 桌面窗口检查，不用浏览器预览代替。这里的状态只写入 v2 SQLite，不会修改 v1 或 AI 工具目录。
         </p>
         <div className="qa-checklist-grid">
-          <article>
-            <span className="qa-status done">已验证</span>
-            <strong>默认窗口完整可读</strong>
-            <small>侧边栏、总览卡片、滚动条和主标题不能被裁切。</small>
-          </article>
-          <article>
-            <span className="qa-status planned">待复查</span>
-            <strong>快照页安全闸门</strong>
-            <small>备份、回滚、恢复预演必须保持只读提示，不能出现真实执行入口。</small>
-          </article>
-          <article>
-            <span className="qa-status planned">待复查</span>
-            <strong>设置页发布说明</strong>
-            <small>用户必须能看懂开发启动、调试 exe 和正式打包位置的区别。</small>
-          </article>
-          <article>
-            <span className="qa-status blocked">禁止跳过</span>
-            <strong>截图证据</strong>
-            <small>高 DPI Windows 下优先用窗口截图或人工截图，不能只依赖浏览器截图。</small>
-          </article>
+          {desktopQaChecks.map(check => (
+            <article className={`qa-check-card ${qaStatusClass(check.status)}`} key={check.id}>
+              <span className={`qa-status ${qaStatusClass(check.status)}`}>{qaStatusLabel(check.status)}</span>
+              <strong>{check.title}</strong>
+              <small>{check.description}</small>
+              <div className="qa-actions" aria-label={`${check.title} 状态`}>
+                <button
+                  className={check.status === "passed" ? "qa-action active" : "qa-action"}
+                  disabled={disabled}
+                  onClick={() => onQaStatus(check.id, "passed")}
+                  type="button"
+                >
+                  通过
+                </button>
+                <button
+                  className={check.status === "failed" ? "qa-action danger active" : "qa-action danger"}
+                  disabled={disabled}
+                  onClick={() => onQaStatus(check.id, "failed")}
+                  type="button"
+                >
+                  失败
+                </button>
+                <button
+                  className={check.status === "pending" ? "qa-action muted active" : "qa-action muted"}
+                  disabled={disabled}
+                  onClick={() => onQaStatus(check.id, "pending")}
+                  type="button"
+                >
+                  待查
+                </button>
+              </div>
+              <small className="qa-updated">更新：{formatScanTime(check.updatedAt)}</small>
+            </article>
+          ))}
+          {desktopQaChecks.length === 0 && <EmptyState text="等待 v2 SQLite 生成桌面 QA 检查项。" />}
         </div>
       </section>
     </div>
@@ -1481,6 +1534,53 @@ function createPreviewSnapshot(): LegacySnapshot {
         summary: "zip 预览：2 个 Skill 可识别；路径穿越防护已通过。"
       }
     ],
+    desktopQaChecks: [
+      {
+        id: "window-readable",
+        title: "默认窗口完整可读",
+        description: "侧边栏、主标题、指标卡和滚动条不能被裁切；默认窗口尺寸下必须能直接操作。",
+        status: "passed",
+        required: true,
+        evidence: "",
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: "dpi-clarity",
+        title: "高 DPI 清晰度",
+        description: "真实 Tauri 桌面窗口里的中文、英文、数字和胶囊状态不能发虚，不能用浏览器预览代替。",
+        status: "pending",
+        required: true,
+        evidence: "",
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: "release-gate-readable",
+        title: "发布闸门可读",
+        description: "诊断、发布预检、分享验收、zip 预览和桌面 QA 状态必须能被清楚读到。",
+        status: "pending",
+        required: true,
+        evidence: "",
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: "snapshot-safety",
+        title: "快照与恢复仍锁定",
+        description: "备份、恢复和真实同步必须保持预演/锁定状态，不能出现误触发真实写入的入口。",
+        status: "pending",
+        required: true,
+        evidence: "",
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: "release-build-guidance",
+        title: "发布说明清楚",
+        description: "用户必须能区分开发命令、调试 exe 和未来正式打包产物。",
+        status: "pending",
+        required: true,
+        evidence: "",
+        updatedAt: new Date().toISOString()
+      }
+    ],
     diagnostics: {
       available: false,
       appVersion: "v2 preview",
@@ -1531,6 +1631,19 @@ function updatePreviewEnabled(
   }
 
   return snapshot;
+}
+
+function updatePreviewDesktopQaStatus(
+  snapshot: LegacySnapshot,
+  id: string,
+  status: "pending" | "passed" | "failed"
+): LegacySnapshot {
+  return {
+    ...snapshot,
+    desktopQaChecks: snapshot.desktopQaChecks.map(check =>
+      check.id === id ? { ...check, status, updatedAt: new Date().toISOString() } : check
+    )
+  };
 }
 
 function scopeLabel(scope: string) {
@@ -1602,6 +1715,41 @@ function releaseReportGateLabel(report?: ReleaseReportCard) {
   if (report.ok && report.status === "ok") return "已通过";
   if (report.status === "warn") return "需复查";
   return "已阻断";
+}
+
+function desktopQaGateStatus(checks: DesktopQaCheckCard[]) {
+  if (checks.length === 0) return "planned";
+  if (checks.some(check => check.required && check.status === "failed")) return "blocked";
+  if (checks.filter(check => check.required).every(check => check.status === "passed")) return "done";
+  return "planned";
+}
+
+function desktopQaGateLabel(checks: DesktopQaCheckCard[]) {
+  const status = desktopQaGateStatus(checks);
+  if (status === "done") return "已通过";
+  if (status === "blocked") return "已阻断";
+  return "待复查";
+}
+
+function desktopQaGateSummary(checks: DesktopQaCheckCard[]) {
+  if (checks.length === 0) return "还没有生成桌面 QA 检查项。";
+  const required = checks.filter(check => check.required);
+  const passed = required.filter(check => check.status === "passed").length;
+  const failed = required.filter(check => check.status === "failed").length;
+  const pending = required.length - passed - failed;
+  return `桌面 QA：${passed}/${required.length} 项通过，${pending} 项待检查，${failed} 项失败。`;
+}
+
+function qaStatusClass(status: string) {
+  if (status === "passed") return "done";
+  if (status === "failed") return "blocked";
+  return "planned";
+}
+
+function qaStatusLabel(status: string) {
+  if (status === "passed") return "已通过";
+  if (status === "failed") return "未通过";
+  return "待检查";
 }
 
 function formatScanTime(value: string) {

@@ -1407,6 +1407,21 @@ h3 {
   background: rgba(255, 255, 255, .78);
 }
 
+.qa-check-card.done {
+  border-color: rgba(32, 180, 134, .2);
+  background: linear-gradient(135deg, #f7fffb, #ffffff);
+}
+
+.qa-check-card.planned {
+  border-color: rgba(73, 99, 198, .14);
+  background: linear-gradient(135deg, #f9fbff, #ffffff);
+}
+
+.qa-check-card.blocked {
+  border-color: rgba(216, 154, 43, .22);
+  background: linear-gradient(135deg, #fff8ee, #ffffff);
+}
+
 .qa-checklist-grid strong,
 .qa-checklist-grid small {
   display: block;
@@ -1446,6 +1461,66 @@ h3 {
 .qa-status.blocked {
   color: #9b4b12;
   background: #fff0dd;
+}
+
+.qa-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 4px;
+}
+
+.qa-action {
+  min-height: 34px;
+  border: 1px solid rgba(32, 180, 134, .18);
+  border-radius: 999px;
+  color: #31584e;
+  background: #f5fbf8;
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.qa-action:hover:not(:disabled),
+.qa-action.active {
+  border-color: rgba(32, 180, 134, .38);
+  color: #0b7058;
+  background: #def7ee;
+}
+
+.qa-action.danger {
+  border-color: rgba(216, 154, 43, .2);
+  color: #8a4b18;
+  background: #fff8ee;
+}
+
+.qa-action.danger:hover:not(:disabled),
+.qa-action.danger.active {
+  border-color: rgba(216, 154, 43, .38);
+  color: #9b4b12;
+  background: #fff0dd;
+}
+
+.qa-action.muted {
+  border-color: rgba(73, 99, 198, .14);
+  color: #536199;
+  background: #f8faff;
+}
+
+.qa-action.muted:hover:not(:disabled),
+.qa-action.muted.active {
+  border-color: rgba(73, 99, 198, .32);
+  color: #4963c6;
+  background: #ebefff;
+}
+
+.qa-action:disabled {
+  cursor: wait;
+  opacity: .58;
+}
+
+.qa-updated {
+  color: #87969d;
 }
 
 .safety-list {
