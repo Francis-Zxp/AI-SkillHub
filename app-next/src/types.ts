@@ -30,6 +30,7 @@ export type LegacySnapshot = {
   backupDryRun: BackupDryRunItemCard[];
   restoreDryRun: RestoreDryRunItemCard[];
   rollbackPlan: RollbackPlanStepCard[];
+  releaseReports: ReleaseReportCard[];
   diagnostics: DiagnosticSummary;
   index: IndexReport;
 };
@@ -196,6 +197,21 @@ export type RollbackPlanStepCard = {
   title: string;
   riskLevel: "low" | "medium" | "high" | string;
   status: "ready" | "planned" | "locked" | string;
+  summary: string;
+};
+
+export type ReleaseReportCard = {
+  id: string;
+  title: string;
+  reportType: string;
+  status: "ok" | "warn" | "error" | "missing" | string;
+  generatedAt: string;
+  version: string;
+  ok: boolean;
+  total: number;
+  passed: number;
+  warn: number;
+  error: number;
   summary: string;
 };
 

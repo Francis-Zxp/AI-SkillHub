@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
-import type { LegacySnapshot, LegacySummary, NavKey, ProjectScanCard, WorkspaceCard } from "./types";
+import type { LegacySnapshot, LegacySummary, NavKey, ProjectScanCard, ReleaseReportCard, WorkspaceCard } from "./types";
 
 const navItems: Array<{ key: NavKey; label: string; hint: string }> = [
   { key: "dashboard", label: "总览", hint: "健康、同步、风险" },
@@ -704,6 +704,11 @@ function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
 
 function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
   const diagnostics = snapshot?.diagnostics;
+  const releaseReports = snapshot?.releaseReports ?? [];
+  const diagnosticsReport = releaseReports.find(report => report.id === "diagnostics");
+  const releasePreflight = releaseReports.find(report => report.id === "release-preflight");
+  const shareRecipient = releaseReports.find(report => report.id === "share-recipient");
+  const zipPreview = releaseReports.find(report => report.id === "zip-preview");
   const backupDryRun = snapshot?.backupDryRun ?? [];
   const restoreDryRun = snapshot?.restoreDryRun ?? [];
   const rollbackPlan = snapshot?.rollbackPlan ?? [];
@@ -712,7 +717,9 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
   const blockedRestores = countByStatus(restoreDryRun, "blocked");
   const plannedRestores = countByStatus(restoreDryRun, "planned");
   const lockedRollbackSteps = rollbackPlan.filter(step => step.status === "locked").length;
-  const diagnosticsReady = Boolean(diagnostics?.available && diagnostics.error === 0);
+  const diagnosticsReady = Boolean(
+    diagnosticsReport?.ok ?? (diagnostics?.available && diagnostics.error === 0)
+  );
 
   const gateItems = [
     {
@@ -720,7 +727,8 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
       title: "诊断体检",
       label: diagnosticsReady ? "已通过" : "待处理",
       summary: diagnosticsReady
-        ? `诊断可读取：${diagnostics?.ok ?? 0} ok / ${diagnostics?.warn ?? 0} warn / ${diagnostics?.error ?? 0} error。`
+        ? diagnosticsReport?.summary ??
+          `诊断可读取：${diagnostics?.ok ?? 0} ok / ${diagnostics?.warn ?? 0} warn / ${diagnostics?.error ?? 0} error。`
         : "没有可用诊断，或诊断仍包含错误。"
     },
     {
@@ -757,10 +765,22 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
       summary: "已建立桌面窗口检查清单；每次打包前仍需真实 Tauri 窗口截图或人工确认。"
     },
     {
-      status: "planned",
+      status: releaseReportGateStatus(releasePreflight),
+      title: "发布预检",
+      label: releaseReportGateLabel(releasePreflight),
+      summary: releasePreflight?.summary ?? "还没有找到 v1 发布预检报告。"
+    },
+    {
+      status: releaseReportGateStatus(shareRecipient),
       title: "分享验证",
-      label: "待接入",
-      summary: "v2 还没有独立分享验证；暂时继承 v1 的 release preflight 和 share-recipient 流程。"
+      label: releaseReportGateLabel(shareRecipient),
+      summary: shareRecipient?.summary ?? "还没有找到 v1 分享验收报告。"
+    },
+    {
+      status: releaseReportGateStatus(zipPreview),
+      title: "zip 预览",
+      label: releaseReportGateLabel(zipPreview),
+      summary: zipPreview?.summary ?? "还没有找到 zip 导入预览报告。"
     }
   ];
   const doneCount = gateItems.filter(item => item.status === "done").length;
@@ -802,7 +822,7 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
         <p className="eyebrow">Preflight Status</p>
         <h3>发布仍保持锁定</h3>
         <p>
-          只有当诊断、备份预演、恢复预演、回滚、桌面 QA 和分享验证都通过后，v2 才应该开放打包入口。
+          只有当诊断、备份预演、恢复预演、回滚、桌面 QA、发布预检和分享验证都通过后，v2 才应该开放打包入口。
         </p>
         <div className="release-gate-grid">
           {gateItems.map(item => (
@@ -815,12 +835,37 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
         </div>
       </section>
 
+      <section className="panel release-report-panel">
+        <p className="eyebrow">V1 Report Inputs</p>
+        <h3>已接入的 v1 报告摘要</h3>
+        <p>
+          v2 当前只读取这些报告的摘要，不执行 v1 脚本，也不修改任何本机 AI 工具目录。
+        </p>
+        <div className="release-report-grid">
+          {releaseReports.map(report => (
+            <article className={`release-report-card ${releaseReportGateStatus(report)}`} key={report.id}>
+              <div>
+                <span className={`qa-status ${releaseReportGateStatus(report)}`}>{releaseReportGateLabel(report)}</span>
+                <strong>{report.title}</strong>
+              </div>
+              <small>{formatScanTime(report.generatedAt)}</small>
+              <p>{report.summary}</p>
+              <div className="release-report-stats">
+                <span>{report.passed}/{report.total} 通过</span>
+                <span>{report.warn} warn</span>
+                <span>{report.error} error</span>
+              </div>
+            </article>
+          ))}
+          {releaseReports.length === 0 && <p>未找到 v1 报告。请先在 v1 生成诊断包、发布预检或分享验收。</p>}
+        </div>
+      </section>
+
       <section className="panel release-next-panel">
         <p className="eyebrow">Next Safe Step</p>
-        <h3>下一步先补 v2 分享验证入口</h3>
+        <h3>下一步补桌面 QA 证据入口</h3>
         <p>
-          现在页面已经能集中展示发布前状态；下一步应把 v1 的分享验证、发布预检和诊断包结果接入 v2，
-          仍然保持只读，直到所有闸门可以解释清楚再考虑真正打包。
+          v1 诊断、预检、分享和 zip 预览已经进入 v2 发布闸门；下一步应把桌面窗口截图/人工确认结果也记录成可追踪状态。
         </p>
       </section>
     </div>
@@ -1378,6 +1423,64 @@ function createPreviewSnapshot(): LegacySnapshot {
         summary: "恢复按钮保持锁定，直到备份和 dry-run 通过。"
       }
     ],
+    releaseReports: [
+      {
+        id: "diagnostics",
+        title: "诊断包结果",
+        reportType: "diagnostics",
+        status: "ok",
+        generatedAt: new Date().toISOString(),
+        version: "v1.1.1",
+        ok: true,
+        total: 9,
+        passed: 6,
+        warn: 1,
+        error: 0,
+        summary: "诊断报告：6 ok / 1 warn / 0 error / 2 info。"
+      },
+      {
+        id: "release-preflight",
+        title: "发布预检",
+        reportType: "release-preflight",
+        status: "ok",
+        generatedAt: new Date().toISOString(),
+        version: "v1.1.1",
+        ok: true,
+        total: 12,
+        passed: 12,
+        warn: 0,
+        error: 0,
+        summary: "发布预检：12/12 项通过；当前包名 AI SkillHub.exe。"
+      },
+      {
+        id: "share-recipient",
+        title: "分享验收",
+        reportType: "share-recipient-test",
+        status: "ok",
+        generatedAt: new Date().toISOString(),
+        version: "v1.1.1",
+        ok: true,
+        total: 8,
+        passed: 8,
+        warn: 2,
+        error: 1,
+        summary: "分享验收：8/8 个场景按预期通过；含无 Codex、缺 Git/WebView2 等模拟场景。"
+      },
+      {
+        id: "zip-preview",
+        title: "zip 导入预览",
+        reportType: "zip-preview-test",
+        status: "ok",
+        generatedAt: new Date().toISOString(),
+        version: "",
+        ok: true,
+        total: 4,
+        passed: 4,
+        warn: 0,
+        error: 0,
+        summary: "zip 预览：2 个 Skill 可识别；路径穿越防护已通过。"
+      }
+    ],
     diagnostics: {
       available: false,
       appVersion: "v2 preview",
@@ -1485,6 +1588,20 @@ function restoreActionLabel(action: string) {
   if (action === "block-restore") return "阻断真实恢复";
   if (action === "skip") return "跳过未检测工具";
   return action;
+}
+
+function releaseReportGateStatus(report?: ReleaseReportCard) {
+  if (!report) return "planned";
+  if (report.ok && report.status === "ok") return "done";
+  if (report.status === "warn") return "planned";
+  return "blocked";
+}
+
+function releaseReportGateLabel(report?: ReleaseReportCard) {
+  if (!report) return "待接入";
+  if (report.ok && report.status === "ok") return "已通过";
+  if (report.status === "warn") return "需复查";
+  return "已阻断";
 }
 
 function formatScanTime(value: string) {

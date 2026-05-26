@@ -30,6 +30,7 @@ struct LegacySnapshot {
     backup_dry_run: Vec<BackupDryRunItemCard>,
     restore_dry_run: Vec<RestoreDryRunItemCard>,
     rollback_plan: Vec<RollbackPlanStepCard>,
+    release_reports: Vec<ReleaseReportCard>,
     diagnostics: DiagnosticSummary,
     index: IndexReport,
 }
@@ -229,6 +230,23 @@ struct RollbackPlanStepCard {
     summary: String,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct ReleaseReportCard {
+    id: String,
+    title: String,
+    report_type: String,
+    status: String,
+    generated_at: String,
+    version: String,
+    ok: bool,
+    total: u64,
+    passed: u64,
+    warn: u64,
+    error: u64,
+    summary: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiagnosticSummary {
@@ -358,6 +376,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         backup_dry_run: Vec::new(),
         restore_dry_run: Vec::new(),
         rollback_plan: Vec::new(),
+        release_reports: derive_release_reports(&root),
         diagnostics,
         index: IndexReport {
             persisted: false,
@@ -629,6 +648,7 @@ fn read_snapshot_from_database(
         backup_dry_run,
         restore_dry_run,
         rollback_plan,
+        release_reports: derive_release_reports(root),
         diagnostics,
         index,
     })
@@ -2736,6 +2756,179 @@ fn parse_diagnostic_summary(diagnostics: Option<&Value>) -> DiagnosticSummary {
     }
 }
 
+fn derive_release_reports(root: &Path) -> Vec<ReleaseReportCard> {
+    let reports_root = root.join("app").join("reports");
+    let candidates = [
+        release_report_from_diagnostics(&reports_root.join("latest-diagnostics.json")),
+        release_report_from_release_preflight(
+            &reports_root
+                .join("release-preflight")
+                .join("latest-release-preflight.json"),
+        ),
+        release_report_from_share_recipient(
+            &reports_root
+                .join("share-recipient-test")
+                .join("latest-share-recipient-test.json"),
+        ),
+        release_report_from_zip_preview(
+            &reports_root
+                .join("zip-preview-test")
+                .join("latest-zip-preview-test.json"),
+        ),
+    ];
+
+    candidates.into_iter().flatten().collect()
+}
+
+fn release_report_from_diagnostics(path: &Path) -> Option<ReleaseReportCard> {
+    let root = read_json(path)?;
+    let summary = root.get("summary").unwrap_or(&Value::Null);
+    let ok = json_u64(summary, "ok");
+    let warn = json_u64(summary, "warn");
+    let error = json_u64(summary, "error");
+    let info = json_u64(summary, "info");
+    let total = json_u64(summary, "checks").max(ok + warn + error + info);
+    let status = non_empty_or(json_string(&root, "overallStatus"), "missing");
+
+    Some(ReleaseReportCard {
+        id: "diagnostics".to_string(),
+        title: "诊断包结果".to_string(),
+        report_type: "diagnostics".to_string(),
+        status: status.clone(),
+        generated_at: json_string(&root, "generatedAt"),
+        version: json_string(&root, "appVersion"),
+        ok: status == "ok" && error == 0,
+        total,
+        passed: ok,
+        warn,
+        error,
+        summary: format!(
+            "诊断报告：{} ok / {} warn / {} error / {} info。",
+            ok, warn, error, info
+        ),
+    })
+}
+
+fn release_report_from_release_preflight(path: &Path) -> Option<ReleaseReportCard> {
+    let root = read_json(path)?;
+    let checks = root
+        .get("checks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let total = checks.len() as u64;
+    let passed = count_status(&checks, "ok");
+    let warn = count_status(&checks, "warn");
+    let error = total.saturating_sub(passed + warn);
+    let status = non_empty_or(
+        json_string(&root, "overallStatus"),
+        if json_bool(&root, "ok") { "ok" } else { "error" },
+    );
+    let package_name = non_empty_or(json_string(&root, "packageName"), "未生成");
+
+    Some(ReleaseReportCard {
+        id: "release-preflight".to_string(),
+        title: "发布预检".to_string(),
+        report_type: "release-preflight".to_string(),
+        status: status.clone(),
+        generated_at: json_string(&root, "generatedAt"),
+        version: json_string(&root, "version"),
+        ok: status == "ok" && error == 0,
+        total,
+        passed,
+        warn,
+        error,
+        summary: format!(
+            "发布预检：{}/{} 项通过；当前包名 {}。",
+            passed, total, package_name
+        ),
+    })
+}
+
+fn release_report_from_share_recipient(path: &Path) -> Option<ReleaseReportCard> {
+    let root = read_json(path)?;
+    let cases = root
+        .get("cases")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let total = cases.len() as u64;
+    let passed = cases.iter().filter(|case| json_bool(case, "ok")).count() as u64;
+    let warn = count_status(&cases, "warn");
+    let error = count_status(&cases, "error");
+    let ok = json_bool(&root, "ok");
+
+    Some(ReleaseReportCard {
+        id: "share-recipient".to_string(),
+        title: "分享验收".to_string(),
+        report_type: "share-recipient-test".to_string(),
+        status: if ok { "ok" } else { "error" }.to_string(),
+        generated_at: json_string(&root, "generatedAt"),
+        version: json_string(&root, "appVersion"),
+        ok,
+        total,
+        passed,
+        warn,
+        error,
+        summary: format!(
+            "分享验收：{}/{} 个场景按预期通过；含无 Codex、缺 Git/WebView2 等模拟场景。",
+            passed, total
+        ),
+    })
+}
+
+fn release_report_from_zip_preview(path: &Path) -> Option<ReleaseReportCard> {
+    let root = read_json(path)?;
+    let result = root.get("result").unwrap_or(&Value::Null);
+    let checks = [
+        json_bool(&root, "ok"),
+        json_bool(result, "previewOk"),
+        json_bool(result, "safeExtracted"),
+        json_bool(result, "traversalBlocked"),
+    ];
+    let passed = checks.iter().filter(|item| **item).count() as u64;
+    let ok = checks.iter().all(|item| *item);
+    let skill_count = json_u64(result, "previewSkillCount");
+
+    Some(ReleaseReportCard {
+        id: "zip-preview".to_string(),
+        title: "zip 导入预览".to_string(),
+        report_type: "zip-preview-test".to_string(),
+        status: if ok { "ok" } else { "error" }.to_string(),
+        generated_at: json_string(&root, "generatedAt"),
+        version: String::new(),
+        ok,
+        total: checks.len() as u64,
+        passed,
+        warn: 0,
+        error: checks.len() as u64 - passed,
+        summary: format!(
+            "zip 预览：{} 个 Skill 可识别；路径穿越防护{}。",
+            skill_count,
+            if json_bool(result, "traversalBlocked") {
+                "已通过"
+            } else {
+                "未通过"
+            }
+        ),
+    })
+}
+
+fn count_status(items: &[Value], status: &str) -> u64 {
+    items
+        .iter()
+        .filter(|item| json_string(item, "status") == status)
+        .count() as u64
+}
+
+fn non_empty_or(value: String, fallback: &str) -> String {
+    if value.is_empty() {
+        fallback.to_string()
+    } else {
+        value
+    }
+}
+
 fn parse_diagnostic_skills(diagnostics: Option<&Value>) -> HashMap<String, SkillDiagnostic> {
     let mut result = HashMap::new();
     let Some(skills) = diagnostics
@@ -3255,5 +3448,65 @@ mod tests {
         assert_eq!(item.action, "block-backup");
         assert_eq!(item.status, "blocked");
         assert!(item.summary.contains("不复制任何文件"));
+    }
+
+    #[test]
+    fn release_reports_parse_v1_preflight_inputs_without_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-release-report-test-{}",
+            unix_timestamp_string()
+        ));
+        let reports = root.join("app").join("reports");
+        fs::create_dir_all(reports.join("release-preflight"))
+            .expect("release-preflight folder should be created");
+        fs::create_dir_all(reports.join("share-recipient-test"))
+            .expect("share-recipient-test folder should be created");
+        fs::create_dir_all(reports.join("zip-preview-test"))
+            .expect("zip-preview-test folder should be created");
+
+        fs::write(
+            reports.join("latest-diagnostics.json"),
+            r#"{"overallStatus":"ok","appVersion":"v1.1.1","generatedAt":"2026-05-27T00:00:00+09:00","summary":{"checks":3,"ok":2,"warn":1,"error":0,"info":0}}"#,
+        )
+        .expect("diagnostics report should be written");
+        fs::write(
+            reports
+                .join("release-preflight")
+                .join("latest-release-preflight.json"),
+            r#"{"ok":true,"overallStatus":"ok","version":"v1.1.1","packageName":"AI SkillHub.exe","generatedAt":"2026-05-27T00:00:00+09:00","checks":[{"status":"ok"},{"status":"ok"}]}"#,
+        )
+        .expect("release preflight report should be written");
+        fs::write(
+            reports
+                .join("share-recipient-test")
+                .join("latest-share-recipient-test.json"),
+            r#"{"ok":true,"appVersion":"v1.1.1","generatedAt":"2026-05-27T00:00:00+09:00","cases":[{"ok":true,"status":"ok"},{"ok":true,"status":"warn"}]}"#,
+        )
+        .expect("share recipient report should be written");
+        fs::write(
+            reports
+                .join("zip-preview-test")
+                .join("latest-zip-preview-test.json"),
+            r#"{"ok":true,"generatedAt":"2026-05-27T00:00:00+09:00","result":{"previewOk":true,"safeExtracted":true,"traversalBlocked":true,"previewSkillCount":2}}"#,
+        )
+        .expect("zip preview report should be written");
+
+        let release_reports = derive_release_reports(&root);
+        let ids = release_reports
+            .iter()
+            .map(|report| report.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(release_reports.len(), 4);
+        assert!(ids.contains(&"diagnostics"));
+        assert!(ids.contains(&"release-preflight"));
+        assert!(ids.contains(&"share-recipient"));
+        assert!(ids.contains(&"zip-preview"));
+        assert!(release_reports.iter().all(|report| report.ok));
+        assert!(release_reports
+            .iter()
+            .all(|report| !report.summary.contains("D:\\")));
+
+        let _ = fs::remove_dir_all(root);
     }
 }
