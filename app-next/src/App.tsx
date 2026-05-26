@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
-import type { LegacySnapshot, LegacySummary, NavKey, ProjectScanCard } from "./types";
+import type { LegacySnapshot, LegacySummary, NavKey, ProjectScanCard, WorkspaceCard } from "./types";
 
 const navItems: Array<{ key: NavKey; label: string; hint: string }> = [
   { key: "dashboard", label: "总览", hint: "健康、同步、风险" },
@@ -243,18 +243,45 @@ function Workspaces({
 }) {
   const workspaces = snapshot?.workspaces ?? [];
   const projectScans = snapshot?.projectScans ?? [];
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>("");
+
+  useEffect(() => {
+    if (workspaces.length === 0) {
+      if (selectedWorkspaceId) setSelectedWorkspaceId("");
+      return;
+    }
+
+    if (!workspaces.some(workspace => workspace.id === selectedWorkspaceId)) {
+      setSelectedWorkspaceId(workspaces[0].id);
+    }
+  }, [selectedWorkspaceId, workspaces]);
+
+  const selectedWorkspace = workspaces.find(workspace => workspace.id === selectedWorkspaceId) ?? workspaces[0];
+  const selectedProjectScan = selectedWorkspace
+    ? projectScans.find(scan => scan.workspaceId === selectedWorkspace.id)
+    : undefined;
 
   return (
     <div className="view">
       <div className="card-grid">
         {workspaces.map(workspace => (
-          <article className="workspace-card" key={workspace.id}>
+          <article
+            className={workspace.id === selectedWorkspace?.id ? "workspace-card is-selected" : "workspace-card"}
+            key={workspace.id}
+          >
             <div className="card-head">
               <strong>{workspace.name}</strong>
               <span className={`scope ${workspace.scope}`}>{scopeLabel(workspace.scope)}</span>
             </div>
             <p>{workspace.path}</p>
             <footer>
+              <button
+                className="detail-button"
+                onClick={() => setSelectedWorkspaceId(workspace.id)}
+                type="button"
+              >
+                查看详情
+              </button>
               <span>{workspace.agentCount} 个 AI 工具</span>
               <span>{workspace.skillCount} 个 Skills</span>
               <ToggleSwitch
@@ -269,7 +296,11 @@ function Workspaces({
         {workspaces.length === 0 && <EmptyState text="正在等待工作区索引结果。" />}
       </div>
 
-      <section className="panel">
+      {selectedWorkspace && (
+        <WorkspaceDetailPanel projectScan={selectedProjectScan} workspace={selectedWorkspace} />
+      )}
+
+      <section className="panel workspace-scan-panel">
         <p className="eyebrow">Project Workspace Scanner</p>
         <h3>只读项目扫描</h3>
         <div className="project-scan-list">
@@ -301,6 +332,75 @@ function Workspaces({
         </div>
       </section>
     </div>
+  );
+}
+
+function WorkspaceDetailPanel({
+  projectScan,
+  workspace
+}: {
+  projectScan?: ProjectScanCard;
+  workspace: WorkspaceCard;
+}) {
+  const isProject = workspace.scope === "project";
+
+  return (
+    <section className="panel workspace-detail-panel">
+      <div className="workspace-detail-head">
+        <div>
+          <p className="eyebrow">Workspace Detail</p>
+          <h3>{workspace.name}</h3>
+          <span>{workspace.path}</span>
+        </div>
+        <span className={`scope ${workspace.scope}`}>{scopeLabel(workspace.scope)}</span>
+      </div>
+
+      <div className="workspace-detail-metrics">
+        <article>
+          <span>范围</span>
+          <strong>{scopeLabel(workspace.scope)}</strong>
+        </article>
+        <article>
+          <span>AI 工具</span>
+          <strong>{workspace.agentCount}</strong>
+        </article>
+        <article>
+          <span>Skills</span>
+          <strong>{workspace.skillCount}</strong>
+        </article>
+        <article>
+          <span>状态</span>
+          <strong>{workspace.enabled ? "已启用" : "已停用"}</strong>
+        </article>
+      </div>
+
+      {isProject && projectScan ? (
+        <div className="workspace-detail-scan">
+          <div className="scan-flags">
+            <ScanFlag enabled={projectScan.hasGit} label="Git" />
+            <ScanFlag enabled={projectScan.hasPackageJson} label="package.json" />
+            <ScanFlag enabled={projectScan.hasCargoToml} label="Cargo.toml" />
+            <ScanFlag enabled={projectScan.hasTauriConfig} label="Tauri" />
+            <ScanFlag enabled={projectScan.hasAgentsMd} label="AGENTS.md" />
+            <ScanFlag enabled={projectScan.hasClaudeMd} label="CLAUDE.md" />
+            <ScanFlag enabled={projectScan.hasReadmeMd} label="README.md" />
+          </div>
+          <div className="instruction-preview">
+            <p className="eyebrow">只读说明预览</p>
+            <pre>{projectInstructionPreview(projectScan)}</pre>
+          </div>
+        </div>
+      ) : (
+        <div className="workspace-detail-note">
+          <strong>{isProject ? "等待项目扫描结果" : "当前是只读工作区详情"}</strong>
+          <span>
+            {isProject
+              ? "项目详情页会在扫描完成后显示技术栈、说明文件和只读说明草稿。"
+              : "全局和 Agent 工作区先展示范围、路径和启用状态；真实同步仍需等待备份、回滚和发布闸门完成。"}
+          </span>
+        </div>
+      )}
+    </section>
   );
 }
 

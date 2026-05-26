@@ -548,6 +548,33 @@ h3 {
   white-space: nowrap;
 }
 
+.workspace-card.is-selected {
+  border-color: rgba(32, 180, 134, .36);
+  box-shadow: inset 0 0 0 1px rgba(32, 180, 134, .14), var(--shadow);
+}
+
+.detail-button {
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid rgba(32, 180, 134, .22);
+  border-radius: 999px;
+  color: #176f5b;
+  background: #effaf5;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+  transition:
+    transform .16s ease,
+    border-color .16s ease,
+    background-color .16s ease;
+}
+
+.detail-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(32, 180, 134, .42);
+  background: #e2f7ef;
+}
+
 .adapter-card {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, .98), rgba(250, 255, 252, .96)),
@@ -724,6 +751,90 @@ h3 {
   font-size: 13px;
   line-height: 1.65;
   white-space: pre-wrap;
+}
+
+.workspace-detail-panel {
+  display: grid;
+  gap: 18px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .99), rgba(243, 253, 248, .96) 58%, rgba(255, 249, 240, .96)),
+    #ffffff;
+}
+
+.workspace-detail-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.workspace-detail-head h3 {
+  margin-bottom: 7px;
+}
+
+.workspace-detail-head > div > span {
+  color: #6b7a83;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.workspace-detail-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.workspace-detail-metrics article {
+  padding: 15px;
+  border: 1px solid rgba(34, 67, 61, .1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .74);
+}
+
+.workspace-detail-metrics span,
+.workspace-detail-metrics strong {
+  display: block;
+}
+
+.workspace-detail-metrics span {
+  color: #71808a;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.workspace-detail-metrics strong {
+  margin-top: 6px;
+  color: #1f2c34;
+  font-size: 22px;
+  font-weight: 950;
+}
+
+.workspace-detail-scan {
+  display: grid;
+  gap: 14px;
+}
+
+.workspace-detail-note {
+  display: grid;
+  gap: 6px;
+  padding: 15px;
+  border-radius: 16px;
+  background: #f7fbf9;
+  box-shadow: inset 0 0 0 1px rgba(32, 180, 134, .1);
+}
+
+.workspace-detail-note strong {
+  color: #24343d;
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.workspace-detail-note span {
+  color: #6b7a83;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.55;
 }
 
 .snapshot-hero::after {
@@ -1425,6 +1536,10 @@ code {
   }
 
   .qa-checklist-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .workspace-detail-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
