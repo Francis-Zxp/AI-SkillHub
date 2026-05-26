@@ -933,6 +933,85 @@ h3 {
   background: #edf6f2;
 }
 
+.dry-run-list {
+  display: grid;
+  gap: 12px;
+}
+
+.dry-run-row {
+  display: grid;
+  grid-template-columns: minmax(180px, .5fr) minmax(320px, 1fr) max-content max-content;
+  gap: 12px;
+  align-items: center;
+  padding: 15px;
+  border: 1px solid rgba(34, 67, 61, .1);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .98), rgba(247, 252, 249, .96)),
+    #ffffff;
+}
+
+.dry-run-row.blocked {
+  border-color: rgba(230, 109, 148, .22);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .98), rgba(255, 247, 249, .96)),
+    #ffffff;
+}
+
+.dry-run-row.skipped {
+  opacity: .78;
+}
+
+.dry-run-row strong,
+.dry-run-row span {
+  display: block;
+}
+
+.dry-run-row strong {
+  color: #1f2c34;
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.dry-run-row div > span {
+  margin-top: 4px;
+  color: #71808a;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.dry-run-row p {
+  grid-column: 1 / -1;
+  color: #63727a;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.dry-run-paths {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.dry-run-paths code {
+  overflow: hidden;
+  padding: 8px 10px;
+  border-radius: 12px;
+  color: #31424b;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 12px;
+  background: #f2f7f5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dry-run-paths span {
+  color: #9aa6ad;
+  font-size: 16px;
+  font-weight: 950;
+}
+
 .snapshot-list {
   display: grid;
   gap: 10px;

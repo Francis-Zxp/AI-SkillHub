@@ -444,6 +444,7 @@ function Agents({
 function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
   const snapshots = snapshot?.snapshots ?? [];
   const backupTargets = snapshot?.backupTargets ?? [];
+  const restoreDryRun = snapshot?.restoreDryRun ?? [];
   const rollbackPlan = snapshot?.rollbackPlan ?? [];
   const latest = snapshots.find(item => item.isLatest) ?? snapshots[0];
 
@@ -529,6 +530,30 @@ function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
             </article>
           ))}
           {backupTargets.length === 0 && <p>等待下一次刷新生成备份目标清单。</p>}
+        </div>
+      </section>
+
+      <section className="panel">
+        <p className="eyebrow">Restore Dry-run Report</p>
+        <h3>只预演，不执行真实恢复</h3>
+        <div className="dry-run-list">
+          {restoreDryRun.map(item => (
+            <article className={`dry-run-row ${item.status}`} key={item.id}>
+              <div>
+                <strong>{item.agentName}</strong>
+                <span>{restoreActionLabel(item.action)}</span>
+              </div>
+              <div className="dry-run-paths">
+                <code>{item.backupPath}</code>
+                <span>→</span>
+                <code>{item.targetPath}</code>
+              </div>
+              <span className={`step-status ${item.status}`}>{dryRunStatusLabel(item.status)}</span>
+              <span className={`risk ${item.riskLevel}`}>{riskLabel(item.riskLevel)}</span>
+              <p>{item.summary}</p>
+            </article>
+          ))}
+          {restoreDryRun.length === 0 && <p>等待下一次刷新生成恢复预演报告。</p>}
         </div>
       </section>
 
@@ -936,6 +961,44 @@ function createPreviewSnapshot(): LegacySnapshot {
         blocker: "未检测到该工具；不会创建假目录，也不会执行接管写入。"
       }
     ],
+    restoreDryRun: [
+      {
+        id: "preview-restore-claude",
+        backupTargetId: "preview-backup-claude",
+        adapterId: "claude",
+        agentName: "Claude / Claude Code",
+        action: "prepare-restore",
+        targetPath: "~\\.claude\\skills",
+        backupPath: "../app-next/.skillhub-next/backups/claude/skills",
+        status: "planned",
+        riskLevel: "medium",
+        summary: "真实同步前会先生成备份；恢复预演会列出从备份位置还原到目标目录的计划。"
+      },
+      {
+        id: "preview-restore-codex",
+        backupTargetId: "preview-backup-codex",
+        adapterId: "codex",
+        agentName: "OpenAI Codex",
+        action: "block-restore",
+        targetPath: "~\\.codex\\skills",
+        backupPath: "../app-next/.skillhub-next/backups/codex/skills",
+        status: "blocked",
+        riskLevel: "high",
+        summary: "当前目标仍被阻断，恢复预演只能报告原因，不能进入真实恢复。"
+      },
+      {
+        id: "preview-restore-antigravity",
+        backupTargetId: "preview-backup-antigravity",
+        adapterId: "antigravity",
+        agentName: "Antigravity",
+        action: "skip",
+        targetPath: "~\\.gemini\\antigravity\\skills",
+        backupPath: "../app-next/.skillhub-next/backups/antigravity/skills",
+        status: "skipped",
+        riskLevel: "low",
+        summary: "未检测到该工具，恢复预演会跳过此目标，不创建目录、不写入文件。"
+      }
+    ],
     rollbackPlan: [
       {
         id: "preview-step-1",
@@ -1048,6 +1111,22 @@ function backupStatusLabel(status: string) {
   if (status === "blocked") return "已阻断";
   if (status === "skipped") return "暂不处理";
   return status;
+}
+
+function dryRunStatusLabel(status: string) {
+  if (status === "ready") return "可恢复";
+  if (status === "planned") return "预演中";
+  if (status === "blocked") return "已阻断";
+  if (status === "skipped") return "跳过";
+  return status;
+}
+
+function restoreActionLabel(action: string) {
+  if (action === "prepare-restore") return "等待备份后才能恢复";
+  if (action === "restore-from-backup") return "从备份恢复";
+  if (action === "block-restore") return "阻断真实恢复";
+  if (action === "skip") return "跳过未检测工具";
+  return action;
 }
 
 function formatScanTime(value: string) {

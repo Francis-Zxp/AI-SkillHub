@@ -83,6 +83,44 @@ pnpm build
 pnpm tauri info
 ```
 
+## How to start v2 during development
+
+V2 is not the same as the released v1 executable yet. It is still the Tauri development line.
+
+Use this command while developing:
+
+```powershell
+cd "D:\My Files\AI_global_skills\app-next"
+pnpm tauri dev
+```
+
+That command starts the Vite web UI and then opens the Tauri desktop window.
+
+After the first dev run, a debug executable may exist here:
+
+```text
+D:\My Files\AI_global_skills\app-next\src-tauri\target\debug\ai-skillhub-next.exe
+```
+
+That debug executable is not the final shareable installer. It may still expect the dev server/runtime context and should not be copied to other computers.
+
+## Where the final v2 exe will be
+
+When v2 is ready to package, use:
+
+```powershell
+cd "D:\My Files\AI_global_skills\app-next"
+pnpm tauri build
+```
+
+The final Windows installer/executable will be generated under:
+
+```text
+D:\My Files\AI_global_skills\app-next\src-tauri\target\release\bundle\
+```
+
+Do not publish that v2 build yet unless the backup, restore dry-run, release preflight, and share validation steps have passed.
+
 If `npm` reports cache permission errors, use a local cache temporarily:
 
 ```powershell
