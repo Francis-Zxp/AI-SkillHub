@@ -15,11 +15,14 @@ const navItems: Array<{ key: NavKey; label: string; hint: string; icon: string }
   { key: "library", label: "Skill Library", hint: "Central skills", icon: "✦" },
   { key: "sources", label: "Sources", hint: "GitHub and local", icon: "▤" },
   { key: "workspaces", label: "Workspaces", hint: "Global and projects", icon: "⌘" },
-  { key: "presets", label: "Presets", hint: "Skill bundles", icon: "≡" }
+  { key: "presets", label: "Presets", hint: "Skill bundles", icon: "≡" },
+  { key: "agents", label: "Agents", hint: "Claude, Codex, Antigravity", icon: "◎" },
+  { key: "snapshots", label: "Snapshots", hint: "Backups and rollback", icon: "◈" },
+  { key: "release", label: "Release Gate", hint: "QA and publishing", icon: "△" }
 ];
 
 export function App() {
-  const [active, setActive] = useState<NavKey>("dashboard");
+  const [active, setActive] = useState<NavKey>(() => initialNavKey());
   const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
@@ -192,7 +195,14 @@ export function App() {
             summary={summary}
           />
         )}
-        {active === "library" && <Library snapshot={snapshot} />}
+        {active === "library" && (
+          <Library
+            loading={loading}
+            onOpenSources={() => setActive("sources")}
+            onSync={() => void loadSnapshot("refresh")}
+            snapshot={snapshot}
+          />
+        )}
         {active === "workspaces" && <Workspaces disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "presets" && <Presets disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "sources" && <Sources snapshot={snapshot} />}
@@ -364,25 +374,148 @@ function Dashboard({
   );
 }
 
-function Library({ snapshot }: { snapshot: LegacySnapshot | null }) {
+function Library({
+  loading,
+  onOpenSources,
+  onSync,
+  snapshot
+}: {
+  loading: boolean;
+  onOpenSources: () => void;
+  onSync: () => void;
+  snapshot: LegacySnapshot | null;
+}) {
   const skills = snapshot?.skills ?? [];
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [healthFilter, setHealthFilter] = useState<string>("all");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const categories = Array.from(new Set(skills.map(skill => skill.category).filter(Boolean))).slice(0, 6);
+  const filteredSkills = skills.filter(skill => {
+    const categoryMatches = categoryFilter === "all" || skill.category === categoryFilter;
+    const healthMatches = healthFilter === "all" || skill.health === healthFilter;
+    return categoryMatches && healthMatches;
+  });
+  const healthCounts = {
+    ok: skills.filter(skill => skill.health === "ok").length,
+    warn: skills.filter(skill => skill.health === "warn").length,
+    error: skills.filter(skill => skill.health === "error").length,
+    info: skills.filter(skill => skill.health === "info").length
+  };
 
   return (
-    <div className="card-grid">
-      {skills.map(skill => (
-        <article className="skill-card" key={skill.name}>
-          <div className="card-head">
-            <strong>{skill.name}</strong>
-            <span className={`health ${skill.health}`}>{skill.health}</span>
+    <div className="view skill-library-view">
+      <section className="library-header">
+        <div>
+          <h2>Skill Library</h2>
+          <p>Manage, configure, and monitor all active AI capabilities across your workspaces.</p>
+        </div>
+        <div className="library-actions">
+          <button className="secondary-action library-action" disabled={loading} onClick={onSync} type="button">
+            ↻ {loading ? "Syncing" : "Sync Sources"}
+          </button>
+          <button className="primary-action library-action" onClick={onOpenSources} type="button">
+            + New Skill
+          </button>
+        </div>
+      </section>
+
+      <section className="library-controls glass-panel">
+        <div className="library-filter-row" aria-label="Skill category filters">
+          <button
+            className={categoryFilter === "all" ? "filter-chip active" : "filter-chip"}
+            onClick={() => setCategoryFilter("all")}
+            type="button"
+          >
+            All Skills
+          </button>
+          {categories.map(category => (
+            <button
+              className={categoryFilter === category ? "filter-chip active" : "filter-chip"}
+              key={category}
+              onClick={() => setCategoryFilter(category)}
+              type="button"
+            >
+              {category}
+            </button>
+          ))}
+          <span className="filter-divider" />
+          <button
+            className={healthFilter === "ok" ? "filter-chip active" : "filter-chip"}
+            onClick={() => setHealthFilter(healthFilter === "ok" ? "all" : "ok")}
+            type="button"
+          >
+            <span className="status-dot healthy" />
+            Healthy {healthCounts.ok}
+          </button>
+          <button
+            className={healthFilter === "warn" ? "filter-chip active" : "filter-chip"}
+            onClick={() => setHealthFilter(healthFilter === "warn" ? "all" : "warn")}
+            type="button"
+          >
+            <span className="status-dot syncing" />
+            Warnings {healthCounts.warn}
+          </button>
+          <button
+            className={healthFilter === "error" ? "filter-chip active" : "filter-chip"}
+            onClick={() => setHealthFilter(healthFilter === "error" ? "all" : "error")}
+            type="button"
+          >
+            <span className="status-dot error" />
+            Errors {healthCounts.error}
+          </button>
+        </div>
+        <div className="view-toggle" aria-label="Skill view mode">
+          <button
+            className={viewMode === "grid" ? "active" : ""}
+            onClick={() => setViewMode("grid")}
+            type="button"
+          >
+            ▦
+          </button>
+          <button
+            className={viewMode === "list" ? "active" : ""}
+            onClick={() => setViewMode("list")}
+            type="button"
+          >
+            ☰
+          </button>
+        </div>
+      </section>
+
+      <section className={viewMode === "grid" ? "skill-library-grid" : "skill-library-grid list-mode"}>
+        {filteredSkills.map(skill => (
+          <article className={`skill-library-card glow-card ${skill.health}`} key={skill.name}>
+            <div className="skill-card-top">
+              <div className={`skill-card-icon ${categoryTone(skill.category)}`}>{skillIcon(skill.category)}</div>
+              <div className="skill-card-status">
+                <span className={`status-badge ${skill.health}`}>
+                  <span className={`status-dot ${statusDotClass(skill.health)}`} />
+                  {skillStatusLabel(skill.health)}
+                </span>
+                <button aria-label={`Edit ${skill.name}`} className="icon-action" type="button">⋮</button>
+              </div>
+            </div>
+            <h3>{skill.name}</h3>
+            <p>{skill.description || "No description provided yet."}</p>
+            <div className="skill-tags">
+              <span>{skill.category || "Uncategorized"}</span>
+              {skill.enabled ? <span>Enabled</span> : <span>Disabled</span>}
+            </div>
+            <footer>
+              <div>
+                <span aria-hidden="true">⌁</span>
+                <small>Source: {skill.source || skill.relativePath || "local"}</small>
+              </div>
+              <button aria-label={`Configure ${skill.name}`} className="icon-action" type="button">✎</button>
+            </footer>
+          </article>
+        ))}
+        {filteredSkills.length === 0 && (
+          <div className="empty-state library-empty">
+            {skills.length === 0 ? "正在等待 v1 Skill 扫描结果。" : "当前筛选条件下没有 Skill。"}
           </div>
-          <p>{skill.description}</p>
-          <footer>
-            <span>{skill.category}</span>
-            <span>{skill.source}</span>
-          </footer>
-        </article>
-      ))}
-      {skills.length === 0 && <EmptyState text="正在等待 v1 Skill 扫描结果。" />}
+        )}
+      </section>
     </div>
   );
 }
@@ -1172,6 +1305,49 @@ function Settings({
 
 function hasTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function initialNavKey(): NavKey {
+  if (typeof window === "undefined") return "dashboard";
+  const view = new URLSearchParams(window.location.search).get("view");
+  return isNavKey(view) ? view : "dashboard";
+}
+
+function isNavKey(value: string | null): value is NavKey {
+  return navItems.some(item => item.key === value) || value === "settings";
+}
+
+function categoryTone(category: string): string {
+  const value = category.toLowerCase();
+  if (value.includes("design") || value.includes("ui") || category.includes("设计")) return "tone-tertiary";
+  if (value.includes("research") || category.includes("科研") || category.includes("论文")) return "tone-primary";
+  if (value.includes("security") || category.includes("安全")) return "tone-error";
+  if (value.includes("development") || value.includes("dev") || category.includes("工程")) return "tone-secondary";
+  return "tone-surface";
+}
+
+function skillIcon(category: string): string {
+  const value = category.toLowerCase();
+  if (value.includes("design") || value.includes("ui") || category.includes("设计")) return "✦";
+  if (value.includes("research") || category.includes("科研") || category.includes("论文")) return "⌁";
+  if (value.includes("figure") || category.includes("图")) return "◒";
+  if (value.includes("security") || category.includes("安全")) return "△";
+  if (value.includes("development") || value.includes("dev") || category.includes("工程")) return "⌘";
+  return "✧";
+}
+
+function statusDotClass(health: string): string {
+  if (health === "ok") return "healthy";
+  if (health === "error") return "error";
+  return "syncing";
+}
+
+function skillStatusLabel(health: string): string {
+  if (health === "ok") return "Active";
+  if (health === "warn") return "Review";
+  if (health === "error") return "Failed";
+  if (health === "info") return "Info";
+  return health;
 }
 
 function createPreviewSnapshot(): LegacySnapshot {
