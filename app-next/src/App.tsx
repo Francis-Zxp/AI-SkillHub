@@ -10,15 +10,39 @@ import type {
   WorkspaceCard
 } from "./types";
 
-const navItems: Array<{ key: NavKey; label: string; hint: string; icon: string }> = [
-  { key: "dashboard", label: "Dashboard", hint: "Overview", icon: "▦" },
-  { key: "library", label: "Skill Library", hint: "Central skills", icon: "✦" },
-  { key: "sources", label: "Sources", hint: "GitHub and local", icon: "▤" },
-  { key: "workspaces", label: "Workspaces", hint: "Global and projects", icon: "⌘" },
-  { key: "presets", label: "Presets", hint: "Skill bundles", icon: "≡" },
-  { key: "agents", label: "Agents", hint: "Claude, Codex, Antigravity", icon: "◎" },
-  { key: "snapshots", label: "Snapshots", hint: "Backups and rollback", icon: "◈" },
-  { key: "release", label: "Release Gate", hint: "QA and publishing", icon: "△" }
+type IconName =
+  | "add"
+  | "agent"
+  | "alert"
+  | "bell"
+  | "dashboard"
+  | "edit"
+  | "help"
+  | "info"
+  | "library"
+  | "list"
+  | "menu"
+  | "moon"
+  | "more"
+  | "refresh"
+  | "release"
+  | "search"
+  | "settings"
+  | "snapshots"
+  | "sources"
+  | "sparkle"
+  | "sun"
+  | "workspaces";
+
+const navItems: Array<{ key: NavKey; label: string; hint: string; icon: IconName }> = [
+  { key: "dashboard", label: "Dashboard", hint: "Overview", icon: "dashboard" },
+  { key: "library", label: "Skill Library", hint: "Central skills", icon: "sparkle" },
+  { key: "sources", label: "Sources", hint: "GitHub and local", icon: "sources" },
+  { key: "workspaces", label: "Workspaces", hint: "Global and projects", icon: "workspaces" },
+  { key: "presets", label: "Presets", hint: "Skill bundles", icon: "list" },
+  { key: "agents", label: "Agents", hint: "Claude, Codex, Antigravity", icon: "agent" },
+  { key: "snapshots", label: "Snapshots", hint: "Backups and rollback", icon: "snapshots" },
+  { key: "release", label: "Release Gate", hint: "QA and publishing", icon: "release" }
 ];
 
 type ThemeName = "dark" | "light";
@@ -130,7 +154,7 @@ export function App() {
               onClick={() => setActive(item.key)}
               type="button"
             >
-              <span className="nav-icon" aria-hidden="true">{item.icon}</span>
+              <span className="nav-icon" aria-hidden="true"><Icon name={item.icon} /></span>
               <strong>{item.label}</strong>
             </button>
           ))}
@@ -142,11 +166,11 @@ export function App() {
             onClick={() => setActive("settings")}
             type="button"
           >
-            <span className="nav-icon" aria-hidden="true">⚙</span>
+            <span className="nav-icon" aria-hidden="true"><Icon name="settings" /></span>
             <strong>Settings</strong>
           </button>
           <button className="nav-item" onClick={() => setActive("release")} type="button">
-            <span className="nav-icon" aria-hidden="true">?</span>
+            <span className="nav-icon" aria-hidden="true"><Icon name="help" /></span>
             <strong>Help</strong>
           </button>
         </div>
@@ -155,20 +179,20 @@ export function App() {
       <section className="workspace">
         <header className="topbar">
           <div className="command-search">
-            <span aria-hidden="true">⌕</span>
+            <span className="search-icon" aria-hidden="true"><Icon name="search" /></span>
             <input aria-label="Search commands, skills, or sources" placeholder="Search commands, skills, or sources..." />
             <kbd>⌘</kbd>
             <kbd>K</kbd>
           </div>
           <div className="topbar-actions">
-            <button className="icon-button" aria-label="Notifications" type="button">!</button>
+            <button className="icon-button" aria-label="Notifications" type="button"><Icon name="bell" /></button>
             <button
               className="icon-button theme-toggle-button"
               aria-label={theme === "dark" ? "切换到亮色主题" : "切换到暗色主题"}
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               type="button"
             >
-              {theme === "dark" ? "☼" : "☾"}
+              <Icon name={theme === "dark" ? "sun" : "moon"} />
             </button>
             <span className="topbar-divider" />
             <img alt="AI SkillHub" className="topbar-avatar" src="/ai-skillhub-logo.png" />
@@ -230,6 +254,65 @@ export function App() {
   );
 }
 
+function Icon({ className = "", name }: { className?: string; name: IconName }) {
+  const props = {
+    className: `ui-icon ${className}`.trim(),
+    fill: "none",
+    stroke: "currentColor",
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    strokeWidth: 1.8,
+    viewBox: "0 0 24 24"
+  };
+
+  switch (name) {
+    case "add":
+      return <svg {...props}><path d="M12 5v14M5 12h14" /></svg>;
+    case "agent":
+      return <svg {...props}><circle cx="12" cy="12" r="7" /><circle cx="12" cy="12" r="2.5" /><path d="M12 3v2M21 12h-2M12 21v-2M3 12h2" /></svg>;
+    case "alert":
+      return <svg {...props}><path d="M12 4 21 20H3L12 4Z" /><path d="M12 9v5M12 17h.01" /></svg>;
+    case "bell":
+      return <svg {...props}><path d="M18 9a6 6 0 1 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z" /><path d="M10 21h4" /></svg>;
+    case "dashboard":
+      return <svg {...props}><rect x="4" y="4" width="6" height="6" /><rect x="14" y="4" width="6" height="6" /><rect x="4" y="14" width="6" height="6" /><rect x="14" y="14" width="6" height="6" /></svg>;
+    case "edit":
+      return <svg {...props}><path d="M4 20h4L19 9l-4-4L4 16v4Z" /><path d="m13.5 6.5 4 4" /></svg>;
+    case "help":
+      return <svg {...props}><circle cx="12" cy="12" r="9" /><path d="M9.8 9a2.4 2.4 0 0 1 4.6 1c0 1.8-2.4 2.1-2.4 4" /><path d="M12 17h.01" /></svg>;
+    case "info":
+      return <svg {...props}><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>;
+    case "library":
+      return <svg {...props}><path d="M6 4h10a2 2 0 0 1 2 2v14H8a2 2 0 0 1-2-2V4Z" /><path d="M8 18h10M9 8h6M9 12h5" /></svg>;
+    case "list":
+      return <svg {...props}><path d="M8 6h12M8 12h12M8 18h12" /><path d="M4 6h.01M4 12h.01M4 18h.01" /></svg>;
+    case "menu":
+      return <svg {...props}><path d="M5 7h14M5 12h14M5 17h14" /></svg>;
+    case "moon":
+      return <svg {...props}><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 7 7 0 1 0 20 15.5Z" /></svg>;
+    case "more":
+      return <svg {...props}><circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="19" r="1" /></svg>;
+    case "refresh":
+      return <svg {...props}><path d="M20 6v5h-5" /><path d="M4 18v-5h5" /><path d="M18 11a6 6 0 0 0-10-4.5L4 10" /><path d="M6 13a6 6 0 0 0 10 4.5L20 14" /></svg>;
+    case "release":
+      return <svg {...props}><path d="M12 4 21 20H3L12 4Z" /></svg>;
+    case "search":
+      return <svg {...props}><circle cx="11" cy="11" r="7" /><path d="m16.5 16.5 3.5 3.5" /></svg>;
+    case "settings":
+      return <svg {...props}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2 3-.2-.1a1.8 1.8 0 0 0-2 .2 1.7 1.7 0 0 0-.8 1.7V22h-3.6v-.2a1.7 1.7 0 0 0-.8-1.7 1.8 1.8 0 0 0-2-.2l-.2.1-2-3 .1-.1A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.5-1.1H3v-3.8h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1 2-3 .2.1a1.8 1.8 0 0 0 2-.2 1.7 1.7 0 0 0 .8-1.7V2h3.6v.2a1.7 1.7 0 0 0 .8 1.7 1.8 1.8 0 0 0 2 .2l.2-.1 2 3-.1.1A1.7 1.7 0 0 0 19.4 9a1.7 1.7 0 0 0 1.5 1.1h.1v3.8h-.1A1.7 1.7 0 0 0 19.4 15Z" /></svg>;
+    case "snapshots":
+      return <svg {...props}><path d="m12 3 9 9-9 9-9-9 9-9Z" /><path d="m12 8 4 4-4 4-4-4 4-4Z" /></svg>;
+    case "sources":
+      return <svg {...props}><rect x="5" y="4" width="14" height="16" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></svg>;
+    case "sparkle":
+      return <svg {...props}><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" /><path d="m18 15 .7 2.3L21 18l-2.3.7L18 21l-.7-2.3L15 18l2.3-.7L18 15Z" /></svg>;
+    case "sun":
+      return <svg {...props}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>;
+    case "workspaces":
+      return <svg {...props}><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="18" r="2" /><path d="M8 6h8M6 8v8M18 8v8M8 18h8" /></svg>;
+  }
+}
+
 function Dashboard({
   loading,
   onOpenRelease,
@@ -284,7 +367,7 @@ function Dashboard({
   ];
   const alerts = [
     {
-      icon: "!",
+      icon: "alert" as const,
       title: healthIssues > 0 ? "Safety Gate Requires Review" : "Safety Gate Clear",
       body:
         healthIssues > 0
@@ -293,7 +376,7 @@ function Dashboard({
       action: "Inspect Gate"
     },
     {
-      icon: "↻",
+      icon: "refresh" as const,
       title: loading ? "Index Refresh Running" : "SQLite Index Ready",
       body: snapshot?.index.databaseFile
         ? "Current dashboard is loaded from the v2 SQLite index."
@@ -301,7 +384,7 @@ function Dashboard({
       action: loading ? "Watching" : "Open Index"
     },
     {
-      icon: "i",
+      icon: "info" as const,
       title: "Desktop Alpha Notice",
       body: "This is the v2 Alpha shell. Real sync remains locked behind dry-run gates.",
       action: "View Notes"
@@ -317,19 +400,19 @@ function Dashboard({
         </div>
         <div className="hero-actions">
           <button className="secondary-action" disabled={loading} onClick={onSync} type="button">
-            ↺ {loading ? "Syncing" : "Sync All"}
+            <Icon name="refresh" /> {loading ? "Syncing" : "Sync All"}
           </button>
           <button className="primary-action" onClick={onOpenSources} type="button">
-            + New Deployment
+            <Icon name="add" /> New Deployment
           </button>
         </div>
       </section>
 
       <section className="metrics command-metrics">
-        <Metric accent="violet" icon="⚙" label="Active Skills" trend={`+${summary.sources} sources indexed`} value={summary.skills} />
-        <Metric accent="indigo" icon="❖" label="Sources Indexed" trend={`${summary.prompts} prompt collections`} value={summary.sources} />
-        <Metric accent="amber" icon="◒" label="AI Agents" trend={`${summary.agentsDetected} detected locally`} value={summary.agentsDetected} />
-        <Metric accent="rose" icon="△" label="Health Issues" trend={healthIssues > 0 ? "Requires attention" : "All clear"} value={healthIssues} />
+        <Metric accent="violet" icon="sparkle" label="Active Skills" trend={`+${summary.sources} sources indexed`} value={summary.skills} />
+        <Metric accent="indigo" icon="sources" label="Sources Indexed" trend={`${summary.prompts} prompt collections`} value={summary.sources} />
+        <Metric accent="amber" icon="agent" label="AI Agents" trend={`${summary.agentsDetected} detected locally`} value={summary.agentsDetected} />
+        <Metric accent="rose" icon="alert" label="Health Issues" trend={healthIssues > 0 ? "Requires attention" : "All clear"} value={healthIssues} />
       </section>
 
       <section className="command-grid">
@@ -367,13 +450,13 @@ function Dashboard({
 
         <aside className="linear-panel alerts-panel">
           <header className="linear-panel-head">
-            <h3><span aria-hidden="true">△</span> Active Alerts</h3>
+            <h3><Icon name="alert" /> Active Alerts</h3>
             <em>{healthIssues} SYS</em>
           </header>
           <div className="alert-list">
             {alerts.map(alert => (
               <article className="alert-item" key={alert.title}>
-                <span className="alert-icon">{alert.icon}</span>
+                <span className="alert-icon"><Icon name={alert.icon} /></span>
                 <div>
                   <strong>{alert.title}</strong>
                   <p>{alert.body}</p>
@@ -426,10 +509,10 @@ function Library({
         </div>
         <div className="library-actions">
           <button className="secondary-action library-action" disabled={loading} onClick={onSync} type="button">
-            ↻ {loading ? "Syncing" : "Sync Sources"}
+            <Icon name="refresh" /> {loading ? "Syncing" : "Sync Sources"}
           </button>
           <button className="primary-action library-action" onClick={onOpenSources} type="button">
-            + New Skill
+            <Icon name="add" /> New Skill
           </button>
         </div>
       </section>
@@ -485,14 +568,14 @@ function Library({
             onClick={() => setViewMode("grid")}
             type="button"
           >
-            ▦
+            <Icon name="dashboard" />
           </button>
           <button
             className={viewMode === "list" ? "active" : ""}
             onClick={() => setViewMode("list")}
             type="button"
           >
-            ☰
+            <Icon name="list" />
           </button>
         </div>
       </section>
@@ -501,13 +584,15 @@ function Library({
         {filteredSkills.map(skill => (
           <article className={`skill-library-card glow-card ${skill.health}`} key={skill.name}>
             <div className="skill-card-top">
-              <div className={`skill-card-icon ${categoryTone(skill.category)}`}>{skillIcon(skill.category)}</div>
+              <div className={`skill-card-icon ${categoryTone(skill.category)}`}>
+                <Icon name={skillIcon(skill.category)} />
+              </div>
               <div className="skill-card-status">
                 <span className={`status-badge ${skill.health}`}>
                   <span className={`status-dot ${statusDotClass(skill.health)}`} />
                   {skillStatusLabel(skill.health)}
                 </span>
-                <button aria-label={`Edit ${skill.name}`} className="icon-action" type="button">⋮</button>
+                <button aria-label={`Edit ${skill.name}`} className="icon-action" type="button"><Icon name="more" /></button>
               </div>
             </div>
             <h3>{skill.name}</h3>
@@ -518,10 +603,10 @@ function Library({
             </div>
             <footer>
               <div>
-                <span aria-hidden="true">⌁</span>
+                <span aria-hidden="true"><Icon name="sources" /></span>
                 <small>Source: {skill.source || skill.relativePath || "local"}</small>
               </div>
-              <button aria-label={`Configure ${skill.name}`} className="icon-action" type="button">✎</button>
+              <button aria-label={`Configure ${skill.name}`} className="icon-action" type="button"><Icon name="edit" /></button>
             </footer>
           </article>
         ))}
@@ -1390,14 +1475,14 @@ function categoryTone(category: string): string {
   return "tone-surface";
 }
 
-function skillIcon(category: string): string {
+function skillIcon(category: string): IconName {
   const value = category.toLowerCase();
-  if (value.includes("design") || value.includes("ui") || category.includes("设计")) return "✦";
-  if (value.includes("research") || category.includes("科研") || category.includes("论文")) return "⌁";
-  if (value.includes("figure") || category.includes("图")) return "◒";
-  if (value.includes("security") || category.includes("安全")) return "△";
-  if (value.includes("development") || value.includes("dev") || category.includes("工程")) return "⌘";
-  return "✧";
+  if (value.includes("design") || value.includes("ui") || category.includes("设计")) return "sparkle";
+  if (value.includes("research") || category.includes("科研") || category.includes("论文")) return "library";
+  if (value.includes("figure") || category.includes("图")) return "dashboard";
+  if (value.includes("security") || category.includes("安全")) return "alert";
+  if (value.includes("development") || value.includes("dev") || category.includes("工程")) return "workspaces";
+  return "sparkle";
 }
 
 function statusDotClass(health: string): string {
@@ -2265,7 +2350,7 @@ function Metric({
   value
 }: {
   accent?: string;
-  icon?: string;
+  icon?: IconName;
   label: string;
   trend?: string;
   value: number;
@@ -2274,7 +2359,7 @@ function Metric({
     <article className={`metric metric-${accent}`}>
       <div>
         <span>{label}</span>
-        {icon && <em aria-hidden="true">{icon}</em>}
+        {icon && <em aria-hidden="true"><Icon name={icon} /></em>}
       </div>
       <strong>{value.toLocaleString()}</strong>
       {trend && <small>{trend}</small>}

@@ -5610,3 +5610,355 @@ kbd,
 .bar-visual span {
   background: color-mix(in srgb, var(--ui-brand-strong) 46%, var(--ui-panel-soft)) !important;
 }
+
+/* V2 UI audit pass 3: deterministic SVG icons and default-window fit */
+html,
+body,
+#root {
+  min-width: 0 !important;
+  overflow-x: hidden;
+}
+
+.shell {
+  width: 100%;
+  min-width: 0 !important;
+  grid-template-columns: var(--ui-sidebar-width) minmax(0, 1fr) !important;
+  overflow-x: hidden;
+}
+
+.workspace {
+  min-width: 0 !important;
+  overflow-x: hidden !important;
+}
+
+.ui-icon {
+  display: block;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 auto;
+  stroke: currentColor;
+  vector-effect: non-scaling-stroke;
+}
+
+.nav-item {
+  display: grid !important;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 14px;
+  min-width: 0;
+  padding: 0 12px !important;
+  text-align: left;
+}
+
+.nav-icon {
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 12px !important;
+  font-size: 20px !important;
+}
+
+.nav-icon .ui-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.nav-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.command-search {
+  display: grid !important;
+  grid-template-columns: 22px minmax(0, 1fr) 28px 28px;
+  align-items: center;
+  width: min(520px, 48vw) !important;
+  min-width: 260px;
+  gap: 8px;
+}
+
+.command-search .search-icon,
+.command-search > span:first-child {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--ui-text-soft) !important;
+  font-size: 20px !important;
+}
+
+.command-search input {
+  min-width: 0;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 0;
+  gap: 10px !important;
+}
+
+.icon-button,
+.theme-toggle-button,
+.icon-action,
+.view-toggle button {
+  display: grid !important;
+  place-items: center;
+}
+
+.icon-button .ui-icon,
+.theme-toggle-button .ui-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.icon-action .ui-icon,
+.view-toggle .ui-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.metric em,
+.linear-panel-head h3 svg,
+.alert-icon,
+.skill-card-icon,
+.skill-library-card footer > div > span {
+  display: grid;
+  place-items: center;
+}
+
+.metric em {
+  font-size: 19px !important;
+}
+
+.metric em .ui-icon,
+.linear-panel-head h3 .ui-icon,
+.alert-icon .ui-icon,
+.skill-card-icon .ui-icon,
+.skill-library-card footer .ui-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.primary-action,
+.secondary-action,
+.library-action,
+.ghost-button,
+.logs-button {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.primary-action .ui-icon,
+.secondary-action .ui-icon,
+.library-action .ui-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.command-hero,
+.library-header,
+.page-header,
+.hero-panel {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.library-header,
+.page-header {
+  align-items: center !important;
+}
+
+.library-header > div,
+.page-header > div:first-child {
+  min-width: 0;
+}
+
+.page-header-stats {
+  align-self: flex-start;
+  align-items: flex-start;
+  justify-content: flex-end;
+  flex: 0 1 360px !important;
+  max-width: 360px !important;
+  min-width: 0 !important;
+}
+
+.page-header-stats span {
+  flex: 0 0 auto;
+  height: 32px !important;
+  min-height: 32px !important;
+  max-height: 32px !important;
+  padding: 0 12px !important;
+  writing-mode: horizontal-tb !important;
+}
+
+.skill-library-grid,
+.adapter-grid,
+.preset-grid,
+.workspace-card-grid,
+.card-grid,
+.command-metrics,
+.release-summary-grid {
+  width: 100%;
+  min-width: 0;
+}
+
+.skill-library-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)) !important;
+}
+
+.preset-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)) !important;
+}
+
+.adapter-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr)) !important;
+}
+
+.card-grid,
+.workspace-card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)) !important;
+}
+
+.source-table {
+  width: 100%;
+  overflow: hidden !important;
+}
+
+.source-row {
+  display: grid !important;
+  grid-template-columns: minmax(160px, 1.2fr) 82px 84px 120px minmax(0, 2fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.source-row strong,
+.source-row small,
+.source-row span {
+  min-width: 0;
+}
+
+.theme-light .logs-button {
+  color: #2c2121 !important;
+  background: #fffdf9 !important;
+  border: 1px solid #d9cec5 !important;
+}
+
+@media (max-width: 1520px) {
+  :root {
+    --ui-page-max: 1160px;
+  }
+
+  .skill-library-grid,
+  .command-metrics,
+  .release-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .command-grid {
+    grid-template-columns: minmax(0, 1.4fr) minmax(300px, .8fr) !important;
+  }
+}
+
+@media (max-width: 1280px) {
+  :root {
+    --ui-sidebar-width: 232px;
+    --ui-page-max: 980px;
+  }
+
+  .command-search {
+    width: min(420px, 44vw) !important;
+  }
+
+  .page-header,
+  .library-header {
+    align-items: flex-start !important;
+    flex-direction: column;
+  }
+
+  .page-header-stats {
+    justify-content: flex-start;
+    max-width: 100% !important;
+  }
+
+  .source-row {
+    grid-template-columns: minmax(180px, 1fr) auto auto;
+  }
+
+  .source-row small {
+    grid-column: 1 / -1;
+  }
+
+  .source-row .status-badge {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 1080px) {
+  :root {
+    --ui-sidebar-width: 220px;
+    --ui-page-max: 820px;
+  }
+
+  .shell {
+    min-width: 0 !important;
+  }
+
+  .topbar {
+    padding-inline: 18px !important;
+  }
+
+  .command-search {
+    width: min(360px, 42vw) !important;
+    min-width: 220px;
+  }
+
+  .topbar-avatar,
+  .topbar-divider {
+    display: none;
+  }
+
+  .view,
+  .command-view,
+  .skill-library-view,
+  .sources-view,
+  .workspaces-view,
+  .presets-view,
+  .agents-view,
+  .snapshots-view,
+  .release-view,
+  .settings-view {
+    padding: 22px 18px 40px !important;
+  }
+
+  .skill-library-grid,
+  .command-metrics,
+  .release-summary-grid,
+  .preset-grid,
+  .adapter-grid,
+  .card-grid,
+  .workspace-card-grid,
+  .release-gate-grid,
+  .release-report-grid,
+  .qa-checklist-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .command-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
