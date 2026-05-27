@@ -161,14 +161,14 @@ export function App() {
             <kbd>K</kbd>
           </div>
           <div className="topbar-actions">
-            <button className="icon-button" aria-label="Notifications" type="button">♧</button>
+            <button className="icon-button" aria-label="Notifications" type="button">!</button>
             <button
               className="icon-button theme-toggle-button"
               aria-label={theme === "dark" ? "切换到亮色主题" : "切换到暗色主题"}
               onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
               type="button"
             >
-              {theme === "dark" ? "☀" : "☾"}
+              {theme === "dark" ? "☼" : "☾"}
             </button>
             <span className="topbar-divider" />
             <img alt="AI SkillHub" className="topbar-avatar" src="/ai-skillhub-logo.png" />
@@ -590,7 +590,7 @@ function Workspaces({
               <ToggleSwitch
                 disabled={disabled}
                 enabled={workspace.enabled}
-                label={workspace.enabled ? "已启用" : "已停用"}
+                label={workspace.enabled ? "已启用" : "未启用"}
                 onClick={() => onToggle("set_workspace_enabled", workspace.id, !workspace.enabled)}
               />
             </footer>
@@ -739,7 +739,7 @@ function Presets({
             <ToggleSwitch
               disabled={disabled}
               enabled={preset.enabled}
-              label={preset.enabled ? "已启用" : "已停用"}
+              label={preset.enabled ? "已启用" : "未启用"}
               onClick={() => onToggle("set_preset_enabled", preset.id, !preset.enabled)}
             />
           </footer>
@@ -840,7 +840,7 @@ function Agents({
               <ToggleSwitch
                 disabled={disabled || !adapter.detected}
                 enabled={adapter.enabled}
-                label={adapter.enabled ? "已启用" : "已停用"}
+                label={!adapter.detected ? "未检测" : adapter.enabled ? "已启用" : "未启用"}
                 onClick={() => onToggle("set_agent_adapter_enabled", adapter.id, !adapter.enabled)}
               />
             </footer>
@@ -2241,13 +2241,17 @@ function ToggleSwitch({
 }) {
   return (
     <button
+      aria-label={label}
       aria-pressed={enabled}
       className={enabled ? "switch is-on" : "switch"}
+      data-state={enabled ? "on" : "off"}
       disabled={disabled}
       onClick={onClick}
       type="button"
     >
-      <span aria-hidden="true" />
+      <span className="switch-track" aria-hidden="true">
+        <span className="switch-thumb" />
+      </span>
       <strong>{label}</strong>
     </button>
   );

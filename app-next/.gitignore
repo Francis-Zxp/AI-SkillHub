@@ -6,4 +6,5 @@ src-tauri/gen/
 .npm-cache/
 .pnpm-store/
 .skillhub-next/
+reports/
 *.log
