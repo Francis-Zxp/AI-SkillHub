@@ -10,16 +10,12 @@ import type {
   WorkspaceCard
 } from "./types";
 
-const navItems: Array<{ key: NavKey; label: string; hint: string }> = [
-  { key: "dashboard", label: "总览", hint: "健康、同步、风险" },
-  { key: "library", label: "技能库", hint: "中央 Skill Library" },
-  { key: "workspaces", label: "工作区", hint: "全局、Agent、项目" },
-  { key: "presets", label: "预设", hint: "分类组合与场景" },
-  { key: "sources", label: "来源", hint: "GitHub、本地、Prompt" },
-  { key: "agents", label: "AI 工具", hint: "Claude、Codex、Antigravity" },
-  { key: "snapshots", label: "快照", hint: "备份、回滚、保险" },
-  { key: "release", label: "发布闸门", hint: "预检、QA、分享" },
-  { key: "settings", label: "设置", hint: "路径、主题、迁移" }
+const navItems: Array<{ key: NavKey; label: string; hint: string; icon: string }> = [
+  { key: "dashboard", label: "Dashboard", hint: "Overview", icon: "▦" },
+  { key: "library", label: "Skill Library", hint: "Central skills", icon: "✦" },
+  { key: "sources", label: "Sources", hint: "GitHub and local", icon: "▤" },
+  { key: "workspaces", label: "Workspaces", hint: "Global and projects", icon: "⌘" },
+  { key: "presets", label: "Presets", hint: "Skill bundles", icon: "≡" }
 ];
 
 export function App() {
@@ -108,10 +104,10 @@ export function App() {
     <main className={runtimeAvailable ? "shell" : "shell browser-preview-shell"}>
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">AI</div>
+          <img alt="AI SkillHub" className="brand-logo" src="/ai-skillhub-logo.png" />
           <div>
-            <strong>AI SkillHub</strong>
-            <span>v2 app-next</span>
+            <strong>SkillHub V2</strong>
+            <span>Management Platform</span>
           </div>
         </div>
 
@@ -123,22 +119,43 @@ export function App() {
               onClick={() => setActive(item.key)}
               type="button"
             >
+              <span className="nav-icon" aria-hidden="true">{item.icon}</span>
               <strong>{item.label}</strong>
-              <span>{item.hint}</span>
             </button>
           ))}
         </nav>
+
+        <div className="sidebar-footer">
+          <button
+            className={active === "settings" ? "nav-item active" : "nav-item"}
+            onClick={() => setActive("settings")}
+            type="button"
+          >
+            <span className="nav-icon" aria-hidden="true">⚙</span>
+            <strong>Settings</strong>
+          </button>
+          <button className="nav-item" onClick={() => setActive("release")} type="button">
+            <span className="nav-icon" aria-hidden="true">?</span>
+            <strong>Help</strong>
+          </button>
+        </div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">V2 原型线</p>
-            <h1>{navItems.find(item => item.key === active)?.label}</h1>
+          <div className="command-search">
+            <span aria-hidden="true">⌕</span>
+            <input aria-label="Search commands, skills, or sources" placeholder="Search commands, skills, or sources..." />
+            <kbd>⌘</kbd>
+            <kbd>K</kbd>
           </div>
           <div className="topbar-actions">
+            <button className="icon-button" aria-label="Notifications" type="button">♧</button>
+            <button className="icon-button" aria-label="Theme" type="button">◐</button>
+            <span className="topbar-divider" />
+            <img alt="AI SkillHub" className="topbar-avatar" src="/ai-skillhub-logo.png" />
             <button
-              className="ghost-button"
+              className="ghost-button sr-refresh"
               disabled={loading}
               onClick={() => void loadSnapshot("refresh")}
               type="button"
@@ -165,7 +182,16 @@ export function App() {
           </section>
         )}
 
-        {active === "dashboard" && <Dashboard loading={loading} snapshot={snapshot} summary={summary} />}
+        {active === "dashboard" && (
+          <Dashboard
+            loading={loading}
+            onOpenRelease={() => setActive("release")}
+            onOpenSources={() => setActive("sources")}
+            onSync={() => void loadSnapshot("refresh")}
+            snapshot={snapshot}
+            summary={summary}
+          />
+        )}
         {active === "library" && <Library snapshot={snapshot} />}
         {active === "workspaces" && <Workspaces disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "presets" && <Presets disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
@@ -181,58 +207,158 @@ export function App() {
 
 function Dashboard({
   loading,
+  onOpenRelease,
+  onOpenSources,
+  onSync,
   snapshot,
   summary
 }: {
   loading: boolean;
+  onOpenRelease: () => void;
+  onOpenSources: () => void;
+  onSync: () => void;
   snapshot: LegacySnapshot | null;
   summary: LegacySummary;
 }) {
+  const backupBlocked = countByStatus(snapshot?.backupDryRun ?? [], "blocked");
+  const restoreBlocked = countByStatus(snapshot?.restoreDryRun ?? [], "blocked");
+  const lockedRollback = (snapshot?.rollbackPlan ?? []).filter(step => step.status === "locked").length;
+  const desktopQaStatus = desktopQaGateStatus(snapshot?.desktopQaChecks ?? []);
+  const releaseReportsOk = (snapshot?.releaseReports ?? []).filter(report => report.ok).length;
+  const releaseReportsTotal = Math.max((snapshot?.releaseReports ?? []).length, 1);
+  const readinessScore = Math.max(
+    20,
+    Math.min(
+      92,
+      Math.round(
+        (summary.diagnosticsStatus === "ok" ? 28 : 10) +
+          (backupBlocked === 0 ? 22 : 8) +
+          (restoreBlocked === 0 ? 18 : 6) +
+          (desktopQaStatus === "done" ? 16 : desktopQaStatus === "blocked" ? 3 : 8) +
+          (releaseReportsOk / releaseReportsTotal) * 8
+      )
+    )
+  );
+  const healthIssues = summary.warnings + backupBlocked + restoreBlocked + lockedRollback;
+  const readinessRows = [
+    {
+      label: "Core Safety Gate",
+      value: readinessScore,
+      caption: `${summary.diagnosticsStatus} diagnostics · ${summary.warnings} warnings`
+    },
+    {
+      label: "Backup / Restore Dry Run",
+      value: backupBlocked + restoreBlocked === 0 ? 72 : 38,
+      caption: `${backupBlocked + restoreBlocked} blocking checks`
+    },
+    {
+      label: "Release Package Readiness",
+      value: desktopQaStatus === "done" ? 66 : 24,
+      caption: desktopQaGateLabel(snapshot?.desktopQaChecks ?? [])
+    }
+  ];
+  const alerts = [
+    {
+      icon: "!",
+      title: healthIssues > 0 ? "Safety Gate Requires Review" : "Safety Gate Clear",
+      body:
+        healthIssues > 0
+          ? `${healthIssues} items still need review before deployment.`
+          : "No blocking release issue is currently visible.",
+      action: "Inspect Gate"
+    },
+    {
+      icon: "↻",
+      title: loading ? "Index Refresh Running" : "SQLite Index Ready",
+      body: snapshot?.index.databaseFile
+        ? "Current dashboard is loaded from the v2 SQLite index."
+        : "Refresh once to seed the v2 SQLite index.",
+      action: loading ? "Watching" : "Open Index"
+    },
+    {
+      icon: "i",
+      title: "Desktop Alpha Notice",
+      body: "This is the v2 Alpha shell. Real sync remains locked behind dry-run gates.",
+      action: "View Notes"
+    }
+  ];
+
   return (
-    <div className="view">
-      <section className="hero-panel">
+    <div className="view command-center">
+      <section className="command-hero">
         <div>
-          <p className="eyebrow">SQLite 优先读取</p>
-          <h2>v2 已经开始从索引库加载 AI SkillHub 数据</h2>
-          <p>
-            默认打开时优先读取 v2 SQLite 索引；只有点击刷新时才重新扫描 v1 的 Skills、来源、AI 工具和诊断结果。
-          </p>
+          <h2>Command Center</h2>
+          <p>System overview and AI skill deployment status.</p>
+        </div>
+        <div className="hero-actions">
+          <button className="secondary-action" disabled={loading} onClick={onSync} type="button">
+            ↺ {loading ? "Syncing" : "Sync All"}
+          </button>
+          <button className="primary-action" onClick={onOpenSources} type="button">
+            + New Deployment
+          </button>
         </div>
       </section>
 
-      <section className="metrics">
-        <Metric label="已启用 Skills" value={summary.skills} />
-        <Metric label="仓库来源" value={summary.sources} />
-        <Metric label="Prompt 资料" value={summary.prompts} />
-        <Metric label="已检测 AI 工具" value={summary.agentsDetected} />
-        <Metric label="需关注" value={summary.warnings} />
+      <section className="metrics command-metrics">
+        <Metric accent="violet" icon="⚙" label="Active Skills" trend={`+${summary.sources} sources indexed`} value={summary.skills} />
+        <Metric accent="indigo" icon="❖" label="Sources Indexed" trend={`${summary.prompts} prompt collections`} value={summary.sources} />
+        <Metric accent="amber" icon="◒" label="AI Agents" trend={`${summary.agentsDetected} detected locally`} value={summary.agentsDetected} />
+        <Metric accent="rose" icon="△" label="Health Issues" trend={healthIssues > 0 ? "Requires attention" : "All clear"} value={healthIssues} />
       </section>
 
-      <section className="panel">
-        <h3>扫描状态</h3>
-        <ul className="check-list">
-          <li>根目录：{snapshot?.root ?? "正在读取..."}</li>
-          <li>诊断状态：{summary.diagnosticsStatus}</li>
-          <li>诊断版本：{snapshot?.diagnostics.appVersion || "尚未读取"}</li>
-          <li>读取模式：{snapshot?.mode ?? "sqlite-index"}，v1 数据仍保持只读</li>
-        </ul>
-      </section>
+      <section className="command-grid">
+        <article className="linear-panel readiness-command-panel">
+          <header className="linear-panel-head">
+            <h3>Release Readiness</h3>
+            <button className="pipeline-link" onClick={onOpenRelease} type="button">
+              View Pipeline →
+            </button>
+          </header>
+          <div className="readiness-stack">
+            {readinessRows.map(row => (
+              <div className="readiness-row" key={row.label}>
+                <div>
+                  <strong>{row.label}</strong>
+                  <span>{row.caption}</span>
+                </div>
+                <b>{row.value}%</b>
+                <div className="linear-progress">
+                  <i style={{ width: `${row.value}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="bar-visual" aria-label="Indexed activity chart">
+            {[32, 46, 24, 62, 84, 52, 78, 92].map((height, index) => (
+              <span
+                className={index === 4 || index === 6 ? "is-active" : ""}
+                key={`${height}-${index}`}
+                style={{ height: `${height}%` }}
+              />
+            ))}
+          </div>
+        </article>
 
-      <section className="panel index-panel">
-        <div>
-          <p className="eyebrow">v2 SQLite 索引</p>
-          <h3>{snapshot?.index.persisted ? "已写入 v2 索引库" : loading ? "正在建立索引" : "尚未写入索引"}</h3>
-          <p>
-            v2 会把扫描结果写到自己的 SQLite 文件里，后续工作区、标签、历史记录和回滚都会基于这个索引继续做。
-          </p>
-        </div>
-        <ul className="index-list">
-          <li>Skills：{snapshot?.index.skillsIndexed ?? 0}</li>
-          <li>来源：{snapshot?.index.sourcesIndexed ?? 0}</li>
-          <li>AI 工具：{snapshot?.index.agentsIndexed ?? 0}</li>
-          <li>快照：{snapshot?.index.snapshotId || "等待生成"}</li>
-          <li>数据库：{snapshot?.index.databaseFile || "等待生成"}</li>
-        </ul>
+        <aside className="linear-panel alerts-panel">
+          <header className="linear-panel-head">
+            <h3><span aria-hidden="true">△</span> Active Alerts</h3>
+            <em>{healthIssues} SYS</em>
+          </header>
+          <div className="alert-list">
+            {alerts.map(alert => (
+              <article className="alert-item" key={alert.title}>
+                <span className="alert-icon">{alert.icon}</span>
+                <div>
+                  <strong>{alert.title}</strong>
+                  <p>{alert.body}</p>
+                  <small>{alert.action}</small>
+                </div>
+              </article>
+            ))}
+          </div>
+          <button className="logs-button" type="button">View All Logs</button>
+        </aside>
       </section>
     </div>
   );
@@ -1880,11 +2006,27 @@ function ToggleSwitch({
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({
+  accent = "violet",
+  icon,
+  label,
+  trend,
+  value
+}: {
+  accent?: string;
+  icon?: string;
+  label: string;
+  trend?: string;
+  value: number;
+}) {
   return (
-    <article className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <article className={`metric metric-${accent}`}>
+      <div>
+        <span>{label}</span>
+        {icon && <em aria-hidden="true">{icon}</em>}
+      </div>
+      <strong>{value.toLocaleString()}</strong>
+      {trend && <small>{trend}</small>}
     </article>
   );
 }

@@ -4,9 +4,9 @@ Updated: 2026-05-27
 
 ## Current Estimate
 
-V2 overall completion is conservatively estimated at **about 77%**.
+V2 overall completion is conservatively estimated at **about 78%**.
 
-This does **not** mean a usable V2 application is 77% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, the first visual-density pass has landed, project workspace detail now tracks instruction-file status with a read-only generated instructions preview, the Workspaces page now has selectable workspace detail navigation, the Release Gate page now combines diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, zip preview status, and one plain-language Release Readiness recommendation, the first snapshot/rollback gate, backup target inventory, backup dry-run plan, and restore dry-run report are visible in the app, and the Settings page now explains the difference between the development exe and a future packaged release build plus SQLite-backed desktop QA records.
+This does **not** mean a usable V2 application is 78% coded. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, the first visual-density pass has landed, project workspace detail now tracks instruction-file status with a read-only generated instructions preview, the Workspaces page now has selectable workspace detail navigation, the Release Gate page now combines diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, zip preview status, and one plain-language Release Readiness recommendation, the first snapshot/rollback gate, backup target inventory, backup dry-run plan, and restore dry-run report are visible in the app, the Settings page now explains the difference between the development exe and a future packaged release build plus SQLite-backed desktop QA records, and the Dashboard shell has started the final Dark Linear visual system based on the Stitch design tokens.
 
 ## Why 77%
 
@@ -24,7 +24,7 @@ This does **not** mean a usable V2 application is 77% coded. It means v1 is now 
 | CLI and automation | planned, not implemented | 0% |
 | Marketplace/recommended index | planned, not implemented | 0% |
 
-Weighted together, the honest number is about **77%**.
+Weighted together, the honest number is about **78%**.
 
 ## Reference Projects Still In Use
 
@@ -65,7 +65,7 @@ The v2 source line has started and the toolchain is ready:
 Continue v2 milestone 1:
 
 1. Continue visual QA inside the real Tauri window, especially Release Gate, Workspaces, Snapshot, and Settings.
-2. Begin the system-level UI design pass; the Release Readiness summary is now in place, so the product skeleton is stable enough to refine visual hierarchy without losing the safety model.
+2. Continue the system-level UI design pass beyond Dashboard: apply the Dark Linear shell to Skill Library, Sources, Workspaces, Presets, Agents, Snapshots, Release Gate, Diagnostics, and Settings without weakening safety gates.
 3. Keep the Release Readiness card as a derived status only: it may explain whether packaging is allowed, but it must not execute packaging or write to AI tool directories.
 4. Later, move workspace detail navigation from in-page selection to route-level detail pages if the product model needs deep links.
 5. Keep v1 as the maintenance app until v2 can cover its core workflows.
@@ -73,3 +73,11 @@ Continue v2 milestone 1:
 ## Plan Alignment Check
 
 The Release Readiness card is not a direction change. It directly follows the previous plan: diagnostics, release preflight, sharing validation, zip preview, desktop QA, backup dry-run, restore dry-run, and rollback lock must be visible before any future packaging work. The card is deliberately read-only and only turns those existing gates into a clear user-facing conclusion.
+
+## 2026-05-27 Dark Linear Dashboard Pass
+
+The system-level UI pass has started with the main Dashboard and app shell. The new direction follows the Stitch `stitch_liquid_glass_design_system` Dark Linear tokens: fixed left sidebar, command-search topbar, deep purple/black surfaces, 1px hairline borders, glass blur, glow accents, dashboard metric cards, Release Readiness panel, and Active Alerts panel.
+
+Important implementation note: the first visual QA exposed a real token bug. The final CSS used `--sidebar-width`, `--topbar-height`, and related design variables before they were defined, causing browser preview to collapse the grid into a single column. The tokens are now explicitly defined in the final cascade, so the main page keeps the intended two-column desktop layout.
+
+Validation after the pass: `pnpm build`, Rust `cargo test`, `git diff --check`, and `pnpm tauri build --no-bundle` passed. The latest root double-click executable was refreshed at `D:\My Files\AI_global_skills\AI SkillHub V2 Alpha.exe`.
