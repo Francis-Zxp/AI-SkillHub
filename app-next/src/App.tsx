@@ -21,8 +21,11 @@ const navItems: Array<{ key: NavKey; label: string; hint: string; icon: string }
   { key: "release", label: "Release Gate", hint: "QA and publishing", icon: "△" }
 ];
 
+type ThemeName = "dark" | "light";
+
 export function App() {
   const [active, setActive] = useState<NavKey>(() => initialNavKey());
+  const [theme, setTheme] = useState<ThemeName>(() => initialTheme());
   const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
@@ -103,8 +106,13 @@ export function App() {
     void loadSnapshot();
   }, []);
 
+  useEffect(() => {
+    document.body.dataset.theme = theme;
+    window.localStorage.setItem("ai-skillhub-theme", theme);
+  }, [theme]);
+
   return (
-    <main className={runtimeAvailable ? "shell" : "shell browser-preview-shell"}>
+    <main className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme}`}>
       <aside className="sidebar">
         <div className="brand">
           <img alt="AI SkillHub" className="brand-logo" src="/ai-skillhub-logo.png" />
@@ -154,7 +162,14 @@ export function App() {
           </div>
           <div className="topbar-actions">
             <button className="icon-button" aria-label="Notifications" type="button">♧</button>
-            <button className="icon-button" aria-label="Theme" type="button">◐</button>
+            <button
+              className="icon-button theme-toggle-button"
+              aria-label={theme === "dark" ? "切换到亮色主题" : "切换到暗色主题"}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              type="button"
+            >
+              {theme === "dark" ? "☀" : "☾"}
+            </button>
             <span className="topbar-divider" />
             <img alt="AI SkillHub" className="topbar-avatar" src="/ai-skillhub-logo.png" />
             <button
@@ -550,7 +565,7 @@ function Workspaces({
     : undefined;
 
   return (
-    <div className="view">
+    <div className="view workspaces-view">
       <div className="card-grid">
         {workspaces.map(workspace => (
           <article
@@ -704,7 +719,15 @@ function Presets({
   const presets = snapshot?.presets ?? [];
 
   return (
-    <div className="preset-grid">
+    <div className="view presets-view">
+      <section className="page-header compact">
+        <div>
+          <h2>Presets</h2>
+          <p>Group related Skills into reusable bundles before enabling them for workspaces.</p>
+        </div>
+      </section>
+
+      <div className="preset-grid">
       {presets.map(preset => (
         <article className={`preset-card ${preset.color}`} key={preset.id}>
           <div className="card-head">
@@ -723,24 +746,45 @@ function Presets({
         </article>
       ))}
       {presets.length === 0 && <EmptyState text="正在等待 Preset 索引结果。" />}
+      </div>
     </div>
   );
 }
 
 function Sources({ snapshot }: { snapshot: LegacySnapshot | null }) {
   const sources = snapshot?.sources ?? [];
+  const githubSources = sources.filter(source => source.url).length;
+  const localSources = sources.filter(source => !source.url && source.localPath).length;
 
   return (
-    <div className="table-panel">
-      {sources.map(source => (
-        <div className="source-row" key={source.name}>
-          <strong>{source.name}</strong>
-          <span>{source.sourceType}</span>
-          <span>{source.skillCount} Skills</span>
-          <small>{source.url || source.localPath}</small>
+    <div className="view sources-view">
+      <section className="page-header">
+        <div>
+          <h2>Sources</h2>
+          <p>Track GitHub repositories, local folders, Prompt material, and current source health before syncing.</p>
         </div>
-      ))}
-      {sources.length === 0 && <EmptyState text="正在等待来源扫描结果。" />}
+        <div className="page-header-stats">
+          <span>{sources.length} total</span>
+          <span>{githubSources} GitHub</span>
+          <span>{localSources} local</span>
+        </div>
+      </section>
+
+      <div className="table-panel source-table">
+        {sources.map(source => (
+          <div className={`source-row ${source.health}`} key={source.name}>
+            <strong>{source.name}</strong>
+            <span>{sourceTypeLabel(source.sourceType)}</span>
+            <span>{source.skillCount} Skills</span>
+            <span className={`status-badge ${source.health}`}>
+              <span className={`status-dot ${statusDotClass(source.health)}`} />
+              {skillStatusLabel(source.health)}
+            </span>
+            <small>{source.url || source.localPath}</small>
+          </div>
+        ))}
+        {sources.length === 0 && <EmptyState text="正在等待来源扫描结果。" />}
+      </div>
     </div>
   );
 }
@@ -760,7 +804,19 @@ function Agents({
   const capabilities = snapshot?.adapterCapabilities ?? [];
 
   return (
-    <div className="view">
+    <div className="view agents-view">
+      <section className="page-header">
+        <div>
+          <h2>Agents</h2>
+          <p>Separate supported AI tools from tools detected on this machine, then enable adapters safely.</p>
+        </div>
+        <div className="page-header-stats">
+          <span>{adapters.length} supported</span>
+          <span>{adapters.filter(adapter => adapter.detected).length} detected</span>
+          <span>{adapters.filter(adapter => adapter.enabled).length} enabled</span>
+        </div>
+      </section>
+
       <section className="panel">
         <p className="eyebrow">Agent Adapter Registry</p>
         <h3>统一 AI 工具适配器</h3>
@@ -838,7 +894,7 @@ function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
   const latest = snapshots.find(item => item.isLatest) ?? snapshots[0];
 
   return (
-    <div className="view">
+    <div className="view snapshots-view">
       <section className="hero-panel snapshot-hero">
         <div>
           <p className="eyebrow">Snapshot / Rollback Gate</p>
@@ -1092,7 +1148,7 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
     .slice(0, 4);
 
   return (
-    <div className="view">
+    <div className="view release-view">
       <section className="hero-panel release-hero">
         <div>
           <p className="eyebrow">Release Gate</p>
@@ -1207,7 +1263,7 @@ function Settings({
   const desktopQaChecks = snapshot?.desktopQaChecks ?? [];
 
   return (
-    <div className="view">
+    <div className="view settings-view">
       <section className="panel">
         <h3>迁移策略</h3>
         <p>
@@ -1313,6 +1369,14 @@ function initialNavKey(): NavKey {
   return isNavKey(view) ? view : "dashboard";
 }
 
+function initialTheme(): ThemeName {
+  if (typeof window === "undefined") return "dark";
+  const searchTheme = new URLSearchParams(window.location.search).get("theme");
+  if (searchTheme === "light" || searchTheme === "dark") return searchTheme;
+  const savedTheme = window.localStorage.getItem("ai-skillhub-theme");
+  return savedTheme === "light" || savedTheme === "dark" ? savedTheme : "dark";
+}
+
 function isNavKey(value: string | null): value is NavKey {
   return navItems.some(item => item.key === value) || value === "settings";
 }
@@ -1348,6 +1412,13 @@ function skillStatusLabel(health: string): string {
   if (health === "error") return "Failed";
   if (health === "info") return "Info";
   return health;
+}
+
+function sourceTypeLabel(sourceType: string): string {
+  if (sourceType === "skill") return "Skill";
+  if (sourceType === "prompt") return "Prompt";
+  if (sourceType === "mixed") return "Mixed";
+  return sourceType;
 }
 
 function createPreviewSnapshot(): LegacySnapshot {
