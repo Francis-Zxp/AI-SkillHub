@@ -5962,3 +5962,312 @@ body,
     grid-template-columns: 1fr !important;
   }
 }
+
+/* V2 UI audit pass 4: fixed sidebar, default-window containment, usage insights */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.shell {
+  display: block !important;
+  min-height: 100dvh;
+}
+
+.sidebar {
+  position: fixed !important;
+  inset: 0 auto 0 0;
+  z-index: 30;
+  display: flex !important;
+  flex-direction: column;
+  width: var(--ui-sidebar-width) !important;
+  height: 100dvh !important;
+  min-height: 0;
+  overflow: hidden !important;
+}
+
+.brand {
+  flex: 0 0 auto;
+}
+
+.nav {
+  display: flex !important;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-footer {
+  flex: 0 0 auto;
+  margin-top: auto !important;
+}
+
+.workspace {
+  width: calc(100vw - var(--ui-sidebar-width)) !important;
+  max-width: calc(100vw - var(--ui-sidebar-width)) !important;
+  margin-left: var(--ui-sidebar-width) !important;
+}
+
+.view,
+.command-view,
+.skill-library-view,
+.sources-view,
+.workspaces-view,
+.presets-view,
+.agents-view,
+.snapshots-view,
+.release-view,
+.settings-view {
+  width: min(100%, var(--ui-page-max)) !important;
+  max-width: min(var(--ui-page-max), calc(100vw - var(--ui-sidebar-width) - 56px)) !important;
+  padding-inline: 24px !important;
+}
+
+.nav-item {
+  display: grid !important;
+  grid-template-columns: 52px minmax(0, 1fr) !important;
+  align-items: center !important;
+  min-height: 58px !important;
+  column-gap: 14px !important;
+  padding: 0 14px !important;
+}
+
+.nav-icon {
+  display: grid !important;
+  place-items: center !important;
+  width: 44px !important;
+  height: 44px !important;
+  margin: 0 !important;
+  line-height: 1 !important;
+}
+
+.nav-icon .ui-icon {
+  width: 21px !important;
+  height: 21px !important;
+}
+
+.nav-item strong {
+  display: block !important;
+  align-self: center !important;
+  line-height: 1 !important;
+}
+
+.library-controls {
+  overflow: hidden !important;
+}
+
+.library-filter-row {
+  flex: 1 1 auto;
+  flex-wrap: wrap !important;
+  overflow: visible !important;
+}
+
+.filter-chip {
+  flex: 0 0 auto;
+}
+
+.skill-library-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.skill-library-card {
+  min-width: 0 !important;
+}
+
+.sources-view .page-header {
+  min-height: 168px !important;
+  max-height: 220px !important;
+  padding: 26px 34px !important;
+  align-items: flex-start !important;
+}
+
+.sources-view .page-header-stats {
+  align-self: flex-start !important;
+  justify-content: flex-start !important;
+  flex: 0 1 auto !important;
+  max-width: 100% !important;
+}
+
+.source-table {
+  margin-top: 0 !important;
+}
+
+.usage-insight {
+  display: grid;
+  gap: 18px;
+  min-height: 280px;
+  margin-top: 26px;
+  padding: 16px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ui-panel) 86%, transparent), color-mix(in srgb, var(--ui-panel-soft) 70%, transparent)),
+    var(--ui-panel);
+}
+
+.usage-insight header,
+.usage-body,
+.usage-lists article p {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.usage-insight header {
+  align-items: flex-start;
+}
+
+.usage-insight header span,
+.usage-lists article > span {
+  display: block;
+  color: var(--ui-text-soft);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.usage-insight header strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--ui-text);
+  font-size: 18px;
+  font-weight: 820;
+}
+
+.usage-range-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ui-panel-soft) 70%, transparent);
+}
+
+.usage-range-toggle button {
+  min-height: 28px;
+  padding: 0 10px;
+  color: var(--ui-text-soft);
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.usage-range-toggle button.active {
+  color: var(--ui-text);
+  background: var(--ui-brand-soft);
+}
+
+.usage-body {
+  align-items: stretch;
+}
+
+.usage-heatmap {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  width: min(46%, 360px);
+  min-width: 260px;
+  padding: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: color-mix(in srgb, var(--ui-bg) 72%, transparent);
+}
+
+.heat-cell {
+  aspect-ratio: 1;
+  min-width: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--ui-panel-soft) 86%, transparent);
+}
+
+.heat-1 {
+  background: color-mix(in srgb, var(--ui-brand-strong) 22%, var(--ui-panel-soft));
+}
+
+.heat-2 {
+  background: color-mix(in srgb, var(--ui-brand-strong) 42%, var(--ui-panel-soft));
+}
+
+.heat-3 {
+  background: color-mix(in srgb, var(--ui-brand-strong) 64%, var(--ui-panel-soft));
+}
+
+.heat-4 {
+  background: var(--ui-brand-strong);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--ui-brand-strong) 38%, transparent);
+}
+
+.usage-lists {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.usage-lists article {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: color-mix(in srgb, var(--ui-panel) 84%, transparent);
+}
+
+.usage-lists article p {
+  margin: 9px 0 0;
+  min-width: 0;
+}
+
+.usage-lists article strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text);
+  font-size: 12px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-lists article em {
+  flex: 0 0 auto;
+  color: var(--ui-brand-strong);
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.usage-insight > small {
+  color: var(--ui-text-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 1520px) {
+  .command-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .readiness-command-panel,
+  .alerts-panel {
+    min-height: auto !important;
+  }
+}
+
+@media (max-width: 1280px) {
+  .skill-library-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .usage-body {
+    flex-direction: column;
+  }
+
+  .usage-heatmap {
+    width: 100%;
+    max-width: none;
+  }
+}

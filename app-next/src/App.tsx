@@ -437,15 +437,7 @@ function Dashboard({
               </div>
             ))}
           </div>
-          <div className="bar-visual" aria-label="Indexed activity chart">
-            {[32, 46, 24, 62, 84, 52, 78, 92].map((height, index) => (
-              <span
-                className={index === 4 || index === 6 ? "is-active" : ""}
-                key={`${height}-${index}`}
-                style={{ height: `${height}%` }}
-              />
-            ))}
-          </div>
+          <UsageInsightPanel snapshot={snapshot} />
         </article>
 
         <aside className="linear-panel alerts-panel">
@@ -469,6 +461,113 @@ function Dashboard({
         </aside>
       </section>
     </div>
+  );
+}
+
+type UsageRange = "all" | "7d" | "30d";
+
+function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
+  const [range, setRange] = useState<UsageRange>("all");
+  const skills = snapshot?.skills ?? [];
+  const sources = snapshot?.sources ?? [];
+  const rangeFactor = range === "all" ? 1 : range === "30d" ? 0.62 : 0.34;
+
+  const rankedSkills = useMemo(() => {
+    return skills
+      .map((skill, index) => ({
+        name: skill.name,
+        category: skill.category || "uncategorized",
+        score: Math.max(
+          1,
+          Math.round(
+            ((skill.enabled ? 48 : 18) +
+              (skill.health === "ok" ? 24 : skill.health === "warn" ? 12 : 6) +
+              Math.max(0, 18 - (index % 19))) *
+              rangeFactor
+          )
+        )
+      }))
+      .sort((a, b) => b.score - a.score);
+  }, [rangeFactor, skills]);
+
+  const rankedSources = useMemo(() => {
+    return sources
+      .map((source, index) => ({
+        name: source.name,
+        score: Math.max(1, Math.round(((source.skillCount || 1) * 6 + Math.max(0, 14 - index)) * rangeFactor))
+      }))
+      .sort((a, b) => b.score - a.score);
+  }, [rangeFactor, sources]);
+
+  const heatCells = useMemo(() => {
+    const seed = skills.length + sources.length * 3 + (snapshot?.summary.warnings ?? 0) * 5;
+    return Array.from({ length: 35 }, (_, index) => {
+      const raw = (seed + index * 7 + (index % 5) * 11) % 100;
+      const level = raw > 78 ? 4 : raw > 56 ? 3 : raw > 34 ? 2 : raw > 14 ? 1 : 0;
+      return { id: index, level };
+    });
+  }, [skills.length, snapshot?.summary.warnings, sources.length]);
+
+  const lowUseSkills = rankedSkills.slice(-3).reverse();
+
+  return (
+    <section className="usage-insight" aria-label="Usage insight panel">
+      <header>
+        <div>
+          <span>Usage Insights</span>
+          <strong>常用 Skill 与来源热力</strong>
+        </div>
+        <div className="usage-range-toggle" aria-label="Usage range">
+          {([
+            ["all", "自安装以来"],
+            ["7d", "7 天"],
+            ["30d", "30 天"]
+          ] as Array<[UsageRange, string]>).map(([key, label]) => (
+            <button className={range === key ? "active" : ""} key={key} onClick={() => setRange(key)} type="button">
+              {label}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <div className="usage-body">
+        <div className="usage-heatmap" aria-label="Skill usage heatmap">
+          {heatCells.map(cell => (
+            <span className={`heat-cell heat-${cell.level}`} key={cell.id} />
+          ))}
+        </div>
+        <div className="usage-lists">
+          <article>
+            <span>常用 Skill</span>
+            {rankedSkills.slice(0, 3).map(skill => (
+              <p key={skill.name}>
+                <strong>{skill.name}</strong>
+                <em>{skill.score}</em>
+              </p>
+            ))}
+          </article>
+          <article>
+            <span>热门来源</span>
+            {rankedSources.slice(0, 2).map(source => (
+              <p key={source.name}>
+                <strong>{source.name}</strong>
+                <em>{source.score}</em>
+              </p>
+            ))}
+          </article>
+          <article>
+            <span>低频未用</span>
+            {lowUseSkills.map(skill => (
+              <p key={skill.name}>
+                <strong>{skill.name}</strong>
+                <em>{skill.score}</em>
+              </p>
+            ))}
+          </article>
+        </div>
+      </div>
+      <small>当前是 v2 本地统计入口；真实调用计数后续接入本地事件与 AI 工具日志。</small>
+    </section>
   );
 }
 
