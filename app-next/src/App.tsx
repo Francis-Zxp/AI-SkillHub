@@ -141,6 +141,60 @@ export function App() {
     }
   }
 
+  async function updateSkillMetadata(
+    skill: SkillCard,
+    draft: SkillDraft
+  ): Promise<"failed" | "preview" | "saved"> {
+    if (!hasTauriRuntime()) {
+      return "preview";
+    }
+
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("set_skill_metadata", {
+        folderName: skill.folderName,
+        name: draft.name,
+        category: draft.category,
+        description: draft.description,
+        note: draft.note
+      });
+      setSnapshot(result);
+      setLoadError("");
+      setToast("已永久保存到 v2 SQLite。");
+      return "saved";
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setToast("保存失败，请查看顶部错误提示。");
+      return "failed";
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateSkillEnabled(skill: SkillCard, enabled: boolean): Promise<boolean> {
+    if (!hasTauriRuntime()) {
+      return false;
+    }
+
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("set_skill_enabled", {
+        folderName: skill.folderName,
+        enabled
+      });
+      setSnapshot(result);
+      setLoadError("");
+      setToast(enabled ? "Skill 已启用，状态已写入 SQLite。" : "Skill 已停用，状态已写入 SQLite。");
+      return true;
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setToast("更新 Skill 启用状态失败，请查看顶部错误提示。");
+      return true;
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
     void loadSnapshot();
   }, []);
@@ -281,6 +335,8 @@ export function App() {
           <Library
             loading={loading}
             onOpenSources={() => setActive("sources")}
+            onSetSkillEnabled={updateSkillEnabled}
+            onSaveMetadata={updateSkillMetadata}
             onSync={() => void loadSnapshot("refresh")}
             snapshot={snapshot}
           />
@@ -626,11 +682,15 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
 function Library({
   loading,
   onOpenSources,
+  onSetSkillEnabled,
+  onSaveMetadata,
   onSync,
   snapshot
 }: {
   loading: boolean;
   onOpenSources: () => void;
+  onSetSkillEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
+  onSaveMetadata: (skill: SkillCard, draft: SkillDraft) => Promise<"failed" | "preview" | "saved">;
   onSync: () => void;
   snapshot: LegacySnapshot | null;
 }) {
@@ -661,10 +721,30 @@ function Library({
     setOpenSkillMenuId("");
   }
 
-  function saveSkillDraft(skill: SkillCard, draft: SkillDraft) {
-    setSkillDrafts(previous => ({ ...previous, [skill.folderName]: draft }));
-    setEditingSkillId("");
-    showUiToast("已保存为本次界面草稿；永久写入会在 Skill 元数据 SQLite 表接入后开启。");
+  async function saveSkillDraft(skill: SkillCard, draft: SkillDraft) {
+    const saveResult = await onSaveMetadata(skill, draft);
+    if (saveResult === "preview") {
+      setSkillDrafts(previous => ({ ...previous, [skill.folderName]: draft }));
+      setEditingSkillId("");
+      showUiToast("浏览器预览已保存为本次界面草稿。");
+    }
+    if (saveResult === "saved") {
+      setSkillDrafts(previous => {
+        const next = { ...previous };
+        delete next[skill.folderName];
+        return next;
+      });
+      setEditingSkillId("");
+    }
+  }
+
+  async function toggleSkillEnabled(skill: SkillCard) {
+    setOpenSkillMenuId("");
+    const nextEnabled = !skill.enabled;
+    const handledByDatabase = await onSetSkillEnabled(skill, nextEnabled);
+    if (!handledByDatabase) {
+      showUiToast("浏览器预览不会写入 Skill 启用状态，请用桌面版测试。");
+    }
   }
 
   return (
@@ -784,13 +864,12 @@ function Library({
                       </button>
                       <button
                         onClick={() => {
-                          setOpenSkillMenuId("");
-                          showUiToast("启用/停用将随工作区与 Preset 分发模型接入。");
+                          void toggleSkillEnabled(skill);
                         }}
                         role="menuitem"
                         type="button"
                       >
-                        启用策略
+                        {skill.enabled ? "停用 Skill" : "启用 Skill"}
                       </button>
                     </div>
                   )}
@@ -803,6 +882,7 @@ function Library({
               <span>{skill.category || "Uncategorized"}</span>
               {skill.enabled ? <span>Enabled</span> : <span>Disabled</span>}
             </div>
+            {skill.note && <div className="skill-note">备注：{skill.note}</div>}
             <footer>
               <div>
                 <span aria-hidden="true"><Icon name="sources" /></span>
@@ -830,7 +910,7 @@ function Library({
         <SkillEditPanel
           draft={skillDrafts[editingSkill.folderName]}
           onClose={() => setEditingSkillId("")}
-          onSave={draft => saveSkillDraft(editingSkill, draft)}
+          onSave={draft => void saveSkillDraft(editingSkill, draft)}
           skill={editingSkill}
         />
       )}
@@ -852,13 +932,13 @@ function SkillEditPanel({
   const [name, setName] = useState(draft?.name ?? skill.name);
   const [category, setCategory] = useState(draft?.category ?? skill.category);
   const [description, setDescription] = useState(draft?.description ?? skill.description);
-  const [note, setNote] = useState(draft?.note ?? "");
+  const [note, setNote] = useState(draft?.note ?? skill.note ?? "");
 
   useEffect(() => {
     setName(draft?.name ?? skill.name);
     setCategory(draft?.category ?? skill.category);
     setDescription(draft?.description ?? skill.description);
-    setNote(draft?.note ?? "");
+    setNote(draft?.note ?? skill.note ?? "");
   }, [draft, skill.folderName]);
 
   return (
@@ -900,7 +980,7 @@ function SkillEditPanel({
           onClick={() => onSave({ category, description, name, note })}
           type="button"
         >
-          保存草稿
+          保存
         </button>
       </footer>
     </aside>
@@ -913,7 +993,8 @@ function applySkillDraft(skill: SkillCard, draft?: SkillDraft): SkillCard {
     ...skill,
     category: draft.category.trim() || skill.category,
     description: draft.description.trim() || skill.description,
-    name: draft.name.trim() || skill.name
+    name: draft.name.trim() || skill.name,
+    note: draft.note.trim() || skill.note
   };
 }
 
@@ -1839,6 +1920,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         folderName: "paper-workflow",
         category: "论文科研",
         description: "判断当前论文下一步该进入构思、写作、图表、引用核查还是投稿审计。",
+        note: "",
         source: "Nature-Paper-Skills",
         health: "ok",
         enabled: true,
@@ -1849,6 +1931,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         folderName: "figure-planner",
         category: "科研图表",
         description: "把实验结果拆成清晰的图组、面板顺序和图注结构。",
+        note: "",
         source: "Nature-Paper-Skills",
         health: "ok",
         enabled: true,
@@ -1859,6 +1942,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         folderName: "impeccable",
         category: "界面设计",
         description: "用于检查界面审美、布局层级、交互细节和视觉一致性。",
+        note: "",
         source: "impeccable",
         health: "info",
         enabled: true,
@@ -1869,6 +1953,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         folderName: "VibeSec-Skill",
         category: "安全",
         description: "扫描脚本、路径、命令和发布边界中的安全风险。",
+        note: "",
         source: "VibeSec-Skill",
         health: "warn",
         enabled: true,
@@ -1879,6 +1964,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         folderName: "gstack",
         category: "产品规划",
         description: "把长期目标拆成可验证、可回退、可持续推进的产品路线。",
+        note: "",
         source: "gstack",
         health: "ok",
         enabled: true,
@@ -1889,6 +1975,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         folderName: "karpathy-guidelines",
         category: "工程质量",
         description: "保持小步验证、清晰状态和稳定推进的工程开发守则。",
+        note: "",
         source: "andrej-karpathy-skills",
         health: "ok",
         enabled: true,

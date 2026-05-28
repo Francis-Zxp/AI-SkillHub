@@ -50,6 +50,7 @@ export type SkillCard = {
   folderName: string;
   category: string;
   description: string;
+  note: string;
   source: string;
   health: "ok" | "warn" | "error" | "info";
   enabled: boolean;

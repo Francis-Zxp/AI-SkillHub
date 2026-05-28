@@ -106,6 +106,16 @@ CREATE TABLE IF NOT EXISTS skill_tags (
   FOREIGN KEY(tag_id) REFERENCES tags(id)
 );
 
+CREATE TABLE IF NOT EXISTS skill_overrides (
+  skill_id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL DEFAULT '',
+  category_id TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  enabled INTEGER,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
   event_type TEXT NOT NULL,

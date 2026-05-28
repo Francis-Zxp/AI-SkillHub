@@ -54,6 +54,7 @@ struct SkillCard {
     folder_name: String,
     category: String,
     description: String,
+    note: String,
     source: String,
     health: String,
     enabled: bool,
@@ -420,7 +421,8 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         snapshot.backup_dry_run = read_indexed_backup_dry_run(&connection).unwrap_or_default();
         snapshot.restore_dry_run = read_indexed_restore_dry_run(&connection).unwrap_or_default();
         snapshot.rollback_plan = read_indexed_rollback_plan(&connection).unwrap_or_default();
-        snapshot.desktop_qa_checks = read_indexed_desktop_qa_checks(&connection).unwrap_or_default();
+        snapshot.desktop_qa_checks =
+            read_indexed_desktop_qa_checks(&connection).unwrap_or_default();
     }
     Ok(snapshot)
 }
@@ -480,6 +482,24 @@ fn set_desktop_qa_check_status(id: String, status: String) -> Result<LegacySnaps
     load_indexed_snapshot()
 }
 
+#[tauri::command]
+fn set_skill_metadata(
+    folder_name: String,
+    name: String,
+    category: String,
+    description: String,
+    note: String,
+) -> Result<LegacySnapshot, String> {
+    set_skill_metadata_override(&folder_name, &name, &category, &description, &note)?;
+    load_indexed_snapshot()
+}
+
+#[tauri::command]
+fn set_skill_enabled(folder_name: String, enabled: bool) -> Result<LegacySnapshot, String> {
+    set_skill_enabled_override(&folder_name, enabled)?;
+    load_indexed_snapshot()
+}
+
 fn resolve_legacy_root() -> Result<PathBuf, String> {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -533,6 +553,20 @@ fn open_index_database(root: &Path) -> Result<Connection, String> {
 }
 
 fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS skill_overrides (
+                skill_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL DEFAULT '',
+                category_id TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                enabled INTEGER,
+                updated_at TEXT NOT NULL
+            );",
+        )
+        .map_err(|error| format!("Cannot ensure skill override table: {}", error))?;
+    ensure_column(connection, "skill_overrides", "enabled", "INTEGER")?;
     ensure_column(
         connection,
         "workspaces",
@@ -760,6 +794,178 @@ fn set_desktop_qa_status(id: &str, status: &str) -> Result<(), String> {
             ],
         )
         .map_err(|error| format!("Cannot write desktop QA audit event: {}", error))?;
+
+    Ok(())
+}
+
+fn set_skill_metadata_override(
+    folder_name: &str,
+    name: &str,
+    category: &str,
+    description: &str,
+    note: &str,
+) -> Result<(), String> {
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    set_skill_metadata_override_in_connection(
+        &connection,
+        folder_name,
+        name,
+        category,
+        description,
+        note,
+    )
+}
+
+fn set_skill_enabled_override(folder_name: &str, enabled: bool) -> Result<(), String> {
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    set_skill_enabled_override_in_connection(&connection, folder_name, enabled)
+}
+
+fn set_skill_metadata_override_in_connection(
+    connection: &Connection,
+    folder_name: &str,
+    name: &str,
+    category: &str,
+    description: &str,
+    note: &str,
+) -> Result<(), String> {
+    let folder_name = compact_note(folder_name);
+    let display_name = compact_note(name);
+    let category = compact_note(category);
+    let description = compact_note(description);
+    let note = compact_note(note);
+
+    if folder_name.is_empty() {
+        return Err("Skill folder name is required.".to_string());
+    }
+    if display_name.is_empty() {
+        return Err("Skill name cannot be empty.".to_string());
+    }
+    if display_name.len() > 120
+        || category.len() > 80
+        || description.len() > 600
+        || note.len() > 600
+    {
+        return Err("Skill metadata is too long.".to_string());
+    }
+
+    let skill_id: Option<String> = connection
+        .query_row(
+            "SELECT id FROM skills WHERE folder_name = ?1 LIMIT 1",
+            params![folder_name],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot locate skill {}: {}", folder_name, error))?;
+    let skill_id = skill_id.ok_or_else(|| format!("Cannot find indexed skill {}.", folder_name))?;
+    let timestamp = unix_timestamp_string();
+
+    connection
+        .execute(
+            "INSERT INTO skill_overrides (
+                skill_id, display_name, category_id, description, note, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(skill_id) DO UPDATE SET
+                display_name = excluded.display_name,
+                category_id = excluded.category_id,
+                description = excluded.description,
+                note = excluded.note,
+                updated_at = excluded.updated_at",
+            params![
+                &skill_id,
+                &display_name,
+                &category,
+                &description,
+                &note,
+                &timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot save skill metadata override: {}", error))?;
+
+    connection
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'skill_metadata_updated', ?2, ?3, ?4)",
+            params![
+                format!(
+                    "audit-skill-meta-{}-{}",
+                    timestamp,
+                    stable_id("skill", &folder_name)
+                ),
+                "Updated skill metadata override",
+                serde_json::to_string(&serde_json::json!({
+                    "folderName": folder_name,
+                    "skillId": skill_id,
+                    "scope": "v2-sqlite-only"
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot write skill metadata audit event: {}", error))?;
+
+    Ok(())
+}
+
+fn set_skill_enabled_override_in_connection(
+    connection: &Connection,
+    folder_name: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let folder_name = compact_note(folder_name);
+    if folder_name.is_empty() {
+        return Err("Skill folder name is required.".to_string());
+    }
+
+    let skill_id: Option<String> = connection
+        .query_row(
+            "SELECT id FROM skills WHERE folder_name = ?1 LIMIT 1",
+            params![folder_name],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot locate skill {}: {}", folder_name, error))?;
+    let skill_id = skill_id.ok_or_else(|| format!("Cannot find indexed skill {}.", folder_name))?;
+    let timestamp = unix_timestamp_string();
+
+    connection
+        .execute(
+            "INSERT INTO skill_overrides (
+                skill_id, display_name, category_id, description, note, enabled, updated_at
+            ) VALUES (?1, '', '', '', '', ?2, ?3)
+            ON CONFLICT(skill_id) DO UPDATE SET
+                enabled = excluded.enabled,
+                updated_at = excluded.updated_at",
+            params![&skill_id, if enabled { 1 } else { 0 }, &timestamp],
+        )
+        .map_err(|error| format!("Cannot save skill enabled override: {}", error))?;
+
+    connection
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'skill_enabled_updated', ?2, ?3, ?4)",
+            params![
+                format!(
+                    "audit-skill-enabled-{}-{}",
+                    timestamp,
+                    stable_id("skill", &folder_name)
+                ),
+                "Updated skill enabled override",
+                serde_json::to_string(&serde_json::json!({
+                    "folderName": folder_name,
+                    "skillId": skill_id,
+                    "enabled": enabled,
+                    "scope": "v2-sqlite-only"
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot write skill enabled audit event: {}", error))?;
 
     Ok(())
 }
@@ -1046,17 +1252,19 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
     let mut statement = connection
         .prepare(
             "SELECT
-                skills.name,
+                COALESCE(NULLIF(skill_overrides.display_name, ''), skills.name) AS display_name,
                 skills.folder_name,
-                skills.category_id,
-                skills.description,
+                COALESCE(NULLIF(skill_overrides.category_id, ''), skills.category_id) AS category_id,
+                COALESCE(NULLIF(skill_overrides.description, ''), skills.description) AS description,
+                COALESCE(skill_overrides.note, '') AS note,
                 COALESCE(sources.name, 'local') AS source_name,
                 skills.health_status,
-                skills.enabled,
+                COALESCE(skill_overrides.enabled, skills.enabled) AS enabled,
                 skills.relative_path
             FROM skills
             LEFT JOIN sources ON sources.id = skills.source_id
-            ORDER BY lower(skills.name)",
+            LEFT JOIN skill_overrides ON skill_overrides.skill_id = skills.id
+            ORDER BY lower(display_name)",
         )
         .map_err(|error| format!("Cannot prepare indexed skill query: {}", error))?;
 
@@ -1067,10 +1275,11 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
                 folder_name: row.get(1)?,
                 category: row.get(2)?,
                 description: row.get(3)?,
-                source: row.get(4)?,
-                health: row.get(5)?,
-                enabled: row.get::<_, i64>(6)? != 0,
-                relative_path: row.get(7)?,
+                note: row.get(4)?,
+                source: row.get(5)?,
+                health: row.get(6)?,
+                enabled: row.get::<_, i64>(7)? != 0,
+                relative_path: row.get(8)?,
             })
         })
         .map_err(|error| format!("Cannot read indexed skills: {}", error))?;
@@ -1729,9 +1938,7 @@ fn seed_desktop_qa_checks(connection: &Connection) -> Result<(), String> {
                     &timestamp
                 ],
             )
-            .map_err(|error| {
-                format!("Cannot seed desktop QA check {}: {}", check.id, error)
-            })?;
+            .map_err(|error| format!("Cannot seed desktop QA check {}: {}", check.id, error))?;
     }
     Ok(())
 }
@@ -2991,7 +3198,11 @@ fn release_report_from_release_preflight(path: &Path) -> Option<ReleaseReportCar
     let error = total.saturating_sub(passed + warn);
     let status = non_empty_or(
         json_string(&root, "overallStatus"),
-        if json_bool(&root, "ok") { "ok" } else { "error" },
+        if json_bool(&root, "ok") {
+            "ok"
+        } else {
+            "error"
+        },
     );
     let package_name = non_empty_or(json_string(&root, "packageName"), "未生成");
 
@@ -3251,6 +3462,7 @@ fn scan_skills(
             folder_name: folder_name.clone(),
             category,
             description,
+            note: String::new(),
             source,
             health: skill_health(&entry.path(), diagnostic),
             enabled: true,
@@ -3421,7 +3633,9 @@ pub fn run() {
             set_agent_adapter_enabled,
             set_workspace_enabled,
             set_preset_enabled,
-            set_desktop_qa_check_status
+            set_desktop_qa_check_status,
+            set_skill_metadata,
+            set_skill_enabled
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AI SkillHub v2 app");
@@ -3687,8 +3901,8 @@ mod tests {
             unix_timestamp_string()
         ));
         let connection = open_index_database(&root).expect("test sqlite should open");
-        let checks = read_indexed_desktop_qa_checks(&connection)
-            .expect("desktop QA checks should read");
+        let checks =
+            read_indexed_desktop_qa_checks(&connection).expect("desktop QA checks should read");
 
         assert_eq!(checks.len(), desktop_qa_catalog().len());
         assert!(checks.iter().all(|check| check.status == "pending"));
@@ -3702,14 +3916,73 @@ mod tests {
         drop(connection);
 
         let connection = open_index_database(&root).expect("test sqlite should reopen");
-        let checks = read_indexed_desktop_qa_checks(&connection)
-            .expect("desktop QA checks should reread");
+        let checks =
+            read_indexed_desktop_qa_checks(&connection).expect("desktop QA checks should reread");
         let window_check = checks
             .iter()
             .find(|check| check.id == "window-readable")
             .expect("window QA check should exist");
 
         assert_eq!(window_check.status, "passed");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skill_metadata_overrides_are_read_from_sqlite() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-skill-meta-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let timestamp = unix_timestamp_string();
+
+        connection
+            .execute(
+                "INSERT INTO skills (
+                    id, source_id, name, folder_name, description, category_id,
+                    health_status, health_summary, enabled, relative_path,
+                    created_at, updated_at
+                ) VALUES (
+                    'skill-paper-workflow', NULL, 'paper-workflow', 'paper-workflow',
+                    'Original description', 'auto', 'ok', '', 1,
+                    'skills\\paper-workflow', ?1, ?1
+                )",
+                params![timestamp],
+            )
+            .expect("skill row should be inserted");
+
+        set_skill_metadata_override_in_connection(
+            &connection,
+            "paper-workflow",
+            "Paper Workflow Plus",
+            "论文科研",
+            "Updated description",
+            "常用入口",
+        )
+        .expect("metadata override should save");
+
+        let skills = read_indexed_skills(&connection).expect("skills should read");
+        let skill = skills
+            .iter()
+            .find(|item| item.folder_name == "paper-workflow")
+            .expect("skill should exist");
+
+        assert_eq!(skill.name, "Paper Workflow Plus");
+        assert_eq!(skill.category, "论文科研");
+        assert_eq!(skill.description, "Updated description");
+        assert_eq!(skill.note, "常用入口");
+
+        set_skill_enabled_override_in_connection(&connection, "paper-workflow", false)
+            .expect("enabled override should save");
+
+        let skills = read_indexed_skills(&connection).expect("skills should reread");
+        let skill = skills
+            .iter()
+            .find(|item| item.folder_name == "paper-workflow")
+            .expect("skill should still exist");
+
+        assert!(!skill.enabled);
 
         let _ = fs::remove_dir_all(root);
     }

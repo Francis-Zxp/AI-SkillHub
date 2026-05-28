@@ -6548,6 +6548,24 @@ body[data-theme="dark"] {
   padding: 10px 12px;
 }
 
+.skill-note {
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  color: var(--ui-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 2px 0 14px;
+  padding: 10px 12px;
+}
+
+.theme-dark .skill-note {
+  background: rgba(255, 255, 255, .04);
+}
+
+.theme-light .skill-note {
+  background: rgba(255, 253, 249, .72);
+}
+
 .skill-editor-panel input:focus,
 .skill-editor-panel textarea:focus {
   border-color: var(--ui-border-strong);
