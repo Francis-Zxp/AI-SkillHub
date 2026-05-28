@@ -7,6 +7,7 @@ import type {
   NavKey,
   ProjectScanCard,
   ReleaseReportCard,
+  SkillCard,
   WorkspaceCard
 } from "./types";
 
@@ -46,6 +47,14 @@ const navItems: Array<{ key: NavKey; label: string; hint: string; icon: IconName
 ];
 
 type ThemeName = "dark" | "light";
+type SkillDraft = {
+  category: string;
+  description: string;
+  name: string;
+  note: string;
+};
+
+const TOAST_EVENT = "ai-skillhub-toast";
 
 export function App() {
   const [active, setActive] = useState<NavKey>(() => initialNavKey());
@@ -53,6 +62,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
+  const [toast, setToast] = useState<string>("");
   const runtimeAvailable = hasTauriRuntime();
 
   const summary = useMemo(() => {
@@ -81,6 +91,9 @@ export function App() {
       const result = await invoke<LegacySnapshot>(command);
       setSnapshot(result);
       setLoadError("");
+      if (mode === "refresh") {
+        setToast("已刷新 v1 数据并重新读取 v2 索引。");
+      }
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -100,6 +113,7 @@ export function App() {
       const result = await invoke<LegacySnapshot>(command, { id, enabled });
       setSnapshot(result);
       setLoadError("");
+      setToast(enabled ? "已启用，状态已写入 SQLite。" : "已停用，状态已写入 SQLite。");
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -119,6 +133,7 @@ export function App() {
       const result = await invoke<LegacySnapshot>("set_desktop_qa_check_status", { id, status });
       setSnapshot(result);
       setLoadError("");
+      setToast("桌面 QA 状态已更新。");
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -134,6 +149,23 @@ export function App() {
     document.body.dataset.theme = theme;
     window.localStorage.setItem("ai-skillhub-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const message = (event as CustomEvent<string>).detail;
+      if (message) {
+        setToast(message);
+      }
+    };
+    window.addEventListener(TOAST_EVENT, handler as EventListener);
+    return () => window.removeEventListener(TOAST_EVENT, handler as EventListener);
+  }, []);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(""), 2600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   return (
     <main className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme}`}>
@@ -185,11 +217,22 @@ export function App() {
             <kbd>K</kbd>
           </div>
           <div className="topbar-actions">
-            <button className="icon-button" aria-label="Notifications" type="button"><Icon name="bell" /></button>
+            <button
+              className="icon-button"
+              aria-label="Notifications"
+              onClick={() => showUiToast("通知中心将在 Diagnostics 与 Release Gate 接入。")}
+              type="button"
+            >
+              <Icon name="bell" />
+            </button>
             <button
               className="icon-button theme-toggle-button"
               aria-label={theme === "dark" ? "切换到亮色主题" : "切换到暗色主题"}
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+              onClick={() => {
+                const nextTheme = theme === "dark" ? "light" : "dark";
+                setTheme(nextTheme);
+                showUiToast(nextTheme === "dark" ? "已切换到暗色 Linear 主题。" : "已切换到亮色 Parchment 主题。");
+              }}
               type="button"
             >
               <Icon name={theme === "dark" ? "sun" : "moon"} />
@@ -249,6 +292,9 @@ export function App() {
         {active === "snapshots" && <Snapshots snapshot={snapshot} />}
         {active === "release" && <ReleaseGate snapshot={snapshot} />}
         {active === "settings" && <Settings disabled={loading} onQaStatus={updateDesktopQaStatus} snapshot={snapshot} />}
+        <div className={toast ? "toast is-visible" : "toast"} role="status">
+          {toast}
+        </div>
       </section>
     </main>
   );
@@ -457,7 +503,13 @@ function Dashboard({
               </article>
             ))}
           </div>
-          <button className="logs-button" type="button">View All Logs</button>
+          <button
+            className="logs-button"
+            onClick={() => showUiToast("日志详情入口已保留，下一阶段会接入完整操作历史。")}
+            type="button"
+          >
+            View All Logs
+          </button>
         </aside>
       </section>
     </div>
@@ -586,18 +638,34 @@ function Library({
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [healthFilter, setHealthFilter] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const categories = Array.from(new Set(skills.map(skill => skill.category).filter(Boolean))).slice(0, 6);
-  const filteredSkills = skills.filter(skill => {
+  const [openSkillMenuId, setOpenSkillMenuId] = useState<string>("");
+  const [editingSkillId, setEditingSkillId] = useState<string>("");
+  const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
+  const displaySkills = skills.map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]));
+  const categories = Array.from(new Set(displaySkills.map(skill => skill.category).filter(Boolean))).slice(0, 6);
+  const filteredSkills = displaySkills.filter(skill => {
     const categoryMatches = categoryFilter === "all" || skill.category === categoryFilter;
     const healthMatches = healthFilter === "all" || skill.health === healthFilter;
     return categoryMatches && healthMatches;
   });
+  const editingSkill = displaySkills.find(skill => skill.folderName === editingSkillId);
   const healthCounts = {
-    ok: skills.filter(skill => skill.health === "ok").length,
-    warn: skills.filter(skill => skill.health === "warn").length,
-    error: skills.filter(skill => skill.health === "error").length,
-    info: skills.filter(skill => skill.health === "info").length
+    ok: displaySkills.filter(skill => skill.health === "ok").length,
+    warn: displaySkills.filter(skill => skill.health === "warn").length,
+    error: displaySkills.filter(skill => skill.health === "error").length,
+    info: displaySkills.filter(skill => skill.health === "info").length
   };
+
+  function openEditor(skill: SkillCard) {
+    setEditingSkillId(skill.folderName);
+    setOpenSkillMenuId("");
+  }
+
+  function saveSkillDraft(skill: SkillCard, draft: SkillDraft) {
+    setSkillDrafts(previous => ({ ...previous, [skill.folderName]: draft }));
+    setEditingSkillId("");
+    showUiToast("已保存为本次界面草稿；永久写入会在 Skill 元数据 SQLite 表接入后开启。");
+  }
 
   return (
     <div className="view skill-library-view">
@@ -681,7 +749,7 @@ function Library({
 
       <section className={viewMode === "grid" ? "skill-library-grid" : "skill-library-grid list-mode"}>
         {filteredSkills.map(skill => (
-          <article className={`skill-library-card glow-card ${skill.health}`} key={skill.name}>
+          <article className={`skill-library-card glow-card ${skill.health}`} key={skill.folderName}>
             <div className="skill-card-top">
               <div className={`skill-card-icon ${categoryTone(skill.category)}`}>
                 <Icon name={skillIcon(skill.category)} />
@@ -691,7 +759,42 @@ function Library({
                   <span className={`status-dot ${statusDotClass(skill.health)}`} />
                   {skillStatusLabel(skill.health)}
                 </span>
-                <button aria-label={`Edit ${skill.name}`} className="icon-action" type="button"><Icon name="more" /></button>
+                <div className="card-menu-host">
+                  <button
+                    aria-expanded={openSkillMenuId === skill.folderName}
+                    aria-label={`More actions for ${skill.name}`}
+                    className="icon-action"
+                    onClick={() => setOpenSkillMenuId(openSkillMenuId === skill.folderName ? "" : skill.folderName)}
+                    type="button"
+                  >
+                    <Icon name="more" />
+                  </button>
+                  {openSkillMenuId === skill.folderName && (
+                    <div className="card-popover" role="menu">
+                      <button onClick={() => openEditor(skill)} role="menuitem" type="button">编辑名称/标签</button>
+                      <button
+                        onClick={() => {
+                          setOpenSkillMenuId("");
+                          void copySkillPrompt(skill);
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        复制调用提示
+                      </button>
+                      <button
+                        onClick={() => {
+                          setOpenSkillMenuId("");
+                          showUiToast("启用/停用将随工作区与 Preset 分发模型接入。");
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        启用策略
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
             <h3>{skill.name}</h3>
@@ -705,7 +808,14 @@ function Library({
                 <span aria-hidden="true"><Icon name="sources" /></span>
                 <small>Source: {skill.source || skill.relativePath || "local"}</small>
               </div>
-              <button aria-label={`Configure ${skill.name}`} className="icon-action" type="button"><Icon name="edit" /></button>
+              <button
+                aria-label={`Configure ${skill.name}`}
+                className="icon-action"
+                onClick={() => openEditor(skill)}
+                type="button"
+              >
+                <Icon name="edit" />
+              </button>
             </footer>
           </article>
         ))}
@@ -715,8 +825,106 @@ function Library({
           </div>
         )}
       </section>
+
+      {editingSkill && (
+        <SkillEditPanel
+          draft={skillDrafts[editingSkill.folderName]}
+          onClose={() => setEditingSkillId("")}
+          onSave={draft => saveSkillDraft(editingSkill, draft)}
+          skill={editingSkill}
+        />
+      )}
     </div>
   );
+}
+
+function SkillEditPanel({
+  draft,
+  onClose,
+  onSave,
+  skill
+}: {
+  draft?: SkillDraft;
+  onClose: () => void;
+  onSave: (draft: SkillDraft) => void;
+  skill: SkillCard;
+}) {
+  const [name, setName] = useState(draft?.name ?? skill.name);
+  const [category, setCategory] = useState(draft?.category ?? skill.category);
+  const [description, setDescription] = useState(draft?.description ?? skill.description);
+  const [note, setNote] = useState(draft?.note ?? "");
+
+  useEffect(() => {
+    setName(draft?.name ?? skill.name);
+    setCategory(draft?.category ?? skill.category);
+    setDescription(draft?.description ?? skill.description);
+    setNote(draft?.note ?? "");
+  }, [draft, skill.folderName]);
+
+  return (
+    <aside aria-label={`${skill.name} details`} className="skill-editor-panel" role="dialog">
+      <header>
+        <div>
+          <span>Skill Metadata</span>
+          <strong>{skill.name}</strong>
+        </div>
+        <button aria-label="Close skill editor" className="icon-action" onClick={onClose} type="button">
+          <Icon name="add" />
+        </button>
+      </header>
+      <label>
+        名称
+        <input onChange={event => setName(event.target.value)} value={name} />
+      </label>
+      <label>
+        细分分类 / 标签
+        <input onChange={event => setCategory(event.target.value)} value={category} />
+      </label>
+      <label>
+        说明
+        <textarea onChange={event => setDescription(event.target.value)} rows={4} value={description} />
+      </label>
+      <label>
+        手动备注
+        <textarea
+          onChange={event => setNote(event.target.value)}
+          placeholder="例如：适合论文初稿；暂不建议给所有工作区启用。"
+          rows={3}
+          value={note}
+        />
+      </label>
+      <footer>
+        <button className="secondary-action" onClick={onClose} type="button">取消</button>
+        <button
+          className="primary-action"
+          onClick={() => onSave({ category, description, name, note })}
+          type="button"
+        >
+          保存草稿
+        </button>
+      </footer>
+    </aside>
+  );
+}
+
+function applySkillDraft(skill: SkillCard, draft?: SkillDraft): SkillCard {
+  if (!draft) return skill;
+  return {
+    ...skill,
+    category: draft.category.trim() || skill.category,
+    description: draft.description.trim() || skill.description,
+    name: draft.name.trim() || skill.name
+  };
+}
+
+async function copySkillPrompt(skill: SkillCard) {
+  const text = `请调用 ${skill.name} 这个 Skill，处理当前任务。适用场景：${skill.description || skill.category || "当前上下文"}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    showUiToast("已复制 Skill 调用提示。");
+  } catch {
+    showUiToast("复制权限不可用，但调用提示已在菜单动作中生成。");
+  }
 }
 
 function Workspaces({
@@ -1563,6 +1771,11 @@ function initialTheme(): ThemeName {
 
 function isNavKey(value: string | null): value is NavKey {
   return navItems.some(item => item.key === value) || value === "settings";
+}
+
+function showUiToast(message: string) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(TOAST_EVENT, { detail: message }));
 }
 
 function categoryTone(category: string): string {
