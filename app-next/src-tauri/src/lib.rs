@@ -32,6 +32,8 @@ struct LegacySnapshot {
     rollback_plan: Vec<RollbackPlanStepCard>,
     release_reports: Vec<ReleaseReportCard>,
     desktop_qa_checks: Vec<DesktopQaCheckCard>,
+    usage_stats: Vec<UsageStatCard>,
+    audit_events: Vec<AuditEventCard>,
     diagnostics: DiagnosticSummary,
     index: IndexReport,
 }
@@ -64,6 +66,7 @@ struct SkillCard {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SourceCard {
+    id: String,
     name: String,
     source_type: String,
     health: String,
@@ -73,6 +76,7 @@ struct SourceCard {
     category_id: String,
     note: String,
     local_path: String,
+    enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -261,6 +265,29 @@ struct DesktopQaCheckCard {
     updated_at: String,
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct UsageStatCard {
+    target_type: String,
+    target_id: String,
+    target_name: String,
+    source_name: String,
+    total_count: usize,
+    seven_day_count: usize,
+    thirty_day_count: usize,
+    last_used_at: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AuditEventCard {
+    id: String,
+    event_type: String,
+    summary: String,
+    detail_json: String,
+    created_at: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DiagnosticSummary {
@@ -392,6 +419,8 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         rollback_plan: Vec::new(),
         release_reports: derive_release_reports(&root),
         desktop_qa_checks: Vec::new(),
+        usage_stats: Vec::new(),
+        audit_events: Vec::new(),
         diagnostics,
         index: IndexReport {
             persisted: false,
@@ -423,6 +452,8 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         snapshot.rollback_plan = read_indexed_rollback_plan(&connection).unwrap_or_default();
         snapshot.desktop_qa_checks =
             read_indexed_desktop_qa_checks(&connection).unwrap_or_default();
+        snapshot.usage_stats = read_indexed_usage_stats(&connection).unwrap_or_default();
+        snapshot.audit_events = read_indexed_audit_events(&connection).unwrap_or_default();
     }
     Ok(snapshot)
 }
@@ -500,6 +531,37 @@ fn set_skill_enabled(folder_name: String, enabled: bool) -> Result<LegacySnapsho
     load_indexed_snapshot()
 }
 
+#[tauri::command]
+fn set_source_metadata(
+    source_id: String,
+    name: String,
+    source_type: String,
+    category: String,
+    note: String,
+    enabled: bool,
+) -> Result<LegacySnapshot, String> {
+    set_source_metadata_override(&source_id, &name, &source_type, &category, &note, enabled)?;
+    load_indexed_snapshot()
+}
+
+#[tauri::command]
+fn record_usage_event(
+    target_type: String,
+    target_id: String,
+    target_name: String,
+    source_name: String,
+    event_type: String,
+) -> Result<LegacySnapshot, String> {
+    record_usage_event_row(
+        &target_type,
+        &target_id,
+        &target_name,
+        &source_name,
+        &event_type,
+    )?;
+    load_indexed_snapshot()
+}
+
 fn resolve_legacy_root() -> Result<PathBuf, String> {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -566,6 +628,28 @@ fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
             );",
         )
         .map_err(|error| format!("Cannot ensure skill override table: {}", error))?;
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS source_overrides (
+                source_id TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL DEFAULT '',
+                source_type TEXT NOT NULL DEFAULT '',
+                category_id TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                enabled INTEGER,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS usage_events (
+                id TEXT PRIMARY KEY,
+                target_type TEXT NOT NULL,
+                target_id TEXT NOT NULL,
+                target_name TEXT NOT NULL DEFAULT '',
+                source_name TEXT NOT NULL DEFAULT '',
+                event_type TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );",
+        )
+        .map_err(|error| format!("Cannot ensure v2 metadata event tables: {}", error))?;
     ensure_column(connection, "skill_overrides", "enabled", "INTEGER")?;
     ensure_column(
         connection,
@@ -656,6 +740,8 @@ fn read_snapshot_from_database(
     let restore_dry_run = read_indexed_restore_dry_run(connection)?;
     let rollback_plan = read_indexed_rollback_plan(connection)?;
     let desktop_qa_checks = read_indexed_desktop_qa_checks(connection)?;
+    let usage_stats = read_indexed_usage_stats(connection)?;
+    let audit_events = read_indexed_audit_events(connection)?;
     let diagnostics = read_indexed_diagnostics(connection);
     let index = read_index_report(
         connection,
@@ -708,6 +794,8 @@ fn read_snapshot_from_database(
         rollback_plan,
         release_reports: derive_release_reports(root),
         desktop_qa_checks,
+        usage_stats,
+        audit_events,
         diagnostics,
         index,
     })
@@ -821,6 +909,213 @@ fn set_skill_enabled_override(folder_name: &str, enabled: bool) -> Result<(), St
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_skill_enabled_override_in_connection(&connection, folder_name, enabled)
+}
+
+fn set_source_metadata_override(
+    source_id: &str,
+    name: &str,
+    source_type: &str,
+    category: &str,
+    note: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    set_source_metadata_override_in_connection(
+        &connection,
+        source_id,
+        name,
+        source_type,
+        category,
+        note,
+        enabled,
+    )
+}
+
+fn set_source_metadata_override_in_connection(
+    connection: &Connection,
+    source_id: &str,
+    name: &str,
+    source_type: &str,
+    category: &str,
+    note: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let source_id = compact_note(source_id);
+    let display_name = compact_note(name);
+    let source_type = normalize_source_type(&compact_note(source_type));
+    let category = compact_note(category);
+    let note = compact_note(note);
+
+    if source_id.is_empty() {
+        return Err("Source id is required.".to_string());
+    }
+    if display_name.is_empty() {
+        return Err("Source name cannot be empty.".to_string());
+    }
+    if display_name.len() > 120 || category.len() > 80 || note.len() > 600 {
+        return Err("Source metadata is too long.".to_string());
+    }
+
+    let exists: Option<String> = connection
+        .query_row(
+            "SELECT id FROM sources WHERE id = ?1 LIMIT 1",
+            params![&source_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot locate source {}: {}", source_id, error))?;
+    exists.ok_or_else(|| format!("Cannot find indexed source {}.", source_id))?;
+
+    let timestamp = unix_timestamp_string();
+    connection
+        .execute(
+            "INSERT INTO source_overrides (
+                source_id, display_name, source_type, category_id, note, enabled, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(source_id) DO UPDATE SET
+                display_name = excluded.display_name,
+                source_type = excluded.source_type,
+                category_id = excluded.category_id,
+                note = excluded.note,
+                enabled = excluded.enabled,
+                updated_at = excluded.updated_at",
+            params![
+                &source_id,
+                &display_name,
+                &source_type,
+                &category,
+                &note,
+                if enabled { 1 } else { 0 },
+                &timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot save source metadata override: {}", error))?;
+
+    connection
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'source_metadata_updated', ?2, ?3, ?4)",
+            params![
+                format!(
+                    "audit-source-meta-{}-{}",
+                    timestamp,
+                    stable_id("source", &source_id)
+                ),
+                "Updated source metadata override",
+                serde_json::to_string(&serde_json::json!({
+                    "sourceId": source_id,
+                    "sourceType": source_type,
+                    "enabled": enabled,
+                    "scope": "v2-sqlite-only"
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot write source metadata audit event: {}", error))?;
+
+    Ok(())
+}
+
+fn record_usage_event_row(
+    target_type: &str,
+    target_id: &str,
+    target_name: &str,
+    source_name: &str,
+    event_type: &str,
+) -> Result<(), String> {
+    let target_type = compact_note(target_type);
+    let target_id = compact_note(target_id);
+    let target_name = compact_note(target_name);
+    let source_name = compact_note(source_name);
+    let event_type = compact_note(event_type);
+
+    if target_type.is_empty() || target_id.is_empty() || event_type.is_empty() {
+        return Err("Usage event target and type are required.".to_string());
+    }
+    if target_type.len() > 40
+        || target_id.len() > 160
+        || target_name.len() > 160
+        || source_name.len() > 160
+        || event_type.len() > 60
+    {
+        return Err("Usage event metadata is too long.".to_string());
+    }
+
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    record_usage_event_row_in_connection(
+        &connection,
+        &target_type,
+        &target_id,
+        &target_name,
+        &source_name,
+        &event_type,
+    )
+}
+
+fn record_usage_event_row_in_connection(
+    connection: &Connection,
+    target_type: &str,
+    target_id: &str,
+    target_name: &str,
+    source_name: &str,
+    event_type: &str,
+) -> Result<(), String> {
+    let timestamp = unix_timestamp_string();
+    connection
+        .execute(
+            "INSERT INTO usage_events (
+                id, target_type, target_id, target_name, source_name, event_type, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                format!(
+                    "usage-{}-{}",
+                    timestamp,
+                    stable_id(
+                        "usage",
+                        &format!("{}:{}:{}", target_type, target_id, event_type)
+                    )
+                ),
+                target_type,
+                target_id,
+                target_name,
+                source_name,
+                event_type,
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot write usage event: {}", error))?;
+
+    connection
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'usage_recorded', ?2, ?3, ?4)",
+            params![
+                format!(
+                    "audit-usage-{}-{}",
+                    timestamp,
+                    stable_id("usage", &format!("{}:{}", target_type, target_id))
+                ),
+                format!("Recorded {} usage", target_type),
+                serde_json::to_string(&serde_json::json!({
+                    "targetType": target_type,
+                    "targetId": target_id,
+                    "targetName": target_name,
+                    "sourceName": source_name,
+                    "eventType": event_type,
+                    "scope": "v2-local-event"
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot write usage audit event: {}", error))?;
+
+    Ok(())
 }
 
 fn set_skill_metadata_override_in_connection(
@@ -1029,14 +1324,18 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
 
     let mut source_ids: HashMap<String, String> = HashMap::new();
     for source in &snapshot.sources {
-        let source_id = stable_id("source", &source.name);
+        let source_id = if source.id.is_empty() {
+            stable_id("source", &source.name)
+        } else {
+            source.id.clone()
+        };
         source_ids.insert(source.name.to_lowercase(), source_id.clone());
         transaction
             .execute(
                 "INSERT INTO sources (
                     id, name, source_type, url, local_path, install_mode,
                     category_id, note, enabled, created_at, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
                 params![
                     source_id,
                     source.name,
@@ -1046,6 +1345,7 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
                     source.mode,
                     source.category_id,
                     source.note,
+                    if source.enabled { 1 } else { 0 },
                     indexed_at
                 ],
             )
@@ -1209,38 +1509,43 @@ fn read_indexed_sources(connection: &Connection) -> Result<Vec<SourceCard>, Stri
     let mut statement = connection
         .prepare(
             "SELECT
-                sources.name,
-                sources.source_type,
+                sources.id,
+                COALESCE(NULLIF(source_overrides.display_name, ''), sources.name) AS display_name,
+                COALESCE(NULLIF(source_overrides.source_type, ''), sources.source_type) AS source_type,
                 sources.url,
                 sources.local_path,
                 sources.install_mode,
-                sources.category_id,
-                sources.note,
+                COALESCE(NULLIF(source_overrides.category_id, ''), sources.category_id) AS category_id,
+                COALESCE(source_overrides.note, sources.note) AS note,
+                COALESCE(source_overrides.enabled, sources.enabled) AS enabled,
                 CASE
-                    WHEN sources.source_type = 'prompt' THEN 'info'
+                    WHEN COALESCE(NULLIF(source_overrides.source_type, ''), sources.source_type) = 'prompt' THEN 'info'
                     WHEN COUNT(skills.id) > 0 THEN 'ok'
                     ELSE 'warn'
                 END AS health_status,
                 COUNT(skills.id) AS skill_count
             FROM sources
             LEFT JOIN skills ON skills.source_id = sources.id
+            LEFT JOIN source_overrides ON source_overrides.source_id = sources.id
             GROUP BY sources.id
-            ORDER BY lower(sources.name)",
+            ORDER BY lower(display_name)",
         )
         .map_err(|error| format!("Cannot prepare indexed source query: {}", error))?;
 
     let rows = statement
         .query_map([], |row| {
             Ok(SourceCard {
-                name: row.get(0)?,
-                source_type: row.get(1)?,
-                url: row.get(2)?,
-                local_path: row.get(3)?,
-                mode: row.get(4)?,
-                category_id: row.get(5)?,
-                note: row.get(6)?,
-                health: row.get(7)?,
-                skill_count: row.get::<_, i64>(8)? as usize,
+                id: row.get(0)?,
+                name: row.get(1)?,
+                source_type: row.get(2)?,
+                url: row.get(3)?,
+                local_path: row.get(4)?,
+                mode: row.get(5)?,
+                category_id: row.get(6)?,
+                note: row.get(7)?,
+                enabled: row.get::<_, i64>(8)? != 0,
+                health: row.get(9)?,
+                skill_count: row.get::<_, i64>(10)? as usize,
             })
         })
         .map_err(|error| format!("Cannot read indexed sources: {}", error))?;
@@ -1285,6 +1590,108 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
         .map_err(|error| format!("Cannot read indexed skills: {}", error))?;
 
     collect_rows(rows, "skill")
+}
+
+fn read_indexed_usage_stats(connection: &Connection) -> Result<Vec<UsageStatCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT target_type, target_id, target_name, source_name, created_at
+            FROM usage_events
+            ORDER BY CAST(created_at AS INTEGER) DESC",
+        )
+        .map_err(|error| format!("Cannot prepare usage event query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|error| format!("Cannot read usage events: {}", error))?;
+
+    let now = current_unix_nanos();
+    let seven_day_floor = now.saturating_sub(7 * DAY_NANOS);
+    let thirty_day_floor = now.saturating_sub(30 * DAY_NANOS);
+    let mut stats: HashMap<String, UsageStatCard> = HashMap::new();
+
+    for row in rows {
+        let (target_type, target_id, target_name, source_name, created_at) =
+            row.map_err(|error| format!("Cannot decode usage event: {}", error))?;
+        let key = format!("{}\u{1f}{}", target_type, target_id);
+        let created_at_nanos = created_at.parse::<u128>().unwrap_or(0);
+        let stat = stats.entry(key).or_insert_with(|| UsageStatCard {
+            target_type: target_type.clone(),
+            target_id: target_id.clone(),
+            target_name: if target_name.is_empty() {
+                target_id.clone()
+            } else {
+                target_name.clone()
+            },
+            source_name: source_name.clone(),
+            total_count: 0,
+            seven_day_count: 0,
+            thirty_day_count: 0,
+            last_used_at: created_at.clone(),
+        });
+
+        stat.total_count += 1;
+        if created_at_nanos >= seven_day_floor {
+            stat.seven_day_count += 1;
+        }
+        if created_at_nanos >= thirty_day_floor {
+            stat.thirty_day_count += 1;
+        }
+        if created_at.parse::<u128>().unwrap_or(0) > stat.last_used_at.parse::<u128>().unwrap_or(0)
+        {
+            stat.last_used_at = created_at;
+        }
+        if stat.source_name.is_empty() && !source_name.is_empty() {
+            stat.source_name = source_name;
+        }
+    }
+
+    let mut output = stats.into_values().collect::<Vec<_>>();
+    output.sort_by(|left, right| {
+        right
+            .total_count
+            .cmp(&left.total_count)
+            .then_with(|| right.thirty_day_count.cmp(&left.thirty_day_count))
+            .then_with(|| right.seven_day_count.cmp(&left.seven_day_count))
+            .then_with(|| right.last_used_at.cmp(&left.last_used_at))
+            .then_with(|| left.target_name.cmp(&right.target_name))
+    });
+    output.truncate(24);
+
+    Ok(output)
+}
+
+fn read_indexed_audit_events(connection: &Connection) -> Result<Vec<AuditEventCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id, event_type, summary, detail_json, created_at
+            FROM audit_events
+            ORDER BY CAST(created_at AS INTEGER) DESC
+            LIMIT 20",
+        )
+        .map_err(|error| format!("Cannot prepare audit event query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(AuditEventCard {
+                id: row.get(0)?,
+                event_type: row.get(1)?,
+                summary: row.get(2)?,
+                detail_json: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })
+        .map_err(|error| format!("Cannot read audit events: {}", error))?;
+
+    collect_rows(rows, "audit event")
 }
 
 fn read_indexed_agents(connection: &Connection) -> Result<Vec<AgentCard>, String> {
@@ -3105,6 +3512,10 @@ fn unix_timestamp_string() -> String {
         .unwrap_or_else(|_| "0".to_string())
 }
 
+fn current_unix_nanos() -> u128 {
+    unix_timestamp_string().parse::<u128>().unwrap_or(0)
+}
+
 fn parse_diagnostic_summary(diagnostics: Option<&Value>) -> DiagnosticSummary {
     let Some(root) = diagnostics else {
         return DiagnosticSummary {
@@ -3388,6 +3799,7 @@ fn scan_sources(
                 .unwrap_or_else(|| infer_source_type(&entry.path()));
 
             sources.push(SourceCard {
+                id: stable_id("source", &folder_name),
                 name: config
                     .map(|item| item.name.clone())
                     .unwrap_or(folder_name.clone()),
@@ -3405,6 +3817,7 @@ fn scan_sources(
                     .unwrap_or_else(|| "auto".to_string()),
                 note: config.map(|item| item.note.clone()).unwrap_or_default(),
                 local_path: entry.path().display().to_string(),
+                enabled: true,
             });
         }
     }
@@ -3603,6 +4016,8 @@ fn normalize_source_type(value: &str) -> String {
     }
 }
 
+const DAY_NANOS: u128 = 86_400_000_000_000;
+
 fn compact_note(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -3635,7 +4050,9 @@ pub fn run() {
             set_preset_enabled,
             set_desktop_qa_check_status,
             set_skill_metadata,
-            set_skill_enabled
+            set_skill_enabled,
+            set_source_metadata,
+            record_usage_event
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AI SkillHub v2 app");
@@ -3983,6 +4400,110 @@ mod tests {
             .expect("skill should still exist");
 
         assert!(!skill.enabled);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_metadata_overrides_are_read_from_sqlite() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-source-meta-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let timestamp = unix_timestamp_string();
+
+        connection
+            .execute(
+                "INSERT INTO sources (
+                    id, name, source_type, url, local_path, install_mode,
+                    category_id, note, enabled, created_at, updated_at
+                ) VALUES (
+                    'source-impeccable', 'impeccable', 'skill',
+                    'https://github.com/pbakaus/impeccable.git', '',
+                    'scan', 'auto', '', 1, ?1, ?1
+                )",
+                params![timestamp],
+            )
+            .expect("source row should be inserted");
+
+        set_source_metadata_override_in_connection(
+            &connection,
+            "source-impeccable",
+            "impeccable-ui",
+            "mixed",
+            "界面设计",
+            "UI design reference",
+            false,
+        )
+        .expect("source override should save");
+
+        let sources = read_indexed_sources(&connection).expect("sources should read");
+        let source = sources
+            .iter()
+            .find(|item| item.id == "source-impeccable")
+            .expect("source should exist");
+
+        assert_eq!(source.name, "impeccable-ui");
+        assert_eq!(source.source_type, "mixed");
+        assert_eq!(source.category_id, "界面设计");
+        assert_eq!(source.note, "UI design reference");
+        assert!(!source.enabled);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn usage_events_aggregate_into_local_stats() {
+        let root =
+            std::env::temp_dir().join(format!("skillhub-usage-test-{}", unix_timestamp_string()));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+
+        record_usage_event_row_in_connection(
+            &connection,
+            "skill",
+            "paper-workflow",
+            "paper-workflow",
+            "Nature-Paper-Skills",
+            "copy_prompt",
+        )
+        .expect("usage event should save");
+        record_usage_event_row_in_connection(
+            &connection,
+            "skill",
+            "paper-workflow",
+            "paper-workflow",
+            "Nature-Paper-Skills",
+            "copy_prompt",
+        )
+        .expect("second usage event should save");
+        record_usage_event_row_in_connection(
+            &connection,
+            "source",
+            "source-impeccable",
+            "impeccable",
+            "impeccable",
+            "open_source",
+        )
+        .expect("source usage event should save");
+
+        let stats = read_indexed_usage_stats(&connection).expect("usage stats should read");
+        let skill_stat = stats
+            .iter()
+            .find(|item| item.target_type == "skill" && item.target_id == "paper-workflow")
+            .expect("skill usage should aggregate");
+        let source_stat = stats
+            .iter()
+            .find(|item| item.target_type == "source" && item.target_id == "source-impeccable")
+            .expect("source usage should aggregate");
+
+        assert_eq!(skill_stat.total_count, 2);
+        assert!(skill_stat.seven_day_count >= 2);
+        assert_eq!(source_stat.total_count, 1);
+        assert!(read_indexed_audit_events(&connection)
+            .expect("audit events should read")
+            .iter()
+            .any(|event| event.event_type == "usage_recorded"));
 
         let _ = fs::remove_dir_all(root);
     }

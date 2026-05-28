@@ -116,6 +116,26 @@ CREATE TABLE IF NOT EXISTS skill_overrides (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS source_overrides (
+  source_id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL DEFAULT '',
+  source_type TEXT NOT NULL DEFAULT '',
+  category_id TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  enabled INTEGER,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS usage_events (
+  id TEXT PRIMARY KEY,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  target_name TEXT NOT NULL DEFAULT '',
+  source_name TEXT NOT NULL DEFAULT '',
+  event_type TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
   event_type TEXT NOT NULL,

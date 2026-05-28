@@ -32,6 +32,8 @@ export type LegacySnapshot = {
   rollbackPlan: RollbackPlanStepCard[];
   releaseReports: ReleaseReportCard[];
   desktopQaChecks: DesktopQaCheckCard[];
+  usageStats: UsageStatCard[];
+  auditEvents: AuditEventCard[];
   diagnostics: DiagnosticSummary;
   index: IndexReport;
 };
@@ -58,6 +60,7 @@ export type SkillCard = {
 };
 
 export type SourceCard = {
+  id: string;
   name: string;
   sourceType: "skill" | "prompt" | "mixed";
   health: "ok" | "warn" | "error" | "info";
@@ -67,6 +70,7 @@ export type SourceCard = {
   categoryId: string;
   note: string;
   localPath: string;
+  enabled: boolean;
 };
 
 export type AgentCard = {
@@ -225,6 +229,25 @@ export type DesktopQaCheckCard = {
   required: boolean;
   evidence: string;
   updatedAt: string;
+};
+
+export type UsageStatCard = {
+  targetType: string;
+  targetId: string;
+  targetName: string;
+  sourceName: string;
+  totalCount: number;
+  sevenDayCount: number;
+  thirtyDayCount: number;
+  lastUsedAt: string;
+};
+
+export type AuditEventCard = {
+  id: string;
+  eventType: string;
+  summary: string;
+  detailJson: string;
+  createdAt: string;
 };
 
 export type DiagnosticSummary = {

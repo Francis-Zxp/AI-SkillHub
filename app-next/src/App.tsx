@@ -8,6 +8,7 @@ import type {
   ProjectScanCard,
   ReleaseReportCard,
   SkillCard,
+  SourceCard,
   WorkspaceCard
 } from "./types";
 
@@ -52,6 +53,14 @@ type SkillDraft = {
   description: string;
   name: string;
   note: string;
+};
+
+type SourceDraft = {
+  category: string;
+  enabled: boolean;
+  name: string;
+  note: string;
+  sourceType: SourceCard["sourceType"];
 };
 
 const TOAST_EVENT = "ai-skillhub-toast";
@@ -195,6 +204,62 @@ export function App() {
     }
   }
 
+  async function updateSourceMetadata(
+    source: SourceCard,
+    draft: SourceDraft
+  ): Promise<"failed" | "preview" | "saved"> {
+    if (!hasTauriRuntime()) {
+      return "preview";
+    }
+
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("set_source_metadata", {
+        sourceId: source.id,
+        name: draft.name,
+        sourceType: draft.sourceType,
+        category: draft.category,
+        note: draft.note,
+        enabled: draft.enabled
+      });
+      setSnapshot(result);
+      setLoadError("");
+      setToast("来源元数据已永久保存到 v2 SQLite。");
+      return "saved";
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setToast("来源保存失败，请查看顶部错误提示。");
+      return "failed";
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function recordUsage(
+    targetType: string,
+    targetId: string,
+    targetName: string,
+    sourceName: string,
+    eventType: string
+  ) {
+    if (!hasTauriRuntime()) {
+      return;
+    }
+
+    try {
+      const result = await invoke<LegacySnapshot>("record_usage_event", {
+        targetType,
+        targetId,
+        targetName,
+        sourceName,
+        eventType
+      });
+      setSnapshot(result);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   useEffect(() => {
     void loadSnapshot();
   }, []);
@@ -335,6 +400,7 @@ export function App() {
           <Library
             loading={loading}
             onOpenSources={() => setActive("sources")}
+            onRecordUsage={recordUsage}
             onSetSkillEnabled={updateSkillEnabled}
             onSaveMetadata={updateSkillMetadata}
             onSync={() => void loadSnapshot("refresh")}
@@ -343,7 +409,14 @@ export function App() {
         )}
         {active === "workspaces" && <Workspaces disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "presets" && <Presets disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
-        {active === "sources" && <Sources snapshot={snapshot} />}
+        {active === "sources" && (
+          <Sources
+            loading={loading}
+            onRecordUsage={recordUsage}
+            onSaveMetadata={updateSourceMetadata}
+            snapshot={snapshot}
+          />
+        )}
         {active === "agents" && <Agents disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "snapshots" && <Snapshots snapshot={snapshot} />}
         {active === "release" && <ReleaseGate snapshot={snapshot} />}
@@ -559,16 +632,35 @@ function Dashboard({
               </article>
             ))}
           </div>
-          <button
-            className="logs-button"
-            onClick={() => showUiToast("日志详情入口已保留，下一阶段会接入完整操作历史。")}
-            type="button"
-          >
-            View All Logs
-          </button>
+          <ActivityTimeline snapshot={snapshot} />
         </aside>
       </section>
     </div>
+  );
+}
+
+function ActivityTimeline({ snapshot }: { snapshot: LegacySnapshot | null }) {
+  const events = snapshot?.auditEvents ?? [];
+  return (
+    <section className="activity-timeline" aria-label="Activity timeline">
+      <header>
+        <strong>Activity Timeline</strong>
+        <span>{events.length} logs</span>
+      </header>
+      <div>
+        {events.slice(0, 6).map(event => (
+          <article key={event.id}>
+            <i />
+            <div>
+              <strong>{auditEventLabel(event.eventType)}</strong>
+              <p>{event.summary}</p>
+              <small>{formatScanTime(event.createdAt)}</small>
+            </div>
+          </article>
+        ))}
+        {events.length === 0 && <p className="empty-activity">暂无本地操作历史。</p>}
+      </div>
+    </section>
   );
 }
 
@@ -578,9 +670,25 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
   const [range, setRange] = useState<UsageRange>("all");
   const skills = snapshot?.skills ?? [];
   const sources = snapshot?.sources ?? [];
+  const usageStats = snapshot?.usageStats ?? [];
+  const scoreKey = range === "all" ? "totalCount" : range === "30d" ? "thirtyDayCount" : "sevenDayCount";
   const rangeFactor = range === "all" ? 1 : range === "30d" ? 0.62 : 0.34;
 
   const rankedSkills = useMemo(() => {
+    const realSkillStats = usageStats
+      .filter(stat => stat.targetType === "skill")
+      .map(stat => ({
+        name: stat.targetName,
+        category: skills.find(skill => skill.folderName === stat.targetId)?.category || "usage",
+        score: stat[scoreKey]
+      }))
+      .filter(stat => stat.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    if (realSkillStats.length > 0) {
+      return realSkillStats;
+    }
+
     return skills
       .map((skill, index) => ({
         name: skill.name,
@@ -596,27 +704,55 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
         )
       }))
       .sort((a, b) => b.score - a.score);
-  }, [rangeFactor, skills]);
+  }, [rangeFactor, scoreKey, skills, usageStats]);
 
   const rankedSources = useMemo(() => {
+    const realSourceStats = usageStats
+      .filter(stat => stat.targetType === "source")
+      .map(stat => ({ name: stat.targetName, score: stat[scoreKey] }))
+      .filter(stat => stat.score > 0)
+      .sort((a, b) => b.score - a.score);
+
+    if (realSourceStats.length > 0) {
+      return realSourceStats;
+    }
+
     return sources
       .map((source, index) => ({
         name: source.name,
         score: Math.max(1, Math.round(((source.skillCount || 1) * 6 + Math.max(0, 14 - index)) * rangeFactor))
       }))
       .sort((a, b) => b.score - a.score);
-  }, [rangeFactor, sources]);
+  }, [rangeFactor, scoreKey, sources, usageStats]);
 
   const heatCells = useMemo(() => {
+    const activeScores = usageStats
+      .map(stat => stat[scoreKey])
+      .filter(score => score > 0);
+    if (activeScores.length > 0) {
+      const maxScore = Math.max(...activeScores, 1);
+      return Array.from({ length: 35 }, (_, index) => {
+        const score = activeScores[index % activeScores.length] ?? 0;
+        const ratio = score / maxScore;
+        const level = ratio > 0.8 ? 4 : ratio > 0.55 ? 3 : ratio > 0.3 ? 2 : ratio > 0 ? 1 : 0;
+        return { id: index, level };
+      });
+    }
+
     const seed = skills.length + sources.length * 3 + (snapshot?.summary.warnings ?? 0) * 5;
     return Array.from({ length: 35 }, (_, index) => {
       const raw = (seed + index * 7 + (index % 5) * 11) % 100;
       const level = raw > 78 ? 4 : raw > 56 ? 3 : raw > 34 ? 2 : raw > 14 ? 1 : 0;
       return { id: index, level };
     });
-  }, [skills.length, snapshot?.summary.warnings, sources.length]);
+  }, [scoreKey, skills.length, snapshot?.summary.warnings, sources.length, usageStats]);
 
-  const lowUseSkills = rankedSkills.slice(-3).reverse();
+  const usedSkillIds = new Set(usageStats.filter(stat => stat.targetType === "skill").map(stat => stat.targetId));
+  const lowUseSkills = skills
+    .filter(skill => skill.enabled && !usedSkillIds.has(skill.folderName))
+    .slice(0, 3)
+    .map(skill => ({ name: skill.name, score: 0 }));
+  const fallbackLowUseSkills = rankedSkills.slice(-3).reverse();
 
   return (
     <section className="usage-insight" aria-label="Usage insight panel">
@@ -665,7 +801,7 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
           </article>
           <article>
             <span>低频未用</span>
-            {lowUseSkills.map(skill => (
+            {(lowUseSkills.length > 0 ? lowUseSkills : fallbackLowUseSkills).map(skill => (
               <p key={skill.name}>
                 <strong>{skill.name}</strong>
                 <em>{skill.score}</em>
@@ -674,7 +810,11 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
           </article>
         </div>
       </div>
-      <small>当前是 v2 本地统计入口；真实调用计数后续接入本地事件与 AI 工具日志。</small>
+      <small>
+        {usageStats.length > 0
+          ? "当前统计来自 v2 本地事件记录；AI 工具外部调用日志后续再接入。"
+          : "还没有真实使用事件，当前展示为索引健康度推算。"}
+      </small>
     </section>
   );
 }
@@ -682,6 +822,7 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
 function Library({
   loading,
   onOpenSources,
+  onRecordUsage,
   onSetSkillEnabled,
   onSaveMetadata,
   onSync,
@@ -689,6 +830,13 @@ function Library({
 }: {
   loading: boolean;
   onOpenSources: () => void;
+  onRecordUsage: (
+    targetType: string,
+    targetId: string,
+    targetName: string,
+    sourceName: string,
+    eventType: string
+  ) => Promise<void>;
   onSetSkillEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
   onSaveMetadata: (skill: SkillCard, draft: SkillDraft) => Promise<"failed" | "preview" | "saved">;
   onSync: () => void;
@@ -855,7 +1003,7 @@ function Library({
                       <button
                         onClick={() => {
                           setOpenSkillMenuId("");
-                          void copySkillPrompt(skill);
+                          void copySkillPrompt(skill, onRecordUsage);
                         }}
                         role="menuitem"
                         type="button"
@@ -998,7 +1146,16 @@ function applySkillDraft(skill: SkillCard, draft?: SkillDraft): SkillCard {
   };
 }
 
-async function copySkillPrompt(skill: SkillCard) {
+async function copySkillPrompt(
+  skill: SkillCard,
+  onRecordUsage?: (
+    targetType: string,
+    targetId: string,
+    targetName: string,
+    sourceName: string,
+    eventType: string
+  ) => Promise<void>
+) {
   const text = `请调用 ${skill.name} 这个 Skill，处理当前任务。适用场景：${skill.description || skill.category || "当前上下文"}`;
   try {
     await navigator.clipboard.writeText(text);
@@ -1006,6 +1163,7 @@ async function copySkillPrompt(skill: SkillCard) {
   } catch {
     showUiToast("复制权限不可用，但调用提示已在菜单动作中生成。");
   }
+  await onRecordUsage?.("skill", skill.folderName, skill.name, skill.source, "copy_prompt");
 }
 
 function Workspaces({
@@ -1224,10 +1382,52 @@ function Presets({
   );
 }
 
-function Sources({ snapshot }: { snapshot: LegacySnapshot | null }) {
+function Sources({
+  loading,
+  onRecordUsage,
+  onSaveMetadata,
+  snapshot
+}: {
+  loading: boolean;
+  onRecordUsage: (
+    targetType: string,
+    targetId: string,
+    targetName: string,
+    sourceName: string,
+    eventType: string
+  ) => Promise<void>;
+  onSaveMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
+  snapshot: LegacySnapshot | null;
+}) {
   const sources = snapshot?.sources ?? [];
   const githubSources = sources.filter(source => source.url).length;
   const localSources = sources.filter(source => !source.url && source.localPath).length;
+  const [editingSourceId, setEditingSourceId] = useState<string>("");
+  const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
+  const displaySources = sources.map(source => applySourceDraft(source, sourceDrafts[source.id]));
+  const editingSource = displaySources.find(source => source.id === editingSourceId);
+
+  async function openSourceDetails(source: SourceCard) {
+    setEditingSourceId(source.id);
+    await onRecordUsage("source", source.id, source.name, source.name, "open_source");
+  }
+
+  async function saveSourceDraft(source: SourceCard, draft: SourceDraft) {
+    const saveResult = await onSaveMetadata(source, draft);
+    if (saveResult === "preview") {
+      setSourceDrafts(previous => ({ ...previous, [source.id]: draft }));
+      setEditingSourceId("");
+      showUiToast("浏览器预览已保存为本次来源草稿。");
+    }
+    if (saveResult === "saved") {
+      setSourceDrafts(previous => {
+        const next = { ...previous };
+        delete next[source.id];
+        return next;
+      });
+      setEditingSourceId("");
+    }
+  }
 
   return (
     <div className="view sources-view">
@@ -1244,8 +1444,8 @@ function Sources({ snapshot }: { snapshot: LegacySnapshot | null }) {
       </section>
 
       <div className="table-panel source-table">
-        {sources.map(source => (
-          <div className={`source-row ${source.health}`} key={source.name}>
+        {displaySources.map(source => (
+          <div className={`source-row ${source.health} ${source.enabled ? "" : "disabled"}`} key={source.id}>
             <strong>{source.name}</strong>
             <span>{sourceTypeLabel(source.sourceType)}</span>
             <span>{source.skillCount} Skills</span>
@@ -1253,13 +1453,130 @@ function Sources({ snapshot }: { snapshot: LegacySnapshot | null }) {
               <span className={`status-dot ${statusDotClass(source.health)}`} />
               {skillStatusLabel(source.health)}
             </span>
+            <span>{source.enabled ? "Enabled" : "Disabled"}</span>
             <small>{source.url || source.localPath}</small>
+            <button
+              className="icon-action"
+              disabled={loading}
+              onClick={() => void openSourceDetails(source)}
+              type="button"
+            >
+              <Icon name="edit" />
+            </button>
           </div>
         ))}
         {sources.length === 0 && <EmptyState text="正在等待来源扫描结果。" />}
       </div>
+
+      {editingSource && (
+        <SourceEditPanel
+          draft={sourceDrafts[editingSource.id]}
+          onClose={() => setEditingSourceId("")}
+          onSave={draft => void saveSourceDraft(editingSource, draft)}
+          source={editingSource}
+        />
+      )}
     </div>
   );
+}
+
+function SourceEditPanel({
+  draft,
+  onClose,
+  onSave,
+  source
+}: {
+  draft?: SourceDraft;
+  onClose: () => void;
+  onSave: (draft: SourceDraft) => void;
+  source: SourceCard;
+}) {
+  const [name, setName] = useState(draft?.name ?? source.name);
+  const [category, setCategory] = useState(draft?.category ?? source.categoryId);
+  const [sourceType, setSourceType] = useState<SourceCard["sourceType"]>(draft?.sourceType ?? source.sourceType);
+  const [note, setNote] = useState(draft?.note ?? source.note ?? "");
+  const [enabled, setEnabled] = useState(draft?.enabled ?? source.enabled);
+
+  useEffect(() => {
+    setName(draft?.name ?? source.name);
+    setCategory(draft?.category ?? source.categoryId);
+    setSourceType(draft?.sourceType ?? source.sourceType);
+    setNote(draft?.note ?? source.note ?? "");
+    setEnabled(draft?.enabled ?? source.enabled);
+  }, [draft, source.id]);
+
+  return (
+    <aside aria-label={`${source.name} source details`} className="skill-editor-panel source-editor-panel" role="dialog">
+      <header>
+        <div>
+          <span>Source Metadata</span>
+          <strong>{source.name}</strong>
+        </div>
+        <button aria-label="Close source editor" className="icon-action" onClick={onClose} type="button">
+          <Icon name="add" />
+        </button>
+      </header>
+      <label>
+        名称
+        <input onChange={event => setName(event.target.value)} value={name} />
+      </label>
+      <label>
+        类型
+        <select onChange={event => setSourceType(event.target.value as SourceCard["sourceType"])} value={sourceType}>
+          <option value="skill">Skill</option>
+          <option value="prompt">Prompt</option>
+          <option value="mixed">Mixed</option>
+        </select>
+      </label>
+      <label>
+        细分分类 / 标签
+        <input onChange={event => setCategory(event.target.value)} value={category} />
+      </label>
+      <label>
+        手动备注
+        <textarea
+          onChange={event => setNote(event.target.value)}
+          placeholder="例如：UI 设计参考；Prompt 资料不安装；科研绘图常用。"
+          rows={3}
+          value={note}
+        />
+      </label>
+      <div className="source-editor-toggle">
+        <div>
+          <strong>启用此来源</strong>
+          <span>只影响 v2 管理视图，不会删除本地仓库。</span>
+        </div>
+        <ToggleSwitch
+          disabled={false}
+          enabled={enabled}
+          label={enabled ? "已启用" : "已停用"}
+          onClick={() => setEnabled(previous => !previous)}
+        />
+      </div>
+      <footer>
+        <button className="secondary-action" onClick={onClose} type="button">取消</button>
+        <button
+          className="primary-action"
+          onClick={() => onSave({ category, enabled, name, note, sourceType })}
+          type="button"
+        >
+          保存
+        </button>
+      </footer>
+    </aside>
+  );
+}
+
+function applySourceDraft(source: SourceCard, draft?: SourceDraft): SourceCard {
+  if (!draft) return source;
+  return {
+    ...source,
+    categoryId: draft.category.trim() || source.categoryId,
+    enabled: draft.enabled,
+    name: draft.name.trim() || source.name,
+    note: draft.note.trim() || source.note,
+    sourceType: draft.sourceType
+  };
 }
 
 function Agents({
@@ -1982,41 +2299,47 @@ function createPreviewSnapshot(): LegacySnapshot {
         relativePath: "skills/karpathy-guidelines"
       }
     ],
-    sources: [
-      {
-        name: "Nature-Paper-Skills",
-        sourceType: "skill",
-        health: "ok",
+      sources: [
+        {
+          id: "source-nature-paper-skills",
+          name: "Nature-Paper-Skills",
+          sourceType: "skill",
+          health: "ok",
         url: "https://github.com/Boom5426/Nature-Paper-Skills.git",
         skillCount: 18,
         mode: "scan",
-        categoryId: "paper",
-        note: "论文科研工作流。",
-        localPath: "../app/github_sources/Nature-Paper-Skills"
-      },
-      {
-        name: "impeccable",
-        sourceType: "skill",
+          categoryId: "paper",
+          note: "论文科研工作流。",
+          localPath: "../app/github_sources/Nature-Paper-Skills",
+          enabled: true
+        },
+        {
+          id: "source-impeccable",
+          name: "impeccable",
+          sourceType: "skill",
         health: "info",
         url: "https://github.com/pbakaus/impeccable.git",
         skillCount: 1,
         mode: "explicit",
-        categoryId: "design",
-        note: "UI 审美检查来源。",
-        localPath: "../app/github_sources/impeccable"
-      },
-      {
-        name: "awesome-ai-research-writing",
-        sourceType: "prompt",
+          categoryId: "design",
+          note: "UI 审美检查来源。",
+          localPath: "../app/github_sources/impeccable",
+          enabled: true
+        },
+        {
+          id: "source-awesome-ai-research-writing",
+          name: "awesome-ai-research-writing",
+          sourceType: "prompt",
         health: "info",
         url: "https://github.com/Leey21/awesome-ai-research-writing.git",
         skillCount: 0,
         mode: "do-not-install",
-        categoryId: "prompt",
-        note: "这是润色 Prompt 资料，不作为 Skill 安装。",
-        localPath: "../app/github_sources/awesome-ai-research-writing"
-      }
-    ],
+          categoryId: "prompt",
+          note: "这是润色 Prompt 资料，不作为 Skill 安装。",
+          localPath: "../app/github_sources/awesome-ai-research-writing",
+          enabled: true
+        }
+      ],
     agents: [
       {
         id: "claude",
@@ -2474,6 +2797,44 @@ function createPreviewSnapshot(): LegacySnapshot {
         updatedAt: new Date().toISOString()
       }
     ],
+    usageStats: [
+      {
+        targetType: "skill",
+        targetId: "paper-workflow",
+        targetName: "paper-workflow",
+        sourceName: "Nature-Paper-Skills",
+        totalCount: 8,
+        sevenDayCount: 3,
+        thirtyDayCount: 8,
+        lastUsedAt: new Date().toISOString()
+      },
+      {
+        targetType: "source",
+        targetId: "source-impeccable",
+        targetName: "impeccable",
+        sourceName: "impeccable",
+        totalCount: 4,
+        sevenDayCount: 1,
+        thirtyDayCount: 4,
+        lastUsedAt: new Date().toISOString()
+      }
+    ],
+    auditEvents: [
+      {
+        id: "preview-audit-usage",
+        eventType: "usage_recorded",
+        summary: "Recorded skill usage",
+        detailJson: "{}",
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: "preview-audit-index",
+        eventType: "legacy_scan_indexed",
+        summary: "Indexed v1 data into v2 SQLite",
+        detailJson: "{}",
+        createdAt: new Date().toISOString()
+      }
+    ],
     diagnostics: {
       available: false,
       appVersion: "v2 preview",
@@ -2578,6 +2939,17 @@ function dryRunStatusLabel(status: string) {
   if (status === "blocked") return "已阻断";
   if (status === "skipped") return "跳过";
   return status;
+}
+
+function auditEventLabel(eventType: string) {
+  if (eventType === "legacy_scan_indexed") return "索引刷新";
+  if (eventType === "skill_metadata_updated") return "Skill 元数据";
+  if (eventType === "skill_enabled_updated") return "Skill 状态";
+  if (eventType === "source_metadata_updated") return "来源元数据";
+  if (eventType === "usage_recorded") return "使用记录";
+  if (eventType === "state_updated") return "状态更新";
+  if (eventType === "desktop_qa_updated") return "桌面 QA";
+  return eventType;
 }
 
 function backupActionLabel(action: string) {
