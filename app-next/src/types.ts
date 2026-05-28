@@ -32,6 +32,7 @@ export type LegacySnapshot = {
   rollbackPlan: RollbackPlanStepCard[];
   releaseReports: ReleaseReportCard[];
   importPreviews: ImportPreviewCard[];
+  sourcePopularity: SourcePopularityCard[];
   desktopQaChecks: DesktopQaCheckCard[];
   usageStats: UsageStatCard[];
   auditEvents: AuditEventCard[];
@@ -232,6 +233,24 @@ export type ImportPreviewCard = {
   skillCount: number;
   promptCount: number;
   safeToContinue: boolean;
+};
+
+export type SourcePopularityCard = {
+  sourceId: string;
+  sourceName: string;
+  url: string;
+  owner: string;
+  repo: string;
+  stars: number;
+  forks: number;
+  openIssues: number;
+  lastUpdatedAt: string;
+  fetchedAt: string;
+  cacheStatus: "fresh" | "stale" | "missing" | "error" | string;
+  error: string;
+  localTotalCount: number;
+  localSevenDayCount: number;
+  localThirtyDayCount: number;
 };
 
 export type DesktopQaCheckCard = {

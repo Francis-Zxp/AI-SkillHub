@@ -261,6 +261,27 @@ export function App() {
     }
   }
 
+  async function refreshSourcePopularity() {
+    if (!hasTauriRuntime()) {
+      setSnapshot(previous => previous ?? createPreviewSnapshot());
+      setToast("浏览器预览不会请求 GitHub；桌面版会把热度缓存到 SQLite。");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("refresh_source_popularity");
+      setSnapshot(result);
+      setLoadError("");
+      setToast("GitHub 星标、分叉和来源热度缓存已刷新。");
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setToast("GitHub 热度刷新失败；已保留旧缓存。");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   useEffect(() => {
     void loadSnapshot();
   }, []);
@@ -392,6 +413,7 @@ export function App() {
             loading={loading}
             onOpenRelease={() => setActive("release")}
             onOpenSources={() => setActive("sources")}
+            onRefreshPopularity={() => void refreshSourcePopularity()}
             onSync={() => void loadSnapshot("refresh")}
             snapshot={snapshot}
             summary={summary}
@@ -493,6 +515,7 @@ function Dashboard({
   loading,
   onOpenRelease,
   onOpenSources,
+  onRefreshPopularity,
   onSync,
   snapshot,
   summary
@@ -500,6 +523,7 @@ function Dashboard({
   loading: boolean;
   onOpenRelease: () => void;
   onOpenSources: () => void;
+  onRefreshPopularity: () => void;
   onSync: () => void;
   snapshot: LegacySnapshot | null;
   summary: LegacySummary;
@@ -613,7 +637,7 @@ function Dashboard({
               </div>
             ))}
           </div>
-          <UsageInsightPanel snapshot={snapshot} />
+          <UsageInsightPanel loading={loading} onRefreshPopularity={onRefreshPopularity} snapshot={snapshot} />
         </article>
 
         <aside className="linear-panel alerts-panel">
@@ -666,14 +690,34 @@ function ActivityTimeline({ snapshot }: { snapshot: LegacySnapshot | null }) {
 }
 
 type UsageRange = "all" | "7d" | "30d";
+type UsageViewMode = "heatmap" | "bars";
 
-function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
+function UsageInsightPanel({
+  loading,
+  onRefreshPopularity,
+  snapshot
+}: {
+  loading: boolean;
+  onRefreshPopularity: () => void;
+  snapshot: LegacySnapshot | null;
+}) {
   const [range, setRange] = useState<UsageRange>("all");
+  const [viewMode, setViewMode] = useState<UsageViewMode>("heatmap");
   const skills = snapshot?.skills ?? [];
   const sources = snapshot?.sources ?? [];
   const usageStats = snapshot?.usageStats ?? [];
-  const scoreKey = range === "all" ? "totalCount" : range === "30d" ? "thirtyDayCount" : "sevenDayCount";
+  const sourcePopularity = snapshot?.sourcePopularity ?? [];
   const rangeFactor = range === "all" ? 1 : range === "30d" ? 0.62 : 0.34;
+  const sourceScore = (source: { localTotalCount: number; localSevenDayCount: number; localThirtyDayCount: number }) => {
+    if (range === "7d") return source.localSevenDayCount;
+    if (range === "30d") return source.localThirtyDayCount;
+    return source.localTotalCount;
+  };
+  const statScore = (stat: { totalCount: number; sevenDayCount: number; thirtyDayCount: number }) => {
+    if (range === "7d") return stat.sevenDayCount;
+    if (range === "30d") return stat.thirtyDayCount;
+    return stat.totalCount;
+  };
 
   const rankedSkills = useMemo(() => {
     const realSkillStats = usageStats
@@ -681,7 +725,7 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
       .map(stat => ({
         name: stat.targetName,
         category: skills.find(skill => skill.folderName === stat.targetId)?.category || "usage",
-        score: stat[scoreKey]
+        score: statScore(stat)
       }))
       .filter(stat => stat.score > 0)
       .sort((a, b) => b.score - a.score);
@@ -705,12 +749,27 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
         )
       }))
       .sort((a, b) => b.score - a.score);
-  }, [rangeFactor, scoreKey, skills, usageStats]);
+  }, [range, rangeFactor, skills, usageStats]);
 
   const rankedSources = useMemo(() => {
+    const popularityStats = sourcePopularity
+      .map(source => ({
+        cacheStatus: source.cacheStatus,
+        forks: source.forks,
+        name: source.sourceName || source.repo,
+        score: sourceScore(source),
+        stars: source.stars
+      }))
+      .filter(source => source.score > 0 || source.stars > 0)
+      .sort((a, b) => b.score - a.score || b.stars - a.stars);
+
+    if (popularityStats.length > 0) {
+      return popularityStats;
+    }
+
     const realSourceStats = usageStats
       .filter(stat => stat.targetType === "source")
-      .map(stat => ({ name: stat.targetName, score: stat[scoreKey] }))
+      .map(stat => ({ cacheStatus: "", forks: 0, name: stat.targetName, score: statScore(stat), stars: 0 }))
       .filter(stat => stat.score > 0)
       .sort((a, b) => b.score - a.score);
 
@@ -720,15 +779,18 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
 
     return sources
       .map((source, index) => ({
+        cacheStatus: "",
+        forks: 0,
         name: source.name,
-        score: Math.max(1, Math.round(((source.skillCount || 1) * 6 + Math.max(0, 14 - index)) * rangeFactor))
+        score: Math.max(1, Math.round(((source.skillCount || 1) * 6 + Math.max(0, 14 - index)) * rangeFactor)),
+        stars: 0
       }))
       .sort((a, b) => b.score - a.score);
-  }, [rangeFactor, scoreKey, sources, usageStats]);
+  }, [range, rangeFactor, sourcePopularity, sources, usageStats]);
 
   const heatCells = useMemo(() => {
     const activeScores = usageStats
-      .map(stat => stat[scoreKey])
+      .map(stat => statScore(stat))
       .filter(score => score > 0);
     if (activeScores.length > 0) {
       const maxScore = Math.max(...activeScores, 1);
@@ -746,7 +808,24 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
       const level = raw > 78 ? 4 : raw > 56 ? 3 : raw > 34 ? 2 : raw > 14 ? 1 : 0;
       return { id: index, level };
     });
-  }, [scoreKey, skills.length, snapshot?.summary.warnings, sources.length, usageStats]);
+  }, [range, skills.length, snapshot?.summary.warnings, sources.length, usageStats]);
+
+  const barRows = useMemo(() => {
+    const rows = [
+      ...rankedSkills.slice(0, 4).map(skill => ({ label: skill.name, score: skill.score, type: "Skill" })),
+      ...rankedSources.slice(0, 4).map(source => ({ label: source.name, score: source.score || source.stars, type: "Source" }))
+    ]
+      .filter(row => row.score > 0)
+      .slice(0, 8);
+    const max = Math.max(...rows.map(row => row.score), 1);
+    return rows.map(row => ({ ...row, width: Math.max(6, Math.round((row.score / max) * 100)) }));
+  }, [rankedSkills, rankedSources]);
+
+  const githubLeaders = sourcePopularity
+    .filter(source => source.stars > 0 || source.cacheStatus === "error")
+    .slice()
+    .sort((a, b) => b.stars - a.stars || b.localTotalCount - a.localTotalCount)
+    .slice(0, 3);
 
   const usedSkillIds = new Set(usageStats.filter(stat => stat.targetType === "skill").map(stat => stat.targetId));
   const lowUseSkills = skills
@@ -762,25 +841,53 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
           <span>Usage Insights</span>
           <strong>常用 Skill 与来源热力</strong>
         </div>
-        <div className="usage-range-toggle" aria-label="Usage range">
-          {([
-            ["all", "自安装以来"],
-            ["7d", "7 天"],
-            ["30d", "30 天"]
-          ] as Array<[UsageRange, string]>).map(([key, label]) => (
-            <button className={range === key ? "active" : ""} key={key} onClick={() => setRange(key)} type="button">
-              {label}
-            </button>
-          ))}
+        <div className="usage-toolbar">
+          <div className="usage-range-toggle" aria-label="Usage range">
+            {([
+              ["all", "自安装以来"],
+              ["7d", "7 天"],
+              ["30d", "30 天"]
+            ] as Array<[UsageRange, string]>).map(([key, label]) => (
+              <button className={range === key ? "active" : ""} key={key} onClick={() => setRange(key)} type="button">
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="usage-range-toggle" aria-label="Usage chart mode">
+            {([
+              ["heatmap", "热力图"],
+              ["bars", "柱状图"]
+            ] as Array<[UsageViewMode, string]>).map(([key, label]) => (
+              <button className={viewMode === key ? "active" : ""} key={key} onClick={() => setViewMode(key)} type="button">
+                {label}
+              </button>
+            ))}
+          </div>
+          <button className="usage-refresh" disabled={loading} onClick={onRefreshPopularity} type="button">
+            <Icon name="refresh" /> {loading ? "刷新中" : "刷新 GitHub 热度"}
+          </button>
         </div>
       </header>
 
       <div className="usage-body">
-        <div className="usage-heatmap" aria-label="Skill usage heatmap">
-          {heatCells.map(cell => (
-            <span className={`heat-cell heat-${cell.level}`} key={cell.id} />
-          ))}
-        </div>
+        {viewMode === "heatmap" ? (
+          <div className="usage-heatmap" aria-label="Skill usage heatmap">
+            {heatCells.map(cell => (
+              <span className={`heat-cell heat-${cell.level}`} key={cell.id} />
+            ))}
+          </div>
+        ) : (
+          <div className="usage-bars" aria-label="Skill usage bar chart">
+            {barRows.map(row => (
+              <div className="usage-bar-row" key={`${row.type}-${row.label}`}>
+                <span>{row.label}</span>
+                <i><b style={{ width: `${row.width}%` }} /></i>
+                <em>{row.score}</em>
+              </div>
+            ))}
+            {barRows.length === 0 && <p>暂无真实使用事件。</p>}
+          </div>
+        )}
         <div className="usage-lists">
           <article>
             <span>常用 Skill</span>
@@ -796,9 +903,25 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
             {rankedSources.slice(0, 2).map(source => (
               <p key={source.name}>
                 <strong>{source.name}</strong>
-                <em>{source.score}</em>
+                <em>{source.score || formatCompactNumber(source.stars)}</em>
               </p>
             ))}
+          </article>
+          <article>
+            <span>GitHub 热度</span>
+            {githubLeaders.length > 0 ? (
+              githubLeaders.map(source => (
+                <p key={source.sourceId}>
+                  <strong>{source.sourceName || source.repo}</strong>
+                  <em>★ {formatCompactNumber(source.stars)}</em>
+                </p>
+              ))
+            ) : (
+              <p>
+                <strong>未刷新缓存</strong>
+                <em>0</em>
+              </p>
+            )}
           </article>
           <article>
             <span>低频未用</span>
@@ -812,9 +935,11 @@ function UsageInsightPanel({ snapshot }: { snapshot: LegacySnapshot | null }) {
         </div>
       </div>
       <small>
-        {usageStats.length > 0
-          ? "当前统计来自 v2 本地事件记录；AI 工具外部调用日志后续再接入。"
-          : "还没有真实使用事件，当前展示为索引健康度推算。"}
+        {sourcePopularity.some(source => source.fetchedAt)
+          ? "GitHub 星标来自手动刷新缓存；调用频度来自 v2 本地使用事件。"
+          : usageStats.length > 0
+            ? "当前统计来自 v2 本地事件记录；GitHub 热度可手动刷新缓存。"
+            : "还没有真实使用事件，当前展示为索引健康度推算。"}
       </small>
     </section>
   );
@@ -1408,6 +1533,9 @@ function Sources({
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
   const displaySources = sources.map(source => applySourceDraft(source, sourceDrafts[source.id]));
   const editingSource = displaySources.find(source => source.id === editingSourceId);
+  const sourcePopularityById = useMemo(() => {
+    return new Map((snapshot?.sourcePopularity ?? []).map(source => [source.sourceId, source]));
+  }, [snapshot?.sourcePopularity]);
 
   async function openSourceDetails(source: SourceCard) {
     setEditingSourceId(source.id);
@@ -1448,27 +1576,42 @@ function Sources({
       <SourceImportPreviewPanel previews={importPreviews} />
 
       <div className="table-panel source-table">
-        {displaySources.map(source => (
-          <div className={`source-row ${source.health} ${source.enabled ? "" : "disabled"}`} key={source.id}>
-            <strong>{source.name}</strong>
-            <span>{sourceTypeLabel(source.sourceType)}</span>
-            <span>{source.skillCount} Skills</span>
-            <span className={`status-badge ${source.health}`}>
-              <span className={`status-dot ${statusDotClass(source.health)}`} />
-              {skillStatusLabel(source.health)}
-            </span>
-            <span>{source.enabled ? "Enabled" : "Disabled"}</span>
-            <small>{source.url || source.localPath}</small>
-            <button
-              className="icon-action"
-              disabled={loading}
-              onClick={() => void openSourceDetails(source)}
-              type="button"
-            >
-              <Icon name="edit" />
-            </button>
-          </div>
-        ))}
+        {displaySources.map(source => {
+          const popularity = sourcePopularityById.get(source.id);
+          const popularityLabel = popularity?.stars
+            ? `★ ${formatCompactNumber(popularity.stars)}`
+            : popularity?.cacheStatus === "error"
+              ? "★ 错误"
+              : "★ 未刷新";
+          const usageLabel = popularity?.localTotalCount ? `${popularity.localTotalCount} 次` : "0 次";
+          return (
+            <div className={`source-row ${source.health} ${source.enabled ? "" : "disabled"}`} key={source.id}>
+              <strong>{source.name}</strong>
+              <span>{sourceTypeLabel(source.sourceType)}</span>
+              <span>{source.skillCount} Skills</span>
+              <span className="source-popularity" title="GitHub 星标缓存">
+                {popularityLabel}
+              </span>
+              <span className="source-usage" title="v2 本地记录的来源打开次数">
+                {usageLabel}
+              </span>
+              <span className={`status-badge ${source.health}`}>
+                <span className={`status-dot ${statusDotClass(source.health)}`} />
+                {skillStatusLabel(source.health)}
+              </span>
+              <span>{source.enabled ? "Enabled" : "Disabled"}</span>
+              <small>{source.url || source.localPath}</small>
+              <button
+                className="icon-action"
+                disabled={loading}
+                onClick={() => void openSourceDetails(source)}
+                type="button"
+              >
+                <Icon name="edit" />
+              </button>
+            </div>
+          );
+        })}
         {sources.length === 0 && <EmptyState text="正在等待来源扫描结果。" />}
       </div>
 
@@ -2879,6 +3022,42 @@ function createPreviewSnapshot(): LegacySnapshot {
         safeToContinue: true
       }
     ],
+    sourcePopularity: [
+      {
+        sourceId: "source-nature-paper-skills",
+        sourceName: "Nature-Paper-Skills",
+        url: "https://github.com/Boom5426/Nature-Paper-Skills.git",
+        owner: "Boom5426",
+        repo: "Nature-Paper-Skills",
+        stars: 1280,
+        forks: 146,
+        openIssues: 3,
+        lastUpdatedAt: new Date().toISOString(),
+        fetchedAt: new Date().toISOString(),
+        cacheStatus: "fresh",
+        error: "",
+        localTotalCount: 8,
+        localSevenDayCount: 3,
+        localThirtyDayCount: 8
+      },
+      {
+        sourceId: "source-impeccable",
+        sourceName: "impeccable",
+        url: "https://github.com/pbakaus/impeccable.git",
+        owner: "pbakaus",
+        repo: "impeccable",
+        stars: 920,
+        forks: 88,
+        openIssues: 1,
+        lastUpdatedAt: new Date().toISOString(),
+        fetchedAt: new Date().toISOString(),
+        cacheStatus: "fresh",
+        error: "",
+        localTotalCount: 4,
+        localSevenDayCount: 1,
+        localThirtyDayCount: 4
+      }
+    ],
     desktopQaChecks: [
       {
         id: "window-readable",
@@ -3172,6 +3351,19 @@ function formatScanTime(value: string) {
     return "已记录";
   }
   return date.toLocaleString();
+}
+
+function formatCompactNumber(value: number) {
+  if (!Number.isFinite(value)) {
+    return "0";
+  }
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
+  }
+  return String(Math.max(0, Math.round(value)));
 }
 
 function countByStatus(items: Array<{ status: string }>, status: string) {

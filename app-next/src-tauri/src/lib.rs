@@ -32,6 +32,7 @@ struct LegacySnapshot {
     rollback_plan: Vec<RollbackPlanStepCard>,
     release_reports: Vec<ReleaseReportCard>,
     import_previews: Vec<ImportPreviewCard>,
+    source_popularity: Vec<SourcePopularityCard>,
     desktop_qa_checks: Vec<DesktopQaCheckCard>,
     usage_stats: Vec<UsageStatCard>,
     audit_events: Vec<AuditEventCard>,
@@ -78,6 +79,33 @@ struct SourceCard {
     note: String,
     local_path: String,
     enabled: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SourcePopularityCard {
+    source_id: String,
+    source_name: String,
+    url: String,
+    owner: String,
+    repo: String,
+    stars: u64,
+    forks: u64,
+    open_issues: u64,
+    last_updated_at: String,
+    fetched_at: String,
+    cache_status: String,
+    error: String,
+    local_total_count: usize,
+    local_seven_day_count: usize,
+    local_thirty_day_count: usize,
+}
+
+struct GithubPopularityFetch {
+    stars: u64,
+    forks: u64,
+    open_issues: u64,
+    last_updated_at: String,
 }
 
 #[derive(Serialize)]
@@ -436,6 +464,7 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         rollback_plan: Vec::new(),
         release_reports,
         import_previews,
+        source_popularity: Vec::new(),
         desktop_qa_checks: Vec::new(),
         usage_stats: Vec::new(),
         audit_events: Vec::new(),
@@ -471,6 +500,9 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         snapshot.desktop_qa_checks =
             read_indexed_desktop_qa_checks(&connection).unwrap_or_default();
         snapshot.usage_stats = read_indexed_usage_stats(&connection).unwrap_or_default();
+        snapshot.source_popularity =
+            read_indexed_source_popularity(&connection, &snapshot.sources, &snapshot.usage_stats)
+                .unwrap_or_default();
         snapshot.audit_events = read_indexed_audit_events(&connection).unwrap_or_default();
     }
     Ok(snapshot)
@@ -580,6 +612,81 @@ fn record_usage_event(
     load_indexed_snapshot()
 }
 
+#[tauri::command]
+fn refresh_source_popularity() -> Result<LegacySnapshot, String> {
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let sources = read_indexed_sources(&connection)?;
+    let fetched_at = unix_timestamp_string();
+    let mut refreshed = 0usize;
+    let mut failed = 0usize;
+
+    for source in sources {
+        let Some((owner, repo)) = parse_github_repo(&source.url) else {
+            continue;
+        };
+
+        match fetch_github_popularity(&owner, &repo) {
+            Ok(popularity) => {
+                upsert_source_popularity_cache(
+                    &connection,
+                    &source,
+                    &owner,
+                    &repo,
+                    &popularity,
+                    &fetched_at,
+                    "fresh",
+                    "",
+                )?;
+                refreshed += 1;
+            }
+            Err(error) => {
+                let fallback = GithubPopularityFetch {
+                    stars: 0,
+                    forks: 0,
+                    open_issues: 0,
+                    last_updated_at: String::new(),
+                };
+                upsert_source_popularity_cache(
+                    &connection,
+                    &source,
+                    &owner,
+                    &repo,
+                    &fallback,
+                    &fetched_at,
+                    "error",
+                    &error,
+                )?;
+                failed += 1;
+            }
+        }
+    }
+
+    connection
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'source_popularity_refreshed', ?2, ?3, ?4)",
+            params![
+                format!("audit-source-popularity-{}", fetched_at),
+                format!(
+                    "GitHub popularity cache refreshed: {} ok, {} failed.",
+                    refreshed, failed
+                ),
+                serde_json::to_string(&serde_json::json!({
+                    "refreshed": refreshed,
+                    "failed": failed,
+                    "scope": "github-api-cache"
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                fetched_at
+            ],
+        )
+        .map_err(|error| format!("Cannot write source popularity audit event: {}", error))?;
+
+    read_snapshot_from_database(&root, &connection)
+}
+
 fn resolve_legacy_root() -> Result<PathBuf, String> {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -665,6 +772,20 @@ fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
                 source_name TEXT NOT NULL DEFAULT '',
                 event_type TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS source_popularity_cache (
+                source_id TEXT PRIMARY KEY,
+                source_name TEXT NOT NULL DEFAULT '',
+                url TEXT NOT NULL DEFAULT '',
+                owner TEXT NOT NULL DEFAULT '',
+                repo TEXT NOT NULL DEFAULT '',
+                stars INTEGER NOT NULL DEFAULT 0,
+                forks INTEGER NOT NULL DEFAULT 0,
+                open_issues INTEGER NOT NULL DEFAULT 0,
+                last_updated_at TEXT NOT NULL DEFAULT '',
+                fetched_at TEXT NOT NULL DEFAULT '',
+                cache_status TEXT NOT NULL DEFAULT 'missing',
+                error TEXT NOT NULL DEFAULT ''
             );",
         )
         .map_err(|error| format!("Cannot ensure v2 metadata event tables: {}", error))?;
@@ -759,6 +880,7 @@ fn read_snapshot_from_database(
     let rollback_plan = read_indexed_rollback_plan(connection)?;
     let desktop_qa_checks = read_indexed_desktop_qa_checks(connection)?;
     let usage_stats = read_indexed_usage_stats(connection)?;
+    let source_popularity = read_indexed_source_popularity(connection, &sources, &usage_stats)?;
     let audit_events = read_indexed_audit_events(connection)?;
     let diagnostics = read_indexed_diagnostics(connection);
     let index = read_index_report(
@@ -814,6 +936,7 @@ fn read_snapshot_from_database(
         rollback_plan,
         release_reports,
         import_previews,
+        source_popularity,
         desktop_qa_checks,
         usage_stats,
         audit_events,
@@ -1688,6 +1811,298 @@ fn read_indexed_usage_stats(connection: &Connection) -> Result<Vec<UsageStatCard
     output.truncate(24);
 
     Ok(output)
+}
+
+fn read_indexed_source_popularity(
+    connection: &Connection,
+    sources: &[SourceCard],
+    usage_stats: &[UsageStatCard],
+) -> Result<Vec<SourcePopularityCard>, String> {
+    let usage_counts = read_source_usage_counts(connection).unwrap_or_default();
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                source_name, url, owner, repo, stars, forks, open_issues,
+                last_updated_at, fetched_at, cache_status, error
+            FROM source_popularity_cache
+            WHERE source_id = ?1",
+        )
+        .map_err(|error| format!("Cannot prepare source popularity cache query: {}", error))?;
+    let mut output = Vec::new();
+
+    for source in sources {
+        let Some((owner, repo)) = parse_github_repo(&source.url) else {
+            continue;
+        };
+
+        let cached = statement
+            .query_row(params![&source.id], |row| {
+                Ok(SourcePopularityCard {
+                    source_id: source.id.clone(),
+                    source_name: row.get::<_, String>(0)?,
+                    url: row.get::<_, String>(1)?,
+                    owner: row.get::<_, String>(2)?,
+                    repo: row.get::<_, String>(3)?,
+                    stars: row.get::<_, i64>(4)?.max(0) as u64,
+                    forks: row.get::<_, i64>(5)?.max(0) as u64,
+                    open_issues: row.get::<_, i64>(6)?.max(0) as u64,
+                    last_updated_at: row.get::<_, String>(7)?,
+                    fetched_at: row.get::<_, String>(8)?,
+                    cache_status: row.get::<_, String>(9)?,
+                    error: row.get::<_, String>(10)?,
+                    local_total_count: 0,
+                    local_seven_day_count: 0,
+                    local_thirty_day_count: 0,
+                })
+            })
+            .optional()
+            .map_err(|error| format!("Cannot read source popularity cache: {}", error))?;
+
+        let mut card = cached.unwrap_or_else(|| SourcePopularityCard {
+            source_id: source.id.clone(),
+            source_name: source.name.clone(),
+            url: source.url.clone(),
+            owner,
+            repo,
+            stars: 0,
+            forks: 0,
+            open_issues: 0,
+            last_updated_at: String::new(),
+            fetched_at: String::new(),
+            cache_status: "missing".to_string(),
+            error: String::new(),
+            local_total_count: 0,
+            local_seven_day_count: 0,
+            local_thirty_day_count: 0,
+        });
+
+        let by_id = usage_counts
+            .get(&format!("id:{}", source.id))
+            .copied()
+            .unwrap_or_default();
+        let by_name = usage_counts
+            .get(&format!("name:{}", normalize_lookup_key(&source.name)))
+            .copied()
+            .unwrap_or_default();
+        card.local_total_count = by_id.0 + by_name.0;
+        card.local_seven_day_count = by_id.1 + by_name.1;
+        card.local_thirty_day_count = by_id.2 + by_name.2;
+
+        if card.local_total_count == 0 {
+            for stat in usage_stats {
+                let matches_source = stat.target_type == "source" && stat.target_id == source.id;
+                let matches_skill_source = stat.target_type == "skill"
+                    && normalize_lookup_key(&stat.source_name)
+                        == normalize_lookup_key(&source.name);
+                if matches_source || matches_skill_source {
+                    card.local_total_count += stat.total_count;
+                    card.local_seven_day_count += stat.seven_day_count;
+                    card.local_thirty_day_count += stat.thirty_day_count;
+                }
+            }
+        }
+
+        if card.source_name.is_empty() {
+            card.source_name = source.name.clone();
+        }
+        if card.url.is_empty() {
+            card.url = source.url.clone();
+        }
+        output.push(card);
+    }
+
+    output.sort_by(|left, right| {
+        right
+            .local_total_count
+            .cmp(&left.local_total_count)
+            .then_with(|| right.stars.cmp(&left.stars))
+            .then_with(|| left.source_name.cmp(&right.source_name))
+    });
+
+    Ok(output)
+}
+
+fn read_source_usage_counts(
+    connection: &Connection,
+) -> Result<HashMap<String, (usize, usize, usize)>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT target_type, target_id, source_name, created_at
+            FROM usage_events",
+        )
+        .map_err(|error| format!("Cannot prepare source usage count query: {}", error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .map_err(|error| format!("Cannot read source usage count events: {}", error))?;
+    let now = current_unix_nanos();
+    let seven_day_floor = now.saturating_sub(7 * DAY_NANOS);
+    let thirty_day_floor = now.saturating_sub(30 * DAY_NANOS);
+    let mut output: HashMap<String, (usize, usize, usize)> = HashMap::new();
+
+    for row in rows {
+        let (target_type, target_id, source_name, created_at) =
+            row.map_err(|error| format!("Cannot decode source usage event: {}", error))?;
+        let key = if target_type == "source" {
+            format!("id:{}", target_id)
+        } else if target_type == "skill" && !source_name.trim().is_empty() {
+            format!("name:{}", normalize_lookup_key(&source_name))
+        } else {
+            continue;
+        };
+        let created_at_nanos = created_at.parse::<u128>().unwrap_or(0);
+        let counts = output.entry(key).or_default();
+        counts.0 += 1;
+        if created_at_nanos >= seven_day_floor {
+            counts.1 += 1;
+        }
+        if created_at_nanos >= thirty_day_floor {
+            counts.2 += 1;
+        }
+    }
+
+    Ok(output)
+}
+
+fn normalize_lookup_key(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn parse_github_repo(input: &str) -> Option<(String, String)> {
+    let mut value = input
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_string();
+    if value.is_empty() {
+        return None;
+    }
+    if let Some((without_hash, _)) = value.split_once('#') {
+        value = without_hash.to_string();
+    }
+    if let Some((without_query, _)) = value.split_once('?') {
+        value = without_query.to_string();
+    }
+    value = value.trim_end_matches('/').to_string();
+
+    let path = if let Some(rest) = value.strip_prefix("git@github.com:") {
+        rest.to_string()
+    } else if let Some(rest) = value.strip_prefix("ssh://git@github.com/") {
+        rest.to_string()
+    } else if let Some(rest) = value.strip_prefix("https://github.com/") {
+        rest.to_string()
+    } else if let Some(rest) = value.strip_prefix("http://github.com/") {
+        rest.to_string()
+    } else {
+        return None;
+    };
+
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim().trim_end_matches(".git");
+    if owner.is_empty() || repo.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    if !owner
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '-' || character == '_')
+        || !repo.chars().all(|character| {
+            character.is_ascii_alphanumeric()
+                || character == '-'
+                || character == '_'
+                || character == '.'
+        })
+    {
+        return None;
+    }
+
+    Some((owner.to_string(), repo.to_string()))
+}
+
+fn fetch_github_popularity(owner: &str, repo: &str) -> Result<GithubPopularityFetch, String> {
+    let url = format!("https://api.github.com/repos/{}/{}", owner, repo);
+    let response = ureq::get(&url)
+        .set("User-Agent", "AI-SkillHub-v2")
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|error| {
+            format!(
+                "GitHub API request failed for {}/{}: {}",
+                owner, repo, error
+            )
+        })?;
+    let payload: Value = response.into_json().map_err(|error| {
+        format!(
+            "Cannot parse GitHub API response for {}/{}: {}",
+            owner, repo, error
+        )
+    })?;
+
+    Ok(GithubPopularityFetch {
+        stars: json_u64(&payload, "stargazers_count"),
+        forks: json_u64(&payload, "forks_count"),
+        open_issues: json_u64(&payload, "open_issues_count"),
+        last_updated_at: payload
+            .get("pushed_at")
+            .or_else(|| payload.get("updated_at"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+fn upsert_source_popularity_cache(
+    connection: &Connection,
+    source: &SourceCard,
+    owner: &str,
+    repo: &str,
+    popularity: &GithubPopularityFetch,
+    fetched_at: &str,
+    cache_status: &str,
+    error: &str,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "INSERT INTO source_popularity_cache (
+                source_id, source_name, url, owner, repo, stars, forks, open_issues,
+                last_updated_at, fetched_at, cache_status, error
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ON CONFLICT(source_id) DO UPDATE SET
+                source_name = excluded.source_name,
+                url = excluded.url,
+                owner = excluded.owner,
+                repo = excluded.repo,
+                stars = CASE WHEN excluded.cache_status = 'fresh' THEN excluded.stars ELSE source_popularity_cache.stars END,
+                forks = CASE WHEN excluded.cache_status = 'fresh' THEN excluded.forks ELSE source_popularity_cache.forks END,
+                open_issues = CASE WHEN excluded.cache_status = 'fresh' THEN excluded.open_issues ELSE source_popularity_cache.open_issues END,
+                last_updated_at = CASE WHEN excluded.cache_status = 'fresh' THEN excluded.last_updated_at ELSE source_popularity_cache.last_updated_at END,
+                fetched_at = excluded.fetched_at,
+                cache_status = excluded.cache_status,
+                error = excluded.error",
+            params![
+                &source.id,
+                &source.name,
+                &source.url,
+                owner,
+                repo,
+                popularity.stars as i64,
+                popularity.forks as i64,
+                popularity.open_issues as i64,
+                &popularity.last_updated_at,
+                fetched_at,
+                cache_status,
+                compact_note(error)
+            ],
+        )
+        .map_err(|error| format!("Cannot write source popularity cache: {}", error))?;
+
+    Ok(())
 }
 
 fn read_indexed_audit_events(connection: &Connection) -> Result<Vec<AuditEventCard>, String> {
@@ -4174,7 +4589,8 @@ pub fn run() {
             set_skill_metadata,
             set_skill_enabled,
             set_source_metadata,
-            record_usage_event
+            record_usage_event,
+            refresh_source_popularity
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AI SkillHub v2 app");
@@ -4710,6 +5126,107 @@ mod tests {
             .expect("audit events should read")
             .iter()
             .any(|event| event.event_type == "usage_recorded"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parse_github_repo_accepts_common_repo_urls() {
+        assert_eq!(
+            parse_github_repo("https://github.com/pbakaus/impeccable.git"),
+            Some(("pbakaus".to_string(), "impeccable".to_string()))
+        );
+        assert_eq!(
+            parse_github_repo("git@github.com:Boom5426/Nature-Paper-Skills.git"),
+            Some(("Boom5426".to_string(), "Nature-Paper-Skills".to_string()))
+        );
+        assert_eq!(
+            parse_github_repo("ssh://git@github.com/Yuan1z0825/nature-skills.git"),
+            Some(("Yuan1z0825".to_string(), "nature-skills".to_string()))
+        );
+
+        assert_eq!(
+            parse_github_repo("https://example.com/owner/repo.git"),
+            None
+        );
+        assert_eq!(
+            parse_github_repo("https://github.com/owner/repo/extra"),
+            None
+        );
+        assert_eq!(
+            parse_github_repo("https://github.com/owner/repo.git invalid"),
+            None
+        );
+    }
+
+    #[test]
+    fn source_popularity_combines_github_cache_with_local_usage() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-source-popularity-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let source = SourceCard {
+            id: "source-impeccable".to_string(),
+            name: "impeccable".to_string(),
+            source_type: "skill".to_string(),
+            health: "ok".to_string(),
+            url: "https://github.com/pbakaus/impeccable.git".to_string(),
+            skill_count: 1,
+            mode: "scan".to_string(),
+            category_id: "ui-design".to_string(),
+            note: String::new(),
+            local_path: "app/github_sources/impeccable".to_string(),
+            enabled: true,
+        };
+        let popularity = GithubPopularityFetch {
+            stars: 1234,
+            forks: 56,
+            open_issues: 7,
+            last_updated_at: "2026-05-29T00:00:00Z".to_string(),
+        };
+
+        upsert_source_popularity_cache(
+            &connection,
+            &source,
+            "pbakaus",
+            "impeccable",
+            &popularity,
+            "123",
+            "fresh",
+            "",
+        )
+        .expect("popularity cache should save");
+        record_usage_event_row_in_connection(
+            &connection,
+            "source",
+            "source-impeccable",
+            "impeccable",
+            "impeccable",
+            "open_source",
+        )
+        .expect("source usage should save");
+        record_usage_event_row_in_connection(
+            &connection,
+            "skill",
+            "impeccable",
+            "impeccable",
+            "impeccable",
+            "copy_prompt",
+        )
+        .expect("skill usage should save");
+
+        let stats = read_indexed_usage_stats(&connection).expect("usage stats should read");
+        let popularity_cards = read_indexed_source_popularity(&connection, &[source], &stats)
+            .expect("source popularity should read");
+        let card = popularity_cards
+            .first()
+            .expect("popularity card should exist");
+
+        assert_eq!(card.stars, 1234);
+        assert_eq!(card.forks, 56);
+        assert_eq!(card.local_total_count, 2);
+        assert!(card.local_seven_day_count >= 2);
 
         let _ = fs::remove_dir_all(root);
     }

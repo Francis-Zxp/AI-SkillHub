@@ -6120,6 +6120,14 @@ body,
   align-items: flex-start;
 }
 
+.usage-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
 .usage-insight header span,
 .usage-lists article > span {
   display: block;
@@ -6162,6 +6170,35 @@ body,
   background: var(--ui-brand-soft);
 }
 
+.usage-refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 13px;
+  color: var(--ui-text);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ui-panel-soft) 70%, transparent);
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.usage-refresh .ui-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.usage-refresh:hover:not(:disabled) {
+  border-color: var(--ui-brand-strong);
+  transform: translateY(-1px);
+}
+
+.usage-refresh:disabled {
+  cursor: wait;
+  opacity: .58;
+}
+
 .usage-body {
   align-items: stretch;
 }
@@ -6202,10 +6239,63 @@ body,
   box-shadow: 0 0 18px color-mix(in srgb, var(--ui-brand-strong) 38%, transparent);
 }
 
+.usage-bars {
+  display: grid;
+  gap: 9px;
+  width: min(48%, 420px);
+  min-width: 280px;
+  padding: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: color-mix(in srgb, var(--ui-bg) 72%, transparent);
+}
+
+.usage-bar-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(96px, 1.6fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: var(--ui-text-soft);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.usage-bar-row span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-bar-row i {
+  display: block;
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ui-panel-soft) 78%, transparent);
+}
+
+.usage-bar-row b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--ui-brand-strong), color-mix(in srgb, var(--ui-brand-strong) 54%, #ffffff));
+  box-shadow: 0 0 18px color-mix(in srgb, var(--ui-brand-strong) 25%, transparent);
+}
+
+.usage-bar-row em {
+  min-width: 24px;
+  color: var(--ui-brand-strong);
+  font-style: normal;
+  text-align: right;
+}
+
 .usage-lists {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   min-width: 0;
 }
@@ -6269,6 +6359,29 @@ body,
   .usage-heatmap {
     width: 100%;
     max-width: none;
+  }
+
+  .usage-bars {
+    width: 100%;
+    max-width: none;
+  }
+
+  .usage-lists {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1080px) {
+  .usage-toolbar {
+    justify-content: flex-start;
+  }
+
+  .usage-lists {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-lists article {
+    min-height: auto;
   }
 }
 
@@ -6601,7 +6714,31 @@ body[data-theme="dark"] {
 }
 
 .source-table .source-row {
-  grid-template-columns: minmax(150px, 1.1fr) 76px 84px 112px 86px minmax(0, 2fr) 42px !important;
+  grid-template-columns: minmax(150px, 1.1fr) 76px 84px 90px 76px 112px 86px minmax(0, 1.8fr) 42px !important;
+}
+
+.source-popularity,
+.source-usage {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ui-surface) 72%, transparent);
+  color: var(--ui-text) !important;
+  font-size: 12px !important;
+  font-weight: 850 !important;
+  white-space: nowrap;
+}
+
+.source-popularity {
+  color: var(--ui-warning) !important;
+}
+
+.source-usage {
+  color: var(--ui-brand-strong) !important;
 }
 
 .source-row.disabled {
@@ -6853,7 +6990,7 @@ body[data-theme="dark"] {
 
 @media (max-width: 1180px) {
   .source-table .source-row {
-    grid-template-columns: minmax(170px, 1fr) auto auto auto !important;
+    grid-template-columns: minmax(170px, 1fr) auto auto auto auto !important;
   }
 
   .source-table .source-row small {
