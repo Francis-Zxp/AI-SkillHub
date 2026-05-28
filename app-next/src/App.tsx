@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import type {
   DesktopQaCheckCard,
+  ImportPreviewCard,
   LegacySnapshot,
   LegacySummary,
   NavKey,
@@ -1400,6 +1401,7 @@ function Sources({
   snapshot: LegacySnapshot | null;
 }) {
   const sources = snapshot?.sources ?? [];
+  const importPreviews = snapshot?.importPreviews ?? [];
   const githubSources = sources.filter(source => source.url).length;
   const localSources = sources.filter(source => !source.url && source.localPath).length;
   const [editingSourceId, setEditingSourceId] = useState<string>("");
@@ -1443,6 +1445,8 @@ function Sources({
         </div>
       </section>
 
+      <SourceImportPreviewPanel previews={importPreviews} />
+
       <div className="table-panel source-table">
         {displaySources.map(source => (
           <div className={`source-row ${source.health} ${source.enabled ? "" : "disabled"}`} key={source.id}>
@@ -1477,6 +1481,79 @@ function Sources({
         />
       )}
     </div>
+  );
+}
+
+function SourceImportPreviewPanel({ previews }: { previews: ImportPreviewCard[] }) {
+  const cards =
+    previews.length > 0
+      ? previews
+      : [
+          {
+            id: "import-github",
+            title: "GitHub 仓库导入",
+            importKind: "github",
+            status: "empty",
+            summary: "等待 v2 索引导入来源。",
+            detail: "当前只显示安全预览，不会 clone、pull 或写入 Skills 目录。",
+            skillCount: 0,
+            promptCount: 0,
+            safeToContinue: true
+          },
+          {
+            id: "import-local",
+            title: "本地文件夹导入",
+            importKind: "local",
+            status: "empty",
+            summary: "等待本地来源扫描。",
+            detail: "只有包含 SKILL.md 的目录会被识别为 Skill。",
+            skillCount: 0,
+            promptCount: 0,
+            safeToContinue: true
+          },
+          {
+            id: "import-zip",
+            title: "zip / .skill 包导入",
+            importKind: "zip",
+            status: "missing",
+            summary: "还没有 zip 预览报告。",
+            detail: "必须先通过路径安全和重复名称检查，才允许进入真实导入。",
+            skillCount: 0,
+            promptCount: 0,
+            safeToContinue: false
+          }
+        ];
+
+  return (
+    <section className="import-preview-panel">
+      <div className="section-title-row">
+        <div>
+          <p className="eyebrow">Import Wizard</p>
+          <h3>导入预览</h3>
+          <p>先预览 GitHub、本地文件夹和 zip 包风险；当前不会真实写入 AI 工具目录。</p>
+        </div>
+        <span className="status-badge info">只读预览</span>
+      </div>
+      <div className="import-preview-grid">
+        {cards.map(card => (
+          <article className={`import-preview-card ${card.status}`} key={card.id}>
+            <div className="card-head">
+              <strong>{card.title}</strong>
+              <span className={`status-badge ${card.safeToContinue ? "ok" : "warn"}`}>
+                {importPreviewStatusLabel(card)}
+              </span>
+            </div>
+            <p>{card.summary}</p>
+            <small>{card.detail}</small>
+            <footer>
+              <span>{card.skillCount} Skills</span>
+              <span>{card.promptCount} Prompt</span>
+              <span>{importKindLabel(card.importKind)}</span>
+            </footer>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -2216,6 +2293,23 @@ function sourceTypeLabel(sourceType: string): string {
   return sourceType;
 }
 
+function importKindLabel(importKind: string): string {
+  if (importKind === "github") return "GitHub";
+  if (importKind === "local") return "Local";
+  if (importKind === "zip") return "Package";
+  return importKind;
+}
+
+function importPreviewStatusLabel(card: ImportPreviewCard): string {
+  if (card.status === "ready") return "Ready";
+  if (card.status === "empty") return "Empty";
+  if (card.status === "ok") return "Safe";
+  if (card.status === "missing") return "Missing";
+  if (card.status === "error" || card.status === "blocked") return "Blocked";
+  if (card.status === "warn") return "Review";
+  return card.safeToContinue ? "Ready" : "Review";
+}
+
 function createPreviewSnapshot(): LegacySnapshot {
   return {
     root: "浏览器预览模式",
@@ -2748,6 +2842,41 @@ function createPreviewSnapshot(): LegacySnapshot {
         warn: 0,
         error: 0,
         summary: "zip 预览：2 个 Skill 可识别；路径穿越防护已通过。"
+      }
+    ],
+    importPreviews: [
+      {
+        id: "import-github",
+        title: "GitHub 仓库导入",
+        importKind: "github",
+        status: "ready",
+        summary: "已索引 3 个 GitHub 来源。",
+        detail: "下一步只做 clone/pull 预览，不直接安装。",
+        skillCount: 19,
+        promptCount: 1,
+        safeToContinue: true
+      },
+      {
+        id: "import-local",
+        title: "本地文件夹导入",
+        importKind: "local",
+        status: "empty",
+        summary: "还没有单独登记的本地来源。",
+        detail: "只有包含 SKILL.md 的目录会被视为 Skill；Prompt 资料会继续标记为资料源。",
+        skillCount: 0,
+        promptCount: 0,
+        safeToContinue: true
+      },
+      {
+        id: "import-zip",
+        title: "zip / .skill 包导入",
+        importKind: "zip",
+        status: "ok",
+        summary: "zip 预览：2 个 Skill 可识别；路径穿越防护已通过。",
+        detail: "zip slip 防护和 SKILL.md 预览已通过；当前仍保持只读，不会真实解压。",
+        skillCount: 2,
+        promptCount: 0,
+        safeToContinue: true
       }
     ],
     desktopQaChecks: [

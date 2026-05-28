@@ -6656,6 +6656,113 @@ body[data-theme="dark"] {
   font-size: 12px;
 }
 
+.import-preview-panel {
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-lg);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .045), transparent 54%),
+    var(--ui-panel);
+  box-shadow: var(--ui-shadow);
+  padding: 18px;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.section-title-row h3 {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.section-title-row p {
+  margin: 6px 0 0;
+  max-width: 760px;
+  color: var(--ui-text-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.import-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.import-preview-card {
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-md);
+  background: rgba(255, 255, 255, .035);
+  padding: 15px;
+  min-width: 0;
+  transition:
+    transform .18s var(--ui-ease),
+    border-color .18s var(--ui-ease),
+    background .18s var(--ui-ease);
+}
+
+.import-preview-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--ui-accent-soft);
+  background: rgba(255, 255, 255, .055);
+}
+
+.import-preview-card p {
+  margin: 12px 0 8px;
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.import-preview-card small {
+  display: block;
+  min-height: 42px;
+  color: var(--ui-text-soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.import-preview-card footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.import-preview-card footer span {
+  border: 1px solid var(--ui-line);
+  border-radius: 999px;
+  color: var(--ui-text-soft);
+  font-size: 11px;
+  font-weight: 850;
+  padding: 5px 8px;
+}
+
+.theme-light .import-preview-panel,
+.theme-light .import-preview-card {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .7), transparent 58%),
+    #fffdf9;
+}
+
+.theme-dark .import-preview-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .036), transparent 62%),
+    rgba(255, 255, 255, .024);
+}
+
+@media (max-width: 1180px) {
+  .import-preview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .activity-timeline {
   margin-top: 18px;
   padding-top: 16px;

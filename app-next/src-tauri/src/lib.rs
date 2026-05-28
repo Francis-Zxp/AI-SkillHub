@@ -31,6 +31,7 @@ struct LegacySnapshot {
     restore_dry_run: Vec<RestoreDryRunItemCard>,
     rollback_plan: Vec<RollbackPlanStepCard>,
     release_reports: Vec<ReleaseReportCard>,
+    import_previews: Vec<ImportPreviewCard>,
     desktop_qa_checks: Vec<DesktopQaCheckCard>,
     usage_stats: Vec<UsageStatCard>,
     audit_events: Vec<AuditEventCard>,
@@ -255,6 +256,20 @@ struct ReleaseReportCard {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct ImportPreviewCard {
+    id: String,
+    title: String,
+    import_kind: String,
+    status: String,
+    summary: String,
+    detail: String,
+    skill_count: usize,
+    prompt_count: usize,
+    safe_to_continue: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct DesktopQaCheckCard {
     id: String,
     title: String,
@@ -388,6 +403,8 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         .count();
     let warnings = skills.iter().filter(|skill| skill.health != "ok").count();
     let agents_detected = agents.iter().filter(|agent| agent.detected).count();
+    let release_reports = derive_release_reports(&root);
+    let import_previews = derive_import_previews(&sources_dir, &sources, &release_reports);
 
     let mut snapshot = LegacySnapshot {
         root: root.display().to_string(),
@@ -417,7 +434,8 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
         backup_dry_run: Vec::new(),
         restore_dry_run: Vec::new(),
         rollback_plan: Vec::new(),
-        release_reports: derive_release_reports(&root),
+        release_reports,
+        import_previews,
         desktop_qa_checks: Vec::new(),
         usage_stats: Vec::new(),
         audit_events: Vec::new(),
@@ -763,6 +781,8 @@ fn read_snapshot_from_database(
         .join("app")
         .join("reports")
         .join("latest-diagnostics.json");
+    let release_reports = derive_release_reports(root);
+    let import_previews = derive_import_previews(&sources_dir, &sources, &release_reports);
 
     Ok(LegacySnapshot {
         root: root.display().to_string(),
@@ -792,7 +812,8 @@ fn read_snapshot_from_database(
         backup_dry_run,
         restore_dry_run,
         rollback_plan,
-        release_reports: derive_release_reports(root),
+        release_reports,
+        import_previews,
         desktop_qa_checks,
         usage_stats,
         audit_events,
@@ -3543,6 +3564,107 @@ fn parse_diagnostic_summary(diagnostics: Option<&Value>) -> DiagnosticSummary {
     }
 }
 
+fn derive_import_previews(
+    sources_dir: &Path,
+    sources: &[SourceCard],
+    release_reports: &[ReleaseReportCard],
+) -> Vec<ImportPreviewCard> {
+    let github_sources: Vec<&SourceCard> = sources
+        .iter()
+        .filter(|source| !source.url.trim().is_empty())
+        .collect();
+    let local_sources: Vec<&SourceCard> = sources
+        .iter()
+        .filter(|source| source.url.trim().is_empty() && !source.local_path.trim().is_empty())
+        .collect();
+    let github_skill_count = github_sources
+        .iter()
+        .map(|source| source.skill_count)
+        .sum::<usize>();
+    let github_prompt_count = github_sources
+        .iter()
+        .filter(|source| source.source_type.eq_ignore_ascii_case("prompt"))
+        .count();
+    let local_skill_count = local_sources
+        .iter()
+        .map(|source| source.skill_count)
+        .sum::<usize>();
+    let local_prompt_count = local_sources
+        .iter()
+        .filter(|source| source.source_type.eq_ignore_ascii_case("prompt"))
+        .count();
+    let zip_report = release_reports
+        .iter()
+        .find(|report| report.id == "zip-preview" || report.report_type == "zip-preview-test");
+
+    vec![
+        ImportPreviewCard {
+            id: "import-github".to_string(),
+            title: "GitHub 仓库导入".to_string(),
+            import_kind: "github".to_string(),
+            status: if github_sources.is_empty() {
+                "empty"
+            } else {
+                "ready"
+            }
+            .to_string(),
+            summary: if github_sources.is_empty() {
+                "还没有已登记的 GitHub 来源。".to_string()
+            } else {
+                format!("已索引 {} 个 GitHub 来源。", github_sources.len())
+            },
+            detail: format!(
+                "下一步只做 clone/pull 预览，不直接安装；来源目录：{}。",
+                sources_dir.display()
+            ),
+            skill_count: github_skill_count,
+            prompt_count: github_prompt_count,
+            safe_to_continue: true,
+        },
+        ImportPreviewCard {
+            id: "import-local".to_string(),
+            title: "本地文件夹导入".to_string(),
+            import_kind: "local".to_string(),
+            status: if local_sources.is_empty() {
+                "empty"
+            } else {
+                "ready"
+            }
+            .to_string(),
+            summary: if local_sources.is_empty() {
+                "还没有单独登记的本地来源。".to_string()
+            } else {
+                format!("已识别 {} 个本地来源。", local_sources.len())
+            },
+            detail: "只有包含 SKILL.md 的目录会被视为 Skill；Prompt 资料会继续标记为资料源。"
+                .to_string(),
+            skill_count: local_skill_count,
+            prompt_count: local_prompt_count,
+            safe_to_continue: true,
+        },
+        ImportPreviewCard {
+            id: "import-zip".to_string(),
+            title: "zip / .skill 包导入".to_string(),
+            import_kind: "zip".to_string(),
+            status: zip_report
+                .map(|report| report.status.clone())
+                .unwrap_or_else(|| "missing".to_string()),
+            summary: zip_report
+                .map(|report| report.summary.clone())
+                .unwrap_or_else(|| "还没有 v2 可复用的 zip 预览报告。".to_string()),
+            detail: if zip_report.map(|report| report.ok).unwrap_or(false) {
+                "zip slip 防护和 SKILL.md 预览已通过；当前仍保持只读，不会真实解压。"
+            } else {
+                "必须先通过路径穿越防护、SKILL.md 预览和重复名称检查，才能进入真实导入。"
+            }
+            .to_string(),
+            skill_count: 0,
+            prompt_count: 0,
+            safe_to_continue: zip_report.map(|report| report.ok).unwrap_or(false),
+        },
+    ]
+}
+
 fn derive_release_reports(root: &Path) -> Vec<ReleaseReportCard> {
     let reports_root = root.join("app").join("reports");
     let candidates = [
@@ -4117,6 +4239,90 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.starts_with("preset-"));
         assert!(second.starts_with("preset-"));
+    }
+
+    #[test]
+    fn import_previews_keep_imports_read_only_and_gate_zip() {
+        let sources = vec![
+            SourceCard {
+                id: "source-github".to_string(),
+                name: "github-skill-pack".to_string(),
+                source_type: "skill".to_string(),
+                health: "ok".to_string(),
+                url: "https://github.com/example/skills.git".to_string(),
+                skill_count: 3,
+                mode: "scan".to_string(),
+                category_id: "agent-tools".to_string(),
+                note: String::new(),
+                local_path: "app/github_sources/github-skill-pack".to_string(),
+                enabled: true,
+            },
+            SourceCard {
+                id: "source-prompt".to_string(),
+                name: "prompt-library".to_string(),
+                source_type: "prompt".to_string(),
+                health: "info".to_string(),
+                url: "https://github.com/example/prompts.git".to_string(),
+                skill_count: 0,
+                mode: "do-not-install".to_string(),
+                category_id: "prompt".to_string(),
+                note: String::new(),
+                local_path: "app/github_sources/prompt-library".to_string(),
+                enabled: true,
+            },
+            SourceCard {
+                id: "source-local".to_string(),
+                name: "local-skill-pack".to_string(),
+                source_type: "skill".to_string(),
+                health: "ok".to_string(),
+                url: String::new(),
+                skill_count: 2,
+                mode: "manual".to_string(),
+                category_id: "ui-design".to_string(),
+                note: String::new(),
+                local_path: "D:\\Skills\\local-skill-pack".to_string(),
+                enabled: true,
+            },
+        ];
+        let reports = vec![ReleaseReportCard {
+            id: "zip-preview".to_string(),
+            title: "zip 导入预览".to_string(),
+            report_type: "zip-preview-test".to_string(),
+            status: "ok".to_string(),
+            generated_at: "2026-05-29".to_string(),
+            version: String::new(),
+            ok: true,
+            total: 4,
+            passed: 4,
+            warn: 0,
+            error: 0,
+            summary: "zip 预览：2 个 Skill 可识别；路径穿越防护已通过。".to_string(),
+        }];
+
+        let previews = derive_import_previews(
+            Path::new("D:\\My Files\\AI_global_skills\\app\\github_sources"),
+            &sources,
+            &reports,
+        );
+        let github = previews
+            .iter()
+            .find(|preview| preview.import_kind == "github")
+            .expect("github preview should exist");
+        let local = previews
+            .iter()
+            .find(|preview| preview.import_kind == "local")
+            .expect("local preview should exist");
+        let zip = previews
+            .iter()
+            .find(|preview| preview.import_kind == "zip")
+            .expect("zip preview should exist");
+
+        assert_eq!(github.status, "ready");
+        assert_eq!(github.skill_count, 3);
+        assert_eq!(github.prompt_count, 1);
+        assert_eq!(local.skill_count, 2);
+        assert!(zip.safe_to_continue);
+        assert!(zip.detail.contains("只读"));
     }
 
     #[test]

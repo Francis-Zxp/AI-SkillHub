@@ -31,6 +31,7 @@ export type LegacySnapshot = {
   restoreDryRun: RestoreDryRunItemCard[];
   rollbackPlan: RollbackPlanStepCard[];
   releaseReports: ReleaseReportCard[];
+  importPreviews: ImportPreviewCard[];
   desktopQaChecks: DesktopQaCheckCard[];
   usageStats: UsageStatCard[];
   auditEvents: AuditEventCard[];
@@ -219,6 +220,18 @@ export type ReleaseReportCard = {
   warn: number;
   error: number;
   summary: string;
+};
+
+export type ImportPreviewCard = {
+  id: string;
+  title: string;
+  importKind: "github" | "local" | "zip" | string;
+  status: "ready" | "empty" | "missing" | "blocked" | "ok" | "warn" | "error" | string;
+  summary: string;
+  detail: string;
+  skillCount: number;
+  promptCount: number;
+  safeToContinue: boolean;
 };
 
 export type DesktopQaCheckCard = {

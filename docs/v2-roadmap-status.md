@@ -4,9 +4,9 @@ Updated: 2026-05-28
 
 ## Current Estimate
 
-V2 overall completion is conservatively estimated at **about 85%**.
+V2 overall completion is conservatively estimated at **about 86%**.
 
-This does **not** mean a usable V2 application is 85% finished for public release. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, the system-level dark/light UI pass covers the major pages, project workspace detail now tracks instruction-file status with a read-only generated instructions preview, the Workspaces page now has selectable workspace detail navigation, the Release Gate page now combines diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, zip preview status, and one plain-language Release Readiness recommendation, the first snapshot/rollback gate, backup target inventory, backup dry-run plan, and restore dry-run report are visible in the app, the Settings page now explains the difference between the development exe and a future packaged release build plus SQLite-backed desktop QA records, and v2 now persists Skill metadata overrides, Source metadata overrides, local Usage Events, Usage Insights, and Activity Timeline records in SQLite.
+This does **not** mean a usable V2 application is 86% finished for public release. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, the system-level dark/light UI pass covers the major pages, project workspace detail now tracks instruction-file status with a read-only generated instructions preview, the Workspaces page now has selectable workspace detail navigation, the Release Gate page now combines diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, zip preview status, and one plain-language Release Readiness recommendation, the first snapshot/rollback gate, backup target inventory, backup dry-run plan, and restore dry-run report are visible in the app, the Settings page now explains the difference between the development exe and a future packaged release build plus SQLite-backed desktop QA records, v2 persists Skill metadata overrides, Source metadata overrides, local Usage Events, Usage Insights, and Activity Timeline records in SQLite, and Sources now has a read-only Import Preview panel for GitHub, local folder, and zip/.skill package intake.
 
 ## Why 85%
 
@@ -14,9 +14,9 @@ This does **not** mean a usable V2 application is 85% finished for public releas
 |---|---:|---:|
 | Reference project analysis | skills-manager, asm, OpenSkills, SkillKit analyzed and still active as references | 70% |
 | Product model | central library, sources, agents, adapter registry, diagnostics, workspaces, workspace detail navigation, presets, safety checks, project scans, snapshot/rollback gates, backup target inventory, backup dry-run plan, restore dry-run report, release gate, Release Readiness summary, release/build explanation, persisted desktop QA, source metadata editing, usage insights, activity timeline, and v1 report inputs are defined through v1 behavior and v2 seed data | 87% |
-| V1 behavior specs for V2 | sharing, diagnostics, import preview, release preflight, troubleshooting, Skill health, problem locator, and zip preview are repeatable specs and now feed the v2 Release Gate as read-only report inputs | 70% |
+| V1 behavior specs for V2 | sharing, diagnostics, import preview, release preflight, troubleshooting, Skill health, problem locator, and zip preview are repeatable specs; zip preview feeds the v2 Release Gate and Sources import preview as read-only report inputs | 73% |
 | V2 technical environment | Node LTS, pnpm, Rust/Cargo, rustup, WebView2, and Visual Studio Build Tools are ready | 85% |
-| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, selectable workspace detail UI, project scan detail, snapshot UI, backup target inventory UI, backup dry-run UI, restore dry-run UI, release gate UI, Release Readiness card, v1 report input cards, browser preview fallback, system-level UI pass, release/build guide UI, persisted desktop QA UI, source metadata editor, usage insights, activity timeline, and first real Tauri desktop-window QA pass | 85% |
+| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, selectable workspace detail UI, project scan detail, snapshot UI, backup target inventory UI, backup dry-run UI, restore dry-run UI, release gate UI, Release Readiness card, v1 report input cards, browser preview fallback, system-level UI pass, release/build guide UI, persisted desktop QA UI, source metadata editor, usage insights, activity timeline, Sources import preview panel, and first real Tauri desktop-window QA pass | 86% |
 | SQLite data model | real v1 sources, skills, agents, agent adapters, adapter capabilities, safety checks, workspaces, project scans with instruction-file metadata, presets, snapshots, backup targets, backup dry-run items, restore dry-run items, rollback plan steps, desktop QA checks, audit events, Skill metadata overrides, Source metadata overrides, and Usage Events are persisted | 85% |
 | Workspaces and presets | first global/agent/project workspaces and category presets are seeded; workspace cards can open a read-only detail panel; project workspaces show AGENTS/CLAUDE/README status and read-only instructions preview | 54% |
 | Release readiness | release gate summarizes diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, and zip preview into one plain-language publish / do-not-publish recommendation, but still does not execute packaging | 74% |
@@ -24,7 +24,7 @@ This does **not** mean a usable V2 application is 85% finished for public releas
 | CLI and automation | planned, not implemented | 0% |
 | Marketplace/recommended index | planned, not implemented | 0% |
 
-Weighted together, the honest number is about **85%**.
+Weighted together, the honest number is about **86%**.
 
 ## Reference Projects Still In Use
 
@@ -66,7 +66,7 @@ Continue v2 milestone 1:
 
 1. Add cached GitHub popularity signals: stars, forks, last update, and source health age. Do not query GitHub live on every app launch.
 2. Add optional real AI-tool invocation ingestion from logs/hooks after a privacy review. Local Usage Events are already persisted, but Claude/Codex real invocation counts are not yet claimed.
-3. Build the source import wizard and bulk edit flow on top of the new Source metadata override table.
+3. Extend the new read-only Sources import preview into a real source import wizard and bulk edit flow on top of the Source metadata override table.
 4. Add a real multi-tag table and Preset/workspace distribution matrix before enabling sync writes.
 5. Keep the Release Readiness card as a derived status only: it may explain whether packaging is allowed, but it must not execute packaging or write to AI tool directories.
 6. Keep v1 as the maintenance app until v2 can cover its core workflows.
@@ -94,3 +94,15 @@ V2 now has a first persistent management layer beyond read-only indexing:
 - The root double-click executable was refreshed after `pnpm build`, `cargo test`, `git diff --check`, and `pnpm tauri build --no-bundle` passed.
 
 This does not yet include GitHub stars/forks/last update cache or real Claude/Codex invocation log ingestion.
+
+## 2026-05-29 Sources Import Preview Gate
+
+V2 now has a read-only Import Preview panel on the Sources page:
+
+- GitHub repositories, local folders, and zip/.skill packages are displayed as separate intake lanes.
+- GitHub/local lanes summarize indexed source counts, Skill counts, Prompt counts, and explain that clone/pull/install is not executed yet.
+- The zip/.skill lane reads the existing v1 zip preview report and blocks real import unless the safety report passes.
+- The backend exposes this as `LegacySnapshot.importPreviews`; the browser preview shell also has matching sample data.
+- A Rust test verifies the safety rule: Prompt sources are counted separately and zip import remains read-only gated.
+
+This is not the final installer. It is the safe preview layer that must exist before real GitHub clone/pull, local import, zip extraction, duplicate handling, and rollback-aware install can be unlocked.
