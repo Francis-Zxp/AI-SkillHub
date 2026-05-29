@@ -237,6 +237,60 @@ export function App() {
     }
   }
 
+  async function updateSourcesBulkMetadata(
+    sourceIds: string[],
+    category: string,
+    enabled: boolean | null
+  ): Promise<"failed" | "preview" | "saved"> {
+    if (sourceIds.length === 0) {
+      setToast("请先选择需要批量修改的来源。");
+      return "failed";
+    }
+    if (!category.trim() && enabled === null) {
+      setToast("请至少填写一个批量修改项。");
+      return "failed";
+    }
+
+    if (!hasTauriRuntime()) {
+      setSnapshot(previous => {
+        const current = previous ?? createPreviewSnapshot();
+        return {
+          ...current,
+          sources: current.sources.map(source =>
+            sourceIds.includes(source.id)
+              ? {
+                  ...source,
+                  categoryId: category.trim() || source.categoryId,
+                  enabled: enabled === null ? source.enabled : enabled
+                }
+              : source
+          )
+        };
+      });
+      setToast("浏览器预览已应用批量来源草稿。");
+      return "preview";
+    }
+
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("set_sources_bulk_metadata", {
+        sourceIds,
+        category,
+        enabled
+      });
+      setSnapshot(result);
+      setLoadError("");
+      setToast(`已批量更新 ${sourceIds.length} 个来源，结果已写入 v2 SQLite。`);
+      return "saved";
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setToast("批量来源编辑失败，请查看顶部错误提示。");
+      return "failed";
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function recordUsage(
     targetType: string,
     targetId: string,
@@ -448,6 +502,7 @@ export function App() {
         {active === "sources" && (
           <Sources
             loading={loading}
+            onBulkSaveMetadata={updateSourcesBulkMetadata}
             onRecordUsage={recordUsage}
             onPreviewImport={previewSourceImportCandidate}
             onSaveMetadata={updateSourceMetadata}
@@ -1524,12 +1579,18 @@ function Presets({
 
 function Sources({
   loading,
+  onBulkSaveMetadata,
   onRecordUsage,
   onPreviewImport,
   onSaveMetadata,
   snapshot
 }: {
   loading: boolean;
+  onBulkSaveMetadata: (
+    sourceIds: string[],
+    category: string,
+    enabled: boolean | null
+  ) => Promise<"failed" | "preview" | "saved">;
   onRecordUsage: (
     targetType: string,
     targetId: string,
@@ -1549,11 +1610,22 @@ function Sources({
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
   const [importPlan, setImportPlan] = useState<SourceImportPlanCard | null>(null);
   const [importPending, setImportPending] = useState<boolean>(false);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+  const [bulkCategory, setBulkCategory] = useState<string>("");
+  const [bulkEnabled, setBulkEnabled] = useState<"keep" | "enabled" | "disabled">("keep");
   const displaySources = sources.map(source => applySourceDraft(source, sourceDrafts[source.id]));
   const editingSource = displaySources.find(source => source.id === editingSourceId);
   const sourcePopularityById = useMemo(() => {
     return new Map((snapshot?.sourcePopularity ?? []).map(source => [source.sourceId, source]));
   }, [snapshot?.sourcePopularity]);
+  const selectedSources = displaySources.filter(source => selectedSourceIds.includes(source.id));
+
+  useEffect(() => {
+    setSelectedSourceIds(previous => {
+      const next = previous.filter(id => sources.some(source => source.id === id));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [sources]);
 
   async function openSourceDetails(source: SourceCard) {
     setEditingSourceId(source.id);
@@ -1597,12 +1669,34 @@ function Sources({
         duplicateReason: message,
         skillCount: 0,
         promptCount: 0,
+        targetRoot: "",
+        targetPath: "",
+        backupPath: "",
+        writeGateStatus: "blocked",
         plannedSteps: ["请修正输入后重新生成 dry-run。"],
+        installPlanSteps: [],
+        blockingChecks: [message],
         rollbackSummary: "预检失败，没有执行任何文件写入。"
       });
       showUiToast("导入 dry-run 失败，请查看计划卡片。");
     } finally {
       setImportPending(false);
+    }
+  }
+
+  function toggleSourceSelection(sourceId: string) {
+    setSelectedSourceIds(previous =>
+      previous.includes(sourceId) ? previous.filter(id => id !== sourceId) : [...previous, sourceId]
+    );
+  }
+
+  async function applyBulkSourceEdit() {
+    const enabled = bulkEnabled === "keep" ? null : bulkEnabled === "enabled";
+    const result = await onBulkSaveMetadata(selectedSourceIds, bulkCategory, enabled);
+    if (result === "saved" || result === "preview") {
+      setSelectedSourceIds([]);
+      setBulkCategory("");
+      setBulkEnabled("keep");
     }
   }
 
@@ -1627,6 +1721,19 @@ function Sources({
         plan={importPlan}
       />
 
+      <SourceBulkEditPanel
+        category={bulkCategory}
+        disabled={loading}
+        enabledMode={bulkEnabled}
+        onApply={() => void applyBulkSourceEdit()}
+        onCategoryChange={setBulkCategory}
+        onClear={() => setSelectedSourceIds([])}
+        onEnabledModeChange={setBulkEnabled}
+        onSelectAll={() => setSelectedSourceIds(displaySources.map(source => source.id))}
+        selectedCount={selectedSources.length}
+        totalCount={displaySources.length}
+      />
+
       <div className="table-panel source-table">
         {displaySources.map(source => {
           const popularity = sourcePopularityById.get(source.id);
@@ -1638,6 +1745,15 @@ function Sources({
           const usageLabel = popularity?.localTotalCount ? `${popularity.localTotalCount} 次` : "0 次";
           return (
             <div className={`source-row ${source.health} ${source.enabled ? "" : "disabled"}`} key={source.id}>
+              <label className="source-select-check" title="选择此来源用于批量编辑">
+                <input
+                  aria-label={`选择来源 ${source.name}`}
+                  checked={selectedSourceIds.includes(source.id)}
+                  disabled={loading}
+                  onChange={() => toggleSourceSelection(source.id)}
+                  type="checkbox"
+                />
+              </label>
               <strong>{source.name}</strong>
               <span>{sourceTypeLabel(source.sourceType)}</span>
               <span>{source.skillCount} Skills</span>
@@ -1676,6 +1792,69 @@ function Sources({
         />
       )}
     </div>
+  );
+}
+
+function SourceBulkEditPanel({
+  category,
+  disabled,
+  enabledMode,
+  onApply,
+  onCategoryChange,
+  onClear,
+  onEnabledModeChange,
+  onSelectAll,
+  selectedCount,
+  totalCount
+}: {
+  category: string;
+  disabled: boolean;
+  enabledMode: "keep" | "enabled" | "disabled";
+  onApply: () => void;
+  onCategoryChange: (value: string) => void;
+  onClear: () => void;
+  onEnabledModeChange: (value: "keep" | "enabled" | "disabled") => void;
+  onSelectAll: () => void;
+  selectedCount: number;
+  totalCount: number;
+}) {
+  return (
+    <section className="source-bulk-panel">
+      <div>
+        <p className="eyebrow">Bulk Source Edit</p>
+        <h3>批量来源编辑</h3>
+        <p>批量修改分类或启用状态；当前只写入 v2 SQLite 元数据，不会修改仓库文件。</p>
+      </div>
+      <div className="source-bulk-fields">
+        <span className="selection-count">
+          已选择 {selectedCount} / {totalCount}
+        </span>
+        <input
+          disabled={disabled}
+          onChange={event => onCategoryChange(event.target.value)}
+          placeholder="批量分类，例如 ui-design / paper-research"
+          value={category}
+        />
+        <select
+          disabled={disabled}
+          onChange={event => onEnabledModeChange(event.target.value as "keep" | "enabled" | "disabled")}
+          value={enabledMode}
+        >
+          <option value="keep">保持启用状态</option>
+          <option value="enabled">全部启用</option>
+          <option value="disabled">全部停用</option>
+        </select>
+        <button className="secondary-action compact" disabled={disabled || totalCount === 0} onClick={onSelectAll} type="button">
+          全选
+        </button>
+        <button className="secondary-action compact" disabled={disabled || selectedCount === 0} onClick={onClear} type="button">
+          清空
+        </button>
+        <button className="primary-action compact" disabled={disabled || selectedCount === 0} onClick={onApply} type="button">
+          应用批量修改
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -1839,13 +2018,48 @@ function SourceImportWizardPanel({
             <span>{plan.skillCount} Skills</span>
             <span>{plan.promptCount} Prompt 资料</span>
             <span>{plan.duplicateSourceId ? "发现重复" : "未发现重复"}</span>
+            <span>写入闸门：{sourceImportWriteGateLabel(plan.writeGateStatus)}</span>
+          </div>
+          <div className="install-plan-paths">
+            <div>
+              <strong>目标根目录</strong>
+              <code>{plan.targetRoot || "未生成"}</code>
+            </div>
+            <div>
+              <strong>计划目标</strong>
+              <code>{plan.targetPath || "需要先修正来源"}</code>
+            </div>
+            <div>
+              <strong>备份位置</strong>
+              <code>{plan.backupPath || "当前不会写入，因此未生成备份路径"}</code>
+            </div>
           </div>
           {plan.duplicateReason && <p className="import-plan-warning">{plan.duplicateReason}</p>}
+          {plan.blockingChecks.length > 0 && (
+            <div className="blocking-checks">
+              <strong>阻断 / 复核条件</strong>
+              <ul>
+                {plan.blockingChecks.map(check => (
+                  <li key={check}>{check}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <ol className="import-plan-steps">
             {plan.plannedSteps.map(step => (
               <li key={step}>{step}</li>
             ))}
           </ol>
+          {plan.installPlanSteps.length > 0 && (
+            <div className="install-plan-steps">
+              <strong>未来可回滚安装步骤</strong>
+              <ol>
+                {plan.installPlanSteps.map(step => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            </div>
+          )}
           <footer>
             <strong>回滚要求</strong>
             <span>{plan.rollbackSummary}</span>
@@ -2624,6 +2838,13 @@ function sourceImportRiskLabel(riskLevel: string): string {
   return riskLevel || "未知";
 }
 
+function sourceImportWriteGateLabel(status: string): string {
+  if (status === "dry-run-ready") return "dry-run 可继续";
+  if (status === "locked") return "真实写入锁定";
+  if (status === "blocked") return "已阻断";
+  return status || "未知";
+}
+
 function createPreviewSourceImportPlan(
   importKind: string,
   input: string,
@@ -2648,15 +2869,28 @@ function createPreviewSourceImportPlan(
   const isPackage = importKind === "zip";
   const safeToContinue = Boolean(value && isGithubValid && !duplicate && !isPackage);
   const status = duplicate || !isGithubValid ? "blocked" : isPackage ? "locked" : safeToContinue ? "ready" : "warn";
+  const targetRoot = "浏览器预览/app/github_sources";
+  const targetPath = `${targetRoot}/${displayName}`;
+  const backupPath = `浏览器预览/app-next/.skillhub-next/backups/source-imports/${displayName}`;
+  const blockingChecks = [
+    duplicate ? `重复来源：${duplicate.name}` : "",
+    !isGithubValid ? "GitHub 地址格式不符合普通仓库地址。" : "",
+    isPackage ? "zip/.skill 必须先通过解压安全扫描。" : "",
+    "真实写入仍需备份 dry-run、恢复 dry-run、Release Gate 通过。"
+  ].filter((check): check is string => Boolean(check));
 
   return {
     id: `preview-${importKind}-${displayName}`,
     importKind,
     input: value,
     normalizedTarget,
+    targetRoot,
+    targetPath,
+    backupPath,
     displayName,
     status,
     riskLevel: duplicate || !isGithubValid ? "high" : isPackage ? "medium" : "low",
+    writeGateStatus: safeToContinue ? "dry-run-ready" : isPackage ? "locked" : "blocked",
     safeToContinue,
     duplicateSourceId: duplicate?.id ?? "",
     duplicateReason: duplicate
@@ -2689,6 +2923,31 @@ function createPreviewSourceImportPlan(
               "解压到临时目录后统计 SKILL.md。",
               "真实导入保持锁定，直到解压安全报告通过。"
             ],
+    installPlanSteps:
+      importKind === "github"
+        ? [
+            "创建来源导入快照。",
+            "如果目标目录已存在，先备份到 source-imports。",
+            "clone 或 pull 到 github_sources 的隔离目录。",
+            "重新扫描 SKILL.md 并更新 v2 SQLite 来源记录。",
+            "真实 AI 工具同步继续锁定，等待 Release Gate。"
+          ]
+        : importKind === "local"
+          ? [
+              "创建来源导入快照。",
+              "把本地来源登记为可管理候选，不直接修改原目录。",
+              "按有效 SKILL.md 目录生成候选索引。",
+              "更新 v2 SQLite 来源记录。",
+              "真实 AI 工具同步继续锁定，等待 Release Gate。"
+            ]
+          : [
+              "创建临时解压目录。",
+              "先执行路径穿越和重复名称扫描。",
+              "安全通过后生成导入快照和备份计划。",
+              "解压进入隔离来源目录并重新扫描。",
+              "真实 AI 工具同步继续锁定，等待 Release Gate。"
+            ],
+    blockingChecks,
     rollbackSummary: "当前只生成 dry-run；没有写入任何文件，因此不需要执行回滚。"
   };
 }

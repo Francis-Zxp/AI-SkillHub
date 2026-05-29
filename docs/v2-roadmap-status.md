@@ -16,15 +16,15 @@ This does **not** mean a usable V2 application is 89% finished for public releas
 | Product model | central library, sources, agents, adapter registry, diagnostics, workspaces, workspace detail navigation, presets, safety checks, project scans, snapshot/rollback gates, backup target inventory, backup dry-run plan, restore dry-run report, release gate, Release Readiness summary, release/build explanation, persisted desktop QA, source metadata editing, usage insights, activity timeline, and v1 report inputs are defined through v1 behavior and v2 seed data | 87% |
 | V1 behavior specs for V2 | sharing, diagnostics, import preview, release preflight, troubleshooting, Skill health, problem locator, and zip preview are repeatable specs; zip preview feeds the v2 Release Gate and Sources import preview as read-only report inputs | 73% |
 | V2 technical environment | Node LTS, pnpm, Rust/Cargo, rustup, WebView2, and Visual Studio Build Tools are ready | 85% |
-| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, selectable workspace detail UI, project scan detail, snapshot UI, backup target inventory UI, backup dry-run UI, restore dry-run UI, release gate UI, Release Readiness card, v1 report input cards, browser preview fallback, system-level UI pass, release/build guide UI, persisted desktop QA UI, source metadata editor, usage insights, activity timeline, Sources import preview panel, Sources dry-run import wizard, GitHub popularity refresh, and first real Tauri desktop-window QA pass | 89% |
-| SQLite data model | real v1 sources, skills, agents, agent adapters, adapter capabilities, safety checks, workspaces, project scans with instruction-file metadata, presets, snapshots, backup targets, backup dry-run items, restore dry-run items, rollback plan steps, desktop QA checks, audit events, Skill metadata overrides, Source metadata overrides, Usage Events, Source Popularity Cache, and dry-run import-plan data contracts are persisted or generated from SQLite inputs | 89% |
+| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, selectable workspace detail UI, project scan detail, snapshot UI, backup target inventory UI, backup dry-run UI, restore dry-run UI, release gate UI, Release Readiness card, v1 report input cards, browser preview fallback, system-level UI pass, release/build guide UI, persisted desktop QA UI, source metadata editor, usage insights, activity timeline, Sources import preview panel, Sources dry-run import wizard, rollback-aware source import plans, bulk source metadata editing, GitHub popularity refresh, and first real Tauri desktop-window QA pass | 90% |
+| SQLite data model | real v1 sources, skills, agents, agent adapters, adapter capabilities, safety checks, workspaces, project scans with instruction-file metadata, presets, snapshots, backup targets, backup dry-run items, restore dry-run items, rollback plan steps, desktop QA checks, audit events, Skill metadata overrides, Source metadata overrides, bulk Source metadata audit events, Usage Events, Source Popularity Cache, and rollback-aware dry-run import-plan data contracts are persisted or generated from SQLite inputs | 90% |
 | Workspaces and presets | first global/agent/project workspaces and category presets are seeded; workspace cards can open a read-only detail panel; project workspaces show AGENTS/CLAUDE/README status and read-only instructions preview | 54% |
 | Release readiness | release gate summarizes diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, and zip preview into one plain-language publish / do-not-publish recommendation, but still does not execute packaging | 74% |
 | Multi-agent adapter registry | first registry implemented with 12 supported tools, detected/managed status overlay, capability metadata, enable state, and safety checks | 52% |
 | CLI and automation | planned, not implemented | 0% |
 | Marketplace/recommended index | planned, not implemented | 0% |
 
-Weighted together, the honest number is about **89%**.
+Weighted together, the honest number is about **90%**.
 
 ## Reference Projects Still In Use
 
@@ -64,9 +64,9 @@ The v2 source line has started and the toolchain is ready:
 
 Continue v2 milestone 1:
 
-1. Extend the new Sources dry-run import wizard into rollback-aware install plans, then add bulk source edit flow on top of the Source metadata override table.
+1. Add the real multi-tag table and Preset/workspace distribution matrix before enabling any sync writes.
 2. Add optional real AI-tool invocation ingestion from logs/hooks after a privacy review. Local Usage Events and GitHub popularity cache are now persisted, but Claude/Codex real invocation counts are not yet claimed.
-3. Add a real multi-tag table and Preset/workspace distribution matrix before enabling sync writes.
+3. Extend source import from dry-run plans into a guarded installer only after backup dry-run, restore dry-run, release preflight, desktop QA, and zip/package safety reports pass.
 4. Keep the Release Readiness card as a derived status only: it may explain whether packaging is allowed, but it must not execute packaging or write to AI tool directories.
 5. Keep v1 as the maintenance app until v2 can cover its core workflows.
 
@@ -135,4 +135,17 @@ Sources now has the first interactive import wizard on top of the earlier read-o
 
 Verification after the pass: `pnpm build`, Rust `cargo test` with 21 tests, `git diff --check`, and `pnpm tauri build --no-bundle` passed.
 
-Remaining V1-to-V2 gaps are still explicit: real GitHub clone/pull import, real local/zip/.skill import, real AI-tool sync/write, diagnostics bundle export, share-validation runner, packaging runner, real Claude/Codex invocation ingestion, full multi-tag model, bulk source edit, and workspace/Preset distribution matrix.
+Remaining V1-to-V2 gaps are still explicit: real GitHub clone/pull import, real local/zip/.skill import, real AI-tool sync/write, diagnostics bundle export, share-validation runner, packaging runner, real Claude/Codex invocation ingestion, full multi-tag model, and workspace/Preset distribution matrix.
+
+## 2026-05-29 Rollback-aware Import Plans And Bulk Source Editing
+
+Sources dry-run import now produces an explicit rollback-aware install plan:
+
+- GitHub, local folder, and zip/.skill candidates show target root, planned target path, backup path, write-gate status, blocking checks, and future rollback-aware install steps.
+- GitHub and local plans can reach `dry-run-ready`; zip/.skill remains `locked` until zip-slip, temporary extraction, and duplicate-skill safety checks are implemented.
+- The UI now shows the write gate and blocking conditions before any future installer can be enabled.
+- Sources now has multi-select bulk editing for category and enabled state.
+- Bulk source edits write only to v2 SQLite metadata overrides and record `source_bulk_metadata_updated` audit events.
+- Real clone/pull/copy/extract/link/sync writes remain locked.
+
+Verification after the pass: `pnpm build` and Rust `cargo test` with 22 tests passed. Final packaging verification should still run before a release candidate.

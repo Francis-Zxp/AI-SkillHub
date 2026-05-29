@@ -240,15 +240,21 @@ export type SourceImportPlanCard = {
   importKind: "github" | "local" | "zip" | string;
   input: string;
   normalizedTarget: string;
+  targetRoot: string;
+  targetPath: string;
+  backupPath: string;
   displayName: string;
   status: "ready" | "warn" | "blocked" | "locked" | string;
   riskLevel: "low" | "medium" | "high" | string;
+  writeGateStatus: "dry-run-ready" | "locked" | "blocked" | string;
   safeToContinue: boolean;
   duplicateSourceId: string;
   duplicateReason: string;
   skillCount: number;
   promptCount: number;
   plannedSteps: string[];
+  installPlanSteps: string[];
+  blockingChecks: string[];
   rollbackSummary: string;
 };
 

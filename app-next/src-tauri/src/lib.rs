@@ -303,15 +303,21 @@ struct SourceImportPlanCard {
     import_kind: String,
     input: String,
     normalized_target: String,
+    target_root: String,
+    target_path: String,
+    backup_path: String,
     display_name: String,
     status: String,
     risk_level: String,
+    write_gate_status: String,
     safe_to_continue: bool,
     duplicate_source_id: String,
     duplicate_reason: String,
     skill_count: usize,
     prompt_count: usize,
     planned_steps: Vec<String>,
+    install_plan_steps: Vec<String>,
+    blocking_checks: Vec<String>,
     rollback_summary: String,
 }
 
@@ -610,6 +616,18 @@ fn set_source_metadata(
     enabled: bool,
 ) -> Result<LegacySnapshot, String> {
     set_source_metadata_override(&source_id, &name, &source_type, &category, &note, enabled)?;
+    load_indexed_snapshot()
+}
+
+#[tauri::command]
+fn set_sources_bulk_metadata(
+    source_ids: Vec<String>,
+    category: String,
+    enabled: Option<bool>,
+) -> Result<LegacySnapshot, String> {
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    set_sources_bulk_metadata_in_connection(&connection, &source_ids, &category, enabled)?;
     load_indexed_snapshot()
 }
 
@@ -1190,6 +1208,83 @@ fn set_source_metadata_override_in_connection(
         .map_err(|error| format!("Cannot write source metadata audit event: {}", error))?;
 
     Ok(())
+}
+
+fn set_sources_bulk_metadata_in_connection(
+    connection: &Connection,
+    source_ids: &[String],
+    category: &str,
+    enabled: Option<bool>,
+) -> Result<usize, String> {
+    let category = compact_note(category);
+    if source_ids.is_empty() {
+        return Err("At least one source must be selected.".to_string());
+    }
+    if category.len() > 80 {
+        return Err("Bulk source category is too long.".to_string());
+    }
+    if category.is_empty() && enabled.is_none() {
+        return Err("Bulk source edit needs a category or enabled-state change.".to_string());
+    }
+
+    let sources = read_indexed_sources(connection)?;
+    let mut updated = 0usize;
+    let mut updated_ids: Vec<String> = Vec::new();
+
+    for raw_id in source_ids {
+        let source_id = compact_note(raw_id);
+        if source_id.is_empty() || updated_ids.iter().any(|item| item == &source_id) {
+            continue;
+        }
+        let source = sources
+            .iter()
+            .find(|item| item.id == source_id)
+            .ok_or_else(|| format!("Cannot find indexed source {}.", source_id))?;
+        let next_category = if category.is_empty() {
+            source.category_id.as_str()
+        } else {
+            category.as_str()
+        };
+        let next_enabled = enabled.unwrap_or(source.enabled);
+        set_source_metadata_override_in_connection(
+            connection,
+            &source.id,
+            &source.name,
+            &source.source_type,
+            next_category,
+            &source.note,
+            next_enabled,
+        )?;
+        updated += 1;
+        updated_ids.push(source_id);
+    }
+
+    if updated == 0 {
+        return Err("No valid source rows were selected.".to_string());
+    }
+
+    let timestamp = unix_timestamp_string();
+    connection
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'source_bulk_metadata_updated', ?2, ?3, ?4)",
+            params![
+                format!("audit-source-bulk-{}", timestamp),
+                "Bulk-updated source metadata overrides",
+                serde_json::to_string(&serde_json::json!({
+                    "sourceIds": updated_ids,
+                    "category": category,
+                    "enabled": enabled,
+                    "scope": "v2-sqlite-only"
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot write source bulk audit event: {}", error))?;
+
+    Ok(updated)
 }
 
 fn record_usage_event_row(
@@ -1999,6 +2094,53 @@ fn read_source_usage_counts(
     Ok(output)
 }
 
+fn source_import_target_root(root: &Path) -> String {
+    root.join("app")
+        .join("github_sources")
+        .to_string_lossy()
+        .to_string()
+}
+
+fn source_import_target_path(root: &Path, display_name: &str) -> String {
+    root.join("app")
+        .join("github_sources")
+        .join(sanitize_source_folder_name(display_name))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn source_import_backup_path(root: &Path, display_name: &str) -> String {
+    root.join("app-next")
+        .join(".skillhub-next")
+        .join("backups")
+        .join("source-imports")
+        .join(sanitize_source_folder_name(display_name))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn sanitize_source_folder_name(value: &str) -> String {
+    let folder = value
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .trim_matches('.')
+        .to_string();
+    if folder.is_empty() {
+        "source-import".to_string()
+    } else {
+        folder
+    }
+}
+
 fn build_source_import_plan(
     root: &Path,
     connection: &Connection,
@@ -2017,9 +2159,13 @@ fn build_source_import_plan(
             import_kind: normalized_kind,
             input: trimmed_input,
             normalized_target: String::new(),
+            target_root: source_import_target_root(root),
+            target_path: String::new(),
+            backup_path: String::new(),
             display_name: "空来源".to_string(),
             status: "blocked".to_string(),
             risk_level: "high".to_string(),
+            write_gate_status: "blocked".to_string(),
             safe_to_continue: false,
             duplicate_source_id: String::new(),
             duplicate_reason: "请先输入 GitHub 地址、本地文件夹路径或 zip/.skill 文件路径。"
@@ -2027,23 +2173,31 @@ fn build_source_import_plan(
             skill_count: 0,
             prompt_count: 0,
             planned_steps: vec!["修正输入后重新生成 dry-run。".to_string()],
+            install_plan_steps: Vec::new(),
+            blocking_checks: vec!["缺少导入来源输入。".to_string()],
             rollback_summary: "没有执行任何文件写入。".to_string(),
         });
     }
 
     let sources = read_indexed_sources(connection)?;
     match normalized_kind.as_str() {
-        "github" => build_github_source_import_plan(&sources, &trimmed_input),
+        "github" => build_github_source_import_plan(root, &sources, &trimmed_input),
         "local" => build_local_source_import_plan(root, &sources, &trimmed_input),
-        "zip" | "skill" | "package" => build_package_source_import_plan(&sources, &trimmed_input),
+        "zip" | "skill" | "package" => {
+            build_package_source_import_plan(root, &sources, &trimmed_input)
+        }
         _ => Ok(SourceImportPlanCard {
             id: stable_id("source-import-unknown", &trimmed_input),
             import_kind: normalized_kind,
             input: trimmed_input,
             normalized_target: String::new(),
+            target_root: source_import_target_root(root),
+            target_path: String::new(),
+            backup_path: String::new(),
             display_name: "未知导入类型".to_string(),
             status: "blocked".to_string(),
             risk_level: "high".to_string(),
+            write_gate_status: "blocked".to_string(),
             safe_to_continue: false,
             duplicate_source_id: String::new(),
             duplicate_reason: "当前只支持 GitHub、本地文件夹和 zip/.skill 包的 dry-run。"
@@ -2051,12 +2205,15 @@ fn build_source_import_plan(
             skill_count: 0,
             prompt_count: 0,
             planned_steps: vec!["选择受支持的导入类型后重新生成计划。".to_string()],
+            install_plan_steps: Vec::new(),
+            blocking_checks: vec!["导入类型不受支持。".to_string()],
             rollback_summary: "没有执行任何文件写入。".to_string(),
         }),
     }
 }
 
 fn build_github_source_import_plan(
+    root: &Path,
     sources: &[SourceCard],
     input: &str,
 ) -> Result<SourceImportPlanCard, String> {
@@ -2066,9 +2223,13 @@ fn build_github_source_import_plan(
             import_kind: "github".to_string(),
             input: input.to_string(),
             normalized_target: input.to_string(),
+            target_root: source_import_target_root(root),
+            target_path: String::new(),
+            backup_path: String::new(),
             display_name: "GitHub 地址格式错误".to_string(),
             status: "blocked".to_string(),
             risk_level: "high".to_string(),
+            write_gate_status: "blocked".to_string(),
             safe_to_continue: false,
             duplicate_source_id: String::new(),
             duplicate_reason:
@@ -2079,6 +2240,8 @@ fn build_github_source_import_plan(
                 "修正仓库地址。".to_string(),
                 "重新生成 dry-run 计划。".to_string(),
             ],
+            install_plan_steps: Vec::new(),
+            blocking_checks: vec!["GitHub URL 不是普通仓库地址。".to_string()],
             rollback_summary: "没有执行 clone、pull 或文件写入。".to_string(),
         });
     };
@@ -2102,15 +2265,31 @@ fn build_github_source_import_plan(
         })
         .unwrap_or_default();
     let safe_to_continue = duplicate.is_none();
+    let target_path = source_import_target_path(root, &display_name);
+    let backup_path = source_import_backup_path(root, &display_name);
+    let mut blocking_checks = Vec::new();
+    if !duplicate_reason.is_empty() {
+        blocking_checks.push(duplicate_reason.clone());
+    }
+    blocking_checks.push("真实写入仍需备份 dry-run、恢复 dry-run、Release Gate 通过。".to_string());
 
     Ok(SourceImportPlanCard {
         id: stable_id("source-import-github", &normalized_target),
         import_kind: "github".to_string(),
         input: input.to_string(),
         normalized_target,
+        target_root: source_import_target_root(root),
+        target_path,
+        backup_path,
         display_name,
         status: if safe_to_continue { "ready" } else { "blocked" }.to_string(),
         risk_level: if safe_to_continue { "low" } else { "high" }.to_string(),
+        write_gate_status: if safe_to_continue {
+            "dry-run-ready"
+        } else {
+            "blocked"
+        }
+        .to_string(),
         safe_to_continue,
         duplicate_source_id: duplicate
             .map(|source| source.id.clone())
@@ -2124,6 +2303,15 @@ fn build_github_source_import_plan(
             "未来真实导入前先创建快照和回滚计划。".to_string(),
             "未来真实导入时 clone/pull 到 app/github_sources，再扫描 SKILL.md。".to_string(),
         ],
+        install_plan_steps: vec![
+            "创建 source-import 快照和目标目录备份 dry-run。".to_string(),
+            "如果目标目录已存在，先复制到 app-next/.skillhub-next/backups/source-imports。"
+                .to_string(),
+            "clone 或 pull 到隔离的 app/github_sources 子目录。".to_string(),
+            "重新扫描 SKILL.md，并只更新 v2 SQLite 来源索引。".to_string(),
+            "真实 Claude/Codex/Antigravity 接管继续等待 Release Gate。".to_string(),
+        ],
+        blocking_checks,
         rollback_summary: "当前只生成 dry-run；没有 clone、pull、复制或链接接管。".to_string(),
     })
 }
@@ -2157,9 +2345,13 @@ fn build_local_source_import_plan(
             import_kind: "local".to_string(),
             input: input.to_string(),
             normalized_target,
+            target_root: source_import_target_root(root),
+            target_path: source_import_target_path(root, &display_name),
+            backup_path: source_import_backup_path(root, &display_name),
             display_name,
             status: "blocked".to_string(),
             risk_level: "high".to_string(),
+            write_gate_status: "blocked".to_string(),
             safe_to_continue: false,
             duplicate_source_id: duplicate
                 .map(|source| source.id.clone())
@@ -2174,6 +2366,8 @@ fn build_local_source_import_plan(
                 "打开已存在来源并确认是否需要保留。".to_string(),
                 "如果确实是新来源，请先改名或移动到不同路径。".to_string(),
             ],
+            install_plan_steps: Vec::new(),
+            blocking_checks: vec!["同名或同路径来源已存在。".to_string()],
             rollback_summary: "没有复制或链接任何本地文件。".to_string(),
         });
     }
@@ -2184,15 +2378,21 @@ fn build_local_source_import_plan(
             import_kind: "local".to_string(),
             input: input.to_string(),
             normalized_target,
+            target_root: source_import_target_root(root),
+            target_path: source_import_target_path(root, &display_name),
+            backup_path: source_import_backup_path(root, &display_name),
             display_name,
             status: "blocked".to_string(),
             risk_level: "high".to_string(),
+            write_gate_status: "blocked".to_string(),
             safe_to_continue: false,
             duplicate_source_id: String::new(),
             duplicate_reason: "本地路径不存在。".to_string(),
             skill_count: 0,
             prompt_count: 0,
             planned_steps: vec!["确认路径是否拼写正确，或重新选择文件夹。".to_string()],
+            install_plan_steps: Vec::new(),
+            blocking_checks: vec!["本地路径不存在。".to_string()],
             rollback_summary: "没有读取到有效来源，也没有执行文件写入。".to_string(),
         });
     }
@@ -2203,15 +2403,21 @@ fn build_local_source_import_plan(
             import_kind: "local".to_string(),
             input: input.to_string(),
             normalized_target,
+            target_root: source_import_target_root(root),
+            target_path: source_import_target_path(root, &display_name),
+            backup_path: source_import_backup_path(root, &display_name),
             display_name,
             status: "blocked".to_string(),
             risk_level: "high".to_string(),
+            write_gate_status: "blocked".to_string(),
             safe_to_continue: false,
             duplicate_source_id: String::new(),
             duplicate_reason: "本地导入需要选择文件夹；zip/.skill 文件请切换到包导入。".to_string(),
             skill_count: 0,
             prompt_count: 0,
             planned_steps: vec!["切换导入类型，或选择包含 SKILL.md 的文件夹。".to_string()],
+            install_plan_steps: Vec::new(),
+            blocking_checks: vec!["本地导入输入不是文件夹。".to_string()],
             rollback_summary: "没有复制或链接任何本地文件。".to_string(),
         });
     }
@@ -2224,9 +2430,18 @@ fn build_local_source_import_plan(
         import_kind: "local".to_string(),
         input: input.to_string(),
         normalized_target,
+        target_root: source_import_target_root(root),
+        target_path: source_import_target_path(root, &display_name),
+        backup_path: source_import_backup_path(root, &display_name),
         display_name,
         status: if has_skills { "ready" } else { "warn" }.to_string(),
         risk_level: if has_skills { "low" } else { "medium" }.to_string(),
+        write_gate_status: if has_skills {
+            "dry-run-ready"
+        } else {
+            "blocked"
+        }
+        .to_string(),
         safe_to_continue: has_skills,
         duplicate_source_id: String::new(),
         duplicate_reason: if has_skills {
@@ -2242,11 +2457,24 @@ fn build_local_source_import_plan(
             "未来真实导入前先创建快照和备份 dry-run。".to_string(),
             "只有有效 Skill 目录会进入候选库；Prompt 资料单独管理。".to_string(),
         ],
+        install_plan_steps: vec![
+            "创建 source-import 快照和目标目录备份 dry-run。".to_string(),
+            "把本地来源作为候选登记到 v2 SQLite，不修改原文件夹。".to_string(),
+            "生成有效 SKILL.md 列表和重复名称报告。".to_string(),
+            "需要复制/链接时先写入可回滚安装计划。".to_string(),
+            "真实 Claude/Codex/Antigravity 接管继续等待 Release Gate。".to_string(),
+        ],
+        blocking_checks: if has_skills {
+            vec!["真实写入仍需备份 dry-run、恢复 dry-run、Release Gate 通过。".to_string()]
+        } else {
+            vec!["没有扫描到 SKILL.md；不能作为 Skill 来源继续安装。".to_string()]
+        },
         rollback_summary: "当前只读取目录元数据；没有复制、移动、删除或创建软链接。".to_string(),
     })
 }
 
 fn build_package_source_import_plan(
+    root: &Path,
     sources: &[SourceCard],
     input: &str,
 ) -> Result<SourceImportPlanCard, String> {
@@ -2266,12 +2494,33 @@ fn build_package_source_import_plan(
         .find(|source| normalize_lookup_key(&source.name) == normalize_lookup_key(&display_name));
     let extension_ok = extension == "zip" || extension == "skill";
     let file_exists = path.exists();
+    let duplicate_reason = if let Some(source) = duplicate {
+        format!(
+            "已存在同名来源：{}。包导入前必须先改名或合并。",
+            source.name
+        )
+    } else if !extension_ok {
+        "包导入只接受 .zip 或 .skill 文件。".to_string()
+    } else if !file_exists {
+        "文件当前不存在；仍可生成计划，但不能进入真实解压。".to_string()
+    } else {
+        "zip/.skill 真实导入仍锁定，必须先接入 zip-slip 安全扫描和临时目录预览。".to_string()
+    };
+    let write_gate_status = if !extension_ok || duplicate.is_some() {
+        "blocked"
+    } else {
+        "locked"
+    }
+    .to_string();
 
     Ok(SourceImportPlanCard {
         id: stable_id("source-import-package", input),
         import_kind: "zip".to_string(),
         input: input.to_string(),
         normalized_target: input.to_string(),
+        target_root: source_import_target_root(root),
+        target_path: source_import_target_path(root, &display_name),
+        backup_path: source_import_backup_path(root, &display_name),
         display_name,
         status: if !extension_ok || duplicate.is_some() {
             "blocked"
@@ -2285,22 +2534,12 @@ fn build_package_source_import_plan(
             "medium"
         }
         .to_string(),
+        write_gate_status,
         safe_to_continue: false,
         duplicate_source_id: duplicate
             .map(|source| source.id.clone())
             .unwrap_or_default(),
-        duplicate_reason: if let Some(source) = duplicate {
-            format!(
-                "已存在同名来源：{}。包导入前必须先改名或合并。",
-                source.name
-            )
-        } else if !extension_ok {
-            "包导入只接受 .zip 或 .skill 文件。".to_string()
-        } else if !file_exists {
-            "文件当前不存在；仍可生成计划，但不能进入真实解压。".to_string()
-        } else {
-            "zip/.skill 真实导入仍锁定，必须先接入 zip-slip 安全扫描和临时目录预览。".to_string()
-        },
+        duplicate_reason: duplicate_reason.clone(),
         skill_count: 0,
         prompt_count: 0,
         planned_steps: vec![
@@ -2309,6 +2548,14 @@ fn build_package_source_import_plan(
             "统计包含 SKILL.md 的目录，并检查重复名称。".to_string(),
             "只有安全报告通过后，才允许创建快照并进入真实导入。".to_string(),
         ],
+        install_plan_steps: vec![
+            "创建只读临时解压目录。".to_string(),
+            "执行 zip-slip、路径穿越和重复名称扫描。".to_string(),
+            "安全通过后创建 source-import 快照和备份 dry-run。".to_string(),
+            "解压到隔离的 app/github_sources 子目录。".to_string(),
+            "真实 Claude/Codex/Antigravity 接管继续等待 Release Gate。".to_string(),
+        ],
+        blocking_checks: vec![duplicate_reason],
         rollback_summary: "当前不解压包、不写入目录；未来真实导入必须先有快照和回滚清单。"
             .to_string(),
     })
@@ -5020,6 +5267,7 @@ pub fn run() {
             set_skill_metadata,
             set_skill_enabled,
             set_source_metadata,
+            set_sources_bulk_metadata,
             preview_source_import_candidate,
             record_usage_event,
             refresh_source_popularity
@@ -5503,6 +5751,63 @@ mod tests {
         assert_eq!(source.category_id, "界面设计");
         assert_eq!(source.note, "UI design reference");
         assert!(!source.enabled);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_bulk_metadata_updates_selected_sources_only() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-source-bulk-meta-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let timestamp = unix_timestamp_string();
+
+        for (id, name) in [
+            ("source-paper", "paper-skills"),
+            ("source-design", "design-skills"),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO sources (
+                        id, name, source_type, url, local_path, install_mode,
+                        category_id, note, enabled, created_at, updated_at
+                    ) VALUES (
+                        ?1, ?2, 'skill', '', ?3, 'scan', 'auto', '', 1, ?4, ?4
+                    )",
+                    params![id, name, format!("app/github_sources/{}", name), timestamp],
+                )
+                .expect("source row should insert");
+        }
+
+        let updated = set_sources_bulk_metadata_in_connection(
+            &connection,
+            &["source-paper".to_string()],
+            "paper-research",
+            Some(false),
+        )
+        .expect("bulk source metadata should save");
+        assert_eq!(updated, 1);
+
+        let sources = read_indexed_sources(&connection).expect("sources should read");
+        let paper = sources
+            .iter()
+            .find(|item| item.id == "source-paper")
+            .expect("paper source should exist");
+        let design = sources
+            .iter()
+            .find(|item| item.id == "source-design")
+            .expect("design source should exist");
+
+        assert_eq!(paper.category_id, "paper-research");
+        assert!(!paper.enabled);
+        assert_eq!(design.category_id, "auto");
+        assert!(design.enabled);
+        assert!(read_indexed_audit_events(&connection)
+            .expect("audit events should read")
+            .iter()
+            .any(|event| event.event_type == "source_bulk_metadata_updated"));
 
         let _ = fs::remove_dir_all(root);
     }
