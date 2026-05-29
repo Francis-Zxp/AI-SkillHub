@@ -10,6 +10,7 @@ import type {
   ReleaseReportCard,
   SkillCard,
   SourceCard,
+  SourceImportPlanCard,
   WorkspaceCard
 } from "./types";
 
@@ -282,6 +283,18 @@ export function App() {
     }
   }
 
+  async function previewSourceImportCandidate(importKind: string, input: string): Promise<SourceImportPlanCard> {
+    if (!hasTauriRuntime()) {
+      const preview = createPreviewSourceImportPlan(importKind, input, snapshot?.sources ?? []);
+      setToast(preview.safeToContinue ? "已生成浏览器导入 dry-run 预览。" : "已生成浏览器预览；存在需要处理的风险。");
+      return preview;
+    }
+
+    const result = await invoke<SourceImportPlanCard>("preview_source_import_candidate", { importKind, input });
+    setToast(result.safeToContinue ? "导入 dry-run 已生成，未写入任何目录。" : "导入 dry-run 已生成，但当前计划不能继续。");
+    return result;
+  }
+
   useEffect(() => {
     void loadSnapshot();
   }, []);
@@ -436,6 +449,7 @@ export function App() {
           <Sources
             loading={loading}
             onRecordUsage={recordUsage}
+            onPreviewImport={previewSourceImportCandidate}
             onSaveMetadata={updateSourceMetadata}
             snapshot={snapshot}
           />
@@ -1511,6 +1525,7 @@ function Presets({
 function Sources({
   loading,
   onRecordUsage,
+  onPreviewImport,
   onSaveMetadata,
   snapshot
 }: {
@@ -1522,6 +1537,7 @@ function Sources({
     sourceName: string,
     eventType: string
   ) => Promise<void>;
+  onPreviewImport: (importKind: string, input: string) => Promise<SourceImportPlanCard>;
   onSaveMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
   snapshot: LegacySnapshot | null;
 }) {
@@ -1531,6 +1547,8 @@ function Sources({
   const localSources = sources.filter(source => !source.url && source.localPath).length;
   const [editingSourceId, setEditingSourceId] = useState<string>("");
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
+  const [importPlan, setImportPlan] = useState<SourceImportPlanCard | null>(null);
+  const [importPending, setImportPending] = useState<boolean>(false);
   const displaySources = sources.map(source => applySourceDraft(source, sourceDrafts[source.id]));
   const editingSource = displaySources.find(source => source.id === editingSourceId);
   const sourcePopularityById = useMemo(() => {
@@ -1559,6 +1577,35 @@ function Sources({
     }
   }
 
+  async function previewImportPlan(importKind: string, input: string) {
+    setImportPending(true);
+    try {
+      const plan = await onPreviewImport(importKind, input);
+      setImportPlan(plan);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setImportPlan({
+        id: "import-plan-error",
+        importKind,
+        input,
+        normalizedTarget: input.trim(),
+        displayName: "导入计划生成失败",
+        status: "blocked",
+        riskLevel: "high",
+        safeToContinue: false,
+        duplicateSourceId: "",
+        duplicateReason: message,
+        skillCount: 0,
+        promptCount: 0,
+        plannedSteps: ["请修正输入后重新生成 dry-run。"],
+        rollbackSummary: "预检失败，没有执行任何文件写入。"
+      });
+      showUiToast("导入 dry-run 失败，请查看计划卡片。");
+    } finally {
+      setImportPending(false);
+    }
+  }
+
   return (
     <div className="view sources-view">
       <section className="page-header">
@@ -1574,6 +1621,11 @@ function Sources({
       </section>
 
       <SourceImportPreviewPanel previews={importPreviews} />
+      <SourceImportWizardPanel
+        disabled={loading || importPending}
+        onPreview={(importKind, input) => void previewImportPlan(importKind, input)}
+        plan={importPlan}
+      />
 
       <div className="table-panel source-table">
         {displaySources.map(source => {
@@ -1696,6 +1748,110 @@ function SourceImportPreviewPanel({ previews }: { previews: ImportPreviewCard[] 
           </article>
         ))}
       </div>
+    </section>
+  );
+}
+
+function SourceImportWizardPanel({
+  disabled,
+  onPreview,
+  plan
+}: {
+  disabled: boolean;
+  onPreview: (importKind: string, input: string) => void;
+  plan: SourceImportPlanCard | null;
+}) {
+  const [importKind, setImportKind] = useState<string>("github");
+  const [input, setInput] = useState<string>("");
+
+  function submitPreview() {
+    const value = input.trim();
+    if (!value) {
+      showUiToast("请先粘贴 GitHub 地址、本地文件夹路径或 zip/.skill 文件路径。");
+      return;
+    }
+    onPreview(importKind, value);
+  }
+
+  return (
+    <section className="source-import-wizard">
+      <div className="section-title-row">
+        <div>
+          <p className="eyebrow">Dry-run Import</p>
+          <h3>导入向导</h3>
+          <p>生成“将会发生什么”的计划：重复来源、识别到的 Skill、风险等级和回滚要求都会先列出来。</p>
+        </div>
+        <span className="status-badge warn">仍锁定真实导入</span>
+      </div>
+      <div className="import-wizard-form">
+        <div className="segmented-control import-kind-control" role="group" aria-label="选择导入类型">
+          {[
+            ["github", "GitHub"],
+            ["local", "本地文件夹"],
+            ["zip", "zip / .skill"]
+          ].map(([value, label]) => (
+            <button
+              className={importKind === value ? "active" : ""}
+              disabled={disabled}
+              key={value}
+              onClick={() => setImportKind(value)}
+              type="button"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <label className="import-input-label">
+          来源地址或路径
+          <input
+            disabled={disabled}
+            onChange={event => setInput(event.target.value)}
+            placeholder={
+              importKind === "github"
+                ? "https://github.com/owner/repo.git"
+                : importKind === "local"
+                  ? "D:\\My Skills\\some-skill-pack"
+                  : "D:\\Downloads\\some-skill-pack.zip"
+            }
+            value={input}
+          />
+        </label>
+        <button className="ghost-button import-preview-button" disabled={disabled} onClick={submitPreview} type="button">
+          {disabled ? "正在生成" : "生成 dry-run 计划"}
+        </button>
+      </div>
+      {plan && (
+        <article className={`import-plan-card ${plan.status}`}>
+          <div className="import-plan-head">
+            <div>
+              <span className="eyebrow">{importKindLabel(plan.importKind)} Plan</span>
+              <strong>{plan.displayName}</strong>
+              <small>{plan.normalizedTarget || plan.input}</small>
+            </div>
+            <div className="import-plan-badges">
+              <span className={`status-badge ${plan.safeToContinue ? "ok" : "warn"}`}>
+                {sourceImportPlanStatusLabel(plan)}
+              </span>
+              <span className={`risk ${plan.riskLevel}`}>风险：{sourceImportRiskLabel(plan.riskLevel)}</span>
+            </div>
+          </div>
+          <div className="import-plan-metrics">
+            <span>{plan.skillCount} Skills</span>
+            <span>{plan.promptCount} Prompt 资料</span>
+            <span>{plan.duplicateSourceId ? "发现重复" : "未发现重复"}</span>
+          </div>
+          {plan.duplicateReason && <p className="import-plan-warning">{plan.duplicateReason}</p>}
+          <ol className="import-plan-steps">
+            {plan.plannedSteps.map(step => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+          <footer>
+            <strong>回滚要求</strong>
+            <span>{plan.rollbackSummary}</span>
+          </footer>
+        </article>
+      )}
     </section>
   );
 }
@@ -2451,6 +2607,97 @@ function importPreviewStatusLabel(card: ImportPreviewCard): string {
   if (card.status === "error" || card.status === "blocked") return "Blocked";
   if (card.status === "warn") return "Review";
   return card.safeToContinue ? "Ready" : "Review";
+}
+
+function sourceImportPlanStatusLabel(plan: SourceImportPlanCard): string {
+  if (plan.status === "ready") return "可进入下一步";
+  if (plan.status === "warn") return "需要复核";
+  if (plan.status === "locked") return "真实导入锁定";
+  if (plan.status === "blocked") return "已阻止";
+  return plan.safeToContinue ? "可进入下一步" : "需要复核";
+}
+
+function sourceImportRiskLabel(riskLevel: string): string {
+  if (riskLevel === "low") return "低";
+  if (riskLevel === "medium") return "中";
+  if (riskLevel === "high") return "高";
+  return riskLevel || "未知";
+}
+
+function createPreviewSourceImportPlan(
+  importKind: string,
+  input: string,
+  sources: SourceCard[]
+): SourceImportPlanCard {
+  const value = input.trim();
+  const displayName = value
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .pop()
+    ?.replace(/\.git$/i, "")
+    .replace(/\.(zip|skill)$/i, "") || "未命名来源";
+  const normalizedGithub = normalizePreviewGithubUrl(value);
+  const normalizedTarget = importKind === "github" ? normalizedGithub : value;
+  const duplicate = sources.find(source => {
+    if (importKind === "github") {
+      return normalizePreviewGithubUrl(source.url) === normalizedGithub;
+    }
+    return (source.localPath || source.url || "").trim().toLowerCase() === value.toLowerCase();
+  });
+  const isGithubValid = importKind !== "github" || Boolean(normalizedGithub);
+  const isPackage = importKind === "zip";
+  const safeToContinue = Boolean(value && isGithubValid && !duplicate && !isPackage);
+  const status = duplicate || !isGithubValid ? "blocked" : isPackage ? "locked" : safeToContinue ? "ready" : "warn";
+
+  return {
+    id: `preview-${importKind}-${displayName}`,
+    importKind,
+    input: value,
+    normalizedTarget,
+    displayName,
+    status,
+    riskLevel: duplicate || !isGithubValid ? "high" : isPackage ? "medium" : "low",
+    safeToContinue,
+    duplicateSourceId: duplicate?.id ?? "",
+    duplicateReason: duplicate
+      ? `已存在同一来源：${duplicate.name}。真实导入前必须合并或改名。`
+      : !isGithubValid
+        ? "GitHub 地址格式不符合普通仓库地址。"
+        : isPackage
+          ? "zip/.skill 仍需要解压安全扫描，当前只允许生成计划。"
+          : "",
+    skillCount: 0,
+    promptCount: 0,
+    plannedSteps:
+      importKind === "github"
+        ? [
+            "校验 GitHub 普通仓库地址。",
+            "检查 v2 SQLite 是否已有同源仓库。",
+            "未来真实导入前先生成快照，再 clone/pull 到 github_sources。",
+            "扫描 SKILL.md，只把有效 Skill 进入候选库。"
+          ]
+        : importKind === "local"
+          ? [
+              "检查本地路径是否可访问。",
+              "递归扫描 SKILL.md，并跳过 target/node_modules/.git 等目录。",
+              "检查重复来源和重复 Skill 名称。",
+              "真实导入前必须先生成快照和回滚计划。"
+            ]
+          : [
+              "验证 zip/.skill 文件扩展名。",
+              "先做 zip-slip 与路径穿越扫描。",
+              "解压到临时目录后统计 SKILL.md。",
+              "真实导入保持锁定，直到解压安全报告通过。"
+            ],
+    rollbackSummary: "当前只生成 dry-run；没有写入任何文件，因此不需要执行回滚。"
+  };
+}
+
+function normalizePreviewGithubUrl(input: string): string {
+  const value = input.trim().replace(/^git@github\.com:/i, "https://github.com/").replace(/^ssh:\/\/git@github\.com\//i, "https://github.com/");
+  const match = value.match(/^https?:\/\/github\.com\/([^/\s]+)\/([^/\s?#]+?)(?:\.git)?(?:[?#].*)?$/i);
+  if (!match) return "";
+  return `https://github.com/${match[1]}/${match[2].replace(/\.git$/i, "")}.git`.toLowerCase();
 }
 
 function createPreviewSnapshot(): LegacySnapshot {

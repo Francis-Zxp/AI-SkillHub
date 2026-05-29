@@ -298,6 +298,25 @@ struct ImportPreviewCard {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct SourceImportPlanCard {
+    id: String,
+    import_kind: String,
+    input: String,
+    normalized_target: String,
+    display_name: String,
+    status: String,
+    risk_level: String,
+    safe_to_continue: bool,
+    duplicate_source_id: String,
+    duplicate_reason: String,
+    skill_count: usize,
+    prompt_count: usize,
+    planned_steps: Vec<String>,
+    rollback_summary: String,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct DesktopQaCheckCard {
     id: String,
     title: String,
@@ -592,6 +611,16 @@ fn set_source_metadata(
 ) -> Result<LegacySnapshot, String> {
     set_source_metadata_override(&source_id, &name, &source_type, &category, &note, enabled)?;
     load_indexed_snapshot()
+}
+
+#[tauri::command]
+fn preview_source_import_candidate(
+    import_kind: String,
+    input: String,
+) -> Result<SourceImportPlanCard, String> {
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    build_source_import_plan(&root, &connection, &import_kind, &input)
 }
 
 #[tauri::command]
@@ -1968,6 +1997,408 @@ fn read_source_usage_counts(
     }
 
     Ok(output)
+}
+
+fn build_source_import_plan(
+    root: &Path,
+    connection: &Connection,
+    import_kind: &str,
+    input: &str,
+) -> Result<SourceImportPlanCard, String> {
+    let normalized_kind = import_kind.trim().to_ascii_lowercase();
+    let trimmed_input = input
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_string();
+    if trimmed_input.is_empty() {
+        return Ok(SourceImportPlanCard {
+            id: "source-import-empty".to_string(),
+            import_kind: normalized_kind,
+            input: trimmed_input,
+            normalized_target: String::new(),
+            display_name: "空来源".to_string(),
+            status: "blocked".to_string(),
+            risk_level: "high".to_string(),
+            safe_to_continue: false,
+            duplicate_source_id: String::new(),
+            duplicate_reason: "请先输入 GitHub 地址、本地文件夹路径或 zip/.skill 文件路径。"
+                .to_string(),
+            skill_count: 0,
+            prompt_count: 0,
+            planned_steps: vec!["修正输入后重新生成 dry-run。".to_string()],
+            rollback_summary: "没有执行任何文件写入。".to_string(),
+        });
+    }
+
+    let sources = read_indexed_sources(connection)?;
+    match normalized_kind.as_str() {
+        "github" => build_github_source_import_plan(&sources, &trimmed_input),
+        "local" => build_local_source_import_plan(root, &sources, &trimmed_input),
+        "zip" | "skill" | "package" => build_package_source_import_plan(&sources, &trimmed_input),
+        _ => Ok(SourceImportPlanCard {
+            id: stable_id("source-import-unknown", &trimmed_input),
+            import_kind: normalized_kind,
+            input: trimmed_input,
+            normalized_target: String::new(),
+            display_name: "未知导入类型".to_string(),
+            status: "blocked".to_string(),
+            risk_level: "high".to_string(),
+            safe_to_continue: false,
+            duplicate_source_id: String::new(),
+            duplicate_reason: "当前只支持 GitHub、本地文件夹和 zip/.skill 包的 dry-run。"
+                .to_string(),
+            skill_count: 0,
+            prompt_count: 0,
+            planned_steps: vec!["选择受支持的导入类型后重新生成计划。".to_string()],
+            rollback_summary: "没有执行任何文件写入。".to_string(),
+        }),
+    }
+}
+
+fn build_github_source_import_plan(
+    sources: &[SourceCard],
+    input: &str,
+) -> Result<SourceImportPlanCard, String> {
+    let Some((owner, repo)) = parse_github_repo(input) else {
+        return Ok(SourceImportPlanCard {
+            id: stable_id("source-import-github-invalid", input),
+            import_kind: "github".to_string(),
+            input: input.to_string(),
+            normalized_target: input.to_string(),
+            display_name: "GitHub 地址格式错误".to_string(),
+            status: "blocked".to_string(),
+            risk_level: "high".to_string(),
+            safe_to_continue: false,
+            duplicate_source_id: String::new(),
+            duplicate_reason:
+                "只接受普通 GitHub 仓库地址，例如 https://github.com/owner/repo.git。".to_string(),
+            skill_count: 0,
+            prompt_count: 0,
+            planned_steps: vec![
+                "修正仓库地址。".to_string(),
+                "重新生成 dry-run 计划。".to_string(),
+            ],
+            rollback_summary: "没有执行 clone、pull 或文件写入。".to_string(),
+        });
+    };
+
+    let normalized_target = normalized_github_repo_url(&owner, &repo);
+    let duplicate = sources.iter().find(|source| {
+        parse_github_repo(&source.url)
+            .map(|(existing_owner, existing_repo)| {
+                normalize_lookup_key(&existing_owner) == normalize_lookup_key(&owner)
+                    && normalize_lookup_key(&existing_repo) == normalize_lookup_key(&repo)
+            })
+            .unwrap_or(false)
+    });
+    let display_name = repo.clone();
+    let duplicate_reason = duplicate
+        .map(|source| {
+            format!(
+                "已存在同源 GitHub 仓库：{}。真实导入前必须合并、停用或改名。",
+                source.name
+            )
+        })
+        .unwrap_or_default();
+    let safe_to_continue = duplicate.is_none();
+
+    Ok(SourceImportPlanCard {
+        id: stable_id("source-import-github", &normalized_target),
+        import_kind: "github".to_string(),
+        input: input.to_string(),
+        normalized_target,
+        display_name,
+        status: if safe_to_continue { "ready" } else { "blocked" }.to_string(),
+        risk_level: if safe_to_continue { "low" } else { "high" }.to_string(),
+        safe_to_continue,
+        duplicate_source_id: duplicate
+            .map(|source| source.id.clone())
+            .unwrap_or_default(),
+        duplicate_reason,
+        skill_count: 0,
+        prompt_count: 0,
+        planned_steps: vec![
+            "校验 GitHub 普通仓库地址并规范化为 .git URL。".to_string(),
+            "检查 v2 SQLite 中是否已有同源仓库。".to_string(),
+            "未来真实导入前先创建快照和回滚计划。".to_string(),
+            "未来真实导入时 clone/pull 到 app/github_sources，再扫描 SKILL.md。".to_string(),
+        ],
+        rollback_summary: "当前只生成 dry-run；没有 clone、pull、复制或链接接管。".to_string(),
+    })
+}
+
+fn build_local_source_import_plan(
+    root: &Path,
+    sources: &[SourceCard],
+    input: &str,
+) -> Result<SourceImportPlanCard, String> {
+    let input_path = PathBuf::from(input);
+    let path = if input_path.is_absolute() {
+        input_path
+    } else {
+        root.join(input_path)
+    };
+    let normalized_target = path.to_string_lossy().to_string();
+    let display_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("local-source")
+        .to_string();
+    let duplicate = sources.iter().find(|source| {
+        normalize_path_for_compare(&source.local_path)
+            == normalize_path_for_compare(&normalized_target)
+            || normalize_lookup_key(&source.name) == normalize_lookup_key(&display_name)
+    });
+
+    if duplicate.is_some() {
+        return Ok(SourceImportPlanCard {
+            id: stable_id("source-import-local-duplicate", &normalized_target),
+            import_kind: "local".to_string(),
+            input: input.to_string(),
+            normalized_target,
+            display_name,
+            status: "blocked".to_string(),
+            risk_level: "high".to_string(),
+            safe_to_continue: false,
+            duplicate_source_id: duplicate
+                .map(|source| source.id.clone())
+                .unwrap_or_default(),
+            duplicate_reason: format!(
+                "已存在同名或同路径来源：{}。真实导入前必须合并或改名。",
+                duplicate.map(|source| source.name.as_str()).unwrap_or("")
+            ),
+            skill_count: 0,
+            prompt_count: 0,
+            planned_steps: vec![
+                "打开已存在来源并确认是否需要保留。".to_string(),
+                "如果确实是新来源，请先改名或移动到不同路径。".to_string(),
+            ],
+            rollback_summary: "没有复制或链接任何本地文件。".to_string(),
+        });
+    }
+
+    if !path.exists() {
+        return Ok(SourceImportPlanCard {
+            id: stable_id("source-import-local-missing", &normalized_target),
+            import_kind: "local".to_string(),
+            input: input.to_string(),
+            normalized_target,
+            display_name,
+            status: "blocked".to_string(),
+            risk_level: "high".to_string(),
+            safe_to_continue: false,
+            duplicate_source_id: String::new(),
+            duplicate_reason: "本地路径不存在。".to_string(),
+            skill_count: 0,
+            prompt_count: 0,
+            planned_steps: vec!["确认路径是否拼写正确，或重新选择文件夹。".to_string()],
+            rollback_summary: "没有读取到有效来源，也没有执行文件写入。".to_string(),
+        });
+    }
+
+    if !path.is_dir() {
+        return Ok(SourceImportPlanCard {
+            id: stable_id("source-import-local-file", &normalized_target),
+            import_kind: "local".to_string(),
+            input: input.to_string(),
+            normalized_target,
+            display_name,
+            status: "blocked".to_string(),
+            risk_level: "high".to_string(),
+            safe_to_continue: false,
+            duplicate_source_id: String::new(),
+            duplicate_reason: "本地导入需要选择文件夹；zip/.skill 文件请切换到包导入。".to_string(),
+            skill_count: 0,
+            prompt_count: 0,
+            planned_steps: vec!["切换导入类型，或选择包含 SKILL.md 的文件夹。".to_string()],
+            rollback_summary: "没有复制或链接任何本地文件。".to_string(),
+        });
+    }
+
+    let (skill_count, prompt_count) = count_skill_dirs_in_path(&path)?;
+    let has_skills = skill_count > 0;
+
+    Ok(SourceImportPlanCard {
+        id: stable_id("source-import-local", &normalized_target),
+        import_kind: "local".to_string(),
+        input: input.to_string(),
+        normalized_target,
+        display_name,
+        status: if has_skills { "ready" } else { "warn" }.to_string(),
+        risk_level: if has_skills { "low" } else { "medium" }.to_string(),
+        safe_to_continue: has_skills,
+        duplicate_source_id: String::new(),
+        duplicate_reason: if has_skills {
+            String::new()
+        } else {
+            "没有扫描到 SKILL.md；真实导入时不会把普通 Prompt 文档当成 Skill。".to_string()
+        },
+        skill_count,
+        prompt_count,
+        planned_steps: vec![
+            "递归扫描 SKILL.md，并跳过 .git、node_modules、target 等目录。".to_string(),
+            "检查重复来源和重复 Skill 文件夹名。".to_string(),
+            "未来真实导入前先创建快照和备份 dry-run。".to_string(),
+            "只有有效 Skill 目录会进入候选库；Prompt 资料单独管理。".to_string(),
+        ],
+        rollback_summary: "当前只读取目录元数据；没有复制、移动、删除或创建软链接。".to_string(),
+    })
+}
+
+fn build_package_source_import_plan(
+    sources: &[SourceCard],
+    input: &str,
+) -> Result<SourceImportPlanCard, String> {
+    let path = PathBuf::from(input);
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let display_name = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("package-source")
+        .to_string();
+    let duplicate = sources
+        .iter()
+        .find(|source| normalize_lookup_key(&source.name) == normalize_lookup_key(&display_name));
+    let extension_ok = extension == "zip" || extension == "skill";
+    let file_exists = path.exists();
+
+    Ok(SourceImportPlanCard {
+        id: stable_id("source-import-package", input),
+        import_kind: "zip".to_string(),
+        input: input.to_string(),
+        normalized_target: input.to_string(),
+        display_name,
+        status: if !extension_ok || duplicate.is_some() {
+            "blocked"
+        } else {
+            "locked"
+        }
+        .to_string(),
+        risk_level: if !extension_ok || duplicate.is_some() {
+            "high"
+        } else {
+            "medium"
+        }
+        .to_string(),
+        safe_to_continue: false,
+        duplicate_source_id: duplicate
+            .map(|source| source.id.clone())
+            .unwrap_or_default(),
+        duplicate_reason: if let Some(source) = duplicate {
+            format!(
+                "已存在同名来源：{}。包导入前必须先改名或合并。",
+                source.name
+            )
+        } else if !extension_ok {
+            "包导入只接受 .zip 或 .skill 文件。".to_string()
+        } else if !file_exists {
+            "文件当前不存在；仍可生成计划，但不能进入真实解压。".to_string()
+        } else {
+            "zip/.skill 真实导入仍锁定，必须先接入 zip-slip 安全扫描和临时目录预览。".to_string()
+        },
+        skill_count: 0,
+        prompt_count: 0,
+        planned_steps: vec![
+            "验证扩展名和文件可读性。".to_string(),
+            "在临时目录执行 zip-slip 与路径穿越扫描。".to_string(),
+            "统计包含 SKILL.md 的目录，并检查重复名称。".to_string(),
+            "只有安全报告通过后，才允许创建快照并进入真实导入。".to_string(),
+        ],
+        rollback_summary: "当前不解压包、不写入目录；未来真实导入必须先有快照和回滚清单。"
+            .to_string(),
+    })
+}
+
+fn count_skill_dirs_in_path(root: &Path) -> Result<(usize, usize), String> {
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut visited = 0usize;
+    let mut skill_count = 0usize;
+    let mut prompt_count = 0usize;
+
+    while let Some((directory, depth)) = stack.pop() {
+        if visited >= 2_500 || depth > 8 {
+            continue;
+        }
+        visited += 1;
+
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        let mut has_skill_md = false;
+        let mut markdown_files = 0usize;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+
+            if file_type.is_dir() {
+                if !should_skip_import_scan_dir(&file_name) {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+
+            if file_type.is_file() {
+                if file_name.eq_ignore_ascii_case("SKILL.md") {
+                    has_skill_md = true;
+                } else if path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .map(|extension| extension.eq_ignore_ascii_case("md"))
+                    .unwrap_or(false)
+                {
+                    markdown_files += 1;
+                }
+            }
+        }
+
+        if has_skill_md {
+            skill_count += 1;
+        } else if depth <= 2 && markdown_files > 0 {
+            prompt_count += markdown_files.min(6);
+        }
+    }
+
+    Ok((skill_count, prompt_count))
+}
+
+fn should_skip_import_scan_dir(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        ".git"
+            | ".hg"
+            | ".svn"
+            | "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | ".next"
+            | ".nuxt"
+            | ".venv"
+            | "__pycache__"
+            | ".skillhub-next"
+            | "webview2-data"
+    )
+}
+
+fn normalized_github_repo_url(owner: &str, repo: &str) -> String {
+    format!("https://github.com/{}/{}.git", owner, repo)
+}
+
+fn normalize_path_for_compare(path: &str) -> String {
+    path.trim()
+        .replace('/', "\\")
+        .trim_end_matches('\\')
+        .to_ascii_lowercase()
 }
 
 fn normalize_lookup_key(value: &str) -> String {
@@ -4589,6 +5020,7 @@ pub fn run() {
             set_skill_metadata,
             set_skill_enabled,
             set_source_metadata,
+            preview_source_import_candidate,
             record_usage_event,
             refresh_source_popularity
         ])
@@ -5157,6 +5589,97 @@ mod tests {
             parse_github_repo("https://github.com/owner/repo.git invalid"),
             None
         );
+    }
+
+    #[test]
+    fn source_import_plan_detects_duplicate_github_url() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-import-github-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let timestamp = unix_timestamp_string();
+
+        connection
+            .execute(
+                "INSERT INTO sources (
+                    id, name, source_type, url, local_path, install_mode,
+                    category_id, note, enabled, created_at, updated_at
+                ) VALUES (
+                    'source-impeccable', 'impeccable', 'skill',
+                    'https://github.com/pbakaus/impeccable.git', '',
+                    'scan', 'ui-design', '', 1, ?1, ?1
+                )",
+                params![timestamp],
+            )
+            .expect("source should insert");
+
+        let plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "git@github.com:pbakaus/impeccable.git",
+        )
+        .expect("import plan should build");
+
+        assert_eq!(plan.status, "blocked");
+        assert_eq!(plan.duplicate_source_id, "source-impeccable");
+        assert!(!plan.safe_to_continue);
+        assert!(plan.duplicate_reason.contains("已存在同源"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_import_plan_counts_local_skill_dirs_without_writing() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-import-local-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let local_source = root.join("local-pack");
+        let skill_dir = local_source.join("paper-workflow");
+        let docs_dir = local_source.join("prompt-docs");
+        fs::create_dir_all(&skill_dir).expect("skill dir should create");
+        fs::create_dir_all(&docs_dir).expect("docs dir should create");
+        fs::write(skill_dir.join("SKILL.md"), "# Paper Workflow").expect("skill file should write");
+        fs::write(docs_dir.join("README.md"), "# Prompt notes").expect("prompt file should write");
+
+        let plan =
+            build_source_import_plan(&root, &connection, "local", &local_source.to_string_lossy())
+                .expect("local import plan should build");
+
+        assert_eq!(plan.status, "ready");
+        assert_eq!(plan.skill_count, 1);
+        assert!(plan.prompt_count >= 1);
+        assert!(plan.safe_to_continue);
+        assert!(plan.rollback_summary.contains("没有复制"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_import_plan_keeps_zip_packages_locked() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-import-zip-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let package_path = root.join("demo-skills.zip");
+
+        let plan =
+            build_source_import_plan(&root, &connection, "zip", &package_path.to_string_lossy())
+                .expect("zip import plan should build");
+
+        assert_eq!(plan.status, "locked");
+        assert_eq!(plan.risk_level, "medium");
+        assert!(!plan.safe_to_continue);
+        assert!(plan
+            .planned_steps
+            .iter()
+            .any(|step| step.contains("zip-slip")));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

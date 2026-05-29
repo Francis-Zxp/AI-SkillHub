@@ -6900,6 +6900,230 @@ body[data-theme="dark"] {
   }
 }
 
+.source-import-wizard {
+  display: grid;
+  gap: 16px;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--ui-panel) 88%, transparent), color-mix(in srgb, var(--ui-panel-soft) 72%, transparent)),
+    var(--ui-panel);
+  box-shadow: var(--ui-shadow);
+}
+
+.import-wizard-form {
+  display: grid;
+  grid-template-columns: minmax(210px, .8fr) minmax(280px, 1.5fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.segmented-control {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 42px;
+  padding: 4px;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ui-panel-soft) 76%, transparent);
+}
+
+.segmented-control button {
+  min-height: 32px;
+  padding: 0 12px;
+  color: var(--ui-text-soft);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 820;
+  transition: transform .16s ease, color .16s ease, background .16s ease, border-color .16s ease;
+}
+
+.segmented-control button:hover,
+.segmented-control button.active {
+  color: var(--ui-text);
+  border-color: var(--ui-border-strong);
+  background: var(--ui-brand-soft);
+}
+
+.segmented-control button:active,
+.import-preview-button:active {
+  transform: scale(.98);
+}
+
+.import-input-label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: var(--ui-text-soft);
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.import-input-label input {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 14px;
+  color: var(--ui-text);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  outline: 0;
+  background: color-mix(in srgb, var(--ui-bg) 74%, transparent);
+  font: 720 13px / 1.35 var(--ui-mono);
+}
+
+.import-input-label input:focus {
+  border-color: var(--ui-border-strong);
+  box-shadow: 0 0 0 3px var(--ui-brand-soft);
+}
+
+.import-preview-button {
+  min-height: 42px;
+  white-space: nowrap;
+}
+
+.import-plan-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--ui-panel-soft) 54%, transparent), transparent 64%),
+    color-mix(in srgb, var(--ui-panel) 92%, transparent);
+}
+
+.import-plan-card.blocked {
+  border-color: color-mix(in srgb, var(--ui-danger) 30%, var(--ui-border));
+}
+
+.import-plan-card.warn,
+.import-plan-card.locked {
+  border-color: color-mix(in srgb, var(--ui-warning) 30%, var(--ui-border));
+}
+
+.import-plan-head,
+.import-plan-badges,
+.import-plan-metrics,
+.import-plan-card footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.import-plan-head > div:first-child {
+  min-width: 0;
+}
+
+.import-plan-head strong {
+  display: block;
+  color: var(--ui-text);
+  font-size: 18px;
+  font-weight: 860;
+}
+
+.import-plan-head small,
+.import-plan-card footer span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ui-text-soft);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-plan-badges {
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.import-plan-metrics {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.import-plan-metrics span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  color: var(--ui-text-soft);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ui-panel-soft) 58%, transparent);
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.import-plan-warning {
+  margin: 0;
+  color: var(--ui-warning);
+  font-size: 13px;
+  font-weight: 780;
+  line-height: 1.45;
+}
+
+.import-plan-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.import-plan-steps li {
+  color: var(--ui-text-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.import-plan-card footer {
+  align-items: center;
+  justify-content: flex-start;
+  padding-top: 12px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.import-plan-card footer strong {
+  color: var(--ui-text);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.theme-light .source-import-wizard,
+.theme-light .import-plan-card {
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, .74), transparent 58%),
+    #fffdf9;
+}
+
+@media (max-width: 1180px) {
+  .import-wizard-form {
+    grid-template-columns: 1fr;
+  }
+
+  .segmented-control {
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .import-plan-head,
+  .import-plan-card footer {
+    flex-direction: column;
+  }
+
+  .import-plan-badges {
+    justify-content: flex-start;
+  }
+}
+
 .activity-timeline {
   margin-top: 18px;
   padding-top: 16px;

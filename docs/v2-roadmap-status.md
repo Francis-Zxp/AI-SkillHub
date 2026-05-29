@@ -4,11 +4,11 @@ Updated: 2026-05-29
 
 ## Current Estimate
 
-V2 overall completion is conservatively estimated at **about 88%**.
+V2 overall completion is conservatively estimated at **about 89%**.
 
-This does **not** mean a usable V2 application is 88% finished for public release. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, the system-level dark/light UI pass covers the major pages, project workspace detail now tracks instruction-file status with a read-only generated instructions preview, the Workspaces page now has selectable workspace detail navigation, the Release Gate page now combines diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, zip preview status, and one plain-language Release Readiness recommendation, the first snapshot/rollback gate, backup target inventory, backup dry-run plan, and restore dry-run report are visible in the app, the Settings page now explains the difference between the development exe and a future packaged release build plus SQLite-backed desktop QA records, v2 persists Skill metadata overrides, Source metadata overrides, local Usage Events, GitHub popularity cache, Usage Insights, and Activity Timeline records in SQLite, and Sources now has read-only import preview plus source popularity/frequency signals.
+This does **not** mean a usable V2 application is 89% finished for public release. It means v1 is now stable enough to become the maintenance line, the first v2 `app-next` scaffold exists, the toolchain is ready, checks pass, the read-only scanner reads real v1 data, the scan persists into v2 SQLite, the UI can open from SQLite before scanning v1, the first Agent Adapter Registry exists, v2 has SQLite-only enable/disable state plus adapter safety checks, the first project workspace scan exists, direct browser preview no longer crashes when Tauri APIs are unavailable, the system-level dark/light UI pass covers the major pages, project workspace detail now tracks instruction-file status with a read-only generated instructions preview, the Workspaces page now has selectable workspace detail navigation, the Release Gate page now combines diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, zip preview status, and one plain-language Release Readiness recommendation, the first snapshot/rollback gate, backup target inventory, backup dry-run plan, and restore dry-run report are visible in the app, the Settings page now explains the difference between the development exe and a future packaged release build plus SQLite-backed desktop QA records, v2 persists Skill metadata overrides, Source metadata overrides, local Usage Events, GitHub popularity cache, Usage Insights, and Activity Timeline records in SQLite, and Sources now has read-only import preview plus an interactive dry-run import wizard that checks GitHub/local/zip candidates without writing to AI tool directories.
 
-## Why 88%
+## Why 89%
 
 | Area | Status | Estimate |
 |---|---:|---:|
@@ -16,15 +16,15 @@ This does **not** mean a usable V2 application is 88% finished for public releas
 | Product model | central library, sources, agents, adapter registry, diagnostics, workspaces, workspace detail navigation, presets, safety checks, project scans, snapshot/rollback gates, backup target inventory, backup dry-run plan, restore dry-run report, release gate, Release Readiness summary, release/build explanation, persisted desktop QA, source metadata editing, usage insights, activity timeline, and v1 report inputs are defined through v1 behavior and v2 seed data | 87% |
 | V1 behavior specs for V2 | sharing, diagnostics, import preview, release preflight, troubleshooting, Skill health, problem locator, and zip preview are repeatable specs; zip preview feeds the v2 Release Gate and Sources import preview as read-only report inputs | 73% |
 | V2 technical environment | Node LTS, pnpm, Rust/Cargo, rustup, WebView2, and Visual Studio Build Tools are ready | 85% |
-| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, selectable workspace detail UI, project scan detail, snapshot UI, backup target inventory UI, backup dry-run UI, restore dry-run UI, release gate UI, Release Readiness card, v1 report input cards, browser preview fallback, system-level UI pass, release/build guide UI, persisted desktop QA UI, source metadata editor, usage insights, activity timeline, Sources import preview panel, GitHub popularity refresh, and first real Tauri desktop-window QA pass | 88% |
-| SQLite data model | real v1 sources, skills, agents, agent adapters, adapter capabilities, safety checks, workspaces, project scans with instruction-file metadata, presets, snapshots, backup targets, backup dry-run items, restore dry-run items, rollback plan steps, desktop QA checks, audit events, Skill metadata overrides, Source metadata overrides, Usage Events, and Source Popularity Cache are persisted | 88% |
+| Tauri/React/Rust/SQLite code | `app-next` scaffold created; frontend build, Rust tests, read-only v1 scanner, SQLite indexing, SQLite-first loading, adapter registry, SQLite-only state toggles, selectable workspace detail UI, project scan detail, snapshot UI, backup target inventory UI, backup dry-run UI, restore dry-run UI, release gate UI, Release Readiness card, v1 report input cards, browser preview fallback, system-level UI pass, release/build guide UI, persisted desktop QA UI, source metadata editor, usage insights, activity timeline, Sources import preview panel, Sources dry-run import wizard, GitHub popularity refresh, and first real Tauri desktop-window QA pass | 89% |
+| SQLite data model | real v1 sources, skills, agents, agent adapters, adapter capabilities, safety checks, workspaces, project scans with instruction-file metadata, presets, snapshots, backup targets, backup dry-run items, restore dry-run items, rollback plan steps, desktop QA checks, audit events, Skill metadata overrides, Source metadata overrides, Usage Events, Source Popularity Cache, and dry-run import-plan data contracts are persisted or generated from SQLite inputs | 89% |
 | Workspaces and presets | first global/agent/project workspaces and category presets are seeded; workspace cards can open a read-only detail panel; project workspaces show AGENTS/CLAUDE/README status and read-only instructions preview | 54% |
 | Release readiness | release gate summarizes diagnostics, backup dry-run, restore dry-run, rollback lock, persisted desktop QA, release preflight, share validation, and zip preview into one plain-language publish / do-not-publish recommendation, but still does not execute packaging | 74% |
 | Multi-agent adapter registry | first registry implemented with 12 supported tools, detected/managed status overlay, capability metadata, enable state, and safety checks | 52% |
 | CLI and automation | planned, not implemented | 0% |
 | Marketplace/recommended index | planned, not implemented | 0% |
 
-Weighted together, the honest number is about **88%**.
+Weighted together, the honest number is about **89%**.
 
 ## Reference Projects Still In Use
 
@@ -64,7 +64,7 @@ The v2 source line has started and the toolchain is ready:
 
 Continue v2 milestone 1:
 
-1. Extend the new read-only Sources import preview into a real source import wizard and bulk edit flow on top of the Source metadata override table.
+1. Extend the new Sources dry-run import wizard into rollback-aware install plans, then add bulk source edit flow on top of the Source metadata override table.
 2. Add optional real AI-tool invocation ingestion from logs/hooks after a privacy review. Local Usage Events and GitHub popularity cache are now persisted, but Claude/Codex real invocation counts are not yet claimed.
 3. Add a real multi-tag table and Preset/workspace distribution matrix before enabling sync writes.
 4. Keep the Release Readiness card as a derived status only: it may explain whether packaging is allowed, but it must not execute packaging or write to AI tool directories.
@@ -121,3 +121,18 @@ V2 now has the first "high-signal" usage intelligence layer:
 Verification after the pass: `pnpm build`, Rust `cargo test` with 18 tests, `git diff --check`, and `pnpm tauri build --no-bundle` passed.
 
 Remaining V1-to-V2 gaps are still explicit: real GitHub clone/pull import, real local/zip/.skill import, real AI-tool sync/write, diagnostics bundle export, share-validation runner, packaging runner, real Claude/Codex invocation ingestion, full multi-tag model, and workspace/Preset distribution matrix.
+
+## 2026-05-29 Sources Dry-run Import Wizard
+
+Sources now has the first interactive import wizard on top of the earlier read-only import preview:
+
+- Backend command `preview_source_import_candidate` generates a dry-run plan for GitHub, local folder, and zip/.skill candidates.
+- GitHub plans normalize ordinary GitHub repository URLs, detect duplicate indexed repositories, and explain the future clone/pull sequence without executing it.
+- Local folder plans scan for `SKILL.md`, count Prompt-like Markdown material, skip heavy build/cache folders, and block duplicate path/name candidates.
+- zip/.skill plans remain locked until a future extractor adds zip-slip and temporary-directory safety checks.
+- The UI shows risk level, duplicate reason, planned steps, Skill/Prompt counts, and rollback requirements before any future write path can be enabled.
+- The root double-click executable was refreshed at `D:\My Files\AI_global_skills\AI SkillHub V2 Alpha.exe`.
+
+Verification after the pass: `pnpm build`, Rust `cargo test` with 21 tests, `git diff --check`, and `pnpm tauri build --no-bundle` passed.
+
+Remaining V1-to-V2 gaps are still explicit: real GitHub clone/pull import, real local/zip/.skill import, real AI-tool sync/write, diagnostics bundle export, share-validation runner, packaging runner, real Claude/Codex invocation ingestion, full multi-tag model, bulk source edit, and workspace/Preset distribution matrix.

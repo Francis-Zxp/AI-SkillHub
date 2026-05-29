@@ -235,6 +235,23 @@ export type ImportPreviewCard = {
   safeToContinue: boolean;
 };
 
+export type SourceImportPlanCard = {
+  id: string;
+  importKind: "github" | "local" | "zip" | string;
+  input: string;
+  normalizedTarget: string;
+  displayName: string;
+  status: "ready" | "warn" | "blocked" | "locked" | string;
+  riskLevel: "low" | "medium" | "high" | string;
+  safeToContinue: boolean;
+  duplicateSourceId: string;
+  duplicateReason: string;
+  skillCount: number;
+  promptCount: number;
+  plannedSteps: string[];
+  rollbackSummary: string;
+};
+
 export type SourcePopularityCard = {
   sourceId: string;
   sourceName: string;
