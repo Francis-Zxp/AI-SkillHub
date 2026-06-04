@@ -1,0 +1,80 @@
+name: V2 CI
+
+# Minimum gate before merging V2 changes: Rust tests, TypeScript types, frontend build.
+# Does NOT run `pnpm tauri build` here — that needs platform-specific bundling assets
+# and is run from the release workflow on tagged commits.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app-next/**"
+      - ".github/workflows/v2-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "app-next/**"
+      - ".github/workflows/v2-ci.yml"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: app-next
+
+jobs:
+  rust-tests:
+    name: cargo test (Rust backend)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app-next/src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('app-next/src-tauri/Cargo.lock') }}
+
+      - name: cargo check
+        run: cargo check --manifest-path src-tauri/Cargo.toml --tests
+
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+  frontend:
+    name: tsc + vite build (React frontend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "11.2.2"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store/v3
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('app-next/pnpm-lock.yaml') }}
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeScript type-check
+        run: pnpm exec tsc --noEmit -p .
+
+      - name: Vite production build
+        run: pnpm exec vite build

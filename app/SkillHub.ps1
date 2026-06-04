@@ -28,6 +28,26 @@ function Write-Utf8Bom([string]$Path, [string]$Text) {
   [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($true))
 }
 
+function Write-Utf8NoBom([string]$Path, [string]$Text) {
+  $parent = Split-Path -Parent $Path
+  New-Item -ItemType Directory -Force -Path $parent | Out-Null
+  [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Read-Utf8Text([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) { return '' }
+  return [System.IO.File]::ReadAllText($Path, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Convert-ToRelativePath([string]$Root, [string]$Path) {
+  $rootFull = (Convert-ToFullPath $Root).TrimEnd('\') + '\'
+  $pathFull = Convert-ToFullPath $Path
+  if ($pathFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return $pathFull.Substring($rootFull.Length)
+  }
+  return $pathFull
+}
+
 function Write-JsonUtf8([string]$Path, $Object, [int]$Depth = 8) {
   Write-Utf8Bom $Path ($Object | ConvertTo-Json -Depth $Depth)
 }
@@ -160,6 +180,66 @@ function Get-PathPriority([string]$Path) {
   return $priority
 }
 
+function Get-PathTieBreaker([string]$Path, [string]$RepoName) {
+  $fullPath = (Convert-ToFullPath $Path).Replace('/', '\').TrimEnd('\')
+  if ([string]::IsNullOrWhiteSpace($RepoName) -or -not $SourceRoot) {
+    return 100
+  }
+
+  $repoRoot = (Join-Path $SourceRoot $RepoName).Replace('/', '\').TrimEnd('\')
+  $extractedRoot = "$repoRoot\.skillhub-extracted\"
+  if ($fullPath.StartsWith($extractedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $versionScore = Get-VersionScoreFromPath $fullPath
+    if ($versionScore -gt 0) {
+      return 20 - $versionScore
+    }
+    return 20
+  }
+
+  $directSkillsRoot = "$repoRoot\skills\"
+  if ($fullPath.StartsWith($directSkillsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return 0
+  }
+
+  $directClaudeRoot = "$repoRoot\.claude\skills\"
+  if ($fullPath.StartsWith($directClaudeRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return 1
+  }
+
+  $directAgentsRoot = "$repoRoot\.agents\skills\"
+  if ($fullPath.StartsWith($directAgentsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return 2
+  }
+
+  if ($fullPath.StartsWith("$repoRoot\", [System.StringComparison]::OrdinalIgnoreCase)) {
+    $relative = $fullPath.Substring($repoRoot.Length + 1)
+    $segmentCount = @($relative -split '\\' | Where-Object { $_ }).Count
+    return 10 + $segmentCount
+  }
+
+  return 100
+}
+
+function Get-VersionScoreFromPath([string]$Path) {
+  $matches = [regex]::Matches($Path, '(?i)(?:^|[\\/_-])v?(\d+)\.(\d+)(?:\.(\d+))?([a-z])?(?=[\\/_-]|$)')
+  if ($matches.Count -eq 0) { return 0 }
+
+  $best = 0
+  foreach ($match in $matches) {
+    $major = [int]$match.Groups[1].Value
+    $minor = [int]$match.Groups[2].Value
+    $patch = if ($match.Groups[3].Success) { [int]$match.Groups[3].Value } else { 0 }
+    $letter = if ($match.Groups[4].Success) {
+      [int][char]$match.Groups[4].Value.ToLowerInvariant()[0] - [int][char]'a' + 1
+    } else {
+      0
+    }
+    $score = ($major * 1000000) + ($minor * 10000) + ($patch * 100) + $letter
+    if ($score -gt $best) { $best = $score }
+  }
+  return $best
+}
+
 function Get-IsReparsePoint($Item) {
   return (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
 }
@@ -211,6 +291,7 @@ function Add-Candidate($List, [string]$Folder, [string]$RepoName, [bool]$Explici
   }
   $note = if ($repoConfig -and $repoConfig.note) { [string]$repoConfig.note } else { '' }
   $priority = if ($Explicit) { 0 } else { Get-PathPriority $Folder }
+  $tieBreaker = if ($Explicit) { 0 } else { Get-PathTieBreaker $Folder $RepoName }
 
   $List.Add([PSCustomObject]@{
     Skill = $skillName
@@ -222,8 +303,172 @@ function Add-Candidate($List, [string]$Folder, [string]$RepoName, [bool]$Explici
     Note = $note
     Description = $description
     Priority = $priority
+    TieBreaker = $tieBreaker
     Explicit = $Explicit
   }) | Out-Null
+}
+
+function Normalize-SkillLookupName([string]$Value) {
+  if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+  return ($Value.Trim().ToLowerInvariant() -replace '[_\s]+', '-')
+}
+
+function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates) {
+  if ([string]::IsNullOrWhiteSpace($RepoName)) { return }
+  if ($RepoName -eq 'AI-SkillHub-local-routers') { return }
+
+  $repoKey = Normalize-SkillLookupName $RepoName
+  $parentCandidate = @(
+    $RepoCandidates | Where-Object {
+      (Normalize-SkillLookupName ([string]$_.Skill)) -eq $repoKey
+    } | Sort-Object Priority, TieBreaker, Source | Select-Object -First 1
+  )
+  $childSkills = @(
+    $RepoCandidates | Where-Object {
+      (Normalize-SkillLookupName ([string]$_.Skill)) -ne $repoKey
+    } | Sort-Object Skill -Unique
+  )
+  if ($childSkills.Count -lt 2) { return }
+
+  $safeRouterName = Get-SafeSkillName $RepoName $RepoName
+  $routerRoot = Join-Path $SourceRoot 'AI-SkillHub-local-routers'
+  $routerFolder = Join-Path $routerRoot $safeRouterName
+  if (-not (Test-UnderRoot $routerFolder $SourceRoot)) {
+    throw "Router target escaped source root: $routerFolder"
+  }
+
+  $childLines = @($childSkills | Sort-Object Skill | Select-Object -ExpandProperty Skill | ForEach-Object { "- [CHILD-SKILL] /$_" })
+  $originalParentSection = @()
+  if ($parentCandidate.Count -gt 0) {
+    $parentSkillMd = Join-Path ([string]$parentCandidate[0].Source) 'SKILL.md'
+    $parentBody = Read-Utf8Text $parentSkillMd
+    if (-not [string]::IsNullOrWhiteSpace($parentBody)) {
+      $parentBody = [regex]::Replace($parentBody, '(?s)\A---\s*.*?---\s*', '').Trim()
+      if ($parentBody.Length -gt 16000) {
+        $parentBody = $parentBody.Substring(0, 16000) + [Environment]::NewLine + '[TRUNCATED: original parent Skill content is longer than 16000 characters.]'
+      }
+      $relativeParent = Convert-ToRelativePath -Root $SourceRoot -Path $parentSkillMd
+      $originalParentSection = @(
+        ''
+        'Original parent Skill content preserved from source:'
+        $relativeParent
+        ''
+        $parentBody
+      )
+    }
+  }
+  $routerText = @(
+    '---'
+    "name: $safeRouterName"
+    "description: `"[ROUTER-HUB] AI SkillHub generated parent router for the local $RepoName skill collection. Use this when the user names the collection but does not know which focused child skill to choose.`""
+    '---'
+    ''
+    "# [ROUTER-HUB] $RepoName"
+    ''
+    "> [ROUTER-HUB] This is an AI SkillHub generated parent Skill. It is a collection entry, not a focused child Skill."
+    ''
+    "This parent router is generated outside the author's repository, so git pull updates will not overwrite the router marker or routing rules."
+    ''
+    'Use this parent Skill when the user names the whole collection, asks which child Skill to use, or gives a broad task that may belong to this collection.'
+    ''
+    'Marker standard:'
+    '- [ROUTER-HUB] = parent collection entry generated by AI SkillHub.'
+    '- [CHILD-SKILL] = focused child Skill from the source repository.'
+    ''
+    'Rules:'
+    '- If the user clearly names a specific child Skill, use that child directly.'
+    '- If the user names only this collection, choose the smallest child Skill that fits the task.'
+    '- If the right child is unclear, explain the top 2-3 choices briefly and ask only when the task cannot be safely routed.'
+    ''
+    'Available child Skills:'
+    ($childLines -join [Environment]::NewLine)
+    ($originalParentSection -join [Environment]::NewLine)
+  ) -join [Environment]::NewLine
+
+  $routerSkillMd = Join-Path $routerFolder 'SKILL.md'
+  if (-not $ReportOnly) {
+    Write-Utf8NoBom $routerSkillMd $routerText
+  }
+
+  if (Test-Path -LiteralPath $routerSkillMd) {
+    Add-Candidate $List $routerFolder $RepoName $true
+  }
+}
+
+function Expand-SkillZipPackages([string]$RepoPath) {
+  if (-not (Test-Path -LiteralPath $RepoPath -PathType Container)) { return @() }
+
+  $extractRoot = Join-Path $RepoPath '.skillhub-extracted'
+  if (-not (Test-UnderRoot $extractRoot $RepoPath)) {
+    throw "Extract target escaped repository root: $extractRoot"
+  }
+
+  $zipFiles = Get-ChildItem -LiteralPath $RepoPath -Recurse -Force -Filter '*.zip' -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.FullName -notmatch '\\\.git\\' -and
+      $_.FullName -notmatch '\\\.skillhub-extracted\\'
+    }
+
+  $expanded = New-Object System.Collections.Generic.List[object]
+  if (@($zipFiles).Count -eq 0) { return $expanded }
+
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+  foreach ($zipFile in $zipFiles) {
+    $archive = $null
+    try {
+      $archive = [System.IO.Compression.ZipFile]::OpenRead($zipFile.FullName)
+      $skillEntries = @($archive.Entries | Where-Object {
+          $entryName = $_.FullName.Replace('\', '/').Trim('/')
+          $entryName -eq 'SKILL.md' -or $entryName.EndsWith('/SKILL.md')
+        })
+      if ($skillEntries.Count -eq 0) { continue }
+
+      $safePackageName = Get-SafeSkillName ([System.IO.Path]::GetFileNameWithoutExtension($zipFile.Name)) ([System.IO.Path]::GetFileNameWithoutExtension($zipFile.Name))
+      $target = Join-Path $extractRoot $safePackageName
+      if (-not (Test-UnderRoot $target $extractRoot)) {
+        throw "Extract package target escaped generated root: $target"
+      }
+
+      if (Test-Path -LiteralPath $target) {
+        Remove-Item -LiteralPath $target -Recurse -Force
+      }
+      New-Item -ItemType Directory -Force -Path $target | Out-Null
+
+      $targetFull = (Convert-ToFullPath $target).TrimEnd('\')
+      foreach ($entry in $archive.Entries) {
+        if ([string]::IsNullOrWhiteSpace($entry.Name)) { continue }
+        $relative = $entry.FullName.Replace('\', '/').TrimStart('/')
+        $parts = @($relative -split '/' | Where-Object { $_ })
+        $unsafeParts = @($parts | Where-Object { $_ -eq '..' -or $_ -match '^[A-Za-z]:$' })
+        if ($parts.Count -eq 0 -or $unsafeParts.Count -gt 0) {
+          throw "Unsafe zip entry path: $($entry.FullName)"
+        }
+
+        $destination = [System.IO.Path]::Combine($target, ($parts -join [System.IO.Path]::DirectorySeparatorChar))
+        $destinationFull = Convert-ToFullPath $destination
+        if (-not $destinationFull.StartsWith($targetFull + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+          throw "Zip entry escaped extraction root: $($entry.FullName)"
+        }
+
+        $destinationDir = Split-Path -Parent $destination
+        New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+        [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $destination, $true)
+      }
+
+      $expanded.Add([PSCustomObject]@{
+        Zip = $zipFile.FullName
+        Target = $target
+        SkillCount = $skillEntries.Count
+      }) | Out-Null
+    } catch {
+      Write-Warning "Skill zip extraction failed for $($zipFile.FullName): $($_.Exception.Message)"
+    } finally {
+      if ($archive) { $archive.Dispose() }
+    }
+  }
+
+  return $expanded
 }
 
 $Config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
@@ -318,6 +563,17 @@ foreach ($repoDir in $sourceRepos) {
   }
 
   if ($repoConfig -or $Config.autoDiscoverManualRepos) {
+    if (-not $ReportOnly) {
+      $expandedPackages = Expand-SkillZipPackages $repoDir.FullName
+      foreach ($package in $expandedPackages) {
+        $log.Add([PSCustomObject]@{
+          Kind = 'skill-zip'
+          Name = $repoDir.Name
+          Message = "Expanded packaged skill zip: $($package.Zip)"
+        }) | Out-Null
+      }
+    }
+
     $skillFiles = Get-ChildItem -LiteralPath $repoDir.FullName -Recurse -Force -Filter 'SKILL.md' -ErrorAction SilentlyContinue |
       Where-Object { $_.FullName -notmatch '\\\.git\\' }
     foreach ($skillFile in $skillFiles) {
@@ -326,13 +582,18 @@ foreach ($repoDir in $sourceRepos) {
   }
 }
 
+foreach ($repoGroup in ($candidates | Group-Object Repo)) {
+  Ensure-CollectionRouterSkill $candidates $repoGroup.Name @($repoGroup.Group)
+}
+
 $selected = New-Object System.Collections.Generic.List[object]
 $conflicts = New-Object System.Collections.Generic.List[object]
 
 foreach ($group in ($candidates | Group-Object Skill)) {
-  $ordered = @($group.Group | Sort-Object Priority, Source)
+  $ordered = @($group.Group | Sort-Object Priority, TieBreaker, Source)
   $bestPriority = $ordered[0].Priority
-  $best = @($ordered | Where-Object { $_.Priority -eq $bestPriority })
+  $bestTieBreaker = $ordered[0].TieBreaker
+  $best = @($ordered | Where-Object { $_.Priority -eq $bestPriority -and $_.TieBreaker -eq $bestTieBreaker })
   if ($best.Count -eq 1) {
     $selected.Add($best[0]) | Out-Null
   } else {

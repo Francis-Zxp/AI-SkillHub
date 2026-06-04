@@ -28,7 +28,7 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "../../app/assets/AI SkillHub.ico"
+      "icons/icon.ico"
     ]
   }
 }

@@ -14,19 +14,29 @@ Build the next AI SkillHub with:
 
 ## Current status
 
-This is the SQLite-first indexing milestone. It is intentionally safe:
+This is the SQLite-first indexing milestone with one explicit write surface (router-hub regeneration, gated behind operator consent). Defaults stay safe:
 
 - It does not write to `../skills`
-- It does not modify `../app/github_sources`
-- It does not take over Claude, Codex, or Antigravity links
+- It does not take over Claude, Codex, or Antigravity links unless you flip the consent toggle
 - It opens from the v2 SQLite index first
 - It scans real v1 Skills, sources, agents, and diagnostics only when the index is missing or manually refreshed
-- It writes only to the v2 SQLite index under `.skillhub-next/`
+- It writes only to the v2 SQLite index under `.skillhub-next/` for normal operations
 - It seeds the first workspace and preset model from the indexed data
-- It keeps a first Agent Adapter Registry so supported tools and locally detected tools are not confused
+- It keeps a first Agent Adapter Registry covering Claude, Codex, Antigravity, Cursor, Gemini CLI, OpenCode, GitHub Copilot, Windsurf, Kiro, Hermes, OpenClaw and Amp
 - It stores enable/disable state in v2 SQLite only, without changing v1 links
 - It records adapter safety checks before any future write/sync behavior is allowed
 - It records adapter capability metadata and a first read-only project workspace scan
+
+### Router-hub regeneration (new in this milestone)
+
+V2 can rebuild parent / router-hub `SKILL.md` files for every collection that has 2+ child Skills:
+
+- Generated files live under `../app/github_sources/AI-SkillHub-local-routers/<collection>-hub/SKILL.md`, never inside the upstream author's repo, so `git pull` cannot overwrite them
+- Parent name uses the `-hub` suffix to avoid colliding with same-named children
+- Dry-run plan is always available (`regenerate_router_hubs` Tauri command with `commit: false`)
+- Real writes require **both** the `commit: true` argument **and** the in-app real-write authorization
+- Each run records a `router_hub_regenerate` event in `audit_events` so you can trace what changed
+- The Sources page surfaces a "重建母 Skill 路由" panel with per-collection cards, duplicate-child warnings, and unquoted-marker health gaps
 
 ## Before running
 

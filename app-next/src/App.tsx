@@ -1,16 +1,22 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, type CSSProperties, useEffect, useMemo, useState } from "react";
 import type {
   DesktopQaCheckCard,
   ImportPreviewCard,
   LegacySnapshot,
   LegacySummary,
   NavKey,
+  PresetDistributionCard,
   ProjectScanCard,
   ReleaseReportCard,
+  RouterHubReport,
   SkillCard,
   SourceCard,
+  SourceImportExecutionCard,
   SourceImportPlanCard,
+  SourceImportPromotionCard,
+  SourcePopularityCard,
+  WriteGateCard,
   WorkspaceCard
 } from "./types";
 
@@ -40,14 +46,13 @@ type IconName =
 
 const navItems: Array<{ key: NavKey; label: string; hint: string; icon: IconName }> = [
   { key: "dashboard", label: "Dashboard", hint: "Overview", icon: "dashboard" },
-  { key: "library", label: "Skill Library", hint: "Central skills", icon: "sparkle" },
   { key: "sources", label: "Sources", hint: "GitHub and local", icon: "sources" },
+  { key: "library", label: "Skill Library", hint: "Central skills", icon: "sparkle" },
   { key: "workspaces", label: "Workspaces", hint: "Global and projects", icon: "workspaces" },
   { key: "presets", label: "Presets", hint: "Skill bundles", icon: "list" },
-  { key: "agents", label: "Agents", hint: "Claude, Codex, Antigravity", icon: "agent" },
-  { key: "snapshots", label: "Snapshots", hint: "Backups and rollback", icon: "snapshots" },
-  { key: "release", label: "Release Gate", hint: "QA and publishing", icon: "release" }
+  { key: "agents", label: "Agents", hint: "Claude, Codex, Antigravity", icon: "agent" }
 ];
+const advancedNavKeys: NavKey[] = ["snapshots", "release"];
 
 type ThemeName = "dark" | "light";
 type SkillDraft = {
@@ -55,6 +60,7 @@ type SkillDraft = {
   description: string;
   name: string;
   note: string;
+  tags: string;
 };
 
 type SourceDraft = {
@@ -63,9 +69,121 @@ type SourceDraft = {
   name: string;
   note: string;
   sourceType: SourceCard["sourceType"];
+  tags: string;
+};
+
+type QuickSourceDraft = Omit<SourceDraft, "name">;
+
+type ImportFeedbackOptions = {
+  quiet?: boolean;
+};
+
+type QuickAddStatus = {
+  body: string;
+  title: string;
+  tone: "info" | "ok" | "warn" | "error";
+};
+
+type SourceSortKey = "recent" | "usage" | "heat" | "skillCount" | "health" | "name";
+
+type SkillCollectionGroup = {
+  children: SkillCard[];
+  childPreview: string[];
+  name: string;
+  parent?: SkillCard;
 };
 
 const TOAST_EVENT = "ai-skillhub-toast";
+const AUTO_CATEGORY_ID = "auto";
+
+type CategoryOption = {
+  id: string;
+  label: string;
+  keywords: string[];
+};
+
+const CATEGORY_OPTIONS: CategoryOption[] = [
+  {
+    id: "academic-writing",
+    label: "论文科研",
+    keywords: ["paper", "manuscript", "nature", "academic", "writing", "research-writing", "sci", "论文", "科研", "稿件", "学术"]
+  },
+  {
+    id: "literature-research",
+    label: "文献研究",
+    keywords: ["literature", "citation", "reference", "pubmed", "arxiv", "review", "deep-research", "文献", "引文", "综述", "检索"]
+  },
+  {
+    id: "scientific-figures",
+    label: "科研图表",
+    keywords: ["figure", "plot", "chart", "graph", "matplotlib", "visualization", "figures4papers", "图表", "绘图", "可视化", "科研图"]
+  },
+  {
+    id: "ui-design",
+    label: "界面设计",
+    keywords: ["ui", "ux", "design", "frontend", "figma", "interface", "impeccable", "界面", "设计", "前端"]
+  },
+  {
+    id: "security-audit",
+    label: "安全审计",
+    keywords: ["security", "audit", "vibesec", "vulnerability", "review", "安全", "审计", "漏洞"]
+  },
+  {
+    id: "agent-tools",
+    label: "智能体工具",
+    keywords: ["agent", "claude", "codex", "gstack", "tool", "automation", "智能体", "工具", "自动化"]
+  },
+  {
+    id: "image-generation",
+    label: "图像生成",
+    keywords: ["image", "gpt-image", "generate-image", "diffusion", "图像", "图片", "生成"]
+  },
+  {
+    id: "knowledge-retrieval",
+    label: "知识检索",
+    keywords: ["retrieval", "search", "kb", "database", "lookup", "exa", "知识", "检索", "搜索"]
+  },
+  {
+    id: "presentations",
+    label: "汇报演示",
+    keywords: ["presentation", "slides", "ppt", "poster", "汇报", "演示", "幻灯", "PPT"]
+  },
+  {
+    id: "prompt-polishing",
+    label: "提示词润色",
+    keywords: ["prompt", "polish", "awesome-ai", "润色", "提示词", "改写"]
+  },
+  {
+    id: "data-analysis",
+    label: "数据分析",
+    keywords: ["data", "analysis", "single-cell", "rnaseq", "pandas", "统计", "分析", "数据"]
+  },
+  {
+    id: "development",
+    label: "工程开发",
+    keywords: ["code", "dev", "engineering", "react", "rust", "tauri", "工程", "开发", "代码"]
+  },
+  {
+    id: "general",
+    label: "通用",
+    keywords: ["general", "misc", "other", "通用", "其它", "其他"]
+  }
+];
+
+function parseTagInput(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(/[,\n，;；#]+/)
+        .map(tag => tag.trim())
+        .filter(Boolean)
+    )
+  ).slice(0, 12);
+}
+
+function tagInputValue(tags?: string[]): string {
+  return (tags ?? []).join(", ");
+}
 
 export function App() {
   const [active, setActive] = useState<NavKey>(() => initialNavKey());
@@ -74,7 +192,10 @@ export function App() {
   const [loadError, setLoadError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
   const [toast, setToast] = useState<string>("");
+  const [globalSearch, setGlobalSearch] = useState<string>("");
   const runtimeAvailable = hasTauriRuntime();
+  const realWritesEnabled = snapshot?.operatorConsent?.realWritesEnabled === true;
+  const skillCommandSearch = queryLooksLikeSkillCommand(globalSearch);
 
   const summary = useMemo(() => {
     return (
@@ -88,25 +209,50 @@ export function App() {
       }
     );
   }, [snapshot]);
+  const globalSearchResults = useMemo(() => {
+    const skills = (snapshot?.skills ?? [])
+      .filter(skill => skillMatchesSearch(skill, globalSearch))
+      .sort((left, right) => skillSearchScore(right, globalSearch) - skillSearchScore(left, globalSearch))
+      .slice(0, skillCommandSearch ? 12 : 8);
+    const sources = skillCommandSearch
+      ? []
+      : (snapshot?.sources ?? [])
+          .filter(source => sourceMatchesSearch(source, globalSearch))
+          .sort((left, right) => sourceSearchScore(right, globalSearch) - sourceSearchScore(left, globalSearch))
+          .slice(0, 8);
+    return { skills, sources };
+  }, [globalSearch, skillCommandSearch, snapshot]);
 
-  async function loadSnapshot(mode: "indexed" | "refresh" = "indexed") {
+  async function loadSnapshot(mode: "indexed" | "refresh" = "indexed"): Promise<LegacySnapshot | null> {
     setLoading(true);
     try {
       if (!hasTauriRuntime()) {
-        setSnapshot(createPreviewSnapshot());
+        const preview = createPreviewSnapshot();
+        setSnapshot(preview);
         setLoadError("");
-        return;
+        return preview;
       }
 
-      const command = mode === "refresh" ? "scan_legacy_snapshot" : "load_indexed_snapshot";
+      const shouldRunRealSync = mode === "refresh" && snapshot?.operatorConsent?.realWritesEnabled === true;
+      const command = shouldRunRealSync
+        ? "run_skillhub_sync"
+        : mode === "refresh"
+          ? "scan_legacy_snapshot"
+          : "load_indexed_snapshot";
       const result = await invoke<LegacySnapshot>(command);
       setSnapshot(result);
       setLoadError("");
       if (mode === "refresh") {
-        setToast("已刷新 v1 数据并重新读取 v2 索引。");
+        setToast(
+          shouldRunRealSync
+            ? "已执行 GitHub 更新、Skill 路由重建、AI 工具链接同步，并刷新 v2 索引。"
+            : "未开启真实写入授权：已刷新索引，但没有写入 Claude/Codex/Antigravity。"
+        );
       }
+      return result;
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -162,16 +308,20 @@ export function App() {
 
     setLoading(true);
     try {
-      const result = await invoke<LegacySnapshot>("set_skill_metadata", {
+      let result = await invoke<LegacySnapshot>("set_skill_metadata", {
         folderName: skill.folderName,
         name: draft.name,
         category: draft.category,
         description: draft.description,
         note: draft.note
       });
+      result = await invoke<LegacySnapshot>("set_skill_tags", {
+        folderName: skill.folderName,
+        tags: parseTagInput(draft.tags)
+      });
       setSnapshot(result);
       setLoadError("");
-      setToast("已永久保存到 v2 SQLite。");
+      setToast("Skill 名称、分类、备注和多标签已永久保存到 v2 SQLite。");
       return "saved";
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
@@ -216,7 +366,7 @@ export function App() {
 
     setLoading(true);
     try {
-      const result = await invoke<LegacySnapshot>("set_source_metadata", {
+      let result = await invoke<LegacySnapshot>("set_source_metadata", {
         sourceId: source.id,
         name: draft.name,
         sourceType: draft.sourceType,
@@ -224,9 +374,13 @@ export function App() {
         note: draft.note,
         enabled: draft.enabled
       });
+      result = await invoke<LegacySnapshot>("set_source_tags", {
+        sourceId: source.id,
+        tags: parseTagInput(draft.tags)
+      });
       setSnapshot(result);
       setLoadError("");
-      setToast("来源元数据已永久保存到 v2 SQLite。");
+      setToast("来源元数据和多标签已永久保存到 v2 SQLite。");
       return "saved";
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
@@ -291,6 +445,82 @@ export function App() {
     }
   }
 
+  async function updatePresetWorkspaceDistribution(presetId: string, workspaceId: string, enabled: boolean) {
+    setLoading(true);
+    try {
+      if (!hasTauriRuntime()) {
+        setSnapshot(previous =>
+          updatePreviewPresetDistribution(previous ?? createPreviewSnapshot(), presetId, workspaceId, enabled)
+        );
+        setLoadError("");
+        setToast(enabled ? "浏览器预览已启用该 Preset 分发。" : "浏览器预览已停用该 Preset 分发。");
+        return;
+      }
+
+      const result = await invoke<LegacySnapshot>("set_preset_workspace_enabled", {
+        presetId,
+        workspaceId,
+        enabled
+      });
+      setSnapshot(result);
+      setLoadError("");
+      setToast(enabled ? "Preset 已分发到工作区。" : "Preset 已从工作区停用。");
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setToast("Preset 分发状态更新失败，请查看顶部错误提示。");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runReleaseGateRunner(runnerId: string) {
+    setLoading(true);
+    try {
+      if (!hasTauriRuntime()) {
+        setSnapshot(previous => updatePreviewOperationRunner(previous ?? createPreviewSnapshot(), runnerId));
+        setLoadError("");
+        setToast("浏览器预览已模拟执行器状态；桌面版会写入 v2 SQLite 审计记录。");
+        return;
+      }
+
+      const result = await invoke<LegacySnapshot>("run_release_gate_runner", { runnerId });
+      setSnapshot(result);
+      setLoadError("");
+      setToast("发布闸门执行器已完成 dry-run 记录。");
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setToast("执行器运行失败，请查看顶部错误提示。");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateRealWriteAuthorization(enabled: boolean) {
+    setLoading(true);
+    try {
+      if (!hasTauriRuntime()) {
+        setSnapshot(previous => updatePreviewRealWriteAuthorization(previous ?? createPreviewSnapshot(), enabled));
+        setLoadError("");
+        setToast(enabled ? "浏览器预览已模拟开启真实写入授权。" : "浏览器预览已模拟关闭真实写入授权。");
+        return;
+      }
+
+      const result = await invoke<LegacySnapshot>("set_real_write_authorization", { enabled });
+      setSnapshot(result);
+      setLoadError("");
+      setToast(
+        enabled
+          ? "真实写入授权已开启；点击“同步 / 刷新”会运行 GitHub 更新和 AI 工具链接同步。"
+          : "真实写入授权已关闭；同步按钮只刷新索引，不会改 Claude/Codex/Antigravity。"
+      );
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setToast("真实写入授权更新失败，请查看顶部错误提示。");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function recordUsage(
     targetType: string,
     targetId: string,
@@ -328,7 +558,9 @@ export function App() {
       const result = await invoke<LegacySnapshot>("refresh_source_popularity");
       setSnapshot(result);
       setLoadError("");
-      setToast("GitHub 星标、分叉和来源热度缓存已刷新。");
+      const refreshed = result.sourcePopularity.filter(source => source.cacheStatus === "fresh").length;
+      const failed = result.sourcePopularity.filter(source => source.cacheStatus === "error").length;
+      setToast(`GitHub 热度已刷新：${refreshed} 个成功，${failed} 个失败。趋势需要至少两次刷新才会出现变化。`);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
       setToast("GitHub 热度刷新失败；已保留旧缓存。");
@@ -337,15 +569,76 @@ export function App() {
     }
   }
 
-  async function previewSourceImportCandidate(importKind: string, input: string): Promise<SourceImportPlanCard> {
+  async function previewSourceImportCandidate(
+    importKind: string,
+    input: string,
+    options: ImportFeedbackOptions = {}
+  ): Promise<SourceImportPlanCard> {
     if (!hasTauriRuntime()) {
       const preview = createPreviewSourceImportPlan(importKind, input, snapshot?.sources ?? []);
-      setToast(preview.safeToContinue ? "已生成浏览器导入 dry-run 预览。" : "已生成浏览器预览；存在需要处理的风险。");
+      if (!options.quiet) {
+        setToast(preview.safeToContinue ? "已生成浏览器导入 dry-run 预览。" : "已生成浏览器预览；存在需要处理的风险。");
+      }
       return preview;
     }
 
     const result = await invoke<SourceImportPlanCard>("preview_source_import_candidate", { importKind, input });
-    setToast(result.safeToContinue ? "导入 dry-run 已生成，未写入任何目录。" : "导入 dry-run 已生成，但当前计划不能继续。");
+    if (!options.quiet) {
+      setToast(result.safeToContinue ? "导入 dry-run 已生成，未写入任何目录。" : "导入 dry-run 已生成，但当前计划不能继续。");
+    }
+    return result;
+  }
+
+  async function stageSourceImportCandidate(
+    importKind: string,
+    input: string,
+    options: ImportFeedbackOptions = {}
+  ): Promise<SourceImportExecutionCard> {
+    if (!hasTauriRuntime()) {
+      const execution = createPreviewSourceImportExecution(importKind, input);
+      if (!options.quiet) {
+        setToast("浏览器预览已模拟 staging；桌面版才会写入隔离 staging 目录。");
+      }
+      return execution;
+    }
+
+    const result = await invoke<SourceImportExecutionCard>("stage_source_import_candidate", { importKind, input });
+    if (!options.quiet) {
+      setToast(
+        result.status === "staged"
+          ? "来源已写入隔离 staging，正式安装仍未开放。"
+          : "staging 执行完成；请查看阻断项和报告。"
+      );
+    }
+    return result;
+  }
+
+  async function promoteStagedSourceImport(
+    importKind: string,
+    stagedPath: string,
+    sourceName: string,
+    options: ImportFeedbackOptions = {}
+  ): Promise<SourceImportPromotionCard> {
+    if (!hasTauriRuntime()) {
+      const promotion = createPreviewSourceImportPromotion(importKind, stagedPath, sourceName);
+      if (!options.quiet) {
+        setToast("浏览器预览已模拟提升；桌面版才会写入 app/github_sources。");
+      }
+      return promotion;
+    }
+
+    const result = await invoke<SourceImportPromotionCard>("promote_staged_source_import", {
+      importKind,
+      stagedPath,
+      sourceName
+    });
+    if (!options.quiet) {
+      setToast(
+        result.status === "promoted"
+          ? "来源已提升为受管理来源；AI 工具同步仍保持锁定。"
+          : "提升被阻止，请查看结果卡片。"
+      );
+    }
     return result;
   }
 
@@ -409,9 +702,13 @@ export function App() {
             <span className="nav-icon" aria-hidden="true"><Icon name="settings" /></span>
             <strong>Settings</strong>
           </button>
-          <button className="nav-item" onClick={() => setActive("release")} type="button">
-            <span className="nav-icon" aria-hidden="true"><Icon name="help" /></span>
-            <strong>Help</strong>
+          <button
+            className={active === "release" || active === "snapshots" ? "nav-item active" : "nav-item"}
+            onClick={() => setActive("release")}
+            type="button"
+          >
+            <span className="nav-icon" aria-hidden="true"><Icon name="release" /></span>
+            <strong>高级安全</strong>
           </button>
         </div>
       </aside>
@@ -420,7 +717,20 @@ export function App() {
         <header className="topbar">
           <div className="command-search">
             <span className="search-icon" aria-hidden="true"><Icon name="search" /></span>
-            <input aria-label="Search commands, skills, or sources" placeholder="Search commands, skills, or sources..." />
+            <input
+              aria-label="Search sources and skills"
+              onChange={event => setGlobalSearch(event.target.value)}
+              onKeyDown={event => {
+                if (event.key !== "Enter" || !globalSearch.trim()) return;
+                setActive(
+                  queryLooksLikeSkillCommand(globalSearch) || globalSearchResults.skills.length > globalSearchResults.sources.length
+                    ? "library"
+                    : "sources"
+                );
+              }}
+              placeholder="搜索来源和 Skills；例如 /nature 或 research-writing"
+              value={globalSearch}
+            />
             <kbd>⌘</kbd>
             <kbd>K</kbd>
           </div>
@@ -434,16 +744,18 @@ export function App() {
               <Icon name="bell" />
             </button>
             <button
-              className="icon-button theme-toggle-button"
-              aria-label={theme === "dark" ? "切换到亮色主题" : "切换到暗色主题"}
+              className="theme-mode-button"
+              aria-label={theme === "dark" ? "当前暗色主题，点击切换到亮色主题" : "当前亮色主题，点击切换到暗色主题"}
               onClick={() => {
                 const nextTheme = theme === "dark" ? "light" : "dark";
                 setTheme(nextTheme);
                 showUiToast(nextTheme === "dark" ? "已切换到暗色 Linear 主题。" : "已切换到亮色 Parchment 主题。");
               }}
+              title={theme === "dark" ? "当前暗色主题，点击切换到亮色主题" : "当前亮色主题，点击切换到暗色主题"}
               type="button"
             >
-              <Icon name={theme === "dark" ? "sun" : "moon"} />
+              <Icon name={theme === "dark" ? "moon" : "sun"} />
+              <span>主题：{theme === "dark" ? "暗色" : "亮色"}</span>
             </button>
             <span className="topbar-divider" />
             <img alt="AI SkillHub" className="topbar-avatar" src="/ai-skillhub-logo.png" />
@@ -453,10 +765,22 @@ export function App() {
               onClick={() => void loadSnapshot("refresh")}
               type="button"
             >
-              {runtimeAvailable ? (loading ? "正在刷新" : "刷新 v1 并入库") : loading ? "正在载入" : "重载预览"}
+              {runtimeAvailable
+                ? loading
+                  ? "正在同步"
+                  : realWritesEnabled
+                    ? "同步并刷新"
+                    : "刷新索引"
+                : loading
+                  ? "正在载入"
+                  : "重载预览"}
             </button>
             <div className={runtimeAvailable ? "status-pill" : "status-pill preview"}>
-              {runtimeAvailable ? "SQLite 优先 · 手动刷新才扫描 v1" : "浏览器预览 · 桌面窗口读取真实数据"}
+              {runtimeAvailable
+                ? realWritesEnabled
+                  ? "已授权 · 可同步 AI 工具"
+                  : "未授权 · 只刷新索引"
+                : "浏览器预览 · 桌面窗口读取真实数据"}
             </div>
           </div>
         </header>
@@ -473,6 +797,18 @@ export function App() {
             <h3>读取 v1 数据失败</h3>
             <p>{loadError}</p>
           </section>
+        )}
+
+        {globalSearch.trim() && (
+          <GlobalSearchResults
+            onClear={() => setGlobalSearch("")}
+            onOpenLibrary={() => setActive("library")}
+            onOpenSources={() => setActive("sources")}
+            onCopySkill={skill => void copySkillPrompt(skill, recordUsage)}
+            query={globalSearch}
+            skills={globalSearchResults.skills}
+            sources={globalSearchResults.sources}
+          />
         )}
 
         {active === "dashboard" && (
@@ -494,30 +830,133 @@ export function App() {
             onSetSkillEnabled={updateSkillEnabled}
             onSaveMetadata={updateSkillMetadata}
             onSync={() => void loadSnapshot("refresh")}
+            searchQuery={globalSearch}
             snapshot={snapshot}
           />
         )}
         {active === "workspaces" && <Workspaces disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
-        {active === "presets" && <Presets disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
+        {active === "presets" && (
+          <Presets
+            disabled={loading}
+            onToggle={updateEnabled}
+            onToggleDistribution={updatePresetWorkspaceDistribution}
+            snapshot={snapshot}
+          />
+        )}
         {active === "sources" && (
           <Sources
             loading={loading}
             onBulkSaveMetadata={updateSourcesBulkMetadata}
             onRecordUsage={recordUsage}
             onPreviewImport={previewSourceImportCandidate}
+            onStageImport={stageSourceImportCandidate}
+            onPromoteImport={promoteStagedSourceImport}
+            onRefreshIndex={() => loadSnapshot("refresh")}
+            onRealWriteAuthorization={updateRealWriteAuthorization}
             onSaveMetadata={updateSourceMetadata}
             snapshot={snapshot}
+            searchQuery={globalSearch}
           />
         )}
         {active === "agents" && <Agents disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
         {active === "snapshots" && <Snapshots snapshot={snapshot} />}
-        {active === "release" && <ReleaseGate snapshot={snapshot} />}
-        {active === "settings" && <Settings disabled={loading} onQaStatus={updateDesktopQaStatus} snapshot={snapshot} />}
+        {active === "release" && (
+          <ReleaseGate
+            disabled={loading}
+            onRealWriteAuthorization={updateRealWriteAuthorization}
+            onRunRunner={runReleaseGateRunner}
+            snapshot={snapshot}
+          />
+        )}
+        {active === "settings" && (
+          <Settings
+            disabled={loading}
+            onOpenRelease={() => setActive("release")}
+            onOpenSnapshots={() => setActive("snapshots")}
+            onQaStatus={updateDesktopQaStatus}
+            snapshot={snapshot}
+          />
+        )}
         <div className={toast ? "toast is-visible" : "toast"} role="status">
           {toast}
         </div>
       </section>
     </main>
+  );
+}
+
+function GlobalSearchResults({
+  onClear,
+  onCopySkill,
+  onOpenLibrary,
+  onOpenSources,
+  query,
+  skills,
+  sources
+}: {
+  onClear: () => void;
+  onCopySkill: (skill: SkillCard) => void;
+  onOpenLibrary: () => void;
+  onOpenSources: () => void;
+  query: string;
+  skills: SkillCard[];
+  sources: SourceCard[];
+}) {
+  const skillCommand = queryLooksLikeSkillCommand(query);
+
+  return (
+    <section className="global-search-results" role="search">
+      <div className="global-search-head">
+        <div>
+          <strong>正在搜索：{query.trim()}</strong>
+          <span>
+            {skillCommand
+              ? "已按 Skill 调用名搜索。点击复制后，可直接把调用提示粘贴给 Codex / Claude。"
+              : "默认同时筛选 Sources 和 Skill Library。按 Enter 会跳到匹配更多的一页。"}
+          </span>
+        </div>
+        <button className="ghost-action compact" onClick={onClear} type="button">清空</button>
+      </div>
+      <div className="global-search-columns">
+        {!skillCommand && (
+        <div>
+          <button className="search-column-title" onClick={onOpenSources} type="button">
+            Sources <span>{sources.length}</span>
+          </button>
+          {sources.length === 0 ? (
+            <small className="search-empty">来源库没有匹配项。</small>
+          ) : (
+            sources.map(source => (
+              <button className="search-result-item" key={source.id} onClick={onOpenSources} type="button">
+                <strong>{source.name}</strong>
+                <span>{categoryDisplayName(source.categoryId)} · {sourceTypeLabel(source.sourceType)}</span>
+              </button>
+            ))
+          )}
+        </div>
+        )}
+        <div>
+          <button className="search-column-title" onClick={onOpenLibrary} type="button">
+            Skill Library <span>{skills.length}</span>
+          </button>
+          {skills.length === 0 ? (
+            <small className="search-empty">技能库没有匹配项。</small>
+          ) : (
+            skills.map(skill => (
+              <div className="search-result-item search-result-skill" key={skill.folderName}>
+                <button className="search-result-main" onClick={onOpenLibrary} type="button">
+                  <strong>/{skill.name}</strong>
+                  <span>{categoryDisplayName(skill.category)} · {skill.source || "local"} · {skill.folderName}</span>
+                </button>
+                <button className="search-result-copy" onClick={() => onCopySkill(skill)} type="button">
+                  复制调用
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -654,9 +1093,9 @@ function Dashboard({
     },
     {
       icon: "info" as const,
-      title: "Desktop Alpha Notice",
-      body: "This is the v2 Alpha shell. Real sync remains locked behind dry-run gates.",
-      action: "View Notes"
+      title: "V2 Daily Driver Mode",
+      body: "V2 now manages sources, metadata, staging, QA, and calls the proven sync engine when real-write authorization is enabled.",
+      action: "Open Sources"
     }
   ];
 
@@ -669,10 +1108,10 @@ function Dashboard({
         </div>
         <div className="hero-actions">
           <button className="secondary-action" disabled={loading} onClick={onSync} type="button">
-            <Icon name="refresh" /> {loading ? "Syncing" : "Sync All"}
+            <Icon name="refresh" /> {loading ? "正在同步" : "同步 / 刷新"}
           </button>
           <button className="primary-action" onClick={onOpenSources} type="button">
-            <Icon name="add" /> New Deployment
+            <Icon name="add" /> 添加来源
           </button>
         </div>
       </section>
@@ -742,7 +1181,7 @@ function ActivityTimeline({ snapshot }: { snapshot: LegacySnapshot | null }) {
         <span>{events.length} logs</span>
       </header>
       <div>
-        {events.slice(0, 6).map(event => (
+        {events.slice(0, 4).map(event => (
           <article key={event.id}>
             <i />
             <div>
@@ -759,7 +1198,38 @@ function ActivityTimeline({ snapshot }: { snapshot: LegacySnapshot | null }) {
 }
 
 type UsageRange = "all" | "7d" | "30d";
-type UsageViewMode = "heatmap" | "bars";
+type UsageViewMode = "heatmap" | "bars" | "trends";
+type UsageHeatMetricKey = "usage" | "sevenDay" | "thirtyDay" | "stars" | "forks" | "skills";
+
+const usageHeatMetrics: Array<{ key: UsageHeatMetricKey; label: string }> = [
+  { key: "usage", label: "调用" },
+  { key: "sevenDay", label: "7 天" },
+  { key: "thirtyDay", label: "30 天" },
+  { key: "stars", label: "星标" },
+  { key: "forks", label: "分叉" },
+  { key: "skills", label: "Skills" }
+];
+
+function sourcePopularityDisplayName(source: Pick<SourcePopularityCard, "owner" | "repo" | "sourceName">) {
+  const repoName = [source.owner, source.repo].filter(Boolean).join("/");
+  const sourceName = source.sourceName?.trim();
+  if (!sourceName) return repoName || source.repo || "unknown-source";
+  if (repoName && (sourceName === source.repo || sourceName.toLowerCase() === "skills")) {
+    return repoName;
+  }
+  return sourceName;
+}
+
+function heatLevel(value: number, max: number) {
+  if (value <= 0 || max <= 0) return 0;
+  const ratio = value / max;
+  if (ratio >= 0.86) return 6;
+  if (ratio >= 0.68) return 5;
+  if (ratio >= 0.5) return 4;
+  if (ratio >= 0.32) return 3;
+  if (ratio >= 0.16) return 2;
+  return 1;
+}
 
 function UsageInsightPanel({
   loading,
@@ -825,12 +1295,12 @@ function UsageInsightPanel({
       .map(source => ({
         cacheStatus: source.cacheStatus,
         forks: source.forks,
-        name: source.sourceName || source.repo,
+        name: sourcePopularityDisplayName(source),
         score: sourceScore(source),
         stars: source.stars
       }))
       .filter(source => source.score > 0 || source.stars > 0)
-      .sort((a, b) => b.score - a.score || b.stars - a.stars);
+      .sort((a, b) => b.stars - a.stars || b.score - a.score);
 
     if (popularityStats.length > 0) {
       return popularityStats;
@@ -857,37 +1327,102 @@ function UsageInsightPanel({
       .sort((a, b) => b.score - a.score);
   }, [range, rangeFactor, sourcePopularity, sources, usageStats]);
 
-  const heatCells = useMemo(() => {
-    const activeScores = usageStats
-      .map(stat => statScore(stat))
-      .filter(score => score > 0);
-    if (activeScores.length > 0) {
-      const maxScore = Math.max(...activeScores, 1);
-      return Array.from({ length: 35 }, (_, index) => {
-        const score = activeScores[index % activeScores.length] ?? 0;
-        const ratio = score / maxScore;
-        const level = ratio > 0.8 ? 4 : ratio > 0.55 ? 3 : ratio > 0.3 ? 2 : ratio > 0 ? 1 : 0;
-        return { id: index, level };
+  const heatRows = useMemo(() => {
+    const rows: Array<{
+      id: string;
+      label: string;
+      type: string;
+      metrics: Record<UsageHeatMetricKey, number>;
+    }> = [];
+    const seen = new Set<string>();
+
+    sourcePopularity.forEach(source => {
+      const matchedSource = sources.find(
+        item =>
+          item.id === source.sourceId ||
+          item.name === source.sourceName ||
+          (!!source.url && item.url === source.url)
+      );
+      const id = source.sourceId || matchedSource?.id || `${source.owner}/${source.repo}`;
+      seen.add(id);
+      if (matchedSource) seen.add(matchedSource.id);
+      rows.push({
+        id,
+        label: sourcePopularityDisplayName(source),
+        type: matchedSource?.sourceType || "GitHub",
+        metrics: {
+          forks: source.forks,
+          sevenDay: source.localSevenDayCount,
+          skills: matchedSource?.skillCount ?? 0,
+          stars: source.stars,
+          thirtyDay: source.localThirtyDayCount,
+          usage: sourceScore(source)
+        }
       });
+    });
+
+    sources.forEach(source => {
+      if (seen.has(source.id) || rows.some(row => row.label === source.name)) return;
+      const usage = usageStats.find(stat => stat.targetType === "source" && (stat.targetId === source.id || stat.targetName === source.name));
+      rows.push({
+        id: source.id,
+        label: source.name,
+        type: source.sourceType,
+        metrics: {
+          forks: 0,
+          sevenDay: usage?.sevenDayCount ?? 0,
+          skills: source.skillCount,
+          stars: 0,
+          thirtyDay: usage?.thirtyDayCount ?? 0,
+          usage: usage ? statScore(usage) : Math.max(0, source.skillCount)
+        }
+      });
+    });
+
+    if (rows.length === 0) {
+      const seed = skills.length + (snapshot?.summary.warnings ?? 0) * 5;
+      return Array.from({ length: 8 }, (_, index) => ({
+        id: `fallback-${index}`,
+        label: `来源 ${index + 1}`,
+        type: "preview",
+        metrics: {
+          forks: 0,
+          sevenDay: (seed + index * 2) % 8,
+          skills: (seed + index * 5) % 14,
+          stars: (seed + index * 13) % 90,
+          thirtyDay: (seed + index * 3) % 18,
+          usage: (seed + index * 7) % 30
+        }
+      }));
     }
 
-    const seed = skills.length + sources.length * 3 + (snapshot?.summary.warnings ?? 0) * 5;
-    return Array.from({ length: 35 }, (_, index) => {
-      const raw = (seed + index * 7 + (index % 5) * 11) % 100;
-      const level = raw > 78 ? 4 : raw > 56 ? 3 : raw > 34 ? 2 : raw > 14 ? 1 : 0;
-      return { id: index, level };
-    });
-  }, [range, skills.length, snapshot?.summary.warnings, sources.length, usageStats]);
+    return rows.sort((a, b) => b.metrics.usage - a.metrics.usage || b.metrics.stars - a.metrics.stars || a.label.localeCompare(b.label));
+  }, [range, skills.length, snapshot?.summary.warnings, sourcePopularity, sources, usageStats]);
+
+  const heatMaxByMetric = useMemo(
+    () =>
+      usageHeatMetrics.reduce<Record<UsageHeatMetricKey, number>>((acc, metric) => {
+        acc[metric.key] = Math.max(...heatRows.map(row => row.metrics[metric.key]), 1);
+        return acc;
+      }, { forks: 1, sevenDay: 1, skills: 1, stars: 1, thirtyDay: 1, usage: 1 }),
+    [heatRows]
+  );
 
   const barRows = useMemo(() => {
     const rows = [
-      ...rankedSkills.slice(0, 4).map(skill => ({ label: skill.name, score: skill.score, type: "Skill" })),
-      ...rankedSources.slice(0, 4).map(source => ({ label: source.name, score: source.score || source.stars, type: "Source" }))
-    ]
-      .filter(row => row.score > 0)
-      .slice(0, 8);
+      ...rankedSources.map(source => ({ label: source.name, score: source.stars || source.score, type: "Source" })),
+      ...rankedSkills.slice(0, 12).map(skill => ({ label: skill.name, score: skill.score, type: "Skill" }))
+    ].filter(row => row.score > 0);
     const max = Math.max(...rows.map(row => row.score), 1);
-    return rows.map(row => ({ ...row, width: Math.max(6, Math.round((row.score / max) * 100)) }));
+    return rows
+      .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
+      .slice(0, 12)
+      .map(row => ({
+        ...row,
+        level: heatLevel(row.score, max),
+        scoreLabel: formatCompactNumber(row.score),
+        width: Math.max(6, Math.round((row.score / max) * 100))
+      }));
   }, [rankedSkills, rankedSources]);
 
   const githubLeaders = sourcePopularity
@@ -902,6 +1437,41 @@ function UsageInsightPanel({
     .slice(0, 3)
     .map(skill => ({ name: skill.name, score: 0 }));
   const fallbackLowUseSkills = rankedSkills.slice(-3).reverse();
+
+  const trendRows = useMemo(() => {
+    const rows =
+      sourcePopularity.length > 0
+        ? sourcePopularity.map(source => {
+            const points = source.trendPoints?.length > 0 ? source.trendPoints : [];
+            const first = points[0]?.stars ?? 0;
+            const last = points[points.length - 1]?.stars ?? source.stars;
+            return {
+              createdAt: source.createdAt,
+              forks: source.forks,
+              id: source.sourceId,
+              name: sourcePopularityDisplayName(source),
+              points,
+              sampleCount: points.length,
+              stars: source.stars,
+              trendDelta: points.length >= 2 ? last - first : 0,
+              usage: sourceScore(source)
+            };
+          })
+        : sources.map(source => ({
+            createdAt: "",
+            forks: 0,
+            id: source.id,
+            name: source.name,
+            points: [],
+            sampleCount: 0,
+            stars: 0,
+            trendDelta: 0,
+            usage: Math.max(0, source.skillCount)
+          }));
+
+    return rows
+      .sort((a, b) => b.stars - a.stars || b.usage - a.usage || a.name.localeCompare(b.name));
+  }, [range, sourcePopularity, sources]);
 
   return (
     <section className="usage-insight" aria-label="Usage insight panel">
@@ -925,7 +1495,8 @@ function UsageInsightPanel({
           <div className="usage-range-toggle" aria-label="Usage chart mode">
             {([
               ["heatmap", "热力图"],
-              ["bars", "柱状图"]
+              ["bars", "柱状图"],
+              ["trends", "趋势"]
             ] as Array<[UsageViewMode, string]>).map(([key, label]) => (
               <button className={viewMode === key ? "active" : ""} key={key} onClick={() => setViewMode(key)} type="button">
                 {label}
@@ -940,27 +1511,81 @@ function UsageInsightPanel({
 
       <div className="usage-body">
         {viewMode === "heatmap" ? (
-          <div className="usage-heatmap" aria-label="Skill usage heatmap">
-            {heatCells.map(cell => (
-              <span className={`heat-cell heat-${cell.level}`} key={cell.id} />
-            ))}
+          <div className="usage-heatmap source-heatmap" aria-label="Source metric heatmap">
+            <div className="heatmap-grid" style={{ "--heat-columns": usageHeatMetrics.length } as CSSProperties}>
+              <span className="heatmap-corner">来源 / 指标</span>
+              {usageHeatMetrics.map(metric => (
+                <span className="heatmap-column" key={metric.key}>
+                  {metric.label}
+                </span>
+              ))}
+              {heatRows.map(row => (
+                <Fragment key={row.id}>
+                  <span className="heatmap-row-label" title={row.label}>
+                    <strong>{row.label}</strong>
+                    <em>{row.type}</em>
+                  </span>
+                  {usageHeatMetrics.map(metric => {
+                    const value = row.metrics[metric.key];
+                    const level = heatLevel(value, heatMaxByMetric[metric.key]);
+                    return (
+                      <span
+                        aria-label={`${row.label} ${metric.label}: ${value}`}
+                        className={`heat-tile heat-level-${level}`}
+                        key={`${row.id}-${metric.key}`}
+                        title={`${row.label} · ${metric.label}: ${value}`}
+                      >
+                        {metric.key === "stars" || metric.key === "forks" ? formatCompactNumber(value) : value}
+                      </span>
+                    );
+                  })}
+                </Fragment>
+              ))}
+            </div>
+            <div className="heatmap-legend" aria-label="Heatmap color legend">
+              <span>低</span>
+              {[0, 1, 2, 3, 4, 5, 6].map(level => (
+                <i className={`heat-level-${level}`} key={level} />
+              ))}
+              <span>高</span>
+            </div>
           </div>
-        ) : (
+        ) : viewMode === "bars" ? (
           <div className="usage-bars" aria-label="Skill usage bar chart">
             {barRows.map(row => (
               <div className="usage-bar-row" key={`${row.type}-${row.label}`}>
                 <span>{row.label}</span>
-                <i><b style={{ width: `${row.width}%` }} /></i>
-                <em>{row.score}</em>
+                <i><b className={`bar-level-${row.level}`} style={{ width: `${row.width}%` }} /></i>
+                <em>{row.scoreLabel}</em>
               </div>
             ))}
             {barRows.length === 0 && <p>暂无真实使用事件。</p>}
+          </div>
+        ) : (
+          <div className="usage-trends" aria-label="GitHub source popularity trends">
+            {trendRows.map(row => (
+              <article className="trend-row" key={row.id}>
+                <div>
+                  <strong>{row.name}</strong>
+                  <span>
+                    ★ {formatCompactNumber(row.stars)} · Fork {formatCompactNumber(row.forks)} · 调用 {row.usage} · 采样 {row.sampleCount}
+                  </span>
+                </div>
+                <MiniTrendLine points={row.points.map(point => point.stars)} />
+                <em className={row.trendDelta >= 0 ? "trend-up" : "trend-down"}>
+                  {row.sampleCount >= 2
+                    ? `${row.trendDelta >= 0 ? "+" : "-"}${formatCompactNumber(Math.abs(row.trendDelta))}`
+                    : "待二次刷新"}
+                </em>
+              </article>
+            ))}
+            {trendRows.length === 0 && <p>暂无 GitHub 来源；刷新来源热度后会记录历史点。</p>}
           </div>
         )}
         <div className="usage-lists">
           <article>
             <span>常用 Skill</span>
-            {rankedSkills.slice(0, 3).map(skill => (
+            {rankedSkills.slice(0, 5).map(skill => (
               <p key={skill.name}>
                 <strong>{skill.name}</strong>
                 <em>{skill.score}</em>
@@ -969,10 +1594,10 @@ function UsageInsightPanel({
           </article>
           <article>
             <span>热门来源</span>
-            {rankedSources.slice(0, 2).map(source => (
+            {rankedSources.slice(0, 5).map(source => (
               <p key={source.name}>
                 <strong>{source.name}</strong>
-                <em>{source.score || formatCompactNumber(source.stars)}</em>
+                <em>{source.stars > 0 ? `★ ${formatCompactNumber(source.stars)}` : `调用 ${source.score}`}</em>
               </p>
             ))}
           </article>
@@ -981,7 +1606,7 @@ function UsageInsightPanel({
             {githubLeaders.length > 0 ? (
               githubLeaders.map(source => (
                 <p key={source.sourceId}>
-                  <strong>{source.sourceName || source.repo}</strong>
+                  <strong>{sourcePopularityDisplayName(source)}</strong>
                   <em>★ {formatCompactNumber(source.stars)}</em>
                 </p>
               ))
@@ -1005,12 +1630,34 @@ function UsageInsightPanel({
       </div>
       <small>
         {sourcePopularity.some(source => source.fetchedAt)
-          ? "GitHub 星标来自手动刷新缓存；调用频度来自 v2 本地使用事件。"
+          ? "GitHub 星标来自手动刷新缓存；趋势从 AI SkillHub 开始同步后精确记录，创建日前的完整历史无法由 GitHub 仓库接口直接还原。"
           : usageStats.length > 0
             ? "当前统计来自 v2 本地事件记录；GitHub 热度可手动刷新缓存。"
             : "还没有真实使用事件，当前展示为索引健康度推算。"}
       </small>
     </section>
+  );
+}
+
+function MiniTrendLine({ points }: { points: number[] }) {
+  const safePoints = points.length > 1 ? points : [0, points[0] ?? 0];
+  const max = Math.max(...safePoints, 1);
+  const min = Math.min(...safePoints, 0);
+  const span = Math.max(max - min, 1);
+  const width = 112;
+  const height = 34;
+  const path = safePoints
+    .map((point, index) => {
+      const x = safePoints.length === 1 ? width : (index / (safePoints.length - 1)) * width;
+      const y = height - ((point - min) / span) * (height - 6) - 3;
+      return `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+
+  return (
+    <svg className="mini-trend-line" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="source popularity trend">
+      <path d={path} />
+    </svg>
   );
 }
 
@@ -1021,6 +1668,7 @@ function Library({
   onSetSkillEnabled,
   onSaveMetadata,
   onSync,
+  searchQuery,
   snapshot
 }: {
   loading: boolean;
@@ -1035,6 +1683,7 @@ function Library({
   onSetSkillEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
   onSaveMetadata: (skill: SkillCard, draft: SkillDraft) => Promise<"failed" | "preview" | "saved">;
   onSync: () => void;
+  searchQuery: string;
   snapshot: LegacySnapshot | null;
 }) {
   const skills = snapshot?.skills ?? [];
@@ -1045,11 +1694,16 @@ function Library({
   const [editingSkillId, setEditingSkillId] = useState<string>("");
   const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
   const displaySkills = skills.map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]));
-  const categories = Array.from(new Set(displaySkills.map(skill => skill.category).filter(Boolean))).slice(0, 6);
+  const searchActive = searchQuery.trim().length > 0;
+  const collectionGroups = useMemo(() => deriveSkillCollectionGroups(displaySkills), [displaySkills]);
+  const categories = CATEGORY_OPTIONS.filter(option =>
+    displaySkills.some(skill => categoryMatchesFilter(skill.category, option.id))
+  ).slice(0, 10);
   const filteredSkills = displaySkills.filter(skill => {
-    const categoryMatches = categoryFilter === "all" || skill.category === categoryFilter;
-    const healthMatches = healthFilter === "all" || skill.health === healthFilter;
-    return categoryMatches && healthMatches;
+    const categoryMatches = searchActive || categoryFilter === "all" || categoryMatchesFilter(skill.category, categoryFilter);
+    const healthMatches = searchActive || healthFilter === "all" || skill.health === healthFilter;
+    const searchMatches = skillMatchesSearch(skill, searchQuery);
+    return categoryMatches && healthMatches && searchMatches;
   });
   const editingSkill = displaySkills.find(skill => skill.folderName === editingSkillId);
   const healthCounts = {
@@ -1099,10 +1753,10 @@ function Library({
         </div>
         <div className="library-actions">
           <button className="secondary-action library-action" disabled={loading} onClick={onSync} type="button">
-            <Icon name="refresh" /> {loading ? "Syncing" : "Sync Sources"}
+            <Icon name="refresh" /> {loading ? "正在同步" : "同步来源"}
           </button>
           <button className="primary-action library-action" onClick={onOpenSources} type="button">
-            <Icon name="add" /> New Skill
+            <Icon name="add" /> 添加 Skill
           </button>
         </div>
       </section>
@@ -1118,12 +1772,12 @@ function Library({
           </button>
           {categories.map(category => (
             <button
-              className={categoryFilter === category ? "filter-chip active" : "filter-chip"}
-              key={category}
-              onClick={() => setCategoryFilter(category)}
+              className={categoryFilter === category.id ? "filter-chip active" : "filter-chip"}
+              key={category.id}
+              onClick={() => setCategoryFilter(category.id)}
               type="button"
             >
-              {category}
+              {category.label}
             </button>
           ))}
           <span className="filter-divider" />
@@ -1170,14 +1824,67 @@ function Library({
         </div>
       </section>
 
+      {searchActive && (
+        <section className="search-scope-note">
+          <strong>正在全库搜索 Skill</strong>
+          <span>已临时忽略分类和健康筛选，找到 {filteredSkills.length} 个匹配项。可直接搜索 `/nature`、`/research-writing-skill` 或子 Skill 名。</span>
+        </section>
+      )}
+
+      {collectionGroups.length > 0 && (
+        <section className="skill-collection-panel glass-panel">
+          <div className="collection-panel-copy">
+            <span className="eyebrow">Skill Collections</span>
+            <h3>母 Skill 负责选择路线，子 Skill 负责执行任务</h3>
+            <p>
+              不确定该用哪个时，先调用集合入口；已经知道具体任务时，直接调用子 Skill。
+            </p>
+          </div>
+          <div className="collection-grid">
+            {collectionGroups.slice(0, 6).map(group => (
+              <article className="collection-card" key={group.name}>
+                <div>
+                  <strong>{group.name}</strong>
+                  <span>{group.children.length} 个子 Skill</span>
+                </div>
+                <p>{group.childPreview.join(" / ")}</p>
+                <button
+                  className="secondary-action compact"
+                  onClick={() => {
+                    const targetSkill = group.parent ?? group.children[0];
+                    if (targetSkill) {
+                      void copySkillPrompt(targetSkill, onRecordUsage);
+                    }
+                  }}
+                  type="button"
+                >
+                  <Icon name={group.parent ? "library" : "sparkle"} />
+                  {group.parent ? "复制母入口调用" : "复制推荐子 Skill"}
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className={viewMode === "grid" ? "skill-library-grid" : "skill-library-grid list-mode"}>
-        {filteredSkills.map(skill => (
-          <article className={`skill-library-card glow-card ${skill.health}`} key={skill.folderName}>
+        {filteredSkills.map(skill => {
+          const isRouter = isRouterHubSkill(skill);
+          return (
+          <article className={`skill-library-card glow-card ${skill.health}${isRouter ? " is-router" : ""}`} key={skill.folderName}>
             <div className="skill-card-top">
               <div className={`skill-card-icon ${categoryTone(skill.category)}`}>
                 <Icon name={skillIcon(skill.category)} />
               </div>
               <div className="skill-card-status">
+                <span
+                  className={`kind-chip ${isRouter ? "router" : "child"}`}
+                  title={isRouter
+                    ? "母 Skill：负责为集合选择路线，不确定时调用它"
+                    : "子 Skill：完成具体任务"}
+                >
+                  {isRouter ? "母 Skill" : "子 Skill"}
+                </span>
                 <span className={`status-badge ${skill.health}`}>
                   <span className={`status-dot ${statusDotClass(skill.health)}`} />
                   {skillStatusLabel(skill.health)}
@@ -1220,10 +1927,13 @@ function Library({
               </div>
             </div>
             <h3>{skill.name}</h3>
-            <p>{skill.description || "No description provided yet."}</p>
+            <p>{cleanSkillDescription(skill.description) || "No description provided yet."}</p>
             <div className="skill-tags">
-              <span>{skill.category || "Uncategorized"}</span>
+              <span>{categoryDisplayName(skill.category) || "Uncategorized"}</span>
               {skill.enabled ? <span>Enabled</span> : <span>Disabled</span>}
+              {(skill.tags ?? []).slice(0, 4).map(tag => (
+                <span className={`tag-chip ${categoryTone(tag)}`} key={tag}>{tag}</span>
+              ))}
             </div>
             {skill.note && <div className="skill-note">备注：{skill.note}</div>}
             <footer>
@@ -1241,7 +1951,8 @@ function Library({
               </button>
             </footer>
           </article>
-        ))}
+          );
+        })}
         {filteredSkills.length === 0 && (
           <div className="empty-state library-empty">
             {skills.length === 0 ? "正在等待 v1 Skill 扫描结果。" : "当前筛选条件下没有 Skill。"}
@@ -1261,6 +1972,75 @@ function Library({
   );
 }
 
+function deriveSkillCollectionGroups(skills: SkillCard[]): SkillCollectionGroup[] {
+  const bySource = new Map<string, SkillCard[]>();
+
+  for (const skill of skills) {
+    const source = skill.source.trim();
+    if (!source || source === "local" || source === "AI-SkillHub-local-routers") {
+      continue;
+    }
+    bySource.set(source, [...(bySource.get(source) ?? []), skill]);
+  }
+
+  return Array.from(bySource.entries())
+    .map(([source, sourceSkills]) => {
+      const sourceKey = normalizeLookup(source);
+      const parent = skills.find(skill => {
+        const folderKey = normalizeLookup(skill.folderName);
+        const nameKey = normalizeLookup(skill.name);
+        return folderKey === sourceKey || nameKey === sourceKey;
+      });
+      const children = sourceSkills
+        .filter(skill => skill.folderName !== parent?.folderName)
+        .sort((left, right) => left.name.localeCompare(right.name));
+
+      return {
+        children,
+        childPreview: children.slice(0, 4).map(skill => skill.name),
+        name: source,
+        parent
+      };
+    })
+    // Loosened from >=3 to >=2 — small collections also benefit from the parent / child explanation.
+    // Aligns with feedback that "有的可行有的不可行" — 2-child collections were silently dropped.
+    .filter(group => group.children.length >= 2 || Boolean(group.parent))
+    .sort((left, right) => {
+      if (left.parent && !right.parent) return -1;
+      if (!left.parent && right.parent) return 1;
+      return right.children.length - left.children.length;
+    });
+}
+
+// Strip the [ROUTER-HUB] / [CHILD-SKILL] marker prefix from a description so the
+// human-readable text stays clean while the markers still exist in the underlying SKILL.md.
+function cleanSkillDescription(value: string | undefined | null): string {
+  if (!value) return "";
+  return String(value).replace(/^\s*\[(?:ROUTER-HUB|CHILD-SKILL)\]\s*/i, "").trim();
+}
+
+// Decide whether this Skill is the parent / router-hub entry of a collection.
+// Trusts the backend `isRouterHub` field first (single source of truth, populated
+// by compute_is_router_hub() in lib.rs). Falls back to the same three heuristics
+// only when the field is missing, e.g. when reading an older SQLite snapshot.
+function isRouterHubSkill(skill: SkillCard): boolean {
+  if (typeof skill.isRouterHub === "boolean") {
+    return skill.isRouterHub;
+  }
+  const description = String(skill.description || "");
+  if (description.indexOf("[ROUTER-HUB]") !== -1) return true;
+  const source = String(skill.source || skill.relativePath || "");
+  if (source.indexOf("AI-SkillHub-local-routers") !== -1) return true;
+  if (skill.folderName && skill.source && normalizeLookup(skill.folderName) === normalizeLookup(skill.source)) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeLookup(value: string): string {
+  return value.trim().toLowerCase().replace(/[_\s]+/g, "-");
+}
+
 function SkillEditPanel({
   draft,
   onClose,
@@ -1276,12 +2056,14 @@ function SkillEditPanel({
   const [category, setCategory] = useState(draft?.category ?? skill.category);
   const [description, setDescription] = useState(draft?.description ?? skill.description);
   const [note, setNote] = useState(draft?.note ?? skill.note ?? "");
+  const [tags, setTags] = useState(draft?.tags ?? tagInputValue(skill.tags ?? []));
 
   useEffect(() => {
     setName(draft?.name ?? skill.name);
     setCategory(draft?.category ?? skill.category);
     setDescription(draft?.description ?? skill.description);
     setNote(draft?.note ?? skill.note ?? "");
+    setTags(draft?.tags ?? tagInputValue(skill.tags ?? []));
   }, [draft, skill.folderName]);
 
   return (
@@ -1304,6 +2086,14 @@ function SkillEditPanel({
         <input onChange={event => setCategory(event.target.value)} value={category} />
       </label>
       <label>
+        多标签
+        <input
+          onChange={event => setTags(event.target.value)}
+          placeholder="例如：论文科研, 写作, 常用"
+          value={tags}
+        />
+      </label>
+      <label>
         说明
         <textarea onChange={event => setDescription(event.target.value)} rows={4} value={description} />
       </label>
@@ -1320,7 +2110,7 @@ function SkillEditPanel({
         <button className="secondary-action" onClick={onClose} type="button">取消</button>
         <button
           className="primary-action"
-          onClick={() => onSave({ category, description, name, note })}
+          onClick={() => onSave({ category, description, name, note, tags })}
           type="button"
         >
           保存
@@ -1337,7 +2127,8 @@ function applySkillDraft(skill: SkillCard, draft?: SkillDraft): SkillCard {
     category: draft.category.trim() || skill.category,
     description: draft.description.trim() || skill.description,
     name: draft.name.trim() || skill.name,
-    note: draft.note.trim() || skill.note
+    note: draft.note.trim() || skill.note,
+    tags: parseTagInput(draft.tags)
   };
 }
 
@@ -1359,6 +2150,39 @@ async function copySkillPrompt(
     showUiToast("复制权限不可用，但调用提示已在菜单动作中生成。");
   }
   await onRecordUsage?.("skill", skill.folderName, skill.name, skill.source, "copy_prompt");
+}
+
+async function copyTextToClipboard(text: string, successMessage: string) {
+  if (!text.trim()) {
+    showUiToast("暂无可复制路径。");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    showUiToast(successMessage);
+  } catch {
+    showUiToast("复制权限不可用，请手动选中路径复制。");
+  }
+}
+
+async function openReleaseGateExportPath(path: string) {
+  if (!path.trim()) {
+    showUiToast("暂无可打开路径。");
+    return;
+  }
+
+  if (!hasTauriRuntime()) {
+    await copyTextToClipboard(path, "浏览器预览不能打开本地路径，已复制路径。");
+    return;
+  }
+
+  try {
+    await invoke("open_release_gate_export_path", { path });
+    showUiToast("已打开导出位置。");
+  } catch (error) {
+    showUiToast(`打开失败：${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function Workspaces({
@@ -1536,13 +2360,16 @@ function WorkspaceDetailPanel({
 function Presets({
   disabled,
   onToggle,
+  onToggleDistribution,
   snapshot
 }: {
   disabled: boolean;
   onToggle: (command: string, id: string, enabled: boolean) => Promise<void>;
+  onToggleDistribution: (presetId: string, workspaceId: string, enabled: boolean) => Promise<void>;
   snapshot: LegacySnapshot | null;
 }) {
   const presets = snapshot?.presets ?? [];
+  const distributions = snapshot?.presetDistributions ?? [];
 
   return (
     <div className="view presets-view">
@@ -1561,6 +2388,10 @@ function Presets({
             <span>{preset.skillCount}</span>
           </div>
           <p>{preset.description}</p>
+          <div className="preset-meta-row">
+            <span>{preset.skillCount} Skills</span>
+            <span>{preset.workspaceCount} 工作区</span>
+          </div>
           <footer>
             <ToggleSwitch
               disabled={disabled}
@@ -1573,7 +2404,56 @@ function Presets({
       ))}
       {presets.length === 0 && <EmptyState text="正在等待 Preset 索引结果。" />}
       </div>
+
+      <section className="panel distribution-panel">
+        <div className="section-title-row">
+          <div>
+            <p className="eyebrow">Distribution Matrix</p>
+            <h3>Preset / 工作区分发矩阵</h3>
+            <p>这里只管理 v2 SQLite 中的分发计划，不会把 Skill 写入 Claude、Codex 或 Antigravity。</p>
+          </div>
+          <span className="status-badge info">{distributions.length} 条计划</span>
+        </div>
+        <div className="distribution-grid">
+          {distributions.map(item => (
+            <PresetDistributionRow
+              disabled={disabled}
+              item={item}
+              key={item.id}
+              onToggle={enabled => void onToggleDistribution(item.presetId, item.workspaceId, enabled)}
+            />
+          ))}
+          {distributions.length === 0 && <EmptyState text="等待 v2 SQLite 生成 Preset/工作区矩阵。" />}
+        </div>
+      </section>
     </div>
+  );
+}
+
+function PresetDistributionRow({
+  disabled,
+  item,
+  onToggle
+}: {
+  disabled: boolean;
+  item: PresetDistributionCard;
+  onToggle: (enabled: boolean) => void;
+}) {
+  return (
+    <article className={item.enabled ? "distribution-row is-enabled" : "distribution-row"}>
+      <div>
+        <strong>{item.presetName}</strong>
+        <span>{item.workspaceName} · {scopeLabel(item.workspaceScope)}</span>
+      </div>
+      <span className="distribution-count">{item.skillCount} Skills</span>
+      <small>{item.summary}</small>
+      <ToggleSwitch
+        disabled={disabled}
+        enabled={item.enabled}
+        label={item.enabled ? "已分发" : "未分发"}
+        onClick={() => onToggle(!item.enabled)}
+      />
+    </article>
   );
 }
 
@@ -1581,8 +2461,13 @@ function Sources({
   loading,
   onBulkSaveMetadata,
   onRecordUsage,
+  onPromoteImport,
   onPreviewImport,
+  onRefreshIndex,
+  onRealWriteAuthorization,
   onSaveMetadata,
+  onStageImport,
+  searchQuery,
   snapshot
 }: {
   loading: boolean;
@@ -1598,8 +2483,18 @@ function Sources({
     sourceName: string,
     eventType: string
   ) => Promise<void>;
-  onPreviewImport: (importKind: string, input: string) => Promise<SourceImportPlanCard>;
+  onPromoteImport: (
+    importKind: string,
+    stagedPath: string,
+    sourceName: string,
+    options?: ImportFeedbackOptions
+  ) => Promise<SourceImportPromotionCard>;
+  onPreviewImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportPlanCard>;
+  onRefreshIndex: () => Promise<LegacySnapshot | null>;
+  onRealWriteAuthorization: (enabled: boolean) => Promise<void>;
   onSaveMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
+  onStageImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
+  searchQuery: string;
   snapshot: LegacySnapshot | null;
 }) {
   const sources = snapshot?.sources ?? [];
@@ -1609,16 +2504,31 @@ function Sources({
   const [editingSourceId, setEditingSourceId] = useState<string>("");
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
   const [importPlan, setImportPlan] = useState<SourceImportPlanCard | null>(null);
+  const [importExecution, setImportExecution] = useState<SourceImportExecutionCard | null>(null);
+  const [importPromotion, setImportPromotion] = useState<SourceImportPromotionCard | null>(null);
   const [importPending, setImportPending] = useState<boolean>(false);
+  const [quickAddStatus, setQuickAddStatus] = useState<QuickAddStatus | null>(null);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [bulkCategory, setBulkCategory] = useState<string>("");
   const [bulkEnabled, setBulkEnabled] = useState<"keep" | "enabled" | "disabled">("keep");
+  const [sourceSortKey, setSourceSortKey] = useState<SourceSortKey>("recent");
   const displaySources = sources.map(source => applySourceDraft(source, sourceDrafts[source.id]));
-  const editingSource = displaySources.find(source => source.id === editingSourceId);
+  const filteredSources = displaySources.filter(source => sourceMatchesSearch(source, searchQuery));
   const sourcePopularityById = useMemo(() => {
     return new Map((snapshot?.sourcePopularity ?? []).map(source => [source.sourceId, source]));
   }, [snapshot?.sourcePopularity]);
+  const sortedSources = useMemo(
+    () => sortSources(filteredSources, sourceSortKey, sourcePopularityById),
+    [filteredSources, sourcePopularityById, sourceSortKey]
+  );
+  const editingSource = displaySources.find(source => source.id === editingSourceId);
   const selectedSources = displaySources.filter(source => selectedSourceIds.includes(source.id));
+  const operatorConsent = snapshot?.operatorConsent ?? {
+    realWritesEnabled: false,
+    enabledAt: "",
+    updatedAt: "",
+    summary: "真实写入授权未开启；同步按钮只刷新索引，不会写入 AI 工具目录。"
+  };
 
   useEffect(() => {
     setSelectedSourceIds(previous => {
@@ -1654,6 +2564,8 @@ function Sources({
     try {
       const plan = await onPreviewImport(importKind, input);
       setImportPlan(plan);
+      setImportExecution(null);
+      setImportPromotion(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setImportPlan({
@@ -1679,6 +2591,236 @@ function Sources({
         rollbackSummary: "预检失败，没有执行任何文件写入。"
       });
       showUiToast("导入 dry-run 失败，请查看计划卡片。");
+    } finally {
+      setImportPending(false);
+    }
+  }
+
+  async function stageImportPlan(importKind: string, input: string) {
+    setImportPending(true);
+    try {
+      const execution = await onStageImport(importKind, input);
+      setImportExecution(execution);
+      setImportPromotion(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setImportExecution({
+        id: "import-stage-error",
+        importKind,
+        input,
+        status: "blocked",
+        riskLevel: "high",
+        summary: message,
+        stagedPath: "",
+        reportPath: "",
+        manifestPath: "",
+        copiedFiles: 0,
+        copiedBytes: 0,
+        skillCount: 0,
+        promptCount: 0,
+        blockingChecks: [message],
+        rollbackSteps: ["没有执行 staging 写入。"],
+        realWriteScope: "none"
+      });
+      showUiToast("隔离 staging 执行失败，请查看结果卡片。");
+    } finally {
+      setImportPending(false);
+    }
+  }
+
+  async function promoteImportExecution(execution: SourceImportExecutionCard, plan: SourceImportPlanCard | null) {
+    if (execution.status !== "staged" && execution.status !== "warn") {
+      showUiToast("只有已经进入 staging 的来源才能提升。");
+      return;
+    }
+    setImportPending(true);
+    try {
+      const sourceName = plan?.displayName || execution.id.replace(/^preview-stage-/, "");
+      const promotion = await onPromoteImport(execution.importKind, execution.stagedPath, sourceName);
+      setImportPromotion(promotion);
+      if (promotion.status === "promoted") {
+        await onRefreshIndex();
+        showUiToast(
+          operatorConsent.realWritesEnabled
+            ? "来源已加入来源库，并已执行 AI 工具同步。"
+            : "来源已加入来源库并刷新索引；打开授权后点击同步即可写入 AI 工具。"
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setImportPromotion({
+        id: "import-promotion-error",
+        importKind: execution.importKind,
+        sourceName: plan?.displayName || "unknown-source",
+        status: "blocked",
+        riskLevel: "high",
+        summary: message,
+        stagedPath: execution.stagedPath,
+        targetPath: "",
+        reportPath: "",
+        manifestPath: "",
+        copiedFiles: 0,
+        copiedBytes: 0,
+        skillCount: 0,
+        promptCount: 0,
+        blockingChecks: [message],
+        rollbackSteps: ["没有执行受管理来源写入。"],
+        realWriteScope: "none"
+      });
+      showUiToast("提升为受管理来源失败，请查看结果卡片。");
+    } finally {
+      setImportPending(false);
+    }
+  }
+
+  async function quickAddImport(importKind: string, input: string, draft: QuickSourceDraft) {
+    const value = input.trim();
+    if (!value) {
+      showUiToast("请先粘贴 GitHub 地址、本地文件夹路径或 zip/.skill 文件路径。");
+      return;
+    }
+    setImportPending(true);
+    setQuickAddStatus({
+      tone: "info",
+      title: "正在检查来源",
+      body: "正在校验地址、重复来源和安全条件。"
+    });
+    try {
+      const plan = await onPreviewImport(importKind, value, { quiet: true });
+      setImportPlan(plan);
+      setImportExecution(null);
+      setImportPromotion(null);
+      if (!plan.safeToContinue) {
+        const reason = plan.duplicateReason || plan.blockingChecks[0] || "预检未通过，请展开高级详情查看原因。";
+        if (plan.duplicateSourceId) {
+          const duplicateSource = displaySources.find(source => source.id === plan.duplicateSourceId);
+          if (duplicateSource) {
+            const saveResult = await onSaveMetadata(duplicateSource, { ...draft, name: duplicateSource.name });
+            if (saveResult === "preview") {
+              setSourceDrafts(previous => ({ ...previous, [duplicateSource.id]: { ...draft, name: duplicateSource.name } }));
+            }
+            await onRefreshIndex();
+            setQuickAddStatus({
+              tone: "ok",
+              title: "来源已存在，已刷新",
+              body: "没有重复克隆；已按当前分类、备注和标签刷新来源库。"
+            });
+            showUiToast("来源已存在，已刷新元数据和索引。");
+            return;
+          }
+        }
+        setQuickAddStatus({
+          tone: "warn",
+          title: "需要先处理",
+          body: reason
+        });
+        showUiToast("一键添加没有继续：请查看需要处理的原因。");
+        return;
+      }
+
+      setQuickAddStatus({
+        tone: "info",
+        title: "正在加入来源库",
+        body: "安全检查已通过，正在下载到隔离区。这个阶段如果网络较慢会等待，但不会无限卡住。"
+      });
+      const execution = await onStageImport(plan.importKind, plan.input, { quiet: true });
+      setImportExecution(execution);
+      if (execution.status !== "staged" && execution.status !== "warn") {
+        setQuickAddStatus({
+          tone: "warn",
+          title: "未写入来源库",
+          body: execution.summary || "隔离写入未通过，请展开高级详情查看原因。"
+        });
+        showUiToast("一键添加停在隔离区写入阶段。");
+        return;
+      }
+
+      setQuickAddStatus({
+        tone: "info",
+        title: "正在写入来源库",
+        body: "隔离区检查已通过，正在提升为受管理来源。"
+      });
+      const sourceName = plan.displayName || execution.id.replace(/^preview-stage-/, "");
+      const promotion = await onPromoteImport(execution.importKind, execution.stagedPath, sourceName, { quiet: true });
+      setImportPromotion(promotion);
+      if (!sourceImportPromotionIsUsable(promotion.status)) {
+        setQuickAddStatus({
+          tone: "warn",
+          title: "未写入来源库",
+          body: promotion.summary || "提升为来源被阻止，请展开高级详情查看原因。"
+        });
+        showUiToast("一键添加被阻止，请查看状态说明。");
+        return;
+      }
+
+      setQuickAddStatus({
+        tone: "info",
+        title: "正在刷新索引",
+        body: "来源已写入，正在刷新 Skill / Prompt / AI 工具索引。"
+      });
+      const refreshed = await onRefreshIndex();
+      const promotedSource = findPromotedSource(refreshed?.sources ?? [], promotion);
+      if (promotedSource) {
+        await onSaveMetadata(promotedSource, {
+          ...draft,
+          category: draft.category.trim() || promotedSource.categoryId,
+          name: promotedSource.name,
+          note: draft.note,
+          tags: draft.tags
+        });
+        const syncWasExecuted = operatorConsent.realWritesEnabled;
+        setQuickAddStatus({
+          tone: "ok",
+          title: promotion.status === "already-managed" ? "来源已存在，已刷新" : "已添加到来源库",
+          body: syncWasExecuted
+            ? "已添加来源、执行 GitHub 更新和 AI 工具链接同步，并保存分类、备注和标签。"
+            : "已添加来源并刷新索引；打开真实写入授权后点击同步，即可写入 Claude/Codex/Antigravity。"
+        });
+        showUiToast(
+          syncWasExecuted
+            ? "已添加来源并同步到 AI 工具。"
+            : promotion.status === "already-managed"
+              ? "来源已存在，已刷新索引并保存分类/备注/标签。"
+              : "已添加来源并刷新索引；打开授权后可一键同步到 AI 工具。"
+        );
+      } else {
+        setQuickAddStatus({
+          tone: "warn",
+          title: "已添加但需确认",
+          body: "来源库已刷新，但没有自动匹配到元数据记录，请在下方来源列表确认。"
+        });
+        showUiToast("已添加来源并刷新索引；未自动匹配元数据，请在来源列表中手动确认。");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setQuickAddStatus({
+        tone: "error",
+        title: "一键添加失败",
+        body: message
+      });
+      setImportPlan({
+        id: "quick-add-error",
+        importKind,
+        input: value,
+        normalizedTarget: value,
+        displayName: "一键添加失败",
+        status: "blocked",
+        riskLevel: "high",
+        safeToContinue: false,
+        duplicateSourceId: "",
+        duplicateReason: message,
+        skillCount: 0,
+        promptCount: 0,
+        targetRoot: "",
+        targetPath: "",
+        backupPath: "",
+        writeGateStatus: "blocked",
+        plannedSteps: ["没有执行正式来源写入。"],
+        installPlanSteps: [],
+        blockingChecks: [message],
+        rollbackSummary: "失败前没有改动 AI 工具目录。"
+      });
+      showUiToast("一键添加失败，请查看状态说明。");
     } finally {
       setImportPending(false);
     }
@@ -1718,7 +2860,15 @@ function Sources({
       <SourceImportWizardPanel
         disabled={loading || importPending}
         onPreview={(importKind, input) => void previewImportPlan(importKind, input)}
+        onQuickAdd={(importKind, input, draft) => void quickAddImport(importKind, input, draft)}
+        onRealWriteAuthorization={onRealWriteAuthorization}
+        onStage={(importKind, input) => void stageImportPlan(importKind, input)}
+        onPromote={execution => void promoteImportExecution(execution, importPlan)}
+        execution={importExecution}
+        operatorConsent={operatorConsent}
+        promotion={importPromotion}
         plan={importPlan}
+        quickAddStatus={quickAddStatus}
       />
 
       <SourceBulkEditPanel
@@ -1729,13 +2879,24 @@ function Sources({
         onCategoryChange={setBulkCategory}
         onClear={() => setSelectedSourceIds([])}
         onEnabledModeChange={setBulkEnabled}
-        onSelectAll={() => setSelectedSourceIds(displaySources.map(source => source.id))}
+        onSelectAll={() => setSelectedSourceIds(sortedSources.map(source => source.id))}
         selectedCount={selectedSources.length}
-        totalCount={displaySources.length}
+        totalCount={sortedSources.length}
+      />
+
+      <RouterHubPanel
+        disabled={loading || importPending}
+        realWritesEnabled={operatorConsent.realWritesEnabled}
+      />
+
+      <SourceListToolbar
+        resultCount={sortedSources.length}
+        sortKey={sourceSortKey}
+        onSortKeyChange={setSourceSortKey}
       />
 
       <div className="table-panel source-table">
-        {displaySources.map(source => {
+        {sortedSources.map(source => {
           const popularity = sourcePopularityById.get(source.id);
           const popularityLabel = popularity?.stars
             ? `★ ${formatCompactNumber(popularity.stars)}`
@@ -1768,7 +2929,10 @@ function Sources({
                 {skillStatusLabel(source.health)}
               </span>
               <span>{source.enabled ? "Enabled" : "Disabled"}</span>
-              <small>{source.url || source.localPath}</small>
+              <small>
+                {(source.tags ?? []).length > 0 ? `标签：${(source.tags ?? []).join(" / ")} · ` : ""}
+                {source.url || source.localPath}
+              </small>
               <button
                 className="icon-action"
                 disabled={loading}
@@ -1780,7 +2944,9 @@ function Sources({
             </div>
           );
         })}
-        {sources.length === 0 && <EmptyState text="正在等待来源扫描结果。" />}
+        {sortedSources.length === 0 && (
+          <EmptyState text={searchQuery.trim() ? "当前搜索条件下没有来源。" : "正在等待来源扫描结果。"} />
+        )}
       </div>
 
       {editingSource && (
@@ -1792,6 +2958,255 @@ function Sources({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Surfaces the router-hub regeneration state to the user. Lets them:
+ *   - run a dry-run plan to see which collections would get a parent SKILL.md
+ *   - commit (writes real files) — only when real_writes consent is on
+ *   - read the duplicate-children and unquoted-marker warnings the backend collected
+ *
+ * Routes through the regenerate_router_hubs Tauri command. In browser preview
+ * (no Tauri runtime) the button is disabled with an explanatory hint.
+ */
+function RouterHubPanel({
+  disabled,
+  realWritesEnabled
+}: {
+  disabled: boolean;
+  realWritesEnabled: boolean;
+}) {
+  const [report, setReport] = useState<RouterHubReport | null>(null);
+  const [pending, setPending] = useState<"" | "plan" | "commit">("");
+  const [error, setError] = useState<string>("");
+  const runtimeAvailable = hasTauriRuntime();
+
+  async function runRouterHubs(commit: boolean) {
+    if (!runtimeAvailable) {
+      setError("浏览器预览模式下无法重建母 Skill 路由；请在 Tauri 桌面窗口运行。");
+      return;
+    }
+    setPending(commit ? "commit" : "plan");
+    setError("");
+    try {
+      const next = await invoke<RouterHubReport>("regenerate_router_hubs", { commit });
+      setReport(next);
+      showUiToast(
+        commit
+          ? `母 Skill 路由已重建：写入 ${next.writtenCount}，跳过 ${next.skippedCount}。`
+          : `母 Skill 路由 dry-run：${next.totalCollections} 个集合，${next.duplicateChildren.length} 个重名子 Skill。`
+      );
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setError(message);
+      showUiToast(`重建母 Skill 路由失败：${message}`);
+    } finally {
+      setPending("");
+    }
+  }
+
+  const writtenPlans = report?.plans.filter(plan => plan.status === "written") ?? [];
+  const plannedPlans = report?.plans.filter(plan => plan.status === "planned") ?? [];
+  const skippedPlans = report?.plans.filter(plan => plan.status.startsWith("skipped")) ?? [];
+
+  return (
+    <section className="router-hub-panel glass-panel">
+      <div className="router-hub-head">
+        <div>
+          <p className="eyebrow">Router Hubs</p>
+          <h3>重建母 Skill 路由</h3>
+          <p>
+            扫描所有集合并为含 2 个及以上子 Skill 的集合生成母 Skill 入口（保持原集合调用名，不再追加 <code>-hub</code> 后缀）。
+            预览只读，重建会把生成结果写入 <code>app/github_sources/AI-SkillHub-local-routers/</code>。
+          </p>
+        </div>
+        <div className="router-hub-actions">
+          <button
+            className="ghost-action compact"
+            disabled={disabled || pending !== ""}
+            onClick={() => void runRouterHubs(false)}
+            type="button"
+          >
+            {pending === "plan" ? "正在预览" : "预览路由 (dry-run)"}
+          </button>
+          <button
+            className="primary-action compact"
+            disabled={disabled || pending !== "" || !realWritesEnabled || !runtimeAvailable}
+            onClick={() => void runRouterHubs(true)}
+            type="button"
+            title={
+              !realWritesEnabled
+                ? "需要先在上方一键添加来源面板里打开「同步到 AI 工具授权」"
+                : !runtimeAvailable
+                  ? "浏览器预览模式只读"
+                  : "立即重建 router-hub SKILL.md"
+            }
+          >
+            {pending === "commit" ? "正在重建" : "立即重建路由"}
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="router-hub-error" role="alert">
+          <strong>失败：</strong>
+          <span>{error}</span>
+        </div>
+      )}
+
+      {!report && !error && (
+        <div className="router-hub-hint">
+          <span>点击「预览路由」查看每个集合会生成哪些 router-hub SKILL.md，以及是否有未引号 [ROUTER-HUB] 描述或跨集合重名子 Skill。</span>
+        </div>
+      )}
+
+      {report && (
+        <>
+          <div className="router-hub-stats">
+            <span className="router-hub-stat ok">
+              <strong>{report.totalCollections}</strong>
+              <em>collections</em>
+            </span>
+            <span className="router-hub-stat brand">
+              <strong>{writtenPlans.length + plannedPlans.length}</strong>
+              <em>{report.committed ? "written" : "planned"}</em>
+            </span>
+            <span className="router-hub-stat warn">
+              <strong>{skippedPlans.length}</strong>
+              <em>skipped</em>
+            </span>
+            <span className="router-hub-stat danger">
+              <strong>{report.duplicateChildren.length}</strong>
+              <em>duplicate child</em>
+            </span>
+            <span className="router-hub-stat warn">
+              <strong>{report.healthWarnings.length}</strong>
+              <em>unquoted</em>
+            </span>
+          </div>
+          <div className="router-hub-summary">{report.summary}</div>
+
+          {report.duplicateChildren.length > 0 && (
+            <div className="router-hub-duplicates">
+              <strong>跨集合重名子 Skill</strong>
+              <span>同一个 <code>name:</code> 出现在多个集合里，Claude 只会载入其中一个；建议改名或合并：</span>
+              <ul>
+                {report.duplicateChildren.map(dup => (
+                  <li key={dup.childName}>
+                    <code>/{dup.childName}</code>
+                    <span>{dup.collections.join("、")}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {report.healthWarnings.length > 0 && (
+            <div className="router-hub-warnings">
+              <strong>未引号 [ROUTER-HUB] 描述</strong>
+              <span>这些 SKILL.md 的描述以 [ROUTER-HUB] 开头但没有用引号包起来；严格的 YAML 解析器会把它当作 flow 序列从而把整个 Skill 丢弃：</span>
+              <ul>
+                {report.healthWarnings.map(warn => (
+                  <li key={warn.skillMdPath}>
+                    <code>{warn.skillMdPath}</code>
+                    <small>{warn.issue}</small>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <div className="router-hub-plan-grid">
+            {report.plans.map(plan => (
+              <article className={`router-hub-card status-${plan.status}`} key={plan.collectionName}>
+                <header>
+                  <strong>{plan.collectionName}</strong>
+                  <span className={`router-hub-pill ${planStatusTone(plan.status)}`}>
+                    {planStatusLabel(plan.status)}
+                  </span>
+                </header>
+                {plan.routerSkillName && (
+                  <div className="router-hub-name">
+                    <small>母 Skill</small>
+                    <code>/{plan.routerSkillName}</code>
+                  </div>
+                )}
+                <p>{plan.summary}</p>
+                {plan.children.length > 0 && (
+                  <div className="router-hub-children">
+                    <small>子 Skill × {plan.childCount}</small>
+                    <ul>
+                      {plan.children.slice(0, 5).map(child => (
+                        <li key={child}>
+                          <code>/{child}</code>
+                        </li>
+                      ))}
+                      {plan.children.length > 5 && <li className="router-hub-more">+{plan.children.length - 5}</li>}
+                    </ul>
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function planStatusTone(status: string): "ok" | "warn" | "info" | "danger" {
+  if (status === "written") return "ok";
+  if (status === "planned") return "info";
+  if (status === "skipped-collision") return "danger";
+  return "warn";
+}
+
+function planStatusLabel(status: string): string {
+  switch (status) {
+    case "written":
+      return "已写入";
+    case "planned":
+      return "待写入";
+    case "skipped-empty":
+      return "跳过 · 无 Skill";
+    case "skipped-single-child":
+      return "跳过 · 单子";
+    case "skipped-collision":
+      return "跳过 · 名冲突";
+    default:
+      return status;
+  }
+}
+
+function SourceListToolbar({
+  onSortKeyChange,
+  resultCount,
+  sortKey
+}: {
+  onSortKeyChange: (value: SourceSortKey) => void;
+  resultCount: number;
+  sortKey: SourceSortKey;
+}) {
+  return (
+    <section className="source-list-toolbar">
+      <div>
+        <p className="eyebrow">Source List</p>
+        <h3>来源列表</h3>
+        <p>{resultCount} 个来源；支持按加入时间、使用频率、GitHub 热度、Skill 数量和风险状态排序。</p>
+      </div>
+      <label>
+        <span>排序</span>
+        <select value={sortKey} onChange={event => onSortKeyChange(event.target.value as SourceSortKey)}>
+          <option value="recent">最近加入/刷新</option>
+          <option value="usage">使用频率最高</option>
+          <option value="heat">GitHub 热度最高</option>
+          <option value="skillCount">Skill 数量最多</option>
+          <option value="health">风险优先</option>
+          <option value="name">名称 A-Z</option>
+        </select>
+      </label>
+    </section>
   );
 }
 
@@ -1931,17 +3346,93 @@ function SourceImportPreviewPanel({ previews }: { previews: ImportPreviewCard[] 
   );
 }
 
-function SourceImportWizardPanel({
+function CategoryPicker({
   disabled,
-  onPreview,
-  plan
+  inferredIds,
+  mode,
+  onModeChange,
+  onToggleCategory,
+  selectedIds
 }: {
   disabled: boolean;
+  inferredIds: string[];
+  mode: "auto" | "manual";
+  onModeChange: (mode: "auto" | "manual") => void;
+  onToggleCategory: (categoryId: string) => void;
+  selectedIds: string[];
+}) {
+  const activeIds = mode === "auto" ? inferredIds : selectedIds;
+
+  return (
+    <div className="category-picker">
+      <div className="category-picker-head">
+        <span>自动分类 / 手动多选</span>
+        <button
+          className={mode === "auto" ? "category-chip active" : "category-chip"}
+          disabled={disabled}
+          onClick={() => onModeChange("auto")}
+          type="button"
+        >
+          自动分类
+        </button>
+      </div>
+      <div className="category-chip-grid" role="group" aria-label="选择来源分类">
+        {CATEGORY_OPTIONS.map(option => (
+          <button
+            className={activeIds.includes(option.id) ? "category-chip active" : "category-chip"}
+            disabled={disabled}
+            key={option.id}
+            onClick={() => onToggleCategory(option.id)}
+            type="button"
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      <small>
+        当前：{activeIds.length > 0 ? activeIds.map(categoryDisplayName).join("、") : "通用"}
+        {mode === "auto" ? "（根据地址、类型和备注自动判断）" : "（手动多选）"}
+      </small>
+    </div>
+  );
+}
+
+function SourceImportWizardPanel({
+  disabled,
+  execution,
+  onPreview,
+  onQuickAdd,
+  onPromote,
+  onRealWriteAuthorization,
+  onStage,
+  operatorConsent,
+  plan,
+  promotion,
+  quickAddStatus
+}: {
+  disabled: boolean;
+  execution: SourceImportExecutionCard | null;
   onPreview: (importKind: string, input: string) => void;
+  onQuickAdd: (importKind: string, input: string, draft: QuickSourceDraft) => void;
+  onPromote: (execution: SourceImportExecutionCard) => void;
+  onRealWriteAuthorization: (enabled: boolean) => Promise<void>;
+  onStage: (importKind: string, input: string) => void;
+  operatorConsent: LegacySnapshot["operatorConsent"];
   plan: SourceImportPlanCard | null;
+  promotion: SourceImportPromotionCard | null;
+  quickAddStatus: QuickAddStatus | null;
 }) {
   const [importKind, setImportKind] = useState<string>("github");
   const [input, setInput] = useState<string>("");
+  const [sourceType, setSourceType] = useState<SourceCard["sourceType"]>("skill");
+  const [categoryMode, setCategoryMode] = useState<"auto" | "manual">("auto");
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
+  const [note, setNote] = useState<string>("");
+  const [tags, setTags] = useState<string>("");
+  const [enabled, setEnabled] = useState<boolean>(true);
+  const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
+  const inferredCategoryIds = inferCategoryIds(`${input} ${note} ${sourceType} ${importKind}`);
+  const effectiveCategoryIds = resolveCategoryIds(categoryMode, selectedCategoryIds, inferredCategoryIds, sourceType);
 
   function submitPreview() {
     const value = input.trim();
@@ -1952,33 +3443,58 @@ function SourceImportWizardPanel({
     onPreview(importKind, value);
   }
 
+  function submitStage() {
+    if (!plan) {
+      return;
+    }
+    if (!plan.safeToContinue) {
+      showUiToast("当前计划还不能执行 staging，请先处理阻断项。");
+      return;
+    }
+    onStage(plan.importKind, plan.input);
+  }
+
+  function submitQuickAdd() {
+    const value = input.trim();
+    if (!value) {
+      showUiToast("请先粘贴 GitHub 地址、本地文件夹路径或 zip/.skill 文件路径。");
+      return;
+    }
+    const primaryCategory = categoryDisplayName(effectiveCategoryIds[0] ?? categoryIdForSourceType(sourceType));
+    const mergedTags = mergeTagInputs(tags, effectiveCategoryIds.slice(1).map(categoryDisplayName).join(", "));
+    onQuickAdd(importKind, value, { category: primaryCategory, enabled, note, sourceType, tags: mergedTags });
+  }
+
   return (
     <section className="source-import-wizard">
       <div className="section-title-row">
         <div>
-          <p className="eyebrow">Dry-run Import</p>
-          <h3>导入向导</h3>
-          <p>生成“将会发生什么”的计划：重复来源、识别到的 Skill、风险等级和回滚要求都会先列出来。</p>
+          <p className="eyebrow">Quick Add</p>
+          <h3>一键添加来源</h3>
+          <p>粘贴 GitHub 仓库、本地文件夹或 zip 包，填好分类备注后直接添加并刷新。安全检查会在后台自动完成。</p>
         </div>
-        <span className="status-badge warn">仍锁定真实导入</span>
+        <span className="status-badge info">普通模式</span>
       </div>
       <div className="import-wizard-form">
-        <div className="segmented-control import-kind-control" role="group" aria-label="选择导入类型">
-          {[
-            ["github", "GitHub"],
-            ["local", "本地文件夹"],
-            ["zip", "zip / .skill"]
-          ].map(([value, label]) => (
-            <button
-              className={importKind === value ? "active" : ""}
-              disabled={disabled}
-              key={value}
-              onClick={() => setImportKind(value)}
-              type="button"
-            >
-              {label}
-            </button>
-          ))}
+        <div className="quick-field-group">
+          <span className="quick-field-label">来源类型</span>
+          <div className="segmented-control import-kind-control" role="group" aria-label="选择导入类型">
+            {[
+              ["github", "GitHub"],
+              ["local", "本地文件夹"],
+              ["zip", "zip / .skill"]
+            ].map(([value, label]) => (
+              <button
+                className={importKind === value ? "active" : ""}
+                disabled={disabled}
+                key={value}
+                onClick={() => setImportKind(value)}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         <label className="import-input-label">
           来源地址或路径
@@ -1995,11 +3511,121 @@ function SourceImportWizardPanel({
             value={input}
           />
         </label>
-        <button className="ghost-button import-preview-button" disabled={disabled} onClick={submitPreview} type="button">
-          {disabled ? "正在生成" : "生成 dry-run 计划"}
+      </div>
+      <div className="quick-source-meta-grid" aria-label="来源元数据">
+        <label>
+          类型
+          <select
+            disabled={disabled}
+            onChange={event => setSourceType(event.target.value as SourceCard["sourceType"])}
+            value={sourceType}
+          >
+            <option value="skill">技能 Skill</option>
+            <option value="prompt">润色提示词 Prompt</option>
+            <option value="mixed">混合 Mixed</option>
+          </select>
+        </label>
+        <label>
+          标签
+          <input
+            disabled={disabled}
+            onChange={event => setTags(event.target.value)}
+            placeholder="论文, 常用, GitHub"
+            value={tags}
+          />
+        </label>
+        <div className="quick-category-field">
+          <CategoryPicker
+            disabled={disabled}
+            inferredIds={inferredCategoryIds}
+            mode={categoryMode}
+            onModeChange={setCategoryMode}
+            onToggleCategory={categoryId => {
+              setCategoryMode("manual");
+              setSelectedCategoryIds(previous =>
+                previous.includes(categoryId)
+                  ? previous.filter(id => id !== categoryId)
+                  : [...previous, categoryId]
+              );
+            }}
+            selectedIds={selectedCategoryIds}
+          />
+        </div>
+      </div>
+      <label className="quick-source-note">
+        备注
+        <textarea
+          disabled={disabled}
+          onChange={event => setNote(event.target.value)}
+          placeholder="例如：Nature 写作技能；科研图表常用；只是 Prompt 资料不安装。"
+          rows={2}
+          value={note}
+        />
+      </label>
+      <div className="quick-source-setting-row">
+        <div className="quick-source-toggle">
+          <div>
+            <strong>加入后启用</strong>
+            <span>只控制 v2 来源库显示，不等于同步到 AI 工具。</span>
+          </div>
+          <ToggleSwitch
+            disabled={disabled}
+            enabled={enabled}
+            label={enabled ? "启用" : "停用"}
+            onClick={() => setEnabled(previous => !previous)}
+          />
+        </div>
+      </div>
+      <div className={`source-sync-state ${operatorConsent.realWritesEnabled ? "authorized" : "locked"}`}>
+        <div>
+          <strong>同步到 AI 工具授权</strong>
+          <span>
+            一键添加会写入 AI SkillHub 来源库并刷新索引。打开右侧授权后，“同步 / 刷新”会执行 GitHub 更新、Skill 路由重建，并把共享 Skills 链接同步到 Claude/Codex/Antigravity。
+          </span>
+        </div>
+        <ToggleSwitch
+          disabled={disabled}
+          enabled={operatorConsent.realWritesEnabled}
+          label={operatorConsent.realWritesEnabled ? "已授权" : "未授权"}
+          onClick={() => void onRealWriteAuthorization(!operatorConsent.realWritesEnabled)}
+        />
+      </div>
+      <div className="quick-source-action-row">
+        <div className="quick-source-action-copy">
+          <strong>最后一步</strong>
+          <span>确认上面的地址、类型、分类、标签和授权状态后，再执行一键添加。</span>
+        </div>
+        <button className="primary-action import-quick-add-button" disabled={disabled} onClick={submitQuickAdd} type="button">
+          {disabled ? "正在添加" : "一键添加并刷新"}
         </button>
       </div>
-      {plan && (
+      {quickAddStatus && (
+        <div className={`quick-add-status-card ${quickAddStatus.tone}`} role="status">
+          <strong>{quickAddStatus.title}</strong>
+          <span>{quickAddStatus.body}</span>
+        </div>
+      )}
+      <div className="advanced-import-toggle-row">
+        <div>
+          <strong>高级安全详情</strong>
+          <span>预检、隔离 staging 和提升记录用于排错；普通添加不需要手动点这些步骤。</span>
+        </div>
+        <button
+          className="ghost-action compact"
+          onClick={() => setShowAdvanced(previous => !previous)}
+          type="button"
+        >
+          {showAdvanced ? "收起详情" : "展开详情"}
+        </button>
+      </div>
+      {showAdvanced && (
+        <div className="advanced-import-details">
+          <div className="advanced-import-actions">
+            <button className="ghost-button import-preview-button" disabled={disabled} onClick={submitPreview} type="button">
+              只生成安全预览
+            </button>
+          </div>
+          {plan && (
         <article className={`import-plan-card ${plan.status}`}>
           <div className="import-plan-head">
             <div>
@@ -2064,7 +3690,139 @@ function SourceImportWizardPanel({
             <strong>回滚要求</strong>
             <span>{plan.rollbackSummary}</span>
           </footer>
+          <div className="staging-action-row">
+            <div>
+              <strong>隔离执行器</strong>
+              <span>只写入 app-next/.skillhub-next/staging，不安装到正式来源目录。</span>
+            </div>
+            <button
+              className="primary-action"
+              disabled={disabled || !plan.safeToContinue}
+              onClick={submitStage}
+              type="button"
+            >
+              执行隔离 staging
+            </button>
+          </div>
         </article>
+          )}
+          {execution && (
+        <article className={`import-execution-card ${execution.status}`}>
+          <div className="import-plan-head">
+            <div>
+              <span className="eyebrow">Staging Result</span>
+              <strong>{sourceImportExecutionStatusLabel(execution.status)}</strong>
+              <small>{execution.summary}</small>
+            </div>
+            <div className="import-plan-badges">
+              <span className={`status-badge ${execution.status === "staged" ? "ok" : "warn"}`}>
+                {execution.realWriteScope}
+              </span>
+              <span className={`risk ${execution.riskLevel}`}>风险：{sourceImportRiskLabel(execution.riskLevel)}</span>
+            </div>
+          </div>
+          <div className="import-plan-metrics">
+            <span>{execution.skillCount} Skills</span>
+            <span>{execution.promptCount} Prompt 资料</span>
+            <span>{execution.copiedFiles} files</span>
+            <span>{formatBytes(execution.copiedBytes)}</span>
+          </div>
+          <div className="install-plan-paths">
+            <div>
+              <strong>Staging 目录</strong>
+              <code>{execution.stagedPath || "未写入"}</code>
+            </div>
+            <div>
+              <strong>报告</strong>
+              <code>{execution.reportPath || "未生成"}</code>
+            </div>
+            <div>
+              <strong>Manifest</strong>
+              <code>{execution.manifestPath || "未生成"}</code>
+            </div>
+          </div>
+          {execution.blockingChecks.length > 0 && (
+            <div className="blocking-checks">
+              <strong>仍然锁定的正式动作</strong>
+              <ul>
+                {execution.blockingChecks.map(check => (
+                  <li key={check}>{check}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="staging-action-row">
+            <div>
+              <strong>提升为受管理来源</strong>
+              <span>写入 app/github_sources 后，v2 会重新扫描；AI 工具同步仍然保持锁定。</span>
+            </div>
+            <button
+              className="primary-action"
+              disabled={disabled || (execution.status !== "staged" && execution.status !== "warn")}
+              onClick={() => onPromote(execution)}
+              type="button"
+            >
+              提升为来源
+            </button>
+          </div>
+          <footer>
+            <strong>回滚</strong>
+            <span>{execution.rollbackSteps.join(" / ")}</span>
+          </footer>
+        </article>
+          )}
+          {promotion && (
+        <article className={`import-execution-card ${promotion.status}`}>
+          <div className="import-plan-head">
+            <div>
+              <span className="eyebrow">Promotion Result</span>
+              <strong>{sourceImportPromotionStatusLabel(promotion.status)}</strong>
+              <small>{promotion.summary}</small>
+            </div>
+            <div className="import-plan-badges">
+              <span className={`status-badge ${sourceImportPromotionIsUsable(promotion.status) ? "ok" : "warn"}`}>
+                {promotion.realWriteScope}
+              </span>
+              <span className={`risk ${promotion.riskLevel}`}>风险：{sourceImportRiskLabel(promotion.riskLevel)}</span>
+            </div>
+          </div>
+          <div className="import-plan-metrics">
+            <span>{promotion.skillCount} Skills</span>
+            <span>{promotion.promptCount} Prompt 资料</span>
+            <span>{promotion.copiedFiles} files</span>
+            <span>{formatBytes(promotion.copiedBytes)}</span>
+          </div>
+          <div className="install-plan-paths">
+            <div>
+              <strong>受管理来源目录</strong>
+              <code>{promotion.targetPath || "未写入"}</code>
+            </div>
+            <div>
+              <strong>报告</strong>
+              <code>{promotion.reportPath || "未生成"}</code>
+            </div>
+            <div>
+              <strong>Manifest</strong>
+              <code>{promotion.manifestPath || "未生成"}</code>
+            </div>
+          </div>
+          {promotion.blockingChecks.length > 0 && (
+            <div className="blocking-checks">
+              <strong>{sourceImportPromotionIsUsable(promotion.status) ? "状态说明" : "阻断原因"}</strong>
+              <ul>
+                {promotion.blockingChecks.map(check => (
+                  <li key={check}>{check}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <footer>
+            <strong>回滚</strong>
+            <span>{promotion.rollbackSteps.join(" / ")}</span>
+          </footer>
+        </article>
+          )}
+        </div>
       )}
     </section>
   );
@@ -2086,6 +3844,7 @@ function SourceEditPanel({
   const [sourceType, setSourceType] = useState<SourceCard["sourceType"]>(draft?.sourceType ?? source.sourceType);
   const [note, setNote] = useState(draft?.note ?? source.note ?? "");
   const [enabled, setEnabled] = useState(draft?.enabled ?? source.enabled);
+  const [tags, setTags] = useState(draft?.tags ?? tagInputValue(source.tags ?? []));
 
   useEffect(() => {
     setName(draft?.name ?? source.name);
@@ -2093,6 +3852,7 @@ function SourceEditPanel({
     setSourceType(draft?.sourceType ?? source.sourceType);
     setNote(draft?.note ?? source.note ?? "");
     setEnabled(draft?.enabled ?? source.enabled);
+    setTags(draft?.tags ?? tagInputValue(source.tags ?? []));
   }, [draft, source.id]);
 
   return (
@@ -2123,6 +3883,14 @@ function SourceEditPanel({
         <input onChange={event => setCategory(event.target.value)} value={category} />
       </label>
       <label>
+        多标签
+        <input
+          onChange={event => setTags(event.target.value)}
+          placeholder="例如：GitHub, UI 设计, 常用"
+          value={tags}
+        />
+      </label>
+      <label>
         手动备注
         <textarea
           onChange={event => setNote(event.target.value)}
@@ -2147,7 +3915,7 @@ function SourceEditPanel({
         <button className="secondary-action" onClick={onClose} type="button">取消</button>
         <button
           className="primary-action"
-          onClick={() => onSave({ category, enabled, name, note, sourceType })}
+          onClick={() => onSave({ category, enabled, name, note, sourceType, tags })}
           type="button"
         >
           保存
@@ -2165,8 +3933,24 @@ function applySourceDraft(source: SourceCard, draft?: SourceDraft): SourceCard {
     enabled: draft.enabled,
     name: draft.name.trim() || source.name,
     note: draft.note.trim() || source.note,
-    sourceType: draft.sourceType
+    sourceType: draft.sourceType,
+    tags: parseTagInput(draft.tags)
   };
+}
+
+function findPromotedSource(sources: SourceCard[], promotion: SourceImportPromotionCard): SourceCard | undefined {
+  const targetPath = normalizeSourcePath(promotion.targetPath);
+  const sourceName = promotion.sourceName.trim().toLowerCase();
+
+  return sources.find(source => {
+    const localPath = normalizeSourcePath(source.localPath);
+    const name = source.name.trim().toLowerCase();
+    return Boolean(targetPath && localPath === targetPath) || Boolean(sourceName && name === sourceName);
+  });
+}
+
+function normalizeSourcePath(path: string): string {
+  return path.trim().replace(/[\\/]+/g, "/").replace(/\/+$/g, "").toLowerCase();
 }
 
 function Agents({
@@ -2424,9 +4208,21 @@ function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
   );
 }
 
-function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
+function ReleaseGate({
+  disabled,
+  onRealWriteAuthorization,
+  onRunRunner,
+  snapshot
+}: {
+  disabled: boolean;
+  onRealWriteAuthorization: (enabled: boolean) => Promise<void>;
+  onRunRunner: (runnerId: string) => Promise<void>;
+  snapshot: LegacySnapshot | null;
+}) {
   const diagnostics = snapshot?.diagnostics;
   const releaseReports = snapshot?.releaseReports ?? [];
+  const operationRunners = snapshot?.operationRunners ?? [];
+  const writeGates = snapshot?.writeGates ?? [];
   const diagnosticsReport = releaseReports.find(report => report.id === "diagnostics");
   const releasePreflight = releaseReports.find(report => report.id === "release-preflight");
   const shareRecipient = releaseReports.find(report => report.id === "share-recipient");
@@ -2435,6 +4231,12 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
   const backupDryRun = snapshot?.backupDryRun ?? [];
   const restoreDryRun = snapshot?.restoreDryRun ?? [];
   const rollbackPlan = snapshot?.rollbackPlan ?? [];
+  const operatorConsent = snapshot?.operatorConsent ?? {
+    realWritesEnabled: false,
+    enabledAt: "",
+    updatedAt: "",
+    summary: "真实写入授权未开启；同步按钮只刷新索引，不会写入 AI 工具目录。"
+  };
   const blockedBackups = countByStatus(backupDryRun, "blocked");
   const plannedBackups = countByStatus(backupDryRun, "planned");
   const blockedRestores = countByStatus(restoreDryRun, "blocked");
@@ -2594,6 +4396,79 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
         </div>
       </section>
 
+      <section className="panel write-gate-panel">
+        <div className="section-title-row">
+          <div>
+            <p className="eyebrow">Real Write Unlock Matrix</p>
+            <h3>真实导入 / 同步 / 打包解锁条件</h3>
+            <p>
+              这里列出每类真实写入的通过项、阻断项和下一步。用户授权只是最后一道许可，不会绕过备份、恢复、QA 和报告闸门。
+            </p>
+          </div>
+          <span className={`status-badge ${operatorConsent.realWritesEnabled ? "ok" : "warn"}`}>
+            {operatorConsent.realWritesEnabled ? "真实写入已授权" : "真实写入未授权"}
+          </span>
+        </div>
+        <article className={`real-write-consent-card ${operatorConsent.realWritesEnabled ? "armed" : ""}`}>
+          <div>
+            <span className="eyebrow">Operator Authorization</span>
+            <strong>真实写入授权开关</strong>
+            <p>{operatorConsent.summary}</p>
+            <small>
+              {operatorConsent.realWritesEnabled
+                ? `开启时间：${formatScanTime(operatorConsent.enabledAt || operatorConsent.updatedAt)}`
+                : "关闭状态下，最终执行器只会生成阻断报告，不会改 Claude / Codex / Antigravity 目录。"}
+            </small>
+          </div>
+          <ToggleSwitch
+            disabled={disabled}
+            enabled={operatorConsent.realWritesEnabled}
+            label={operatorConsent.realWritesEnabled ? "已授权" : "未授权"}
+            onClick={() => void onRealWriteAuthorization(!operatorConsent.realWritesEnabled)}
+          />
+        </article>
+        <div className="write-gate-grid">
+          {writeGates.map(gate => (
+            <article className={`write-gate-card ${writeGateStatusClass(gate)}`} key={gate.id}>
+              <div className="card-head">
+                <div>
+                  <strong>{gate.title}</strong>
+                  <small>{gate.operationType} · 风险 {writeGateRiskLabel(gate.riskLevel)}</small>
+                </div>
+                <span className={`qa-status ${writeGateStatusClass(gate)}`}>
+                  {writeGateStatusLabel(gate)}
+                </span>
+              </div>
+              <p>{gate.summary}</p>
+              <div className="write-gate-checks">
+                {gate.blockingChecks.slice(0, 4).map(check => (
+                  <span className="check-line blocked" key={`blocked-${gate.id}-${check}`}>{check}</span>
+                ))}
+                {gate.passingChecks.slice(0, 3).map(check => (
+                  <span className="check-line ok" key={`ok-${gate.id}-${check}`}>{check}</span>
+                ))}
+              </div>
+              <div className="write-plan-preview">
+                <div>
+                  <span>执行预览</span>
+                  {gate.planSteps.slice(0, 4).map(step => (
+                    <small key={`plan-${gate.id}-${step}`}>{step}</small>
+                  ))}
+                </div>
+                <div>
+                  <span>回滚预案</span>
+                  {gate.rollbackSteps.slice(0, 3).map(step => (
+                    <small key={`rollback-${gate.id}-${step}`}>{step}</small>
+                  ))}
+                </div>
+              </div>
+              <small>{gate.nextAction}</small>
+            </article>
+          ))}
+          {writeGates.length === 0 && <EmptyState text="等待 v2 SQLite 生成真实写入解锁矩阵。" />}
+        </div>
+      </section>
+
       <section className="panel release-report-panel">
         <p className="eyebrow">V1 Report Inputs</p>
         <h3>已接入的 v1 报告摘要</h3>
@@ -2622,10 +4497,91 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
 
       <section className="panel release-next-panel">
         <p className="eyebrow">Next Safe Step</p>
-        <h3>下一步补桌面 QA 证据入口</h3>
+        <h3>下一步执行 dry-run 发布工具</h3>
         <p>
-          v1 诊断、预检、分享和 zip 预览已经进入 v2 发布闸门；下一步应把桌面窗口截图/人工确认结果也记录成可追踪状态。
+          v1 诊断、预检、分享和 zip 预览已经进入 v2 发布闸门；真实同步和正式打包先经过解锁检查，
+          没有通过前只允许生成可审计 dry-run 报告。
         </p>
+      </section>
+
+      <section className="panel operation-runner-panel">
+        <div className="section-title-row">
+          <div>
+            <p className="eyebrow">Dry-run Executors</p>
+            <h3>诊断 / 分享 / 解锁检查 / 发布执行器</h3>
+            <p>
+              执行器会先生成 dry-run、解锁检查和最终执行尝试报告；安全闸门未全部通过前，不会接管 AI
+              工具目录，也不会生成发布包或 GitHub Release。
+            </p>
+          </div>
+          <span className="status-badge warn">真实写入锁定</span>
+        </div>
+        <div className="operation-runner-grid">
+          {operationRunners.map(runner => (
+            <article className={`operation-runner-card ${runner.status}`} key={runner.id}>
+              <div className="card-head">
+                <strong>{runner.title}</strong>
+                <span className={`qa-status ${operationRunnerStatusClass(runner.status, runner.locked)}`}>
+                  {operationRunnerStatusLabel(runner.status, runner.locked)}
+                </span>
+              </div>
+              <p>{runner.summary}</p>
+              <div className="runner-meta">
+                <span>{runner.runnerType}</span>
+                <span>{runner.lastRunAt ? formatScanTime(runner.lastRunAt) : "未运行"}</span>
+                <span>{runner.fileCount ? `${runner.fileCount} 个导出文件` : "等待导出"}</span>
+              </div>
+              <small>{runner.nextAction}</small>
+              <div className="runner-export-paths">
+                <span>目录</span>
+                <code title={runner.exportDir}>{runner.exportDir}</code>
+                <span>最新报告</span>
+                <code title={runner.latestMarkdownPath || runner.reportPath}>
+                  {runner.latestMarkdownPath || runner.reportPath}
+                </code>
+                <span>清单</span>
+                <code title={runner.manifestPath}>{runner.manifestPath}</code>
+              </div>
+              <div className="runner-export-actions">
+                <button
+                  className="ghost-action compact"
+                  disabled={disabled || runner.fileCount === 0 || !runner.exportDir}
+                  onClick={() => void openReleaseGateExportPath(runner.exportDir)}
+                  type="button"
+                >
+                  打开目录
+                </button>
+                <button
+                  className="ghost-action compact"
+                  disabled={disabled || runner.fileCount === 0 || !(runner.latestMarkdownPath || runner.reportPath)}
+                  onClick={() => void openReleaseGateExportPath(runner.latestMarkdownPath || runner.reportPath)}
+                  type="button"
+                >
+                  打开报告
+                </button>
+                <button
+                  className="ghost-action compact"
+                  disabled={disabled || !(runner.latestMarkdownPath || runner.reportPath)}
+                  onClick={() =>
+                    void copyTextToClipboard(runner.latestMarkdownPath || runner.reportPath, "已复制报告路径。")
+                  }
+                  type="button"
+                >
+                  复制路径
+                </button>
+              </div>
+              <button
+                className="secondary-action compact"
+                disabled={disabled}
+                onClick={() => void onRunRunner(runner.id)}
+                type="button"
+              >
+                {operationRunnerActionLabel(runner.runnerType, runner.locked)}
+              </button>
+            </article>
+          ))}
+          {operationRunners.length === 0 && <EmptyState text="等待 v2 SQLite 生成 dry-run 执行器清单。" />}
+        </div>
       </section>
     </div>
   );
@@ -2633,10 +4589,14 @@ function ReleaseGate({ snapshot }: { snapshot: LegacySnapshot | null }) {
 
 function Settings({
   disabled,
+  onOpenRelease,
+  onOpenSnapshots,
   onQaStatus,
   snapshot
 }: {
   disabled: boolean;
+  onOpenRelease: () => void;
+  onOpenSnapshots: () => void;
   onQaStatus: (id: string, status: "pending" | "passed" | "failed") => void;
   snapshot: LegacySnapshot | null;
 }) {
@@ -2647,7 +4607,7 @@ function Settings({
       <section className="panel">
         <h3>迁移策略</h3>
         <p>
-          v2 当前只做只读扫描。真正接管 Claude、Codex、Antigravity 前，必须先完成 SQLite schema、备份、快照和回滚。
+          v2 现在作为日常 UI 使用：添加来源、搜索 Skill、刷新索引和同步入口都在 V2。真实写入 AI 工具目录仍需要在 Sources 里开启授权。
         </p>
         <div className="setting-row">
           <span>中央目录</span>
@@ -2660,6 +4620,22 @@ function Settings({
         <div className="setting-row">
           <span>诊断报告</span>
           <code>{snapshot?.diagnosticsFile ?? "../app/reports/latest-diagnostics.json"}</code>
+        </div>
+      </section>
+
+      <section className="panel advanced-tools-panel">
+        <p className="eyebrow">Advanced Tools</p>
+        <h3>高级安全工具已从主导航降级</h3>
+        <p>
+          Snapshots 和 Release Gate 仍然有用：它们负责备份、回滚、分享和发布前检查；但它们不应该挡住日常“添加来源 -&gt; 搜索 Skill -&gt; 同步刷新”的主流程。
+        </p>
+        <div className="advanced-tools-actions">
+          <button className="secondary-action" onClick={onOpenSnapshots} type="button">
+            <Icon name="snapshots" /> 打开快照 / 回滚
+          </button>
+          <button className="secondary-action" onClick={onOpenRelease} type="button">
+            <Icon name="release" /> 打开发布检查
+          </button>
         </div>
       </section>
 
@@ -2758,12 +4734,253 @@ function initialTheme(): ThemeName {
 }
 
 function isNavKey(value: string | null): value is NavKey {
-  return navItems.some(item => item.key === value) || value === "settings";
+  return navItems.some(item => item.key === value) || advancedNavKeys.includes(value as NavKey) || value === "settings";
 }
 
 function showUiToast(message: string) {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(TOAST_EVENT, { detail: message }));
+}
+
+function normalizeSearch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/^\/+/, "")
+    .replace(/[_/\\.-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function compactSearch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/^\/+/, "")
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+}
+
+function queryLooksLikeSkillCommand(query: string): boolean {
+  return query.trim().startsWith("/");
+}
+
+function textMatchesSearch(query: string, values: Array<string | string[] | undefined>): boolean {
+  const tokens = normalizeSearch(query).split(" ").filter(Boolean);
+  if (tokens.length === 0) return true;
+  const joinedValues = values
+    .flatMap(value => (Array.isArray(value) ? value : [value ?? ""]))
+    .join(" ");
+  const haystack = normalizeSearch(joinedValues);
+  const compactQuery = compactSearch(query);
+  const compactHaystack = compactSearch(joinedValues);
+  return tokens.every(token => haystack.includes(token))
+    || (compactQuery.length >= 2 && compactHaystack.includes(compactQuery));
+}
+
+function searchScore(query: string, priorityValues: string[], values: Array<string | string[] | undefined>): number {
+  const normalizedQuery = normalizeSearch(query);
+  const compactQuery = compactSearch(query);
+  if (!normalizedQuery && !compactQuery) return 0;
+
+  let score = 0;
+  for (const value of priorityValues) {
+    const normalized = normalizeSearch(value);
+    const compact = compactSearch(value);
+    if (normalized && normalized === normalizedQuery) score = Math.max(score, 120);
+    if (compact && compact === compactQuery) score = Math.max(score, 118);
+    if (normalized && normalized.startsWith(normalizedQuery)) score = Math.max(score, 96);
+    if (compact && compact.startsWith(compactQuery)) score = Math.max(score, 92);
+    if (normalized && normalized.includes(normalizedQuery)) score = Math.max(score, 72);
+    if (compact && compact.includes(compactQuery)) score = Math.max(score, 68);
+  }
+
+  const joinedValues = values
+    .flatMap(value => (Array.isArray(value) ? value : [value ?? ""]))
+    .join(" ");
+  const haystack = normalizeSearch(joinedValues);
+  const compactHaystack = compactSearch(joinedValues);
+  if (haystack.includes(normalizedQuery)) score = Math.max(score, 42);
+  if (compactQuery && compactHaystack.includes(compactQuery)) score = Math.max(score, 40);
+  return score;
+}
+
+function categoryDisplayName(category: string): string {
+  const option = findCategoryOption(category);
+  return option?.label ?? category;
+}
+
+function findCategoryOption(category: string): CategoryOption | undefined {
+  const normalized = normalizeSearch(category);
+  if (!normalized) return undefined;
+  return CATEGORY_OPTIONS.find(option => {
+    const values = [option.id, option.label, ...option.keywords].map(normalizeSearch);
+    return values.some(value => value === normalized || value.includes(normalized) || normalized.includes(value));
+  });
+}
+
+function categoryMatchesFilter(category: string, filterId: string): boolean {
+  if (filterId === "all") return true;
+  const filter = CATEGORY_OPTIONS.find(option => option.id === filterId);
+  if (!filter) return normalizeSearch(category) === normalizeSearch(filterId);
+  const normalizedCategory = normalizeSearch(category);
+  if (!normalizedCategory) return filter.id === "general";
+  return [filter.id, filter.label, ...filter.keywords].some(value => {
+    const normalizedValue = normalizeSearch(value);
+    return normalizedCategory.includes(normalizedValue) || normalizedValue.includes(normalizedCategory);
+  });
+}
+
+function categoryIdForSourceType(sourceType: SourceCard["sourceType"]): string {
+  if (sourceType === "prompt") return "prompt-polishing";
+  if (sourceType === "mixed") return "general";
+  return "agent-tools";
+}
+
+function inferCategoryIds(input: string): string[] {
+  const text = normalizeSearch(input);
+  const matches = CATEGORY_OPTIONS.filter(option =>
+    [option.id, option.label, ...option.keywords].some(keyword => text.includes(normalizeSearch(keyword)))
+  ).map(option => option.id);
+  return matches.length > 0 ? Array.from(new Set(matches)).slice(0, 4) : ["general"];
+}
+
+function resolveCategoryIds(
+  mode: "auto" | "manual",
+  selectedIds: string[],
+  inferredIds: string[],
+  sourceType: SourceCard["sourceType"]
+): string[] {
+  if (mode === "manual") {
+    return selectedIds.length > 0 ? selectedIds : [categoryIdForSourceType(sourceType)];
+  }
+  if (inferredIds.length === 0 || (inferredIds.length === 1 && inferredIds[0] === "general")) {
+    return [categoryIdForSourceType(sourceType)];
+  }
+  return inferredIds;
+}
+
+function mergeTagInputs(...values: string[]): string {
+  return parseTagInput(values.join(", ")).join(", ");
+}
+
+function skillMatchesSearch(skill: SkillCard, query: string): boolean {
+  return textMatchesSearch(query, [
+    skill.name,
+    skill.folderName,
+    skill.category,
+    categoryDisplayName(skill.category),
+    skill.description,
+    skill.note,
+    skill.source,
+    skill.relativePath,
+    skill.tags
+  ]);
+}
+
+function skillSearchScore(skill: SkillCard, query: string): number {
+  return searchScore(query, [skill.name, skill.folderName], [
+    skill.name,
+    skill.folderName,
+    skill.category,
+    categoryDisplayName(skill.category),
+    skill.description,
+    skill.note,
+    skill.source,
+    skill.relativePath,
+    skill.tags
+  ]);
+}
+
+function sourceMatchesSearch(source: SourceCard, query: string): boolean {
+  return textMatchesSearch(query, [
+    source.name,
+    source.categoryId,
+    categoryDisplayName(source.categoryId),
+    source.sourceType,
+    source.health,
+    source.mode,
+    source.note,
+    source.url,
+    source.localPath,
+    source.tags
+  ]);
+}
+
+function sourceSearchScore(source: SourceCard, query: string): number {
+  return searchScore(query, [source.name, source.url ?? "", source.localPath ?? ""], [
+    source.name,
+    source.categoryId,
+    categoryDisplayName(source.categoryId),
+    source.sourceType,
+    source.health,
+    source.mode,
+    source.note,
+    source.url,
+    source.localPath,
+    source.tags
+  ]);
+}
+
+function sortSources(
+  sources: SourceCard[],
+  sortKey: SourceSortKey,
+  sourcePopularityById: Map<string, SourcePopularityCard>
+): SourceCard[] {
+  return [...sources].sort((left, right) => {
+    const leftPopularity = sourcePopularityById.get(left.id);
+    const rightPopularity = sourcePopularityById.get(right.id);
+    const nameCompare = left.name.localeCompare(right.name, "zh-Hans-CN", {
+      numeric: true,
+      sensitivity: "base"
+    });
+
+    switch (sortKey) {
+      case "usage":
+        return sourceUsageValue(rightPopularity) - sourceUsageValue(leftPopularity) || nameCompare;
+      case "heat":
+        return sourceHeatValue(rightPopularity) - sourceHeatValue(leftPopularity) || nameCompare;
+      case "skillCount":
+        return right.skillCount - left.skillCount || nameCompare;
+      case "health":
+        return sourceHealthRank(left) - sourceHealthRank(right) || nameCompare;
+      case "name":
+        return nameCompare;
+      case "recent":
+      default:
+        return sourceRecentValue(right, rightPopularity) - sourceRecentValue(left, leftPopularity) || nameCompare;
+    }
+  });
+}
+
+function sourceUsageValue(popularity?: SourcePopularityCard): number {
+  return popularity?.localTotalCount ?? 0;
+}
+
+function sourceHeatValue(popularity?: SourcePopularityCard): number {
+  return popularity?.stars ?? 0;
+}
+
+function sourceRecentValue(source: SourceCard, popularity?: SourcePopularityCard): number {
+  return (
+    dateValue(source.createdAt) ||
+    dateValue(popularity?.fetchedAt) ||
+    dateValue(popularity?.lastUpdatedAt) ||
+    dateValue(popularity?.createdAt)
+  );
+}
+
+function sourceHealthRank(source: SourceCard): number {
+  const ranks: Record<string, number> = { error: 0, warn: 1, info: 2, ok: 3 };
+  return ranks[source.health] ?? 4;
+}
+
+function dateValue(value?: string): number {
+  if (!value) return 0;
+  if (/^\d+$/.test(value)) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return value.length > 16 ? Math.floor(numeric / 1_000_000) : numeric;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function categoryTone(category: string): string {
@@ -2838,11 +5055,37 @@ function sourceImportRiskLabel(riskLevel: string): string {
   return riskLevel || "未知";
 }
 
+function sourceImportExecutionStatusLabel(status: string): string {
+  if (status === "staged") return "已进入隔离 staging";
+  if (status === "warn") return "已 staging，需复核";
+  if (status === "locked") return "执行器锁定";
+  if (status === "blocked") return "已阻止";
+  return status || "未知状态";
+}
+
+function sourceImportPromotionStatusLabel(status: string): string {
+  if (status === "promoted") return "已提升为受管理来源";
+  if (status === "already-managed") return "来源已存在，已纳入管理";
+  if (status === "blocked") return "提升已阻止";
+  return status || "未知状态";
+}
+
+function sourceImportPromotionIsUsable(status: string): boolean {
+  return status === "promoted" || status === "already-managed";
+}
+
 function sourceImportWriteGateLabel(status: string): string {
   if (status === "dry-run-ready") return "dry-run 可继续";
   if (status === "locked") return "真实写入锁定";
   if (status === "blocked") return "已阻断";
   return status || "未知";
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function createPreviewSourceImportPlan(
@@ -2876,7 +5119,7 @@ function createPreviewSourceImportPlan(
     duplicate ? `重复来源：${duplicate.name}` : "",
     !isGithubValid ? "GitHub 地址格式不符合普通仓库地址。" : "",
     isPackage ? "zip/.skill 必须先通过解压安全扫描。" : "",
-    "真实写入仍需备份 dry-run、恢复 dry-run、Release Gate 通过。"
+    "未开启真实写入授权时，只会刷新 AI SkillHub 索引，不会写入 AI 工具目录。"
   ].filter((check): check is string => Boolean(check));
 
   return {
@@ -2907,7 +5150,7 @@ function createPreviewSourceImportPlan(
         ? [
             "校验 GitHub 普通仓库地址。",
             "检查 v2 SQLite 是否已有同源仓库。",
-            "未来真实导入前先生成快照，再 clone/pull 到 github_sources。",
+            "生成快照后 clone/pull 到 github_sources。",
             "扫描 SKILL.md，只把有效 Skill 进入候选库。"
           ]
         : importKind === "local"
@@ -2915,13 +5158,13 @@ function createPreviewSourceImportPlan(
               "检查本地路径是否可访问。",
               "递归扫描 SKILL.md，并跳过 target/node_modules/.git 等目录。",
               "检查重复来源和重复 Skill 名称。",
-              "真实导入前必须先生成快照和回滚计划。"
+              "生成快照和回滚计划后登记为来源。"
             ]
           : [
               "验证 zip/.skill 文件扩展名。",
               "先做 zip-slip 与路径穿越扫描。",
               "解压到临时目录后统计 SKILL.md。",
-              "真实导入保持锁定，直到解压安全报告通过。"
+              "解压安全报告通过后才允许登记为来源。"
             ],
     installPlanSteps:
       importKind === "github"
@@ -2930,7 +5173,7 @@ function createPreviewSourceImportPlan(
             "如果目标目录已存在，先备份到 source-imports。",
             "clone 或 pull 到 github_sources 的隔离目录。",
             "重新扫描 SKILL.md 并更新 v2 SQLite 来源记录。",
-            "真实 AI 工具同步继续锁定，等待 Release Gate。"
+            "如果已开启真实写入授权，点击“同步 / 刷新”会同步到 AI 工具。"
           ]
         : importKind === "local"
           ? [
@@ -2938,14 +5181,14 @@ function createPreviewSourceImportPlan(
               "把本地来源登记为可管理候选，不直接修改原目录。",
               "按有效 SKILL.md 目录生成候选索引。",
               "更新 v2 SQLite 来源记录。",
-              "真实 AI 工具同步继续锁定，等待 Release Gate。"
+              "如果已开启真实写入授权，点击“同步 / 刷新”会同步到 AI 工具。"
             ]
           : [
               "创建临时解压目录。",
               "先执行路径穿越和重复名称扫描。",
               "安全通过后生成导入快照和备份计划。",
               "解压进入隔离来源目录并重新扫描。",
-              "真实 AI 工具同步继续锁定，等待 Release Gate。"
+              "如果已开启真实写入授权，点击“同步 / 刷新”会同步到 AI 工具。"
             ],
     blockingChecks,
     rollbackSummary: "当前只生成 dry-run；没有写入任何文件，因此不需要执行回滚。"
@@ -2957,6 +5200,75 @@ function normalizePreviewGithubUrl(input: string): string {
   const match = value.match(/^https?:\/\/github\.com\/([^/\s]+)\/([^/\s?#]+?)(?:\.git)?(?:[?#].*)?$/i);
   if (!match) return "";
   return `https://github.com/${match[1]}/${match[2].replace(/\.git$/i, "")}.git`.toLowerCase();
+}
+
+function createPreviewSourceImportExecution(importKind: string, input: string): SourceImportExecutionCard {
+  const value = input.trim();
+  const displayName =
+    value
+      .split(/[\\/]/)
+      .filter(Boolean)
+      .pop()
+      ?.replace(/\.git$/i, "")
+      .replace(/\.(zip|skill)$/i, "") || "preview-source";
+  const isLockedPackage = importKind === "zip";
+  return {
+    id: `preview-stage-${Date.now()}`,
+    importKind,
+    input: value,
+    status: isLockedPackage ? "locked" : "staged",
+    riskLevel: isLockedPackage ? "medium" : "low",
+    summary: isLockedPackage
+      ? "浏览器预览：zip/.skill staging 仍锁定。"
+      : "浏览器预览：已模拟写入隔离 staging，桌面版才会真实创建 staging 文件夹。",
+    stagedPath: `浏览器预览/app-next/.skillhub-next/staging/source-imports/${displayName}`,
+    reportPath: `浏览器预览/app-next/.skillhub-next/reports/source-import-staging/${displayName}.md`,
+    manifestPath: `浏览器预览/app-next/.skillhub-next/reports/source-import-staging/${displayName}-manifest.json`,
+    copiedFiles: isLockedPackage ? 0 : 12,
+    copiedBytes: isLockedPackage ? 0 : 48 * 1024,
+    skillCount: isLockedPackage ? 0 : 1,
+    promptCount: 0,
+    blockingChecks: [
+      "浏览器预览不执行本机文件写入。",
+      "正式 app/github_sources 安装仍锁定。",
+      "AI 工具同步/接管仍锁定。"
+    ],
+    rollbackSteps: ["删除 staging 目录即可撤销。", "正式来源目录和 AI 工具目录保持不变。"],
+    realWriteScope: "preview-only"
+  };
+}
+
+function createPreviewSourceImportPromotion(
+  importKind: string,
+  stagedPath: string,
+  sourceName: string
+): SourceImportPromotionCard {
+  const safeName = (sourceName || "preview-source")
+    .trim()
+    .replace(/[^\p{L}\p{N}._-]+/gu, "-")
+    .replace(/^-+|-+$/g, "") || "preview-source";
+  return {
+    id: `preview-promotion-${Date.now()}`,
+    importKind,
+    sourceName: safeName,
+    status: "promoted",
+    riskLevel: importKind === "github" ? "medium" : "low",
+    summary: "浏览器预览：已模拟提升为受管理来源；桌面版才会写入 app/github_sources。",
+    stagedPath,
+    targetPath: `浏览器预览/app/github_sources/${safeName}`,
+    reportPath: `浏览器预览/app-next/.skillhub-next/reports/source-import-promotion/${safeName}.md`,
+    manifestPath: `浏览器预览/app-next/.skillhub-next/reports/source-import-promotion/${safeName}-manifest.json`,
+    copiedFiles: 12,
+    copiedBytes: 48 * 1024,
+    skillCount: 1,
+    promptCount: 0,
+    blockingChecks: [
+      "浏览器预览不执行本机文件写入。",
+      "AI 工具同步/接管仍锁定。"
+    ],
+    rollbackSteps: ["删除受管理来源目录即可回滚。", "重新扫描 v2 SQLite 索引。"],
+    realWriteScope: "preview-only"
+  };
 }
 
 function createPreviewSnapshot(): LegacySnapshot {
@@ -2984,7 +5296,8 @@ function createPreviewSnapshot(): LegacySnapshot {
         source: "Nature-Paper-Skills",
         health: "ok",
         enabled: true,
-        relativePath: "skills/core/paper-workflow"
+        relativePath: "skills/core/paper-workflow",
+        tags: ["论文科研", "写作", "常用"]
       },
       {
         name: "figure-planner",
@@ -2995,7 +5308,8 @@ function createPreviewSnapshot(): LegacySnapshot {
         source: "Nature-Paper-Skills",
         health: "ok",
         enabled: true,
-        relativePath: "skills/core/figure-planner"
+        relativePath: "skills/core/figure-planner",
+        tags: ["科研图表", "论文科研"]
       },
       {
         name: "impeccable",
@@ -3006,7 +5320,8 @@ function createPreviewSnapshot(): LegacySnapshot {
         source: "impeccable",
         health: "info",
         enabled: true,
-        relativePath: ".claude/skills/impeccable"
+        relativePath: ".claude/skills/impeccable",
+        tags: ["界面设计", "UI", "审美"]
       },
       {
         name: "VibeSec-Skill",
@@ -3017,7 +5332,8 @@ function createPreviewSnapshot(): LegacySnapshot {
         source: "VibeSec-Skill",
         health: "warn",
         enabled: true,
-        relativePath: "SKILL.md"
+        relativePath: "SKILL.md",
+        tags: ["安全", "发布闸门"]
       },
       {
         name: "gstack",
@@ -3028,7 +5344,8 @@ function createPreviewSnapshot(): LegacySnapshot {
         source: "gstack",
         health: "ok",
         enabled: true,
-        relativePath: "SKILL.md"
+        relativePath: "SKILL.md",
+        tags: ["产品规划", "路线图"]
       },
       {
         name: "karpathy-guidelines",
@@ -3039,7 +5356,8 @@ function createPreviewSnapshot(): LegacySnapshot {
         source: "andrej-karpathy-skills",
         health: "ok",
         enabled: true,
-        relativePath: "skills/karpathy-guidelines"
+        relativePath: "skills/karpathy-guidelines",
+        tags: ["工程质量", "稳定推进"]
       }
     ],
       sources: [
@@ -3051,10 +5369,12 @@ function createPreviewSnapshot(): LegacySnapshot {
         url: "https://github.com/Boom5426/Nature-Paper-Skills.git",
         skillCount: 18,
         mode: "scan",
+          createdAt: "2026-05-01T00:00:00Z",
           categoryId: "paper",
           note: "论文科研工作流。",
           localPath: "../app/github_sources/Nature-Paper-Skills",
-          enabled: true
+          enabled: true,
+          tags: ["GitHub", "论文科研", "常用"]
         },
         {
           id: "source-impeccable",
@@ -3064,10 +5384,12 @@ function createPreviewSnapshot(): LegacySnapshot {
         url: "https://github.com/pbakaus/impeccable.git",
         skillCount: 1,
         mode: "explicit",
+          createdAt: "2026-05-01T00:00:00Z",
           categoryId: "design",
           note: "UI 审美检查来源。",
           localPath: "../app/github_sources/impeccable",
-          enabled: true
+          enabled: true,
+          tags: ["GitHub", "界面设计"]
         },
         {
           id: "source-awesome-ai-research-writing",
@@ -3077,10 +5399,12 @@ function createPreviewSnapshot(): LegacySnapshot {
         url: "https://github.com/Leey21/awesome-ai-research-writing.git",
         skillCount: 0,
         mode: "do-not-install",
+          createdAt: "2026-05-01T00:00:00Z",
           categoryId: "prompt",
           note: "这是润色 Prompt 资料，不作为 Skill 安装。",
           localPath: "../app/github_sources/awesome-ai-research-writing",
-          enabled: true
+          enabled: true,
+          tags: ["Prompt", "润色资料"]
         }
       ],
     agents: [
@@ -3261,7 +5585,8 @@ function createPreviewSnapshot(): LegacySnapshot {
         description: "写作、图表、引用、投稿审计的组合预设。",
         color: "mint",
         enabled: true,
-        skillCount: 18
+        skillCount: 18,
+        workspaceCount: 2
       },
       {
         id: "design",
@@ -3269,7 +5594,8 @@ function createPreviewSnapshot(): LegacySnapshot {
         description: "UI 检查、视觉优化和产品体验打磨。",
         color: "peach",
         enabled: true,
-        skillCount: 7
+        skillCount: 7,
+        workspaceCount: 1
       },
       {
         id: "security",
@@ -3277,7 +5603,8 @@ function createPreviewSnapshot(): LegacySnapshot {
         description: "命令、路径、发布边界和风险模式扫描。",
         color: "violet",
         enabled: true,
-        skillCount: 4
+        skillCount: 4,
+        workspaceCount: 1
       }
     ],
     snapshots: [
@@ -3535,6 +5862,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         url: "https://github.com/Boom5426/Nature-Paper-Skills.git",
         owner: "Boom5426",
         repo: "Nature-Paper-Skills",
+        createdAt: "2025-01-10T00:00:00Z",
         stars: 1280,
         forks: 146,
         openIssues: 3,
@@ -3544,7 +5872,12 @@ function createPreviewSnapshot(): LegacySnapshot {
         error: "",
         localTotalCount: 8,
         localSevenDayCount: 3,
-        localThirtyDayCount: 8
+        localThirtyDayCount: 8,
+        trendPoints: [
+          { sampledAt: "1717200000000000000", stars: 860, forks: 91, openIssues: 4, lastUpdatedAt: "2025-11-01T00:00:00Z", cacheStatus: "fresh" },
+          { sampledAt: "1748736000000000000", stars: 1120, forks: 128, openIssues: 2, lastUpdatedAt: "2026-03-01T00:00:00Z", cacheStatus: "fresh" },
+          { sampledAt: "1780272000000000000", stars: 1280, forks: 146, openIssues: 3, lastUpdatedAt: new Date().toISOString(), cacheStatus: "fresh" }
+        ]
       },
       {
         sourceId: "source-impeccable",
@@ -3552,6 +5885,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         url: "https://github.com/pbakaus/impeccable.git",
         owner: "pbakaus",
         repo: "impeccable",
+        createdAt: "2024-09-12T00:00:00Z",
         stars: 920,
         forks: 88,
         openIssues: 1,
@@ -3561,7 +5895,270 @@ function createPreviewSnapshot(): LegacySnapshot {
         error: "",
         localTotalCount: 4,
         localSevenDayCount: 1,
-        localThirtyDayCount: 4
+        localThirtyDayCount: 4,
+        trendPoints: [
+          { sampledAt: "1717200000000000000", stars: 530, forks: 42, openIssues: 2, lastUpdatedAt: "2025-10-01T00:00:00Z", cacheStatus: "fresh" },
+          { sampledAt: "1748736000000000000", stars: 790, forks: 66, openIssues: 1, lastUpdatedAt: "2026-02-01T00:00:00Z", cacheStatus: "fresh" },
+          { sampledAt: "1780272000000000000", stars: 920, forks: 88, openIssues: 1, lastUpdatedAt: new Date().toISOString(), cacheStatus: "fresh" }
+        ]
+      }
+    ],
+    operatorConsent: {
+      realWritesEnabled: false,
+      enabledAt: "",
+      updatedAt: "",
+      summary: "真实写入授权未开启；同步按钮只刷新索引，不会写入 AI 工具目录。"
+    },
+    tags: [
+      { id: "tag-paper", name: "论文科研", color: "mint", targetCount: 3 },
+      { id: "tag-design", name: "界面设计", color: "peach", targetCount: 2 },
+      { id: "tag-security", name: "安全", color: "violet", targetCount: 2 },
+      { id: "tag-prompt", name: "Prompt", color: "amber", targetCount: 1 }
+    ],
+    presetDistributions: [
+      {
+        id: "dist-paper-global",
+        presetId: "paper",
+        presetName: "论文科研",
+        workspaceId: "global",
+        workspaceName: "全局技能库",
+        workspaceScope: "global",
+        enabled: true,
+        skillCount: 18,
+        status: "enabled",
+        summary: "全局默认启用论文科研组合。"
+      },
+      {
+        id: "dist-paper-claude",
+        presetId: "paper",
+        presetName: "论文科研",
+        workspaceId: "claude-agent",
+        workspaceName: "Claude 工作区",
+        workspaceScope: "agent",
+        enabled: true,
+        skillCount: 18,
+        status: "enabled",
+        summary: "Claude 可优先使用论文写作和投稿审计技能。"
+      },
+      {
+        id: "dist-design-app-next",
+        presetId: "design",
+        presetName: "界面设计",
+        workspaceId: "app-next",
+        workspaceName: "AI SkillHub v2 项目",
+        workspaceScope: "project",
+        enabled: true,
+        skillCount: 7,
+        status: "enabled",
+        summary: "v2 项目工作区启用 UI 审查和交互打磨组合。"
+      },
+      {
+        id: "dist-security-global",
+        presetId: "security",
+        presetName: "安全检查",
+        workspaceId: "global",
+        workspaceName: "全局技能库",
+        workspaceScope: "global",
+        enabled: false,
+        skillCount: 4,
+        status: "disabled",
+        summary: "安全组合默认保留为可选，发布前再启用。"
+      }
+    ],
+    operationRunners: [
+      {
+        id: "diagnostics-export",
+        title: "导出 v2 诊断包",
+        runnerType: "diagnostics",
+        status: "ready",
+        locked: false,
+        lastRunAt: "",
+        exportDir: "../app-next/.skillhub-next/reports/diagnostics",
+        reportPath: "../app-next/.skillhub-next/reports/diagnostics/latest-diagnostics-export.md",
+        latestJsonPath: "../app-next/.skillhub-next/reports/diagnostics/latest-diagnostics-export.json",
+        latestMarkdownPath: "../app-next/.skillhub-next/reports/diagnostics/latest-diagnostics-export.md",
+        manifestPath: "../app-next/.skillhub-next/reports/diagnostics/latest-diagnostics-export-manifest.json",
+        fileCount: 0,
+        summary: "生成脱敏诊断摘要、SQLite 状态和发布闸门输入。",
+        nextAction: "运行 dry-run，记录报告摘要。"
+      },
+      {
+        id: "share-validation",
+        title: "分享验收执行器",
+        runnerType: "share-validation",
+        status: "ready",
+        locked: false,
+        lastRunAt: "",
+        exportDir: "../app-next/.skillhub-next/reports/share-validation",
+        reportPath: "../app-next/.skillhub-next/reports/share-validation/latest-share-validation.md",
+        latestJsonPath: "../app-next/.skillhub-next/reports/share-validation/latest-share-validation.json",
+        latestMarkdownPath: "../app-next/.skillhub-next/reports/share-validation/latest-share-validation.md",
+        manifestPath: "../app-next/.skillhub-next/reports/share-validation/latest-share-validation-manifest.json",
+        fileCount: 0,
+        summary: "检查无 AI 工具、仅 Claude、缺 Git、路径含空格等分享场景。",
+        nextAction: "运行 dry-run，生成分享可用性结论。"
+      },
+      {
+        id: "report-bundle",
+        title: "报告包索引",
+        runnerType: "report-bundle",
+        status: "ready",
+        locked: false,
+        lastRunAt: "",
+        exportDir: "../app-next/.skillhub-next/reports/report-bundle",
+        reportPath: "../app-next/.skillhub-next/reports/report-bundle/latest-report-bundle.md",
+        latestJsonPath: "../app-next/.skillhub-next/reports/report-bundle/latest-report-bundle.json",
+        latestMarkdownPath: "../app-next/.skillhub-next/reports/report-bundle/latest-report-bundle.md",
+        manifestPath: "../app-next/.skillhub-next/reports/report-bundle/latest-report-bundle-manifest.json",
+        fileCount: 0,
+        summary: "汇总诊断、分享和发布计划报告，只生成报告索引，不制作正式发布包。",
+        nextAction: "先运行前置执行器，再生成最终报告包索引。"
+      },
+      {
+        id: "write-execution-plan",
+        title: "真实写入执行计划",
+        runnerType: "write-plan",
+        status: "ready",
+        locked: false,
+        lastRunAt: "",
+        exportDir: "../app-next/.skillhub-next/reports/write-execution-plan",
+        reportPath: "../app-next/.skillhub-next/reports/write-execution-plan/latest-write-execution-plan.md",
+        latestJsonPath: "../app-next/.skillhub-next/reports/write-execution-plan/latest-write-execution-plan.json",
+        latestMarkdownPath: "../app-next/.skillhub-next/reports/write-execution-plan/latest-write-execution-plan.md",
+        manifestPath:
+          "../app-next/.skillhub-next/reports/write-execution-plan/latest-write-execution-plan-manifest.json",
+        fileCount: 0,
+        summary: "把真实导入、同步和打包闸门合成可审计执行计划，包含阻断项和回滚预案。",
+        nextAction: "生成真实写入执行计划报告。"
+      },
+      {
+        id: "v2-completion-audit",
+        title: "V2 完成度审计",
+        runnerType: "completion-audit",
+        status: "ready",
+        locked: false,
+        lastRunAt: "",
+        exportDir: "../app-next/.skillhub-next/reports/v2-completion-audit",
+        reportPath: "../app-next/.skillhub-next/reports/v2-completion-audit/latest-v2-completion-audit.md",
+        latestJsonPath: "../app-next/.skillhub-next/reports/v2-completion-audit/latest-v2-completion-audit.json",
+        latestMarkdownPath:
+          "../app-next/.skillhub-next/reports/v2-completion-audit/latest-v2-completion-audit.md",
+        manifestPath:
+          "../app-next/.skillhub-next/reports/v2-completion-audit/latest-v2-completion-audit-manifest.json",
+        fileCount: 0,
+        summary: "检查 V2 是否可以称为完整版本，并列出剩余发布阻断项。",
+        nextAction: "生成 V2 完成度审计报告。"
+      },
+      {
+        id: "release-package",
+        title: "发布打包执行器",
+        runnerType: "release-package",
+        status: "locked",
+        locked: true,
+        lastRunAt: "",
+        exportDir: "../app-next/.skillhub-next/reports/release-package",
+        reportPath: "../app-next/.skillhub-next/reports/release-package/latest-release-package.md",
+        latestJsonPath: "../app-next/.skillhub-next/reports/release-package/latest-release-package.json",
+        latestMarkdownPath: "../app-next/.skillhub-next/reports/release-package/latest-release-package.md",
+        manifestPath: "../app-next/.skillhub-next/reports/release-package/latest-release-package-manifest.json",
+        fileCount: 0,
+        summary: "正式打包仍锁定，直到诊断、桌面 QA、备份和分享验收全部通过。",
+        nextAction: "先完成全部发布闸门，再开放真实打包。"
+      }
+    ],
+    writeGates: [
+      {
+        id: "github-import",
+        title: "GitHub 来源真实导入",
+        operationType: "clone-pull",
+        status: "blocked",
+        unlocked: false,
+        riskLevel: "medium",
+        summary: "还有 2 个条件未满足；真实写入保持关闭。",
+        nextAction: "先生成具体来源的 dry-run 计划，再开放逐项 clone/pull。",
+        planSteps: [
+          "标准化 GitHub URL 并锁定目标来源目录。",
+          "执行 clone/pull dry-run，记录将新增、更新或跳过的来源。",
+          "扫描 SKILL.md 并区分 Prompt 资料。",
+          "刷新 SQLite 索引，不修改 AI 工具目录。"
+        ],
+        rollbackSteps: ["保留 clone/pull 前来源清单快照。", "失败时删除本次新增的临时来源目录。"],
+        passingChecks: ["诊断报告没有 error", "已生成 GitHub 来源导入预览"],
+        blockingChecks: [
+          "报告包索引尚未生成",
+          "真实 clone/pull 执行器尚未开放；当前只允许 dry-run 计划。"
+        ]
+      },
+      {
+        id: "local-zip-import",
+        title: "本地 / zip 真实导入",
+        operationType: "local-zip-copy",
+        status: "blocked",
+        unlocked: false,
+        riskLevel: "high",
+        summary: "还有 2 个条件未满足；真实写入保持关闭。",
+        nextAction: "先补齐 zip 预览报告和重复名称检查，再生成可回滚安装计划。",
+        planSteps: [
+          "复制/解压到临时隔离目录。",
+          "扫描 SKILL.md、重复名称、路径穿越和超大文件。",
+          "生成目标目录和备份目录清单。",
+          "安全报告通过后才允许移动到正式来源目录。"
+        ],
+        rollbackSteps: ["保留导入前来源目录索引。", "失败时删除临时目录，不碰正式目录。"],
+        passingChecks: ["诊断报告没有 error"],
+        blockingChecks: [
+          "本地文件夹或 zip/.skill 导入预览尚未通过",
+          "真实复制 / 解压执行器尚未开放；当前只允许预览。"
+        ]
+      },
+      {
+        id: "agent-sync",
+        title: "AI 工具真实接管同步",
+        operationType: "agent-link-sync",
+        status: "blocked",
+        unlocked: false,
+        riskLevel: "high",
+        summary: "还有 4 个条件未满足；真实写入保持关闭。",
+        nextAction: "先让备份、恢复、回滚和桌面 QA 全部变成可审计通过状态。",
+        planSteps: [
+          "冻结 v2 SQLite 快照和启用 Skill 清单。",
+          "备份每个已接管 AI 工具的目标 skills 目录。",
+          "生成将创建/替换/删除的链接或复制项清单。",
+          "逐工具执行，同步后立即验证。"
+        ],
+        rollbackSteps: ["从备份目录恢复每个 AI 工具原始 skills 目录。", "撤销本次托管链接，保留用户非托管文件。"],
+        passingChecks: ["诊断报告没有 error", "至少有一个已检测、已启用且由 AI SkillHub 管理的 AI 工具适配器"],
+        blockingChecks: [
+          "备份 dry-run 仍有 planned / blocked 项",
+          "回滚计划仍含 locked / planned 步骤",
+          "必需桌面 QA 未全部通过",
+          "真实链接替换执行器尚未开放；当前不会写入 Claude/Codex/Antigravity 目录。"
+        ]
+      },
+      {
+        id: "release-package",
+        title: "正式发布包生成",
+        operationType: "release-package",
+        status: "blocked",
+        unlocked: false,
+        riskLevel: "medium",
+        summary: "还有 5 个条件未满足；真实写入保持关闭。",
+        nextAction: "完成全部报告与桌面 QA 后，再把 release-package 从计划模式切到真实打包。",
+        planSteps: [
+          "运行诊断、分享验收、发布预检、zip 预览和报告包索引。",
+          "确认公开仓库排除 personal skills / reports / local paths。",
+          "生成发布目录、校验清单、版本说明和 SHA256。",
+          "只在用户确认后推送 tag / release。"
+        ],
+        rollbackSteps: ["发布前保留本地 release manifest。", "失败时删除候选包并保留上一个稳定包。"],
+        passingChecks: ["诊断报告没有 error"],
+        blockingChecks: [
+          "发布预检报告未通过",
+          "分享验收报告未通过",
+          "zip 预览报告未通过",
+          "必需桌面 QA 未全部通过",
+          "正式打包执行器尚未开放；当前 release-package 只写计划报告。"
+        ]
       }
     ],
     desktopQaChecks: [
@@ -3701,6 +6298,101 @@ function updatePreviewEnabled(
   return snapshot;
 }
 
+function updatePreviewPresetDistribution(
+  snapshot: LegacySnapshot,
+  presetId: string,
+  workspaceId: string,
+  enabled: boolean
+): LegacySnapshot {
+  const presetDistributions = snapshot.presetDistributions.map(item =>
+    item.presetId === presetId && item.workspaceId === workspaceId
+      ? {
+          ...item,
+          enabled,
+          status: enabled ? "enabled" : "disabled",
+          summary: enabled
+            ? `${item.presetName} 已计划分发到 ${item.workspaceName}。`
+            : `${item.presetName} 已从 ${item.workspaceName} 的分发计划中停用。`
+        }
+      : item
+  );
+  const workspaceCountByPreset = new Map<string, number>();
+  for (const item of presetDistributions) {
+    if (item.enabled) {
+      workspaceCountByPreset.set(item.presetId, (workspaceCountByPreset.get(item.presetId) ?? 0) + 1);
+    }
+  }
+
+  return {
+    ...snapshot,
+    presetDistributions,
+    presets: snapshot.presets.map(preset => ({
+      ...preset,
+      workspaceCount: workspaceCountByPreset.get(preset.id) ?? 0
+    }))
+  };
+}
+
+function updatePreviewOperationRunner(snapshot: LegacySnapshot, runnerId: string): LegacySnapshot {
+  const now = new Date().toISOString();
+  return {
+    ...snapshot,
+    operationRunners: snapshot.operationRunners.map(runner =>
+      runner.id === runnerId
+        ? {
+          ...runner,
+          status: runner.locked ? "locked" : "completed",
+          lastRunAt: now,
+          fileCount: Math.max(runner.fileCount, 6),
+          summary: runner.locked
+            ? `${runner.title} 已生成锁定计划；没有执行真实打包。`
+            : `${runner.title} 已完成 dry-run 记录；没有执行真实写入。`
+        }
+        : runner
+    ),
+    auditEvents: [
+      {
+        id: `preview-runner-${runnerId}-${Date.now()}`,
+        eventType: "operation_runner_completed",
+        summary: `Completed dry-run runner ${runnerId}`,
+        detailJson: "{}",
+        createdAt: now
+      },
+      ...snapshot.auditEvents
+    ].slice(0, 30)
+  };
+}
+
+function updatePreviewRealWriteAuthorization(snapshot: LegacySnapshot, enabled: boolean): LegacySnapshot {
+  const now = new Date().toISOString();
+  return {
+    ...snapshot,
+    operatorConsent: {
+      realWritesEnabled: enabled,
+      enabledAt: enabled ? now : "",
+      updatedAt: now,
+      summary: enabled
+        ? "用户已手动授权真实写入；同步按钮会运行 GitHub 更新、Skill 路由重建和 AI 工具链接同步。"
+        : "真实写入授权未开启；同步按钮只刷新索引，不会写入 AI 工具目录。"
+    },
+    writeGates: snapshot.writeGates.map(gate => {
+      if (gate.id !== "agent-sync" && gate.id !== "release-package") return gate;
+      const authLabel = "用户已在界面手动开启真实写入授权开关。";
+      return enabled
+        ? {
+            ...gate,
+            passingChecks: Array.from(new Set([...gate.passingChecks, authLabel])),
+            blockingChecks: gate.blockingChecks.filter(check => !check.includes("真实写入授权开关"))
+          }
+        : {
+            ...gate,
+            blockingChecks: Array.from(new Set([...gate.blockingChecks, authLabel])),
+            passingChecks: gate.passingChecks.filter(check => !check.includes("真实写入授权开关"))
+          };
+    })
+  };
+}
+
 function updatePreviewDesktopQaStatus(
   snapshot: LegacySnapshot,
   id: string,
@@ -3794,6 +6486,53 @@ function releaseReportGateLabel(report?: ReleaseReportCard) {
   if (report.ok && report.status === "ok") return "已通过";
   if (report.status === "warn") return "需复查";
   return "已阻断";
+}
+
+function operationRunnerStatusClass(status: string, locked: boolean) {
+  if (locked) return "blocked";
+  if (status === "completed" || status === "ok") return "done";
+  if (status === "error" || status === "blocked") return "blocked";
+  if (status === "armed") return "planned";
+  return "planned";
+}
+
+function operationRunnerStatusLabel(status: string, locked: boolean) {
+  if (locked) return "已锁定";
+  if (status === "completed" || status === "ok") return "已完成";
+  if (status === "armed") return "待确认";
+  if (status === "warn") return "需复查";
+  if (status === "blocked") return "阻断";
+  if (status === "error") return "失败";
+  return "可运行";
+}
+
+function operationRunnerActionLabel(runnerType: string, locked: boolean) {
+  if (locked) return "生成锁定计划";
+  if (runnerType === "real-write-check") return "运行解锁检查";
+  if (runnerType === "real-write-executor") return "尝试最终执行";
+  if (runnerType === "release-package") return "生成打包计划";
+  return "运行 dry-run";
+}
+
+function writeGateStatusClass(gate: WriteGateCard) {
+  if (gate.unlocked) return "done";
+  if (gate.status === "locked") return "planned";
+  if (gate.status === "ready") return "planned";
+  return "blocked";
+}
+
+function writeGateStatusLabel(gate: WriteGateCard) {
+  if (gate.unlocked) return "可执行";
+  if (gate.status === "locked") return "仍锁定";
+  if (gate.status === "ready") return "待解锁";
+  return "阻断";
+}
+
+function writeGateRiskLabel(riskLevel: string) {
+  if (riskLevel === "high") return "高";
+  if (riskLevel === "medium") return "中";
+  if (riskLevel === "low") return "低";
+  return riskLevel || "未知";
 }
 
 function releaseReadinessReason(items: Array<{ status: string; title: string; label: string }>) {

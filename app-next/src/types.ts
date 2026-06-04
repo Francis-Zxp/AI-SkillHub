@@ -33,6 +33,11 @@ export type LegacySnapshot = {
   releaseReports: ReleaseReportCard[];
   importPreviews: ImportPreviewCard[];
   sourcePopularity: SourcePopularityCard[];
+  operatorConsent: OperatorConsentCard;
+  tags: TagCard[];
+  presetDistributions: PresetDistributionCard[];
+  operationRunners: OperationRunnerCard[];
+  writeGates: WriteGateCard[];
   desktopQaChecks: DesktopQaCheckCard[];
   usageStats: UsageStatCard[];
   auditEvents: AuditEventCard[];
@@ -59,6 +64,59 @@ export type SkillCard = {
   health: "ok" | "warn" | "error" | "info";
   enabled: boolean;
   relativePath: string;
+  tags: string[];
+  /**
+   * Backend-computed marker for parent / router-hub Skills.
+   * True when SKILL.md description contains the [ROUTER-HUB] marker,
+   * the file lives under app/github_sources/AI-SkillHub-local-routers,
+   * or the skill name matches its source collection name.
+   * Optional during the rollout window; older SQLite snapshots may omit it.
+   */
+  isRouterHub?: boolean;
+};
+
+/**
+ * Returned by the regenerate_router_hubs Tauri command.
+ * Lists per-collection plans (dry-run) or actual writes (commit + consent).
+ */
+export type RouterHubReport = {
+  plans: RouterHubPlanCard[];
+  routersRoot: string;
+  realWritesEnabled: boolean;
+  committed: boolean;
+  totalCollections: number;
+  writtenCount: number;
+  skippedCount: number;
+  healthWarnings: RouterHubHealthWarning[];
+  /** Same child Skill `name:` appearing in 2+ collections; only one wins on Claude. */
+  duplicateChildren: RouterHubDuplicateChild[];
+  summary: string;
+};
+
+export type RouterHubDuplicateChild = {
+  childName: string;
+  collections: string[];
+};
+
+export type RouterHubPlanCard = {
+  collectionName: string;
+  routerSkillName: string;
+  routerSkillMdPath: string;
+  childCount: number;
+  children: string[];
+  status:
+    | "planned"
+    | "written"
+    | "skipped-single-child"
+    | "skipped-collision"
+    | "skipped-empty"
+    | string;
+  summary: string;
+};
+
+export type RouterHubHealthWarning = {
+  skillMdPath: string;
+  issue: string;
 };
 
 export type SourceCard = {
@@ -73,6 +131,8 @@ export type SourceCard = {
   note: string;
   localPath: string;
   enabled: boolean;
+  tags: string[];
+  createdAt: string;
 };
 
 export type AgentCard = {
@@ -148,6 +208,59 @@ export type PresetCard = {
   color: string;
   enabled: boolean;
   skillCount: number;
+  workspaceCount: number;
+};
+
+export type TagCard = {
+  id: string;
+  name: string;
+  color: string;
+  targetCount: number;
+};
+
+export type PresetDistributionCard = {
+  id: string;
+  presetId: string;
+  presetName: string;
+  workspaceId: string;
+  workspaceName: string;
+  workspaceScope: string;
+  enabled: boolean;
+  skillCount: number;
+  status: string;
+  summary: string;
+};
+
+export type OperationRunnerCard = {
+  id: string;
+  title: string;
+  runnerType: string;
+  status: "ready" | "completed" | "locked" | "error" | string;
+  locked: boolean;
+  lastRunAt: string;
+  exportDir: string;
+  reportPath: string;
+  latestJsonPath: string;
+  latestMarkdownPath: string;
+  manifestPath: string;
+  fileCount: number;
+  summary: string;
+  nextAction: string;
+};
+
+export type WriteGateCard = {
+  id: string;
+  title: string;
+  operationType: string;
+  status: "blocked" | "locked" | "ready" | string;
+  unlocked: boolean;
+  riskLevel: "low" | "medium" | "high" | string;
+  summary: string;
+  nextAction: string;
+  planSteps: string[];
+  rollbackSteps: string[];
+  passingChecks: string[];
+  blockingChecks: string[];
 };
 
 export type SnapshotCard = {
@@ -258,12 +371,52 @@ export type SourceImportPlanCard = {
   rollbackSummary: string;
 };
 
+export type SourceImportExecutionCard = {
+  id: string;
+  importKind: "github" | "local" | "zip" | string;
+  input: string;
+  status: "staged" | "warn" | "blocked" | "locked" | string;
+  riskLevel: "low" | "medium" | "high" | string;
+  summary: string;
+  stagedPath: string;
+  reportPath: string;
+  manifestPath: string;
+  copiedFiles: number;
+  copiedBytes: number;
+  skillCount: number;
+  promptCount: number;
+  blockingChecks: string[];
+  rollbackSteps: string[];
+  realWriteScope: string;
+};
+
+export type SourceImportPromotionCard = {
+  id: string;
+  importKind: "github" | "local" | "zip" | string;
+  sourceName: string;
+  status: "promoted" | "already-managed" | "blocked" | string;
+  riskLevel: "low" | "medium" | "high" | string;
+  summary: string;
+  stagedPath: string;
+  targetPath: string;
+  reportPath: string;
+  manifestPath: string;
+  copiedFiles: number;
+  copiedBytes: number;
+  skillCount: number;
+  promptCount: number;
+  blockingChecks: string[];
+  rollbackSteps: string[];
+  realWriteScope: string;
+};
+
 export type SourcePopularityCard = {
   sourceId: string;
   sourceName: string;
   url: string;
   owner: string;
   repo: string;
+  createdAt: string;
   stars: number;
   forks: number;
   openIssues: number;
@@ -274,6 +427,23 @@ export type SourcePopularityCard = {
   localTotalCount: number;
   localSevenDayCount: number;
   localThirtyDayCount: number;
+  trendPoints: SourcePopularityTrendPointCard[];
+};
+
+export type SourcePopularityTrendPointCard = {
+  sampledAt: string;
+  stars: number;
+  forks: number;
+  openIssues: number;
+  lastUpdatedAt: string;
+  cacheStatus: "fresh" | "stale" | "missing" | "error" | string;
+};
+
+export type OperatorConsentCard = {
+  realWritesEnabled: boolean;
+  enabledAt: string;
+  updatedAt: string;
+  summary: string;
 };
 
 export type DesktopQaCheckCard = {

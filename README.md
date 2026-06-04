@@ -4,6 +4,17 @@ AI SkillHub is a Windows desktop app for managing AI agent Skills in one place. 
 
 ![AI SkillHub v1.1 interface](docs/images/v1.1.png)
 
+## Which version should I use?
+
+| Version | Status | Stack | Folder |
+|---|---|---|---|
+| **v1.1.x (stable)** | Production · daily-driver for sharing | WinForms shell + WebView2 + PowerShell sync | [`app/`](app/) |
+| **v2 alpha (preview)** | Active development · API may shift before v0.2.0 | Tauri 2 + React + TypeScript + Rust + SQLite | [`app-next/`](app-next/) |
+
+**If you just want to use AI SkillHub today**, download the v1.1 release below and run `AI SkillHub.exe`.
+
+**If you want to try v2 or contribute** to the next-gen rewrite, see the [v2 quick start](app-next/README.md). v2 still relies on v1's folder structure (`app/SkillHub.ps1`, `app/github_sources/`, `app/reports/`) — keep them side-by-side in the same repo clone for now.
+
 ## Download
 
 Recommended for normal users:
