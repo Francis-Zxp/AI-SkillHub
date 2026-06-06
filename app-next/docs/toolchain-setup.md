@@ -83,9 +83,10 @@ pnpm build
 pnpm tauri info
 ```
 
-## How to start v2 during development
+## How to start V2 during development
 
-V2 is not the same as the released v1 executable yet. It is still the Tauri development line.
+V2 is now the maintained app line. Development still uses the Tauri dev command
+for hot reload and diagnostics.
 
 Use this command while developing:
 

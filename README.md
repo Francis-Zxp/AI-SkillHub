@@ -1,148 +1,130 @@
-# AI SkillHub
+# AI SkillHub V2
 
-AI SkillHub is a Windows desktop app for managing AI agent Skills in one place. It helps you collect Skills from GitHub, local folders, or zip files, then link the usable Skills into tools such as Claude Code, Codex, and Antigravity.
+AI SkillHub V2 is a Windows desktop hub for managing AI agent Skills, Prompt
+materials, GitHub sources, and local AI-tool links from one place.
 
-![AI SkillHub v1.1 interface](docs/images/v1.1.png)
+The project has moved to the V2-only layout. The old V1 WebView/PowerShell app
+folder has been removed.
 
-## Which version should I use?
+## Current Launcher
 
-| Version | Status | Stack | Folder |
-|---|---|---|---|
-| **v1.1.x (stable)** | Production · daily-driver for sharing | WinForms shell + WebView2 + PowerShell sync | [`app/`](app/) |
-| **v2 alpha (preview)** | Active development · API may shift before v0.2.0 | Tauri 2 + React + TypeScript + Rust + SQLite | [`app-next/`](app-next/) |
-
-**If you just want to use AI SkillHub today**, download the v1.1 release below and run `AI SkillHub.exe`.
-
-**If you want to try v2 or contribute** to the next-gen rewrite, see the [v2 quick start](app-next/README.md). v2 still relies on v1's folder structure (`app/SkillHub.ps1`, `app/github_sources/`, `app/reports/`) — keep them side-by-side in the same repo clone for now.
-
-## Download
-
-Recommended for normal users:
-
-1. Open the latest release page: <https://github.com/Francis-Zxp/AI-SkillHub/releases/latest>
-2. Download `AI-SkillHub-v1.1.0.zip`.
-3. Unzip it to a normal folder, for example `D:\AI-SkillHub`.
-4. Double-click `AI SkillHub.exe`.
-
-If no release asset is available yet, you can still use the green `Code` button on GitHub and choose `Download ZIP`. After unzipping the repository, run `AI SkillHub.exe`.
-
-See `CHANGELOG.md` and `docs/release-notes/v1.1.0.md` for version details.
-
-## What It Does
-
-- Manage GitHub Skill repositories, local Skill folders, and zip imports.
-- Install only real Skills: a folder must contain `SKILL.md` before it is treated as a Skill.
-- Keep Prompt/reference repositories as material instead of installing them as Skills.
-- Link shared Skills into Claude Code, Codex, and Antigravity when those tools are detected.
-- Skip missing AI coding tools instead of creating fake tool folders.
-- Support source categories, tags, notes, search, sorting, duplicate-name hints, and recent operation history.
-- Provide system checks, share checks, diagnostics export, troubleshooting bundles, zip-import safety checks, and clean-recipient validation.
-- Use the in-app Release Center to run share validation, release preflight, and open generated reports/packages.
-- Support Chinese, English, and Korean UI text, with multiple visual themes.
-
-## Quick Start
-
-1. Run `AI SkillHub.exe`.
-2. Paste a GitHub repository URL, or import a local folder/zip.
-3. Click `Sync Now`.
-4. Turn on `Agent Links` if you want Claude Code, Codex, or Antigravity to read the shared Skills.
-5. Use `System Check` or `Share Check` when sending the app to another computer.
-
-The public package does not include anyone's personal Skills. Each user adds their own Skill repositories after the first launch.
-
-## Requirements
-
-- Windows 10 or Windows 11.
-- Git for Windows, required for GitHub sync.
-- Microsoft Edge WebView2 Runtime, usually already included on modern Windows.
-
-Node, Python, Rust, and Visual Studio are not required for normal use.
-
-## First Launch Behavior
-
-On first launch, AI SkillHub creates a local config file:
+For local use, start:
 
 ```text
-app/skillhub.config.json
+AI SkillHub V2 Alpha.exe
 ```
 
-This file stores your own sources, tags, notes, and switches. It is local to your computer and is not included in this public repository.
+The executable in the repository root is a local build artifact and is ignored
+by Git. Public releases should be created with the V2 release package workflow.
+
+## Core Flow
+
+1. Open AI SkillHub V2.
+2. Go to `Sources`.
+3. Paste a GitHub repository URL, select source type, category, tags, and notes.
+4. Click `一键添加并刷新`.
+5. Confirm whether the source should be visible only inside AI SkillHub or also
+   synchronized into Claude Code, Codex, or Antigravity.
+
+AI SkillHub installs only real Skills. A folder must contain `SKILL.md` before
+it is treated as a callable Skill. Prompt-only repositories remain source
+material and are not installed as Skills.
+
+## What V2 Manages
+
+- GitHub Skill repositories.
+- Local Skill folders.
+- Zip or `.skill` package previews.
+- Prompt/reference repositories.
+- Parent router Skills and child Skills.
+- Claude Code, Codex, and Antigravity shared-skill links.
+- Source categories, tags, notes, search, sorting, usage counters, and GitHub
+  popularity metadata.
+- Diagnostics, share checks, backup/restore dry runs, and release package
+  preflight checks.
 
 ## Folder Layout
 
 ```text
-AI-SkillHub/
-  AI SkillHub.exe
-  README.md
-  使用说明.md
-  app/
-    assets/
-    runtime/
-    ui/
-    SkillHub.ps1
-    Manage-AgentSkillLinks.ps1
-    Export-SkillHubDiagnostics.ps1
-    Test-ShareRecipientExperience.ps1
-    Build-SkillHubReleasePackage.ps1
-    skillhub.config.example.json
+AI_global_skills/
+  app-next/                         # V2 Tauri / React / Rust app
+    runtime/                        # V2 helper scripts
+    data/github_sources/            # local cloned sources, private
+    reports/                        # generated reports, private
+    .skillhub-next/                 # generated sync state, private
+  skills/                           # active shared Skills view, private
+  docs/                             # product docs and handoff notes
 ```
 
-The app will create local working folders such as `skills/`, `app/github_sources/`, and `app/reports/` when needed.
-
-## Common Questions
-
-### Why are there no Skills after downloading?
-
-The public download does not bundle personal Skills. Add a GitHub Skill repository or import a local Skill folder/zip, then sync.
-
-### What if I only use Claude Code and do not have Codex?
-
-That is fine. Codex is optional. AI SkillHub detects what is installed and skips missing tools.
-
-### What if no AI coding tool is installed?
-
-AI SkillHub will show that no linkable AI coding tool was detected. Install Claude Code, Codex, or Antigravity first, then enable agent linking again.
-
-### Why does a Prompt repository not appear as an active Skill?
-
-Prompt/reference material is not a callable Skill. AI SkillHub keeps it as source material instead of installing it into `skills/`.
-
-### Is zip import safe?
-
-AI SkillHub previews zip files before import and blocks unsafe paths that try to escape the target folder.
-
-## Validation For Sharing
-
-Before publishing or sending a new build to someone else, developers can run these checks from the app folder or command line:
+The old V1 paths are no longer part of the product:
 
 ```text
-AI SkillHub.exe --self-test
-AI SkillHub.exe --zip-preview-test
-AI SkillHub.exe --troubleshooting-test
-AI SkillHub.exe --share-recipient-test
-AI SkillHub.exe --release-preflight
+app/
+AI SkillHub.exe
+release/
 ```
 
-The share-recipient test creates a temporary clean copy in a path with spaces and Chinese characters, confirms no personal Skills/config/reports are bundled, and simulates missing Codex, no detected AI tools, missing Git, and missing WebView2.
+## Privacy Boundary
 
-The release preflight builds a clean allowlisted zip under `release/`, writes a SHA256 file, and audits the package for personal Skills, cloned sources, local config, reports, and caches.
+The public repository must not include personal Skills, cloned third-party
+repositories, local reports, local config, build output, or diagnostics.
 
-## Developer Notes
-Current v1 stack:
+Important ignored paths:
 
-- C# WinForms shell
-- Microsoft WebView2
-- Static HTML/CSS/JavaScript UI
-- PowerShell sync/link scripts
-- JSON config
+```text
+skills/
+app-next/data/
+app-next/reports/
+app-next/.skillhub-next/
+app-next/runtime/skillhub.config.json
+app-next/node_modules/
+app-next/src-tauri/target/
+AI SkillHub V2 Alpha.exe
+```
 
-Future v2 direction:
+## Developer Setup
 
-- Tauri 2
-- React
-- TypeScript
+Requirements for development:
+
+- Windows 10 or Windows 11
+- Node.js LTS
+- pnpm
 - Rust
-- SQLite
+- Visual Studio C++ Build Tools
+- Git for Windows
+
+Useful checks:
+
+```text
+cd app-next
+pnpm build
+cargo test --manifest-path src-tauri/Cargo.toml
+pnpm tauri build --no-bundle
+```
+
+## Runtime Scripts
+
+The V2 helper scripts live in:
+
+```text
+app-next/runtime/
+```
+
+Do not restore or depend on the old `app/SkillHub.ps1` path.
+
+## Skill Router Standard
+
+AI SkillHub generates parent router Skills under:
+
+```text
+app-next/data/github_sources/AI-SkillHub-local-routers/
+```
+
+Generated parent routers use `[ROUTER-HUB]`. Child entries use
+`[CHILD-SKILL]`. Author-owned `SKILL.md` files are not modified, so GitHub
+updates do not overwrite AI SkillHub's routing standard.
+
+See `docs/skill-router-standard.md` for the rule.
 
 ## Author
 

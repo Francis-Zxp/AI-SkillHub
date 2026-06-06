@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "githubSourcesFolder": "github_sources",
-  "activeSkillsFolder": "..\\skills",
+  "githubSourcesFolder": "..\\data\\github_sources",
+  "activeSkillsFolder": "..\\..\\skills",
   "manageAgentLinks": false,
   "autoDiscoverManualRepos": true,
   "preferredPathFragments": [
@@ -11,3 +11,4 @@
   ],
   "repositories": []
 }
+

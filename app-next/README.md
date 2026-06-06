@@ -1,72 +1,75 @@
-# AI SkillHub v2 app-next
+# AI SkillHub V2 app-next
 
-`app-next` is the clean v2 workspace for AI SkillHub. It does not replace the current v1 WebView2 app yet.
+`app-next` is the maintained V2 workspace for AI SkillHub.
 
-## Goal
-
-Build the next AI SkillHub with:
+V2 uses:
 
 - Tauri 2 desktop shell
 - React + TypeScript + Vite frontend
 - Rust backend
-- SQLite-backed state
-- Read-only migration from the current v1 folders first
+- SQLite local state
+- PowerShell helper scripts under `runtime/`
 
-## Current status
+The old V1 `app/` directory is no longer part of the product.
 
-This is the SQLite-first indexing milestone with one explicit write surface (router-hub regeneration, gated behind operator consent). Defaults stay safe:
+## Runtime Boundary
 
-- It does not write to `../skills`
-- It does not take over Claude, Codex, or Antigravity links unless you flip the consent toggle
-- It opens from the v2 SQLite index first
-- It scans real v1 Skills, sources, agents, and diagnostics only when the index is missing or manually refreshed
-- It writes only to the v2 SQLite index under `.skillhub-next/` for normal operations
-- It seeds the first workspace and preset model from the indexed data
-- It keeps a first Agent Adapter Registry covering Claude, Codex, Antigravity, Cursor, Gemini CLI, OpenCode, GitHub Copilot, Windsurf, Kiro, Hermes, OpenClaw and Amp
-- It stores enable/disable state in v2 SQLite only, without changing v1 links
-- It records adapter safety checks before any future write/sync behavior is allowed
-- It records adapter capability metadata and a first read-only project workspace scan
+```text
+app-next/
+  runtime/                    # V2 helper scripts and config template
+  data/github_sources/        # local source repositories, private
+  reports/                    # generated reports, private
+  .skillhub-next/             # generated state, private
+```
 
-### Router-hub regeneration (new in this milestone)
+The shared active Skill view remains at the repository root:
 
-V2 can rebuild parent / router-hub `SKILL.md` files for every collection that has 2+ child Skills:
+```text
+../skills/
+```
 
-- Generated files live under `../app/github_sources/AI-SkillHub-local-routers/<collection>-hub/SKILL.md`, never inside the upstream author's repo, so `git pull` cannot overwrite them
-- Parent name uses the `-hub` suffix to avoid colliding with same-named children
-- Dry-run plan is always available (`regenerate_router_hubs` Tauri command with `commit: false`)
-- Real writes require **both** the `commit: true` argument **and** the in-app real-write authorization
-- Each run records a `router_hub_regenerate` event in `audit_events` so you can trace what changed
-- The Sources page surfaces a "重建母 Skill 路由" panel with per-collection cards, duplicate-child warnings, and unquoted-marker health gaps
+That directory is private and ignored by Git. It is not V1.
 
-## Before running
-
-Install or verify these tools first:
-
-- Node.js LTS is already available on this computer.
-- pnpm 11.2.2 is available on this computer.
-- Rust/Cargo 1.95.0 is available on this computer.
-- Visual Studio Build Tools / MSVC is required for Tauri on Windows.
-
-See [docs/toolchain-setup.md](docs/toolchain-setup.md) for download links and exact versions checked on 2026-05-25.
-
-After installing tools, run:
+## Development Commands
 
 ```powershell
-cd app-next
-npm run check:toolchain
+cd "D:\My Files\AI_global_skills\app-next"
 pnpm install
 pnpm build
 cargo test --manifest-path src-tauri/Cargo.toml
+pnpm tauri build --no-bundle
 ```
 
-After tools are ready:
+Development desktop window:
 
 ```powershell
-cd app-next
-pnpm install
 pnpm tauri dev
 ```
 
-## v2 principle
+If a stale development process locks the debug executable:
 
-v1 stays usable while v2 grows. V2 now treats v1 as a read-only source and builds its own SQLite model for Skills, sources, agents, agent adapters, adapter capabilities, adapter safety checks, workspaces, project scans, presets, snapshots, and audit events.
+```powershell
+pnpm dev:desktop
+```
+
+## Current Launcher
+
+The local root launcher is:
+
+```text
+D:\My Files\AI_global_skills\AI SkillHub V2 Alpha.exe
+```
+
+The shareable release package should be produced through the V2 release package
+workflow instead of copying the development folder directly.
+
+## Router Hubs
+
+Parent router Skills are generated under:
+
+```text
+app-next/data/github_sources/AI-SkillHub-local-routers/
+```
+
+Generated routers use `[ROUTER-HUB]`; child entries use `[CHILD-SKILL]`.
+Author-owned source repositories are not modified.

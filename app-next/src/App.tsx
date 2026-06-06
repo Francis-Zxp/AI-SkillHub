@@ -185,12 +185,38 @@ function tagInputValue(tags?: string[]): string {
   return (tags ?? []).join(", ");
 }
 
+type OperationStatus = {
+  title: string;
+  detail: string;
+  step: number;
+  total: number;
+  percent: number;
+};
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function friendlyErrorMessage(message: string): string {
+  if (message.includes("Source metadata is too long")) {
+    return "来源信息过长：请缩短备注后再试。";
+  }
+  if (message.includes("来源备注过长")) {
+    return message;
+  }
+  if (message.includes("GitHub API")) {
+    return "GitHub 热度刷新失败：请检查网络或稍后重试。";
+  }
+  return message;
+}
+
 export function App() {
   const [active, setActive] = useState<NavKey>(() => initialNavKey());
   const [theme, setTheme] = useState<ThemeName>(() => initialTheme());
   const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
   const [loadError, setLoadError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
+  const [operation, setOperation] = useState<OperationStatus | null>(null);
   const [toast, setToast] = useState<string>("");
   const [globalSearch, setGlobalSearch] = useState<string>("");
   const runtimeAvailable = hasTauriRuntime();
@@ -223,8 +249,13 @@ export function App() {
     return { skills, sources };
   }, [globalSearch, skillCommandSearch, snapshot]);
 
-  async function loadSnapshot(mode: "indexed" | "refresh" = "indexed"): Promise<LegacySnapshot | null> {
-    setLoading(true);
+  async function loadSnapshot(
+    mode: "indexed" | "refresh" = "indexed",
+    options: { background?: boolean } = {}
+  ): Promise<LegacySnapshot | null> {
+    if (!options.background) {
+      setLoading(true);
+    }
     try {
       if (!hasTauriRuntime()) {
         const preview = createPreviewSnapshot();
@@ -251,10 +282,12 @@ export function App() {
       }
       return result;
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : String(error));
+      setLoadError(messageFromError(error));
       return null;
     } finally {
-      setLoading(false);
+      if (!options.background) {
+        setLoading(false);
+      }
     }
   }
 
@@ -546,27 +579,89 @@ export function App() {
     }
   }
 
-  async function refreshSourcePopularity() {
+  async function refreshSourcePopularity(options: { quiet?: boolean; background?: boolean } = {}): Promise<LegacySnapshot | null> {
     if (!hasTauriRuntime()) {
       setSnapshot(previous => previous ?? createPreviewSnapshot());
-      setToast("浏览器预览不会请求 GitHub；桌面版会把热度缓存到 SQLite。");
-      return;
+      if (!options.quiet) {
+        setToast("浏览器预览不会请求 GitHub；桌面版会把热度缓存到 SQLite。");
+      }
+      return snapshot ?? createPreviewSnapshot();
     }
 
-    setLoading(true);
+    if (!options.background) {
+      setLoading(true);
+    }
     try {
       const result = await invoke<LegacySnapshot>("refresh_source_popularity");
       setSnapshot(result);
       setLoadError("");
       const refreshed = result.sourcePopularity.filter(source => source.cacheStatus === "fresh").length;
       const failed = result.sourcePopularity.filter(source => source.cacheStatus === "error").length;
-      setToast(`GitHub 热度已刷新：${refreshed} 个成功，${failed} 个失败。趋势需要至少两次刷新才会出现变化。`);
+      if (!options.quiet) {
+        setToast(`GitHub 热度已刷新：${refreshed} 个成功，${failed} 个失败。趋势需要至少两次刷新才会出现变化。`);
+      }
+      return result;
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : String(error));
-      setToast("GitHub 热度刷新失败；已保留旧缓存。");
+      setLoadError(messageFromError(error));
+      if (!options.quiet) {
+        setToast("GitHub 热度刷新失败；已保留旧缓存。");
+      }
+      return null;
     } finally {
-      setLoading(false);
+      if (!options.background) {
+        setLoading(false);
+      }
     }
+  }
+
+  async function syncAndRefreshAll(): Promise<LegacySnapshot | null> {
+    if (operation) {
+      setToast("同步已经在后台运行，请等待当前任务完成。");
+      return snapshot;
+    }
+
+    setOperation({
+      title: "同步并刷新",
+      detail: realWritesEnabled ? "正在更新 GitHub 来源并同步 AI 工具链接。" : "正在刷新索引，不写入 AI 工具目录。",
+      step: 1,
+      total: 3,
+      percent: 8
+    });
+    const refreshedIndex = await loadSnapshot("refresh", { background: true });
+    if (!hasTauriRuntime()) {
+      setOperation(null);
+      return refreshedIndex;
+    }
+
+    setOperation({
+      title: "同步并刷新",
+      detail: "正在刷新 GitHub 星标、Fork 和热度缓存。",
+      step: 2,
+      total: 3,
+      percent: 42
+    });
+    const refreshedPopularity = await refreshSourcePopularity({ quiet: true, background: true });
+    if (!refreshedPopularity) {
+      setToast("索引已刷新；GitHub 热度刷新失败，来源列表保留旧缓存。");
+      setOperation(null);
+      return refreshedIndex;
+    }
+
+    const refreshed = refreshedPopularity.sourcePopularity.filter(source => source.cacheStatus === "fresh").length;
+    const failed = refreshedPopularity.sourcePopularity.filter(source => source.cacheStatus === "error").length;
+    const syncSummary = refreshedIndex?.operatorConsent?.realWritesEnabled
+      ? "已同步 AI 工具并刷新索引"
+      : "已刷新索引，未写入 AI 工具";
+    setOperation({
+      title: "同步并刷新",
+      detail: "完成，正在更新界面。",
+      step: 3,
+      total: 3,
+      percent: 100
+    });
+    setToast(`${syncSummary}；GitHub 热度 ${refreshed} 个成功、${failed} 个失败。`);
+    window.setTimeout(() => setOperation(null), 900);
+    return refreshedPopularity;
   }
 
   async function previewSourceImportCandidate(
@@ -668,6 +763,26 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    if (!operation || operation.percent >= 100) return;
+    const timer = window.setInterval(() => {
+      setOperation(current => {
+        if (!current || current.percent >= 100) return current;
+        const phaseStart = ((current.step - 1) / current.total) * 100;
+        const phaseEnd = Math.min(96, (current.step / current.total) * 100 - 3);
+        if (current.percent >= phaseEnd) return current;
+        const increment = current.percent < phaseStart + 18 ? 2 : 1;
+        return {
+          ...current,
+          percent: Math.min(phaseEnd, current.percent + increment)
+        };
+      });
+    }, 520);
+    return () => window.clearInterval(timer);
+  }, [operation?.step, operation?.total]);
+
+  const operationProgress = operation ? Math.max(1, Math.min(100, Math.round(operation.percent))) : 0;
+
   return (
     <main className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme}`}>
       <aside className="sidebar">
@@ -761,13 +876,15 @@ export function App() {
             <img alt="AI SkillHub" className="topbar-avatar" src="/ai-skillhub-logo.png" />
             <button
               className="ghost-button sr-refresh"
-              disabled={loading}
-              onClick={() => void loadSnapshot("refresh")}
+              disabled={loading || Boolean(operation)}
+              onClick={() => void syncAndRefreshAll()}
               type="button"
             >
               {runtimeAvailable
-                ? loading
-                  ? "正在同步"
+                ? operation
+                  ? "后台同步中"
+                  : loading
+                    ? "正在同步"
                   : realWritesEnabled
                     ? "同步并刷新"
                     : "刷新索引"
@@ -792,10 +909,23 @@ export function App() {
           </section>
         )}
 
+        {operation && (
+          <section className="operation-banner" role="status" aria-live="polite">
+            <div>
+              <strong>{operation.title}</strong>
+              <span>{operation.detail}</span>
+            </div>
+            <em>{operationProgress}% · {operation.step}/{operation.total}</em>
+            <i style={{ "--operation-progress": `${operationProgress}%` } as CSSProperties} />
+          </section>
+        )}
+
         {loadError && (
-          <section className="panel warning-panel">
-            <h3>读取 v1 数据失败</h3>
-            <p>{loadError}</p>
+          <section className="status-banner error" role="alert">
+            <div>
+              <strong>操作未完成</strong>
+              <span>{friendlyErrorMessage(loadError)}</span>
+            </div>
           </section>
         )}
 
@@ -817,7 +947,7 @@ export function App() {
             onOpenRelease={() => setActive("release")}
             onOpenSources={() => setActive("sources")}
             onRefreshPopularity={() => void refreshSourcePopularity()}
-            onSync={() => void loadSnapshot("refresh")}
+            onSync={() => void syncAndRefreshAll()}
             snapshot={snapshot}
             summary={summary}
           />
@@ -829,7 +959,7 @@ export function App() {
             onRecordUsage={recordUsage}
             onSetSkillEnabled={updateSkillEnabled}
             onSaveMetadata={updateSkillMetadata}
-            onSync={() => void loadSnapshot("refresh")}
+            onSync={() => void syncAndRefreshAll()}
             searchQuery={globalSearch}
             snapshot={snapshot}
           />
@@ -847,11 +977,10 @@ export function App() {
           <Sources
             loading={loading}
             onBulkSaveMetadata={updateSourcesBulkMetadata}
-            onRecordUsage={recordUsage}
             onPreviewImport={previewSourceImportCandidate}
             onStageImport={stageSourceImportCandidate}
             onPromoteImport={promoteStagedSourceImport}
-            onRefreshIndex={() => loadSnapshot("refresh")}
+            onRefreshIndex={() => syncAndRefreshAll()}
             onRealWriteAuthorization={updateRealWriteAuthorization}
             onSaveMetadata={updateSourceMetadata}
             snapshot={snapshot}
@@ -1220,6 +1349,10 @@ function sourcePopularityDisplayName(source: Pick<SourcePopularityCard, "owner" 
   return sourceName;
 }
 
+function isInternalRouterSource(source: Pick<SourceCard, "name" | "url">) {
+  return source.name.trim().toLowerCase() === "ai-skillhub-local-routers" && !source.url.trim();
+}
+
 function heatLevel(value: number, max: number) {
   if (value <= 0 || max <= 0) return 0;
   const ratio = value / max;
@@ -1246,6 +1379,7 @@ function UsageInsightPanel({
   const sources = snapshot?.sources ?? [];
   const usageStats = snapshot?.usageStats ?? [];
   const sourcePopularity = snapshot?.sourcePopularity ?? [];
+  const displaySources = useMemo(() => sources.filter(source => !isInternalRouterSource(source)), [sources]);
   const rangeFactor = range === "all" ? 1 : range === "30d" ? 0.62 : 0.34;
   const sourceScore = (source: { localTotalCount: number; localSevenDayCount: number; localThirtyDayCount: number }) => {
     if (range === "7d") return source.localSevenDayCount;
@@ -1316,7 +1450,7 @@ function UsageInsightPanel({
       return realSourceStats;
     }
 
-    return sources
+    return displaySources
       .map((source, index) => ({
         cacheStatus: "",
         forks: 0,
@@ -1325,7 +1459,7 @@ function UsageInsightPanel({
         stars: 0
       }))
       .sort((a, b) => b.score - a.score);
-  }, [range, rangeFactor, sourcePopularity, sources, usageStats]);
+  }, [displaySources, range, rangeFactor, sourcePopularity, usageStats]);
 
   const heatRows = useMemo(() => {
     const rows: Array<{
@@ -1337,7 +1471,7 @@ function UsageInsightPanel({
     const seen = new Set<string>();
 
     sourcePopularity.forEach(source => {
-      const matchedSource = sources.find(
+      const matchedSource = displaySources.find(
         item =>
           item.id === source.sourceId ||
           item.name === source.sourceName ||
@@ -1361,7 +1495,7 @@ function UsageInsightPanel({
       });
     });
 
-    sources.forEach(source => {
+    displaySources.forEach(source => {
       if (seen.has(source.id) || rows.some(row => row.label === source.name)) return;
       const usage = usageStats.find(stat => stat.targetType === "source" && (stat.targetId === source.id || stat.targetName === source.name));
       rows.push({
@@ -1397,7 +1531,7 @@ function UsageInsightPanel({
     }
 
     return rows.sort((a, b) => b.metrics.usage - a.metrics.usage || b.metrics.stars - a.metrics.stars || a.label.localeCompare(b.label));
-  }, [range, skills.length, snapshot?.summary.warnings, sourcePopularity, sources, usageStats]);
+  }, [displaySources, range, skills.length, snapshot?.summary.warnings, sourcePopularity, usageStats]);
 
   const heatMaxByMetric = useMemo(
     () =>
@@ -1411,12 +1545,11 @@ function UsageInsightPanel({
   const barRows = useMemo(() => {
     const rows = [
       ...rankedSources.map(source => ({ label: source.name, score: source.stars || source.score, type: "Source" })),
-      ...rankedSkills.slice(0, 12).map(skill => ({ label: skill.name, score: skill.score, type: "Skill" }))
+      ...rankedSkills.map(skill => ({ label: skill.name, score: skill.score, type: "Skill" }))
     ].filter(row => row.score > 0);
     const max = Math.max(...rows.map(row => row.score), 1);
     return rows
       .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
-      .slice(0, 12)
       .map(row => ({
         ...row,
         level: heatLevel(row.score, max),
@@ -2460,7 +2593,6 @@ function PresetDistributionRow({
 function Sources({
   loading,
   onBulkSaveMetadata,
-  onRecordUsage,
   onPromoteImport,
   onPreviewImport,
   onRefreshIndex,
@@ -2476,13 +2608,6 @@ function Sources({
     category: string,
     enabled: boolean | null
   ) => Promise<"failed" | "preview" | "saved">;
-  onRecordUsage: (
-    targetType: string,
-    targetId: string,
-    targetName: string,
-    sourceName: string,
-    eventType: string
-  ) => Promise<void>;
   onPromoteImport: (
     importKind: string,
     stagedPath: string,
@@ -2521,7 +2646,13 @@ function Sources({
     () => sortSources(filteredSources, sourceSortKey, sourcePopularityById),
     [filteredSources, sourcePopularityById, sourceSortKey]
   );
-  const editingSource = displaySources.find(source => source.id === editingSourceId);
+  const sourceIdsSignature = sortedSources.map(source => source.id).join("\u001f");
+  const editingSource = displaySources.find(source => source.id === editingSourceId) ?? null;
+  const editingSourcePopularity = editingSource ? sourcePopularityById.get(editingSource.id) : undefined;
+  const editingSourceSkills = useMemo(() => {
+    if (!editingSource) return [];
+    return (snapshot?.skills ?? []).filter(skill => skillBelongsToSource(skill, editingSource));
+  }, [editingSource?.id, editingSource?.localPath, editingSource?.name, snapshot?.skills]);
   const selectedSources = displaySources.filter(source => selectedSourceIds.includes(source.id));
   const operatorConsent = snapshot?.operatorConsent ?? {
     realWritesEnabled: false,
@@ -2537,16 +2668,23 @@ function Sources({
     });
   }, [sources]);
 
-  async function openSourceDetails(source: SourceCard) {
+  useEffect(() => {
+    setEditingSourceId(previous => {
+      if (previous && sortedSources.some(source => source.id === previous)) {
+        return previous;
+      }
+      return "";
+    });
+  }, [sourceIdsSignature, sortedSources]);
+
+  function openSourceDetails(source: SourceCard) {
     setEditingSourceId(source.id);
-    await onRecordUsage("source", source.id, source.name, source.name, "open_source");
   }
 
   async function saveSourceDraft(source: SourceCard, draft: SourceDraft) {
     const saveResult = await onSaveMetadata(source, draft);
     if (saveResult === "preview") {
       setSourceDrafts(previous => ({ ...previous, [source.id]: draft }));
-      setEditingSourceId("");
       showUiToast("浏览器预览已保存为本次来源草稿。");
     }
     if (saveResult === "saved") {
@@ -2555,7 +2693,6 @@ function Sources({
         delete next[source.id];
         return next;
       });
-      setEditingSourceId("");
     }
   }
 
@@ -2871,92 +3008,108 @@ function Sources({
         quickAddStatus={quickAddStatus}
       />
 
-      <SourceBulkEditPanel
-        category={bulkCategory}
-        disabled={loading}
-        enabledMode={bulkEnabled}
-        onApply={() => void applyBulkSourceEdit()}
-        onCategoryChange={setBulkCategory}
-        onClear={() => setSelectedSourceIds([])}
-        onEnabledModeChange={setBulkEnabled}
-        onSelectAll={() => setSelectedSourceIds(sortedSources.map(source => source.id))}
-        selectedCount={selectedSources.length}
-        totalCount={sortedSources.length}
-      />
+      <section className={`sources-workbench ${editingSource ? "has-detail" : ""}`}>
+        <div className="sources-main-column">
+          <SourceBulkEditPanel
+            category={bulkCategory}
+            disabled={loading}
+            enabledMode={bulkEnabled}
+            onApply={() => void applyBulkSourceEdit()}
+            onCategoryChange={setBulkCategory}
+            onClear={() => setSelectedSourceIds([])}
+            onEnabledModeChange={setBulkEnabled}
+            onSelectAll={() => setSelectedSourceIds(sortedSources.map(source => source.id))}
+            selectedCount={selectedSources.length}
+            totalCount={sortedSources.length}
+          />
 
-      <RouterHubPanel
-        disabled={loading || importPending}
-        realWritesEnabled={operatorConsent.realWritesEnabled}
-      />
+          <RouterHubPanel
+            disabled={loading || importPending}
+            realWritesEnabled={operatorConsent.realWritesEnabled}
+          />
 
-      <SourceListToolbar
-        resultCount={sortedSources.length}
-        sortKey={sourceSortKey}
-        onSortKeyChange={setSourceSortKey}
-      />
+          <SourceListToolbar
+            resultCount={sortedSources.length}
+            sortKey={sourceSortKey}
+            onSortKeyChange={setSourceSortKey}
+          />
 
-      <div className="table-panel source-table">
-        {sortedSources.map(source => {
-          const popularity = sourcePopularityById.get(source.id);
-          const popularityLabel = popularity?.stars
-            ? `★ ${formatCompactNumber(popularity.stars)}`
-            : popularity?.cacheStatus === "error"
-              ? "★ 错误"
-              : "★ 未刷新";
-          const usageLabel = popularity?.localTotalCount ? `${popularity.localTotalCount} 次` : "0 次";
-          return (
-            <div className={`source-row ${source.health} ${source.enabled ? "" : "disabled"}`} key={source.id}>
-              <label className="source-select-check" title="选择此来源用于批量编辑">
-                <input
-                  aria-label={`选择来源 ${source.name}`}
-                  checked={selectedSourceIds.includes(source.id)}
-                  disabled={loading}
-                  onChange={() => toggleSourceSelection(source.id)}
-                  type="checkbox"
-                />
-              </label>
-              <strong>{source.name}</strong>
-              <span>{sourceTypeLabel(source.sourceType)}</span>
-              <span>{source.skillCount} Skills</span>
-              <span className="source-popularity" title="GitHub 星标缓存">
-                {popularityLabel}
-              </span>
-              <span className="source-usage" title="v2 本地记录的来源打开次数">
-                {usageLabel}
-              </span>
-              <span className={`status-badge ${source.health}`}>
-                <span className={`status-dot ${statusDotClass(source.health)}`} />
-                {skillStatusLabel(source.health)}
-              </span>
-              <span>{source.enabled ? "Enabled" : "Disabled"}</span>
-              <small>
-                {(source.tags ?? []).length > 0 ? `标签：${(source.tags ?? []).join(" / ")} · ` : ""}
-                {source.url || source.localPath}
-              </small>
-              <button
-                className="icon-action"
-                disabled={loading}
-                onClick={() => void openSourceDetails(source)}
-                type="button"
-              >
-                <Icon name="edit" />
-              </button>
-            </div>
-          );
-        })}
-        {sortedSources.length === 0 && (
-          <EmptyState text={searchQuery.trim() ? "当前搜索条件下没有来源。" : "正在等待来源扫描结果。"} />
+          <div className="table-panel source-table">
+            {sortedSources.map(source => {
+              const popularity = sourcePopularityById.get(source.id);
+              const popularityInfo = sourcePopularityInfo(source, popularity);
+              const usageLabel = popularity?.localTotalCount ? `${popularity.localTotalCount} 次` : "0 次";
+              const activeSource = editingSource?.id === source.id;
+              return (
+                <div
+                  className={`source-row ${source.health} ${source.enabled ? "" : "disabled"} ${activeSource ? "active" : ""}`}
+                  key={source.id}
+                  onClick={() => openSourceDetails(source)}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <label className="source-select-check" title="选择此来源用于批量编辑">
+                    <input
+                      aria-label={`选择来源 ${source.name}`}
+                      checked={selectedSourceIds.includes(source.id)}
+                      disabled={loading}
+                      onChange={event => {
+                        event.stopPropagation();
+                        toggleSourceSelection(source.id);
+                      }}
+                      onClick={event => event.stopPropagation()}
+                      type="checkbox"
+                    />
+                  </label>
+                  <strong>{source.name}</strong>
+                  <span>{sourceTypeLabel(source.sourceType)}</span>
+                  <span>{source.skillCount} Skills</span>
+                  <span className={`source-popularity ${popularityInfo.tone}`} title={popularityInfo.title}>
+                    {popularityInfo.label}
+                  </span>
+                  <span className="source-usage" title="本地 Skill 调用次数；不统计打开或编辑来源。">
+                    {usageLabel}
+                  </span>
+                  <span className={`status-badge ${source.health}`}>
+                    <span className={`status-dot ${statusDotClass(source.health)}`} />
+                    {skillStatusLabel(source.health)}
+                  </span>
+                  <span>{source.enabled ? "Enabled" : "Disabled"}</span>
+                  <small>
+                    {(source.tags ?? []).length > 0 ? `标签：${(source.tags ?? []).join(" / ")} · ` : ""}
+                    {source.url || source.localPath}
+                  </small>
+                  <button
+                    className="icon-action"
+                    disabled={loading}
+                    onClick={event => {
+                      event.stopPropagation();
+                      openSourceDetails(source);
+                    }}
+                    type="button"
+                  >
+                    <Icon name="edit" />
+                  </button>
+                </div>
+              );
+            })}
+            {sortedSources.length === 0 && (
+              <EmptyState text={searchQuery.trim() ? "当前搜索条件下没有来源。" : "正在等待来源扫描结果。"} />
+            )}
+          </div>
+        </div>
+
+        {editingSource && (
+          <SourceEditPanel
+            draft={sourceDrafts[editingSource.id]}
+            onClose={() => setEditingSourceId("")}
+            onSave={draft => void saveSourceDraft(editingSource, draft)}
+            popularity={editingSourcePopularity}
+            source={editingSource}
+            sourceSkills={editingSourceSkills}
+          />
         )}
-      </div>
-
-      {editingSource && (
-        <SourceEditPanel
-          draft={sourceDrafts[editingSource.id]}
-          onClose={() => setEditingSourceId("")}
-          onSave={draft => void saveSourceDraft(editingSource, draft)}
-          source={editingSource}
-        />
-      )}
+      </section>
     </div>
   );
 }
@@ -3015,11 +3168,8 @@ function RouterHubPanel({
       <div className="router-hub-head">
         <div>
           <p className="eyebrow">Router Hubs</p>
-          <h3>重建母 Skill 路由</h3>
-          <p>
-            扫描所有集合并为含 2 个及以上子 Skill 的集合生成母 Skill 入口（保持原集合调用名，不再追加 <code>-hub</code> 后缀）。
-            预览只读，重建会把生成结果写入 <code>app/github_sources/AI-SkillHub-local-routers/</code>。
-          </p>
+          <h3>母 Skill 路由</h3>
+          <p>让 /nature-skills 这类集合入口保持可用。日常只需要点“立即重建”。</p>
         </div>
         <div className="router-hub-actions">
           <button
@@ -3028,7 +3178,7 @@ function RouterHubPanel({
             onClick={() => void runRouterHubs(false)}
             type="button"
           >
-            {pending === "plan" ? "正在预览" : "预览路由 (dry-run)"}
+            {pending === "plan" ? "正在预览" : "预览"}
           </button>
           <button
             className="primary-action compact"
@@ -3040,10 +3190,10 @@ function RouterHubPanel({
                 ? "需要先在上方一键添加来源面板里打开「同步到 AI 工具授权」"
                 : !runtimeAvailable
                   ? "浏览器预览模式只读"
-                  : "立即重建 router-hub SKILL.md"
+                : "立即重建母 Skill 入口"
             }
           >
-            {pending === "commit" ? "正在重建" : "立即重建路由"}
+            {pending === "commit" ? "正在重建" : "立即重建"}
           </button>
         </div>
       </div>
@@ -3057,7 +3207,7 @@ function RouterHubPanel({
 
       {!report && !error && (
         <div className="router-hub-hint">
-          <span>点击「预览路由」查看每个集合会生成哪些 router-hub SKILL.md，以及是否有未引号 [ROUTER-HUB] 描述或跨集合重名子 Skill。</span>
+          <span>如果母 Skill 调不出来，先预览，再重建。</span>
         </div>
       )}
 
@@ -3283,8 +3433,8 @@ function SourceImportPreviewPanel({ previews }: { previews: ImportPreviewCard[] 
             title: "GitHub 仓库导入",
             importKind: "github",
             status: "empty",
-            summary: "等待 v2 索引导入来源。",
-            detail: "当前只显示安全预览，不会 clone、pull 或写入 Skills 目录。",
+            summary: "可添加 GitHub 仓库并扫描其中的 Skill。",
+            detail: "可添加 GitHub 仓库并扫描其中的 Skill。",
             skillCount: 0,
             promptCount: 0,
             safeToContinue: true
@@ -3294,8 +3444,8 @@ function SourceImportPreviewPanel({ previews }: { previews: ImportPreviewCard[] 
             title: "本地文件夹导入",
             importKind: "local",
             status: "empty",
-            summary: "等待本地来源扫描。",
-            detail: "只有包含 SKILL.md 的目录会被识别为 Skill。",
+            summary: "可选择本地文件夹，只有 SKILL.md 会被识别。",
+            detail: "可选择本地文件夹，只有 SKILL.md 会被识别。",
             skillCount: 0,
             promptCount: 0,
             safeToContinue: true
@@ -3305,8 +3455,8 @@ function SourceImportPreviewPanel({ previews }: { previews: ImportPreviewCard[] 
             title: "zip / .skill 包导入",
             importKind: "zip",
             status: "missing",
-            summary: "还没有 zip 预览报告。",
-            detail: "必须先通过路径安全和重复名称检查，才允许进入真实导入。",
+            summary: "可预览压缩包，确认安全后再导入。",
+            detail: "可预览压缩包，确认安全后再导入。",
             skillCount: 0,
             promptCount: 0,
             safeToContinue: false
@@ -3318,8 +3468,8 @@ function SourceImportPreviewPanel({ previews }: { previews: ImportPreviewCard[] 
       <div className="section-title-row">
         <div>
           <p className="eyebrow">Import Wizard</p>
-          <h3>导入预览</h3>
-          <p>先预览 GitHub、本地文件夹和 zip 包风险；当前不会真实写入 AI 工具目录。</p>
+          <h3>来源预览</h3>
+          <p>先看能识别多少 Skill，再决定是否添加。</p>
         </div>
         <span className="status-badge info">只读预览</span>
       </div>
@@ -3333,7 +3483,6 @@ function SourceImportPreviewPanel({ previews }: { previews: ImportPreviewCard[] 
               </span>
             </div>
             <p>{card.summary}</p>
-            <small>{card.detail}</small>
             <footer>
               <span>{card.skillCount} Skills</span>
               <span>{card.promptCount} Prompt</span>
@@ -3366,7 +3515,7 @@ function CategoryPicker({
   return (
     <div className="category-picker">
       <div className="category-picker-head">
-        <span>自动分类 / 手动多选</span>
+        <span>分类</span>
         <button
           className={mode === "auto" ? "category-chip active" : "category-chip"}
           disabled={disabled}
@@ -3391,8 +3540,48 @@ function CategoryPicker({
       </div>
       <small>
         当前：{activeIds.length > 0 ? activeIds.map(categoryDisplayName).join("、") : "通用"}
-        {mode === "auto" ? "（根据地址、类型和备注自动判断）" : "（手动多选）"}
       </small>
+    </div>
+  );
+}
+
+function quickAddProgressState(status: QuickAddStatus | null, disabled: boolean) {
+  if (disabled) {
+    return { index: 2, tone: "running", label: "正在处理" };
+  }
+  if (!status) {
+    return { index: 0, tone: "idle", label: "等待添加" };
+  }
+  if (status.tone === "ok") {
+    return { index: 4, tone: "ok", label: "已完成" };
+  }
+  if (status.tone === "error") {
+    return { index: 1, tone: "error", label: "需要处理" };
+  }
+  return { index: 1, tone: "warn", label: "请查看提示" };
+}
+
+function QuickAddProgress({ disabled, status }: { disabled: boolean; status: QuickAddStatus | null }) {
+  const steps = ["检查", "加入", "刷新", "同步"];
+  const progress = quickAddProgressState(status, disabled);
+  const width = progress.index === 0 ? 8 : Math.min(100, progress.index * 25);
+
+  return (
+    <div className={`quick-add-progress ${progress.tone}`} aria-label="添加进度">
+      <div className="quick-add-progress-head">
+        <strong>{progress.label}</strong>
+        <span>{steps[Math.min(progress.index, steps.length - 1)]}</span>
+      </div>
+      <div className="quick-add-progress-track">
+        <i style={{ width: `${width}%` }} />
+      </div>
+      <ol>
+        {steps.map((step, index) => (
+          <li className={index < progress.index ? "done" : index === progress.index ? "active" : ""} key={step}>
+            {step}
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
@@ -3471,12 +3660,12 @@ function SourceImportWizardPanel({
         <div>
           <p className="eyebrow">Quick Add</p>
           <h3>一键添加来源</h3>
-          <p>粘贴 GitHub 仓库、本地文件夹或 zip 包，填好分类备注后直接添加并刷新。安全检查会在后台自动完成。</p>
+          <p>粘贴地址，选择类型和分类，然后一键添加并刷新。</p>
         </div>
         <span className="status-badge info">普通模式</span>
       </div>
-      <div className="import-wizard-form">
-        <div className="quick-field-group">
+      <div className="source-add-grid">
+        <div className="quick-field-group source-add-kind">
           <span className="quick-field-label">来源类型</span>
           <div className="segmented-control import-kind-control" role="group" aria-label="选择导入类型">
             {[
@@ -3496,7 +3685,7 @@ function SourceImportWizardPanel({
             ))}
           </div>
         </div>
-        <label className="import-input-label">
+        <label className="import-input-label source-add-input">
           来源地址或路径
           <input
             disabled={disabled}
@@ -3511,9 +3700,7 @@ function SourceImportWizardPanel({
             value={input}
           />
         </label>
-      </div>
-      <div className="quick-source-meta-grid" aria-label="来源元数据">
-        <label>
+        <label className="quick-source-type-field source-add-type">
           类型
           <select
             disabled={disabled}
@@ -3525,16 +3712,7 @@ function SourceImportWizardPanel({
             <option value="mixed">混合 Mixed</option>
           </select>
         </label>
-        <label>
-          标签
-          <input
-            disabled={disabled}
-            onChange={event => setTags(event.target.value)}
-            placeholder="论文, 常用, GitHub"
-            value={tags}
-          />
-        </label>
-        <div className="quick-category-field">
+        <div className="quick-category-field source-add-category">
           <CategoryPicker
             disabled={disabled}
             inferredIds={inferredCategoryIds}
@@ -3551,6 +3729,15 @@ function SourceImportWizardPanel({
             selectedIds={selectedCategoryIds}
           />
         </div>
+        <label className="quick-source-tags-field source-add-tags">
+          标签
+          <input
+            disabled={disabled}
+            onChange={event => setTags(event.target.value)}
+            placeholder="论文, 常用, GitHub"
+            value={tags}
+          />
+        </label>
       </div>
       <label className="quick-source-note">
         备注
@@ -3562,43 +3749,46 @@ function SourceImportWizardPanel({
           value={note}
         />
       </label>
-      <div className="quick-source-setting-row">
-        <div className="quick-source-toggle">
+      <div className="quick-source-state-grid">
+        <div className="quick-source-setting-row">
+          <div className="quick-source-toggle">
+            <div>
+              <strong>加入后启用</strong>
+              <span>只控制 v2 来源库显示，不等于同步到 AI 工具。</span>
+            </div>
+            <ToggleSwitch
+              disabled={disabled}
+              enabled={enabled}
+              label={enabled ? "启用" : "停用"}
+              onClick={() => setEnabled(previous => !previous)}
+            />
+          </div>
+        </div>
+        <div className={`source-sync-state ${operatorConsent.realWritesEnabled ? "authorized" : "locked"}`}>
           <div>
-            <strong>加入后启用</strong>
-            <span>只控制 v2 来源库显示，不等于同步到 AI 工具。</span>
+            <strong>同步到 AI 工具授权</strong>
+            <span>
+              打开后，“同步 / 刷新”会执行 GitHub 更新、Skill 路由重建，并把共享 Skills 链接同步到 Claude/Codex/Antigravity。
+            </span>
           </div>
           <ToggleSwitch
             disabled={disabled}
-            enabled={enabled}
-            label={enabled ? "启用" : "停用"}
-            onClick={() => setEnabled(previous => !previous)}
+            enabled={operatorConsent.realWritesEnabled}
+            label={operatorConsent.realWritesEnabled ? "已授权" : "未授权"}
+            onClick={() => void onRealWriteAuthorization(!operatorConsent.realWritesEnabled)}
           />
         </div>
-      </div>
-      <div className={`source-sync-state ${operatorConsent.realWritesEnabled ? "authorized" : "locked"}`}>
-        <div>
-          <strong>同步到 AI 工具授权</strong>
-          <span>
-            一键添加会写入 AI SkillHub 来源库并刷新索引。打开右侧授权后，“同步 / 刷新”会执行 GitHub 更新、Skill 路由重建，并把共享 Skills 链接同步到 Claude/Codex/Antigravity。
-          </span>
-        </div>
-        <ToggleSwitch
-          disabled={disabled}
-          enabled={operatorConsent.realWritesEnabled}
-          label={operatorConsent.realWritesEnabled ? "已授权" : "未授权"}
-          onClick={() => void onRealWriteAuthorization(!operatorConsent.realWritesEnabled)}
-        />
       </div>
       <div className="quick-source-action-row">
         <div className="quick-source-action-copy">
           <strong>最后一步</strong>
-          <span>确认上面的地址、类型、分类、标签和授权状态后，再执行一键添加。</span>
+          <span>点击后会加入来源库、刷新索引，并按授权状态同步到 AI 工具。</span>
         </div>
         <button className="primary-action import-quick-add-button" disabled={disabled} onClick={submitQuickAdd} type="button">
           {disabled ? "正在添加" : "一键添加并刷新"}
         </button>
       </div>
+      <QuickAddProgress disabled={disabled} status={quickAddStatus} />
       {quickAddStatus && (
         <div className={`quick-add-status-card ${quickAddStatus.tone}`} role="status">
           <strong>{quickAddStatus.title}</strong>
@@ -3608,7 +3798,7 @@ function SourceImportWizardPanel({
       <div className="advanced-import-toggle-row">
         <div>
           <strong>高级安全详情</strong>
-          <span>预检、隔离 staging 和提升记录用于排错；普通添加不需要手动点这些步骤。</span>
+          <span>排错时再展开，日常添加不需要手动操作。</span>
         </div>
         <button
           className="ghost-action compact"
@@ -3832,12 +4022,16 @@ function SourceEditPanel({
   draft,
   onClose,
   onSave,
+  popularity,
+  sourceSkills = [],
   source
 }: {
   draft?: SourceDraft;
   onClose: () => void;
   onSave: (draft: SourceDraft) => void;
+  popularity?: SourcePopularityCard;
   source: SourceCard;
+  sourceSkills?: SkillCard[];
 }) {
   const [name, setName] = useState(draft?.name ?? source.name);
   const [category, setCategory] = useState(draft?.category ?? source.categoryId);
@@ -3845,6 +4039,9 @@ function SourceEditPanel({
   const [note, setNote] = useState(draft?.note ?? source.note ?? "");
   const [enabled, setEnabled] = useState(draft?.enabled ?? source.enabled);
   const [tags, setTags] = useState(draft?.tags ?? tagInputValue(source.tags ?? []));
+  const routerSkills = sourceSkills.filter(isRouterHubSkill);
+  const childSkills = sourceSkills.filter(skill => !isRouterHubSkill(skill));
+  const projectAddress = source.url || source.localPath || "未记录项目地址";
 
   useEffect(() => {
     setName(draft?.name ?? source.name);
@@ -3856,16 +4053,61 @@ function SourceEditPanel({
   }, [draft, source.id]);
 
   return (
-    <aside aria-label={`${source.name} source details`} className="skill-editor-panel source-editor-panel" role="dialog">
+    <aside aria-label={`${source.name} source details`} className="source-detail-panel source-editor-panel" role="complementary">
       <header>
         <div>
-          <span>Source Metadata</span>
+          <span>来源详情</span>
           <strong>{source.name}</strong>
         </div>
-        <button aria-label="Close source editor" className="icon-action" onClick={onClose} type="button">
-          <Icon name="add" />
+        <button className="secondary-action compact" onClick={onClose} type="button">
+          收起
         </button>
       </header>
+      <div className="source-detail-address">
+        <span>项目地址</span>
+        <code title={projectAddress}>{projectAddress}</code>
+      </div>
+      <div className="source-detail-metrics">
+        <span>
+          <b>{source.skillCount}</b>
+          <small>Skills</small>
+        </span>
+        <span>
+          <b>{popularity?.stars ? formatCompactNumber(popularity.stars) : "未刷新"}</b>
+          <small>GitHub 星标</small>
+        </span>
+        <span>
+          <b>{popularity?.localTotalCount ?? 0}</b>
+          <small>本地调用</small>
+        </span>
+      </div>
+      <div className="source-detail-skill-map">
+        <div className="source-detail-section-title">
+          <strong>母/子 Skill</strong>
+          <span>{routerSkills.length} 母入口 · {childSkills.length} 子 Skill</span>
+        </div>
+        {routerSkills.length > 0 && (
+          <div className="source-detail-chip-list">
+            {routerSkills.slice(0, 4).map(skill => (
+              <span className="kind-chip router" key={skill.relativePath || skill.folderName}>
+                [ROUTER-HUB] {skill.name}
+              </span>
+            ))}
+          </div>
+        )}
+        {childSkills.length > 0 ? (
+          <div className="source-detail-child-list">
+            {childSkills.slice(0, 12).map(skill => (
+              <article key={skill.relativePath || skill.folderName}>
+                <strong>{skill.name}</strong>
+                <span>{cleanSkillDescription(skill.description) || skill.category || "子 Skill"}</span>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="source-detail-muted">暂未识别到子 Skill；如果这是多 Skill 仓库，请先重建母 Skill 路由。</p>
+        )}
+      </div>
       <label>
         名称
         <input onChange={event => setName(event.target.value)} value={name} />
@@ -3951,6 +4193,24 @@ function findPromotedSource(sources: SourceCard[], promotion: SourceImportPromot
 
 function normalizeSourcePath(path: string): string {
   return path.trim().replace(/[\\/]+/g, "/").replace(/\/+$/g, "").toLowerCase();
+}
+
+function skillBelongsToSource(skill: SkillCard, source: SourceCard): boolean {
+  const sourceName = normalizeLookup(source.name);
+  const skillSource = normalizeLookup(skill.source);
+  if (sourceName && skillSource === sourceName) {
+    return true;
+  }
+
+  const sourcePath = normalizeSourcePath(source.localPath);
+  const skillPath = normalizeSourcePath(skill.relativePath);
+  const sourceFolder = sourcePath.split("/").filter(Boolean).pop() ?? "";
+  if (sourceFolder && skillPath.includes(`/${sourceFolder}/`)) {
+    return true;
+  }
+
+  const sourceUrlName = normalizeLookup((source.url.split("/").pop() ?? "").replace(/\.git$/i, ""));
+  return Boolean(sourceUrlName && (skillSource === sourceUrlName || skillPath.includes(`/${sourceUrlName}/`)));
 }
 
 function Agents({
@@ -5021,6 +5281,46 @@ function sourceTypeLabel(sourceType: string): string {
   if (sourceType === "prompt") return "Prompt";
   if (sourceType === "mixed") return "Mixed";
   return sourceType;
+}
+
+function sourceIsGithub(source: SourceCard): boolean {
+  const url = source.url?.trim() ?? "";
+  return /(^https?:\/\/github\.com\/|^git@github\.com:)/i.test(url);
+}
+
+function sourcePopularityInfo(
+  source: SourceCard,
+  popularity?: SourcePopularityCard
+): { label: string; title: string; tone: "fresh" | "pending" | "error" | "muted" } {
+  if (!sourceIsGithub(source)) {
+    return {
+      label: "非 GitHub",
+      title: "本地文件夹、Prompt 或 zip 来源没有 GitHub 星标。",
+      tone: "muted"
+    };
+  }
+
+  if (!popularity) {
+    return {
+      label: "★ 待刷新",
+      title: "还没有 GitHub 热度缓存；点击“同步并刷新”会刷新索引并请求 GitHub 热度。",
+      tone: "pending"
+    };
+  }
+
+  if (popularity.cacheStatus === "error") {
+    return {
+      label: "★ 失败",
+      title: popularity.error ? `GitHub 热度刷新失败：${popularity.error}` : "GitHub 热度刷新失败；可能是网络、限流或仓库不可访问。",
+      tone: "error"
+    };
+  }
+
+  return {
+    label: `★ ${formatCompactNumber(popularity.stars)}`,
+    title: `GitHub 星标：${formatCompactNumber(popularity.stars)}；缓存时间：${formatScanTime(popularity.fetchedAt)}`,
+    tone: "fresh"
+  };
 }
 
 function importKindLabel(importKind: string): string {
@@ -6674,7 +6974,7 @@ function ToggleSwitch({
       <span className="switch-track" aria-hidden="true">
         <span className="switch-thumb" />
       </span>
-      <strong>{label}</strong>
+      <span className="switch-label">{label}</span>
     </button>
   );
 }

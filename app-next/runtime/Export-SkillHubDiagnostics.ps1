@@ -11,13 +11,14 @@ $ErrorActionPreference = 'Continue'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $AppRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = Split-Path -Parent $AppRoot
+$V2Root = Split-Path -Parent $AppRoot
+$ProjectRoot = Split-Path -Parent $V2Root
 $SkillsRoot = Join-Path $ProjectRoot 'skills'
-$SourcesRoot = Join-Path $AppRoot 'github_sources'
+$SourcesRoot = Join-Path $V2Root 'data\github_sources'
 $ConfigPath = Join-Path $AppRoot 'skillhub.config.json'
-$ReportsRoot = Join-Path $AppRoot 'reports'
+$ReportsRoot = Join-Path $V2Root 'reports'
 $DiagnosticsRoot = Join-Path $ReportsRoot 'diagnostics'
-$StatePath = Join-Path $AppRoot '.skillhub\managed-links.json'
+$StatePath = Join-Path $V2Root '.skillhub-next\sync-state\managed-links.json'
 $LastSyncPath = Join-Path $ReportsRoot 'last-sync.md'
 $HomePath = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
@@ -171,14 +172,14 @@ function Add-AgentStatus([string]$Id, [string]$Name, [string]$BaseDir, [string[]
 }
 
 $projectRootStatus = if (Test-Path -LiteralPath $ProjectRoot) { 'ok' } else { 'error' }
-Add-Check 'project.root' 'AI SkillHub 根目录' $projectRootStatus '已定位 AI SkillHub 根目录。' $ProjectRoot '请确保 exe、app、skills 放在同一项目根目录。'
+Add-Check 'project.root' 'AI SkillHub 根目录' $projectRootStatus '已定位 AI SkillHub 根目录。' $ProjectRoot '请确保 exe、app-next、skills 放在同一项目根目录。'
 $projectSkillsStatus = if (Test-Path -LiteralPath $SkillsRoot -PathType Container) { 'ok' } else { 'error' }
 Add-Check 'project.skills' 'skills 目录' $projectSkillsStatus '已检查启用技能目录。' $SkillsRoot '缺失时请重新部署 AI SkillHub 文件夹。'
 $projectSourcesStatus = if (Test-Path -LiteralPath $SourcesRoot -PathType Container) { 'ok' } else { 'warn' }
-Add-Check 'project.sources' 'github_sources 目录' $projectSourcesStatus '已检查 GitHub 来源目录。' $SourcesRoot '首次同步会自动创建来源目录。'
+Add-Check 'project.sources' 'V2 data/github_sources 目录' $projectSourcesStatus '已检查 GitHub 来源目录。' $SourcesRoot '首次同步会自动创建来源目录。'
 $projectConfigStatus = if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) { 'ok' } else { 'info' }
 $projectConfigSummary = if ($projectConfigStatus -eq 'ok') { '已检查配置文件。' } else { '尚未创建个人配置文件；首次运行会自动生成空配置。' }
-Add-Check 'project.config' '配置文件' $projectConfigStatus $projectConfigSummary $ConfigPath '首次运行 AI SkillHub.exe 后会自动创建；公开仓库不会包含个人配置。'
+Add-Check 'project.config' '配置文件' $projectConfigStatus $projectConfigSummary $ConfigPath '首次运行 AI SkillHub V2 后会自动创建；公开仓库不会包含个人配置。'
 $reportsWritableStatus = if (Test-DirWritable $DiagnosticsRoot) { 'ok' } else { 'error' }
 Add-Check 'project.reportsWritable' '报告目录可写' $reportsWritableStatus '已检查诊断报告目录可写。' $DiagnosticsRoot '请确认当前用户对 AI SkillHub 文件夹有写入权限。'
 
@@ -204,7 +205,7 @@ if ($nodeCommand) {
   Add-Check 'tool.node' 'Node.js' 'info' '没有检测到 Node.js；普通同步不强制需要。' '' '后续做 v2/Tauri 开发时安装 Node LTS 22 或 24。'
 }
 
-$runtimeDll = Join-Path $AppRoot 'runtime\Microsoft.Web.WebView2.Core.dll'
+$runtimeDll = Join-Path $V2Root 'runtime\Microsoft.Web.WebView2.Core.dll'
 $runtimeDirs = @()
 $pf86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
 $pf = [Environment]::GetEnvironmentVariable('ProgramFiles')
@@ -382,8 +383,8 @@ foreach ($extra in @(
   (Join-Path $AppRoot 'SkillHub.ps1'),
   (Join-Path $AppRoot 'Manage-AgentSkillLinks.ps1'),
   (Join-Path $AppRoot 'Export-SkillHubDiagnostics.ps1'),
-  (Join-Path $AppRoot 'ui\app.js'),
-  (Join-Path $AppRoot 'src\AI.SkillHub.WebView.cs')
+  (Join-Path $V2Root 'ui\app.js'),
+  (Join-Path $V2Root 'src\AI.SkillHub.WebView.cs')
 )) {
   if (Test-Path -LiteralPath $extra) { $appScanRoots.Add($extra) | Out-Null }
 }
@@ -422,7 +423,7 @@ if (Test-Path -LiteralPath $zipPreviewJsonPath -PathType Leaf) {
     $zipPreviewStatus = if ($zipPreview.ok) { 'ok' } else { 'warn' }
     $zipPreviewSummary = if ($zipPreview.ok) { 'zip 导入预览自动测试已通过。' } else { 'zip 导入预览自动测试未通过。' }
     $zipPreviewDetail = Protect-Text ("runId=$($zipPreview.runId); workDir=$($zipPreview.workDir)")
-    $zipPreviewFix = if ($zipPreview.ok) { '无。' } else { '请查看 app\reports\zip-preview-test\latest-zip-preview-test.md。' }
+    $zipPreviewFix = if ($zipPreview.ok) { '无。' } else { '请查看 app-next\reports\zip-preview-test\latest-zip-preview-test.md。' }
   } catch {
     $zipPreviewStatus = 'warn'
     $zipPreviewSummary = 'zip 导入预览自动测试报告无法读取。'
@@ -595,3 +596,4 @@ if (-not $Quiet) {
   if (Test-Path -LiteralPath $zipPath) { Write-Host "诊断包已生成：$zipPath" }
   Write-Host "机器可读状态：$latestPath"
 }
+

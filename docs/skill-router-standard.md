@@ -9,7 +9,7 @@ This document is the stable rule for parent/child Skill routing in AI SkillHub.
 
 ## Rules
 
-1. AI SkillHub must generate parent router Skills outside the author's source repository, under `app/github_sources/AI-SkillHub-local-routers`.
+1. AI SkillHub must generate parent router Skills outside the author's source repository, under `app-next/data/github_sources/AI-SkillHub-local-routers`.
 2. AI SkillHub must not edit author-owned `SKILL.md` files to add parent/child markers.
 3. Parent router names must stay callable by the original collection name, such as `/nature-skills`.
 4. Child Skill names must stay callable by their original names, such as `/nature-figure`.
@@ -23,3 +23,10 @@ This document is the stable rule for parent/child Skill routing in AI SkillHub.
 The router marker is intentionally ASCII-only. This avoids mojibake across Windows PowerShell, Git, Codex Skill parsing, and copied folders on different machines.
 
 UI surfaces may translate these markers into Chinese labels, badges, or icons, but the underlying `SKILL.md` files should keep `[ROUTER-HUB]` and `[CHILD-SKILL]` unchanged.
+
+## Source UI Contract
+
+1. Source list usage counters must mean local Skill invocation count only. Opening a row, editing metadata, selecting a row, or refreshing a source must not increase this number.
+2. A Source row click should open the right-side detail/editor panel. The panel must show project address, GitHub heat, local invocation count, parent router Skills, child Skills, tags, note, type, category, and enabled state.
+3. GitHub stars/forks belong to the original source repository. Generated router collections under `AI-SkillHub-local-routers` are local AI SkillHub artifacts and should not pretend to have upstream GitHub heat.
+4. Router generation must run after daily auto-update, manual sync, and adding a new source. This keeps new child Skills and new repositories aligned with the same parent/child standard.

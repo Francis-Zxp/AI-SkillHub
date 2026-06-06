@@ -23,8 +23,8 @@ function Write-JsonUtf8([string]$Path, $Object, [int]$Depth = 8) {
 function New-DefaultSkillHubConfig {
   [PSCustomObject]@{
     version = 2
-    githubSourcesFolder = 'github_sources'
-    activeSkillsFolder = '..\skills'
+    githubSourcesFolder = '..\data\github_sources'
+    activeSkillsFolder = '..\..\skills'
     manageAgentLinks = $false
     autoDiscoverManualRepos = $true
     preferredPathFragments = @('\.claude\skills\', '\skills\', '\.agents\skills\')
@@ -182,3 +182,4 @@ if (-not $Quiet) {
 } else {
   $rows | ConvertTo-Json -Depth 4 | Out-Null
 }
+

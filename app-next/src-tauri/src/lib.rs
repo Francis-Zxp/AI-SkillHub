@@ -84,7 +84,7 @@ struct SkillCard {
 /// Mark string used in SKILL.md frontmatter to identify a parent / hub Skill.
 const ROUTER_HUB_MARKER: &str = "[ROUTER-HUB]";
 const CHILD_SKILL_MARKER: &str = "[CHILD-SKILL]";
-/// Folder under app/github_sources/ where AI SkillHub writes generated parent SKILL.md files.
+/// Folder under app-next/data/github_sources/ where AI SkillHub writes generated parent SKILL.md files.
 /// The folder name lives OUTSIDE the upstream author's repository, per skill-router-standard.md rule 1.
 const ROUTER_HUB_FOLDER: &str = "AI-SkillHub-local-routers";
 
@@ -179,6 +179,29 @@ fn compute_is_router_hub(
         }
     }
     false
+}
+
+fn resolve_skill_source_id(
+    skill: &SkillCard,
+    source_ids: &HashMap<String, String>,
+) -> Option<String> {
+    if skill.is_router_hub && skill.source.eq_ignore_ascii_case(ROUTER_HUB_FOLDER) {
+        for candidate in [&skill.folder_name, &skill.name] {
+            let key = candidate.to_lowercase();
+            if let Some(source_id) = source_ids.get(&key) {
+                return Some(source_id.clone());
+            }
+        }
+    }
+
+    source_ids.get(&skill.source.to_lowercase()).cloned()
+}
+
+fn insert_source_id_alias(source_ids: &mut HashMap<String, String>, alias: &str, source_id: &str) {
+    let key = alias.trim().to_lowercase();
+    if !key.is_empty() {
+        source_ids.insert(key, source_id.to_string());
+    }
 }
 
 #[derive(Serialize)]
@@ -630,6 +653,7 @@ struct IndexReport {
 struct SkillDiagnostic {
     name: String,
     description: String,
+    repo: String,
     target: String,
     has_skill_md: bool,
     has_front_matter: bool,
@@ -669,22 +693,50 @@ struct PresetWorkspacePolicy {
 }
 
 #[tauri::command]
-fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
+async fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
+    run_blocking_task(scan_legacy_snapshot_blocking).await
+}
+
+#[tauri::command]
+async fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
+    run_blocking_task(load_indexed_snapshot_blocking).await
+}
+
+#[tauri::command]
+async fn run_skillhub_sync() -> Result<LegacySnapshot, String> {
+    run_blocking_task(run_skillhub_sync_blocking).await
+}
+
+#[tauri::command]
+async fn refresh_source_popularity() -> Result<LegacySnapshot, String> {
+    run_blocking_task(refresh_source_popularity_blocking).await
+}
+
+async fn run_blocking_task<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|error| format!("后台任务启动失败：{}", error))?
+}
+
+fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
     let root = resolve_legacy_root()?;
 
     let skills_dir = root.join("skills");
-    let sources_dir = root.join("app").join("github_sources");
-    let diagnostics_file = root
-        .join("app")
-        .join("reports")
-        .join("latest-diagnostics.json");
-    let config_file = root.join("app").join("skillhub.config.json");
+    let sources_dir = active_sources_dir(&root);
+    let diagnostics_file = diagnostics_file(&root);
+    let config_file = skillhub_config_file(&root);
 
     let diagnostics_json = read_json(&diagnostics_file);
     let config_json = read_json(&config_file);
-    let diagnostic_skills = parse_diagnostic_skills(diagnostics_json.as_ref());
+    let mut diagnostic_skills = parse_diagnostic_skills(diagnostics_json.as_ref());
+    merge_managed_link_skills(&root, &mut diagnostic_skills);
     let configured_sources = parse_configured_sources(config_json.as_ref());
     let mut sources = scan_sources(&sources_dir, &configured_sources);
+    hydrate_source_urls_from_git(&root, &mut sources);
     let mut skills = scan_skills(
         &skills_dir,
         &sources_dir,
@@ -822,18 +874,17 @@ fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
     Ok(snapshot)
 }
 
-#[tauri::command]
-fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
+fn load_indexed_snapshot_blocking() -> Result<LegacySnapshot, String> {
     let root = resolve_legacy_root()?;
     let db_file = database_file(&root);
 
     if !db_file.exists() {
-        return scan_legacy_snapshot();
+        return scan_legacy_snapshot_blocking();
     }
 
     let connection = open_index_database(&root)?;
-    let snapshot =
-        read_snapshot_from_database(&root, &connection).or_else(|_| scan_legacy_snapshot())?;
+    let snapshot = read_snapshot_from_database(&root, &connection)
+        .or_else(|_| scan_legacy_snapshot_blocking())?;
 
     if !snapshot.skills.is_empty()
         && (snapshot.workspaces.is_empty()
@@ -847,14 +898,13 @@ fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
             || snapshot.rollback_plan.is_empty()
             || snapshot.desktop_qa_checks.is_empty())
     {
-        return scan_legacy_snapshot();
+        return scan_legacy_snapshot_blocking();
     }
 
     Ok(snapshot)
 }
 
-#[tauri::command]
-fn run_skillhub_sync() -> Result<LegacySnapshot, String> {
+fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     let consent = read_operator_consent(&connection).unwrap_or(OperatorConsentCard {
@@ -875,11 +925,11 @@ fn run_skillhub_sync() -> Result<LegacySnapshot, String> {
     if let Ok(report) = plan_or_write_router_hubs(&root, true, true) {
         let _ = record_router_hub_audit(&connection, &report);
     }
-    scan_legacy_snapshot()
+    scan_legacy_snapshot_blocking()
 }
 
 fn run_skillhub_script(root: &Path) -> Result<(), String> {
-    let script = root.join("app").join("SkillHub.ps1");
+    let script = skillhub_script_file(root);
     if !script.exists() {
         return Err(format!("找不到同步脚本：{}", script.display()));
     }
@@ -950,25 +1000,25 @@ fn command_output_with_timeout(
 #[tauri::command]
 fn set_agent_adapter_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
     set_enabled_state("agent_adapters", &id, enabled)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
 fn set_workspace_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
     set_enabled_state("workspaces", &id, enabled)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
 fn set_preset_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
     set_enabled_state("presets", &id, enabled)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
 fn set_desktop_qa_check_status(id: String, status: String) -> Result<LegacySnapshot, String> {
     set_desktop_qa_status(&id, &status)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -980,13 +1030,13 @@ fn set_skill_metadata(
     note: String,
 ) -> Result<LegacySnapshot, String> {
     set_skill_metadata_override(&folder_name, &name, &category, &description, &note)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
 fn set_skill_enabled(folder_name: String, enabled: bool) -> Result<LegacySnapshot, String> {
     set_skill_enabled_override(&folder_name, enabled)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -999,7 +1049,7 @@ fn set_source_metadata(
     enabled: bool,
 ) -> Result<LegacySnapshot, String> {
     set_source_metadata_override(&source_id, &name, &source_type, &category, &note, enabled)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -1011,7 +1061,7 @@ fn set_sources_bulk_metadata(
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_sources_bulk_metadata_in_connection(&connection, &source_ids, &category, enabled)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -1019,7 +1069,7 @@ fn set_skill_tags(folder_name: String, tags: Vec<String>) -> Result<LegacySnapsh
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_skill_tags_in_connection(&connection, &folder_name, &tags)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -1027,7 +1077,7 @@ fn set_source_tags(source_id: String, tags: Vec<String>) -> Result<LegacySnapsho
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_source_tags_in_connection(&connection, &source_id, &tags)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -1039,7 +1089,7 @@ fn set_preset_workspace_enabled(
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_preset_workspace_enabled_in_connection(&connection, &preset_id, &workspace_id, enabled)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -1047,7 +1097,7 @@ fn set_real_write_authorization(enabled: bool) -> Result<LegacySnapshot, String>
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_real_write_authorization_in_connection(&connection, enabled)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -1055,7 +1105,7 @@ fn run_release_gate_runner(runner_id: String) -> Result<LegacySnapshot, String> 
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     run_release_gate_runner_in_connection(&root, &connection, &runner_id)?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -1177,14 +1227,14 @@ fn record_usage_event(
         &source_name,
         &event_type,
     )?;
-    load_indexed_snapshot()
+    load_indexed_snapshot_blocking()
 }
 
-#[tauri::command]
-fn refresh_source_popularity() -> Result<LegacySnapshot, String> {
+fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
-    let sources = read_indexed_sources(&connection)?;
+    let mut sources = read_indexed_sources(&connection)?;
+    hydrate_source_urls_from_git(&root, &mut sources);
     let fetched_at = unix_timestamp_string();
     let mut refreshed = 0usize;
     let mut failed = 0usize;
@@ -1271,6 +1321,34 @@ fn read_json(path: &Path) -> Option<Value> {
 
 fn app_next_root(root: &Path) -> PathBuf {
     root.join("app-next")
+}
+
+fn app_next_runtime_root(root: &Path) -> PathBuf {
+    app_next_root(root).join("runtime")
+}
+
+fn managed_sources_dir(root: &Path) -> PathBuf {
+    app_next_root(root).join("data").join("github_sources")
+}
+
+fn active_sources_dir(root: &Path) -> PathBuf {
+    managed_sources_dir(root)
+}
+
+fn reports_dir(root: &Path) -> PathBuf {
+    app_next_root(root).join("reports")
+}
+
+fn diagnostics_file(root: &Path) -> PathBuf {
+    reports_dir(root).join("latest-diagnostics.json")
+}
+
+fn skillhub_config_file(root: &Path) -> PathBuf {
+    app_next_runtime_root(root).join("skillhub.config.json")
+}
+
+fn skillhub_script_file(root: &Path) -> PathBuf {
+    app_next_runtime_root(root).join("SkillHub.ps1")
 }
 
 fn database_file(root: &Path) -> PathBuf {
@@ -1508,7 +1586,8 @@ fn read_snapshot_from_database(
     connection: &Connection,
 ) -> Result<LegacySnapshot, String> {
     let skills = read_indexed_skills(connection)?;
-    let sources = read_indexed_sources(connection)?;
+    let mut sources = read_indexed_sources(connection)?;
+    hydrate_source_urls_from_git(root, &mut sources);
     let agents = read_indexed_agents(connection)?;
     let agent_adapters = read_indexed_agent_adapters(connection)?;
     let adapter_safety_checks = read_indexed_adapter_safety_checks(connection)?;
@@ -1545,11 +1624,8 @@ fn read_snapshot_from_database(
     let warnings = skills.iter().filter(|skill| skill.health != "ok").count();
     let agents_detected = agents.iter().filter(|agent| agent.detected).count();
     let skills_dir = root.join("skills");
-    let sources_dir = root.join("app").join("github_sources");
-    let diagnostics_file = root
-        .join("app")
-        .join("reports")
-        .join("latest-diagnostics.json");
+    let sources_dir = active_sources_dir(&root);
+    let diagnostics_file = diagnostics_file(&root);
     let release_reports = derive_release_reports(root);
     let import_previews = derive_import_previews(&sources_dir, &sources, &release_reports);
     let write_gates = derive_write_gates(
@@ -1856,8 +1932,14 @@ fn set_source_metadata_override_in_connection(
     if display_name.is_empty() {
         return Err("Source name cannot be empty.".to_string());
     }
-    if display_name.len() > 120 || category.len() > 80 || note.len() > 600 {
-        return Err("Source metadata is too long.".to_string());
+    if display_name.len() > 120 {
+        return Err("来源名称过长，请控制在 120 个字符以内。".to_string());
+    }
+    if category.len() > 80 {
+        return Err("来源分类过长，请控制在 80 个字符以内。".to_string());
+    }
+    if note.len() > 2000 {
+        return Err("来源备注过长，请控制在 2000 个字符以内。".to_string());
     }
 
     let exists: Option<String> = connection
@@ -3350,7 +3432,17 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
         } else {
             source.id.clone()
         };
-        source_ids.insert(source.name.to_lowercase(), source_id.clone());
+        insert_source_id_alias(&mut source_ids, &source.name, &source_id);
+        insert_source_id_alias(&mut source_ids, &source.id, &source_id);
+        if let Some(folder_name) = Path::new(&source.local_path)
+            .file_name()
+            .and_then(|value| value.to_str())
+        {
+            insert_source_id_alias(&mut source_ids, folder_name, &source_id);
+        }
+        if let Some((_owner, repo_name)) = parse_github_repo(&source.url) {
+            insert_source_id_alias(&mut source_ids, &repo_name, &source_id);
+        }
         transaction
             .execute(
                 "INSERT INTO sources (
@@ -3388,7 +3480,7 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
     let mut all_skill_ids: Vec<String> = Vec::new();
     for skill in &snapshot.skills {
         let skill_id = stable_id("skill", &skill.folder_name);
-        let source_id = source_ids.get(&skill.source.to_lowercase()).cloned();
+        let source_id = resolve_skill_source_id(skill, &source_ids);
         all_skill_ids.push(skill_id.clone());
         skill_ids_by_category
             .entry(category_label(&skill.category))
@@ -3662,10 +3754,17 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
     Ok(skills)
 }
 
+fn usage_event_counts_as_skill_invocation(event_type: &str) -> bool {
+    matches!(
+        event_type.trim(),
+        "copy_prompt" | "invoke_skill" | "skill_invoked" | "skill_call" | "run_skill"
+    )
+}
+
 fn read_indexed_usage_stats(connection: &Connection) -> Result<Vec<UsageStatCard>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT target_type, target_id, target_name, source_name, created_at
+            "SELECT target_type, target_id, target_name, source_name, created_at, event_type
             FROM usage_events
             ORDER BY CAST(created_at AS INTEGER) DESC",
         )
@@ -3679,6 +3778,7 @@ fn read_indexed_usage_stats(connection: &Connection) -> Result<Vec<UsageStatCard
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
             ))
         })
         .map_err(|error| format!("Cannot read usage events: {}", error))?;
@@ -3689,8 +3789,11 @@ fn read_indexed_usage_stats(connection: &Connection) -> Result<Vec<UsageStatCard
     let mut stats: HashMap<String, UsageStatCard> = HashMap::new();
 
     for row in rows {
-        let (target_type, target_id, target_name, source_name, created_at) =
+        let (target_type, target_id, target_name, source_name, created_at, event_type) =
             row.map_err(|error| format!("Cannot decode usage event: {}", error))?;
+        if target_type != "skill" || !usage_event_counts_as_skill_invocation(&event_type) {
+            continue;
+        }
         let key = format!("{}\u{1f}{}", target_type, target_id);
         let created_at_nanos = created_at.parse::<u128>().unwrap_or(0);
         let stat = stats.entry(key).or_insert_with(|| UsageStatCard {
@@ -3820,11 +3923,10 @@ fn read_indexed_source_popularity(
 
         if card.local_total_count == 0 {
             for stat in usage_stats {
-                let matches_source = stat.target_type == "source" && stat.target_id == source.id;
                 let matches_skill_source = stat.target_type == "skill"
                     && normalize_lookup_key(&stat.source_name)
                         == normalize_lookup_key(&source.name);
-                if matches_source || matches_skill_source {
+                if matches_skill_source {
                     card.local_total_count += stat.total_count;
                     card.local_seven_day_count += stat.seven_day_count;
                     card.local_thirty_day_count += stat.thirty_day_count;
@@ -3887,7 +3989,7 @@ fn read_source_usage_counts(
 ) -> Result<HashMap<String, (usize, usize, usize)>, String> {
     let mut statement = connection
         .prepare(
-            "SELECT target_type, target_id, source_name, created_at
+            "SELECT target_type, target_id, source_name, created_at, event_type
             FROM usage_events",
         )
         .map_err(|error| format!("Cannot prepare source usage count query: {}", error))?;
@@ -3898,6 +4000,7 @@ fn read_source_usage_counts(
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
             ))
         })
         .map_err(|error| format!("Cannot read source usage count events: {}", error))?;
@@ -3907,11 +4010,12 @@ fn read_source_usage_counts(
     let mut output: HashMap<String, (usize, usize, usize)> = HashMap::new();
 
     for row in rows {
-        let (target_type, target_id, source_name, created_at) =
+        let (target_type, _target_id, source_name, created_at, event_type) =
             row.map_err(|error| format!("Cannot decode source usage event: {}", error))?;
-        let key = if target_type == "source" {
-            format!("id:{}", target_id)
-        } else if target_type == "skill" && !source_name.trim().is_empty() {
+        let key = if target_type == "skill"
+            && !source_name.trim().is_empty()
+            && usage_event_counts_as_skill_invocation(&event_type)
+        {
             format!("name:{}", normalize_lookup_key(&source_name))
         } else {
             continue;
@@ -3931,15 +4035,11 @@ fn read_source_usage_counts(
 }
 
 fn source_import_target_root(root: &Path) -> String {
-    root.join("app")
-        .join("github_sources")
-        .to_string_lossy()
-        .to_string()
+    managed_sources_dir(root).to_string_lossy().to_string()
 }
 
 fn source_import_target_path(root: &Path, display_name: &str) -> String {
-    root.join("app")
-        .join("github_sources")
+    managed_sources_dir(root)
         .join(sanitize_source_folder_name(display_name))
         .to_string_lossy()
         .to_string()
@@ -4103,7 +4203,8 @@ fn stage_source_import_candidate_in_connection(
         blocking_checks: plan.blocking_checks.clone(),
         rollback_steps: vec![
             "删除本次 staging 目录。".to_string(),
-            "保留正式 app/github_sources、skills、Claude/Codex/Antigravity 目录不变。".to_string(),
+            "保留正式 app-next/data/github_sources、skills、Claude/Codex/Antigravity 目录不变。"
+                .to_string(),
         ],
         real_write_scope: "staging-only".to_string(),
     };
@@ -4411,7 +4512,7 @@ fn promote_staged_source_import_in_connection(
             "重新运行 v2 扫描以刷新 SQLite 索引。".to_string(),
             "Claude/Codex/Antigravity 目录没有被本步骤写入。".to_string(),
         ],
-        real_write_scope: "app/github_sources-only".to_string(),
+        real_write_scope: "app-next/data/github_sources-only".to_string(),
     };
 
     if source_name.is_empty() || source_name == "source-import" {
@@ -4483,7 +4584,7 @@ fn promote_staged_source_import_in_connection(
             "如需移除该来源，请在来源库中删除对应来源并重新扫描。".to_string(),
             "Claude/Codex/Antigravity 目录没有被本步骤写入。".to_string(),
         ];
-        promotion.real_write_scope = "app/github_sources-existing".to_string();
+        promotion.real_write_scope = "app-next/data/github_sources-existing".to_string();
         return write_source_import_promotion_report(root, connection, promotion, &timestamp);
     }
 
@@ -4508,7 +4609,7 @@ fn promote_staged_source_import_in_connection(
     promotion.skill_count = skill_count;
     promotion.prompt_count = prompt_count;
     promotion.blocking_checks = vec![
-        "本步骤只写入 app/github_sources，不写入 skills 或 AI 工具目录。".to_string(),
+        "本步骤只写入 app-next/data/github_sources，不写入 skills 或 AI 工具目录。".to_string(),
         "如已开启真实写入授权，同步按钮会写入 Claude/Codex/Antigravity 链接。".to_string(),
     ];
     write_source_import_promotion_report(root, connection, promotion, &timestamp)
@@ -4578,7 +4679,7 @@ fn write_source_import_promotion_report(
         "report": path_file_name(&md_path),
         "json": path_file_name(&json_path),
         "realWrites": promotion.status == "promoted",
-        "writeScope": "app/github_sources only"
+        "writeScope": "app-next/data/github_sources only"
     });
     fs::write(
         &manifest_path,
@@ -4688,13 +4789,14 @@ fn build_github_source_import_plan(
             "校验 GitHub 普通仓库地址并规范化为 .git URL。".to_string(),
             "检查 v2 SQLite 中是否已有同源仓库。".to_string(),
             "未来真实导入前先创建快照和回滚计划。".to_string(),
-            "未来真实导入时 clone/pull 到 app/github_sources，再扫描 SKILL.md。".to_string(),
+            "未来真实导入时 clone/pull 到 app-next/data/github_sources，再扫描 SKILL.md。"
+                .to_string(),
         ],
         install_plan_steps: vec![
             "创建 source-import 快照和目标目录备份 dry-run。".to_string(),
             "如果目标目录已存在，先复制到 app-next/.skillhub-next/backups/source-imports。"
                 .to_string(),
-            "clone 或 pull 到隔离的 app/github_sources 子目录。".to_string(),
+            "clone 或 pull 到隔离的 app-next/data/github_sources 子目录。".to_string(),
             "重新扫描 SKILL.md，并只更新 v2 SQLite 来源索引。".to_string(),
             "真实 Claude/Codex/Antigravity 接管继续等待 Release Gate。".to_string(),
         ],
@@ -5002,7 +5104,7 @@ fn build_package_source_import_plan(
             "创建只读检查记录和隔离 staging 目录。".to_string(),
             "安全解压到 app-next/.skillhub-next/staging/source-imports。".to_string(),
             "安全通过后创建 source-import 快照和备份 dry-run。".to_string(),
-            "正式安装到 app/github_sources 仍需 Release Gate 单独解锁。".to_string(),
+            "正式安装到 app-next/data/github_sources 仍需 Release Gate 单独解锁。".to_string(),
             "真实 Claude/Codex/Antigravity 接管继续等待 Release Gate。".to_string(),
         ],
         blocking_checks,
@@ -5476,7 +5578,6 @@ fn should_skip_import_scan_dir(name: &str) -> bool {
             | ".svn"
             | "node_modules"
             | "target"
-            | "dist"
             | "build"
             | ".next"
             | ".nuxt"
@@ -5551,6 +5652,83 @@ fn parse_github_repo(input: &str) -> Option<(String, String)> {
     }
 
     Some((owner.to_string(), repo.to_string()))
+}
+
+fn hydrate_source_urls_from_git(root: &Path, sources: &mut [SourceCard]) {
+    for source in sources {
+        if parse_github_repo(&source.url).is_some() {
+            continue;
+        }
+        if let Some(url) = infer_source_github_url(root, source) {
+            source.url = url;
+        }
+    }
+}
+
+fn infer_source_github_url(root: &Path, source: &SourceCard) -> Option<String> {
+    for path in source_candidate_paths(root, source) {
+        let config_path = path.join(".git").join("config");
+        let Ok(config) = fs::read_to_string(config_path) else {
+            continue;
+        };
+        let Some(origin) = parse_git_origin_url(&config) else {
+            continue;
+        };
+        let Some((owner, repo)) = parse_github_repo(&origin) else {
+            continue;
+        };
+        return Some(normalized_github_repo_url(&owner, &repo));
+    }
+    None
+}
+
+fn source_candidate_paths(root: &Path, source: &SourceCard) -> Vec<PathBuf> {
+    let sources_dir = active_sources_dir(&root);
+    let mut candidates = Vec::new();
+    for value in [&source.local_path, &source.id, &source.name] {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(value);
+        if path.is_absolute() {
+            candidates.push(path);
+        } else {
+            candidates.push(root.join(value));
+            candidates.push(sources_dir.join(value));
+        }
+    }
+
+    let mut seen = HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|path| seen.insert(normalize_path_for_compare(&path.display().to_string())))
+        .collect()
+}
+
+fn parse_git_origin_url(config: &str) -> Option<String> {
+    let mut in_origin = false;
+    for raw_line in config.lines() {
+        let line = raw_line.trim();
+        if line.starts_with('[') {
+            let lowered = line.to_ascii_lowercase();
+            in_origin = lowered == "[remote \"origin\"]" || lowered == "[remote 'origin']";
+            continue;
+        }
+        if !in_origin {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim().eq_ignore_ascii_case("url") {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn fetch_github_popularity(owner: &str, repo: &str) -> Result<GithubPopularityFetch, String> {
@@ -8194,7 +8372,8 @@ fn derive_write_gates(
                 ),
                 (
                     true,
-                    "GitHub 来源已支持 staging clone，并可提升到 app/github_sources。".to_string(),
+                    "GitHub 来源已支持 staging clone，并可提升到 app-next/data/github_sources。"
+                        .to_string(),
                 ),
             ],
             vec![
@@ -8226,7 +8405,7 @@ fn derive_write_gates(
                 ),
                 (
                     true,
-                    "本地 / zip 来源已支持隔离 staging，并可提升到 app/github_sources。"
+                    "本地 / zip 来源已支持隔离 staging，并可提升到 app-next/data/github_sources。"
                         .to_string(),
                 ),
             ],
@@ -8435,7 +8614,7 @@ fn required_desktop_qa_passed(desktop_qa_checks: &[DesktopQaCheckCard]) -> bool 
 }
 
 fn derive_release_reports(root: &Path) -> Vec<ReleaseReportCard> {
-    let reports_root = root.join("app").join("reports");
+    let reports_root = reports_dir(root);
     let candidates = [
         release_report_from_diagnostics(&reports_root.join("latest-diagnostics.json")),
         release_report_from_release_preflight(
@@ -8630,6 +8809,7 @@ fn parse_diagnostic_skills(diagnostics: Option<&Value>) -> HashMap<String, Skill
             SkillDiagnostic {
                 name: json_string(item, "name"),
                 description: json_string(item, "description"),
+                repo: json_string(item, "repo"),
                 target: json_string(item, "target"),
                 has_skill_md: json_bool(item, "hasSkillMd"),
                 has_front_matter: json_bool(item, "hasFrontMatter"),
@@ -8637,6 +8817,45 @@ fn parse_diagnostic_skills(diagnostics: Option<&Value>) -> HashMap<String, Skill
         );
     }
     result
+}
+
+fn merge_managed_link_skills(root: &Path, diagnostics: &mut HashMap<String, SkillDiagnostic>) {
+    let managed_links_file = app_next_root(root)
+        .join(".skillhub-next")
+        .join("sync-state")
+        .join("managed-links.json");
+    let Some(managed_links_json) = read_json(&managed_links_file) else {
+        return;
+    };
+    let Some(items) = managed_links_json.as_array() else {
+        return;
+    };
+
+    for item in items {
+        let folder = json_string(item, "Skill");
+        if folder.is_empty() {
+            continue;
+        }
+
+        let diagnostic = diagnostics.entry(folder.to_lowercase()).or_default();
+        if diagnostic.name.is_empty() {
+            diagnostic.name = folder.clone();
+        }
+        let description = json_string(item, "Description");
+        if diagnostic.description.is_empty() && !description.is_empty() {
+            diagnostic.description = description;
+        }
+        let repo = json_string(item, "Repo");
+        if !repo.is_empty() {
+            diagnostic.repo = repo;
+        }
+        let target = json_string(item, "Target");
+        if !target.is_empty() {
+            diagnostic.target = target;
+        }
+        diagnostic.has_skill_md = true;
+        diagnostic.has_front_matter = !diagnostic.description.is_empty();
+    }
 }
 
 fn parse_configured_sources(config: Option<&Value>) -> HashMap<String, SourceConfig> {
@@ -8749,7 +8968,11 @@ fn scan_skills(
                     .map(|path| path.display().to_string())
             })
             .unwrap_or_default();
-        let source = infer_source_name(&target, sources_dir).unwrap_or_else(|| "local".to_string());
+        let source = diagnostic
+            .map(|item| item.repo.clone())
+            .filter(|value| !value.is_empty())
+            .or_else(|| infer_source_name(&target, sources_dir))
+            .unwrap_or_else(|| "local".to_string());
         let category = configured_sources
             .get(&source.to_lowercase())
             .map(|source| source.category_id.clone())
@@ -9117,14 +9340,19 @@ fn read_skill_name(skill_md_path: &Path) -> Option<String> {
     let raw = fs::read_to_string(skill_md_path).ok()?;
     raw.lines()
         .find_map(|line| {
-            line.strip_prefix("name:")
-                .map(|value| value.trim().trim_matches('"').trim_matches('\'').to_string())
+            line.strip_prefix("name:").map(|value| {
+                value
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_string()
+            })
         })
         .filter(|value| !value.is_empty())
 }
 
 /// Plan and (optionally) write parent / router-hub Skills for every collection
-/// under app/github_sources/. Implements the four standard-document rules:
+/// under app-next/data/github_sources/. Implements the four standard-document rules:
 /// - parent file lives in AI-SkillHub-local-routers/ (outside the author repo)
 /// - description is double-quoted
 /// - router name uses the `-hub` suffix to avoid colliding with a same-named child
@@ -9134,7 +9362,7 @@ fn plan_or_write_router_hubs(
     commit: bool,
     real_writes_enabled: bool,
 ) -> Result<RouterHubReport, String> {
-    let sources_dir = legacy_root.join("app").join("github_sources");
+    let sources_dir = active_sources_dir(legacy_root);
     let routers_root = sources_dir.join(ROUTER_HUB_FOLDER);
     let mut plans: Vec<RouterHubPlanCard> = Vec::new();
     let mut warnings: Vec<RouterHubHealthWarning> = Vec::new();
@@ -9154,10 +9382,7 @@ fn plan_or_write_router_hubs(
             skipped_count: 0,
             health_warnings: warnings,
             duplicate_children: Vec::new(),
-            summary: format!(
-                "github_sources 文件夹不存在：{}",
-                sources_dir.display()
-            ),
+            summary: format!("github_sources 文件夹不存在：{}", sources_dir.display()),
         });
     }
 
@@ -9180,7 +9405,11 @@ fn plan_or_write_router_hubs(
         let children = collect_child_skills_for_collection(&collection_dir);
 
         // Walk one level of skill md files looking for unquoted [ROUTER-HUB] descriptions.
-        for child in fs::read_dir(&collection_dir).into_iter().flatten().flatten() {
+        for child in fs::read_dir(&collection_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
             let skill_md = child.path().join("SKILL.md");
             if skill_md.exists() {
                 if let Some(issue) = check_router_hub_description_quoting(&skill_md) {
@@ -9292,7 +9521,11 @@ fn plan_or_write_router_hubs(
         });
     }
 
-    plans.sort_by(|a, b| a.collection_name.to_lowercase().cmp(&b.collection_name.to_lowercase()));
+    plans.sort_by(|a, b| {
+        a.collection_name
+            .to_lowercase()
+            .cmp(&b.collection_name.to_lowercase())
+    });
 
     // Aggregate child Skill names that appear in 2+ collections — these are the
     // silent-shadow case (Claude only loads one SKILL.md with a given `name:`).
@@ -9480,7 +9713,7 @@ mod tests {
 
     #[test]
     fn scan_legacy_snapshot_is_read_only_and_resolves_root() {
-        let snapshot = scan_legacy_snapshot().expect("legacy snapshot should scan");
+        let snapshot = scan_legacy_snapshot_blocking().expect("legacy snapshot should scan");
 
         assert_eq!(snapshot.mode, "read-only");
         assert!(Path::new(&snapshot.root).exists());
@@ -9506,8 +9739,8 @@ mod tests {
 
     #[test]
     fn load_indexed_snapshot_reads_from_sqlite() {
-        scan_legacy_snapshot().expect("legacy snapshot should seed sqlite");
-        let snapshot = load_indexed_snapshot().expect("indexed snapshot should load");
+        scan_legacy_snapshot_blocking().expect("legacy snapshot should seed sqlite");
+        let snapshot = load_indexed_snapshot_blocking().expect("indexed snapshot should load");
 
         assert_eq!(snapshot.mode, "sqlite-index");
         assert!(snapshot.index.persisted);
@@ -9584,6 +9817,36 @@ mod tests {
     }
 
     #[test]
+    fn generated_router_hub_skill_resolves_to_original_source() {
+        let mut source_ids = HashMap::new();
+        source_ids.insert(
+            ROUTER_HUB_FOLDER.to_lowercase(),
+            "source-internal-router".to_string(),
+        );
+        source_ids.insert("nature-skills".to_string(), "source-nature".to_string());
+
+        let skill = SkillCard {
+            name: "nature-skills".to_string(),
+            folder_name: "nature-skills".to_string(),
+            category: "academic-writing".to_string(),
+            description: "[ROUTER-HUB] Nature skill collection".to_string(),
+            note: String::new(),
+            source: ROUTER_HUB_FOLDER.to_string(),
+            health: "ok".to_string(),
+            enabled: true,
+            relative_path: "app\\github_sources\\AI-SkillHub-local-routers\\nature-skills"
+                .to_string(),
+            tags: Vec::new(),
+            is_router_hub: true,
+        };
+
+        assert_eq!(
+            resolve_skill_source_id(&skill, &source_ids).as_deref(),
+            Some("source-nature")
+        );
+    }
+
+    #[test]
     fn router_hub_health_warning_fires_on_unquoted_marker() {
         let root = std::env::temp_dir().join(format!(
             "skillhub-router-quote-test-{}",
@@ -9620,7 +9883,7 @@ mod tests {
             "skillhub-router-collision-test-{}",
             unix_timestamp_string()
         ));
-        let sources_dir = root.join("app").join("github_sources");
+        let sources_dir = active_sources_dir(&root);
         let collection = sources_dir.join("nature-skills");
         // Child #1 shares the parent name — the collision case.
         let same_name = collection.join("nature-skills");
@@ -9650,13 +9913,11 @@ mod tests {
         // Parent name is reported as the original collection name, not a `-hub` mutation.
         assert_eq!(plan.router_skill_name, "nature-skills");
         // No router file got written.
-        assert!(
-            !sources_dir
-                .join("AI-SkillHub-local-routers")
-                .join("nature-skills")
-                .join("SKILL.md")
-                .exists()
-        );
+        assert!(!sources_dir
+            .join("AI-SkillHub-local-routers")
+            .join("nature-skills")
+            .join("SKILL.md")
+            .exists());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -9666,7 +9927,7 @@ mod tests {
             "skillhub-router-dup-test-{}",
             unix_timestamp_string()
         ));
-        let sources_dir = root.join("app").join("github_sources");
+        let sources_dir = active_sources_dir(&root);
         // Two distinct collections, each with a child named "shared-skill".
         for collection in &["alpha", "beta"] {
             let shared = sources_dir.join(collection).join("shared-skill");
@@ -9690,8 +9951,8 @@ mod tests {
             )
             .unwrap();
         }
-        let report = plan_or_write_router_hubs(&root, false, false)
-            .expect("router report should build");
+        let report =
+            plan_or_write_router_hubs(&root, false, false).expect("router report should build");
         let dup = report
             .duplicate_children
             .iter()
@@ -9709,11 +9970,9 @@ mod tests {
             unix_timestamp_string()
         ));
         let connection = open_index_database(&root).expect("sqlite should open");
-        let dry = plan_or_write_router_hubs(&root, false, false)
-            .expect("dry-run should succeed");
+        let dry = plan_or_write_router_hubs(&root, false, false).expect("dry-run should succeed");
         record_router_hub_audit(&connection, &dry).expect("audit write should succeed");
-        let events = read_indexed_audit_events(&connection)
-            .expect("audit events should read");
+        let events = read_indexed_audit_events(&connection).expect("audit events should read");
         assert!(
             events
                 .iter()
@@ -9729,7 +9988,7 @@ mod tests {
             "skillhub-router-plan-test-{}",
             unix_timestamp_string()
         ));
-        let sources_dir = root.join("app").join("github_sources");
+        let sources_dir = active_sources_dir(&root);
         // Collection with two children → should be planned/written.
         let two_child = sources_dir.join("paper-pack");
         fs::create_dir_all(two_child.join("paper-workflow")).unwrap();
@@ -9811,7 +10070,7 @@ mod tests {
                 mode: "scan".to_string(),
                 category_id: "agent-tools".to_string(),
                 note: String::new(),
-                local_path: "app/github_sources/github-skill-pack".to_string(),
+                local_path: "app-next/data/github_sources/github-skill-pack".to_string(),
                 enabled: true,
                 tags: vec!["agent-tools".to_string()],
                 created_at: "2026-05-29T00:00:00Z".to_string(),
@@ -9826,7 +10085,7 @@ mod tests {
                 mode: "do-not-install".to_string(),
                 category_id: "prompt".to_string(),
                 note: String::new(),
-                local_path: "app/github_sources/prompt-library".to_string(),
+                local_path: "app-next/data/github_sources/prompt-library".to_string(),
                 enabled: true,
                 tags: vec!["prompt".to_string()],
                 created_at: "2026-05-28T00:00:00Z".to_string(),
@@ -9938,7 +10197,7 @@ mod tests {
 
     #[test]
     fn rollback_plan_locks_real_restore_until_backup_exists() {
-        let snapshot = scan_legacy_snapshot().expect("legacy snapshot should scan");
+        let snapshot = scan_legacy_snapshot_blocking().expect("legacy snapshot should scan");
         let steps = rollback_plan_steps(&snapshot, "test-snapshot");
 
         assert_eq!(steps.len(), 5);
@@ -10021,12 +10280,12 @@ mod tests {
     }
 
     #[test]
-    fn release_reports_parse_v1_preflight_inputs_without_paths() {
+    fn release_reports_parse_v2_preflight_inputs_without_paths() {
         let root = std::env::temp_dir().join(format!(
             "skillhub-release-report-test-{}",
             unix_timestamp_string()
         ));
-        let reports = root.join("app").join("reports");
+        let reports = root.join("app-next").join("reports");
         fs::create_dir_all(reports.join("release-preflight"))
             .expect("release-preflight folder should be created");
         fs::create_dir_all(reports.join("share-recipient-test"))
@@ -10243,7 +10502,12 @@ mod tests {
                     ) VALUES (
                         ?1, ?2, 'skill', '', ?3, 'scan', 'auto', '', 1, ?4, ?4
                     )",
-                    params![id, name, format!("app/github_sources/{}", name), timestamp],
+                    params![
+                        id,
+                        name,
+                        format!("app-next/data/github_sources/{}", name),
+                        timestamp
+                    ],
                 )
                 .expect("source row should insert");
         }
@@ -10318,14 +10582,15 @@ mod tests {
             .iter()
             .find(|item| item.target_type == "skill" && item.target_id == "paper-workflow")
             .expect("skill usage should aggregate");
-        let source_stat = stats
-            .iter()
-            .find(|item| item.target_type == "source" && item.target_id == "source-impeccable")
-            .expect("source usage should aggregate");
 
         assert_eq!(skill_stat.total_count, 2);
         assert!(skill_stat.seven_day_count >= 2);
-        assert_eq!(source_stat.total_count, 1);
+        assert!(
+            stats.iter().all(
+                |item| !(item.target_type == "source" && item.target_id == "source-impeccable")
+            ),
+            "opening or editing a source must not count as local Skill invocation"
+        );
         assert!(read_indexed_audit_events(&connection)
             .expect("audit events should read")
             .iter()
@@ -10361,6 +10626,50 @@ mod tests {
             parse_github_repo("https://github.com/owner/repo.git invalid"),
             None
         );
+    }
+
+    #[test]
+    fn source_url_hydration_reads_git_origin() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-source-origin-test-{}",
+            unix_timestamp_string()
+        ));
+        let repo_dir = root
+            .join("app-next")
+            .join("data")
+            .join("github_sources")
+            .join("paper-framework-figure-studio-pro");
+        fs::create_dir_all(repo_dir.join(".git")).expect("test git folder should be created");
+        fs::write(
+            repo_dir.join(".git").join("config"),
+            "[remote \"origin\"]\n    url = https://github.com/c-narcissus/paper-framework-figure-studio-pro.git\n",
+        )
+        .expect("test git config should be written");
+
+        let mut sources = vec![SourceCard {
+            id: "paper-framework-figure-studio-pro".to_string(),
+            name: "paper-framework-figure-studio-pro".to_string(),
+            source_type: "skill".to_string(),
+            health: "ok".to_string(),
+            url: String::new(),
+            skill_count: 1,
+            mode: "scan".to_string(),
+            category_id: "scientific-figures".to_string(),
+            note: String::new(),
+            local_path: "app-next/data/github_sources/paper-framework-figure-studio-pro"
+                .to_string(),
+            enabled: true,
+            tags: Vec::new(),
+            created_at: unix_timestamp_string(),
+        }];
+
+        hydrate_source_urls_from_git(&root, &mut sources);
+
+        assert_eq!(
+            sources[0].url,
+            "https://github.com/c-narcissus/paper-framework-figure-studio-pro.git"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -10426,6 +10735,42 @@ mod tests {
         assert!(plan.prompt_count >= 1);
         assert!(plan.safe_to_continue);
         assert!(plan.rollback_summary.contains("没有复制"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_import_plan_counts_paperspine_dist_skill_suite() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-import-paperspine-dist-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let local_source = root.join("PaperSpine");
+        let codex_skill_dir = local_source
+            .join("dist")
+            .join("codex")
+            .join("skills")
+            .join("paper-spine");
+        let claude_skill_dir = local_source
+            .join("dist")
+            .join("claude")
+            .join("skills")
+            .join("paper-spine-ui");
+        fs::create_dir_all(&codex_skill_dir).expect("codex skill dir should create");
+        fs::create_dir_all(&claude_skill_dir).expect("claude skill dir should create");
+        fs::write(codex_skill_dir.join("SKILL.md"), "# PaperSpine")
+            .expect("codex skill should write");
+        fs::write(claude_skill_dir.join("SKILL.md"), "# PaperSpine UI")
+            .expect("claude skill should write");
+
+        let plan =
+            build_source_import_plan(&root, &connection, "local", &local_source.to_string_lossy())
+                .expect("paperspine import plan should build");
+
+        assert_eq!(plan.status, "ready");
+        assert_eq!(plan.skill_count, 2);
+        assert!(plan.safe_to_continue);
 
         let _ = fs::remove_dir_all(root);
     }
@@ -10567,7 +10912,10 @@ mod tests {
 
         let target = Path::new(&promotion.target_path);
         assert_eq!(promotion.status, "promoted");
-        assert_eq!(promotion.real_write_scope, "app/github_sources-only");
+        assert_eq!(
+            promotion.real_write_scope,
+            "app-next/data/github_sources-only"
+        );
         assert!(target
             .join("skills")
             .join("paper-helper")
@@ -10681,7 +11029,7 @@ mod tests {
             mode: "scan".to_string(),
             category_id: "ui-design".to_string(),
             note: String::new(),
-            local_path: "app/github_sources/impeccable".to_string(),
+            local_path: "app-next/data/github_sources/impeccable".to_string(),
             enabled: true,
             tags: vec!["ui-design".to_string()],
             created_at: "2026-05-01T00:00:00Z".to_string(),
@@ -10736,8 +11084,8 @@ mod tests {
         assert_eq!(card.created_at, "2026-05-01T00:00:00Z");
         assert_eq!(card.trend_points.len(), 1);
         assert_eq!(card.trend_points[0].stars, 1234);
-        assert_eq!(card.local_total_count, 2);
-        assert!(card.local_seven_day_count >= 2);
+        assert_eq!(card.local_total_count, 1);
+        assert!(card.local_seven_day_count >= 1);
 
         let _ = fs::remove_dir_all(root);
     }

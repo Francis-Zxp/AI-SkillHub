@@ -1,21 +1,23 @@
 # Personal skills and cloned third-party sources
 /skills/
 /github_sources/
-/app/github_sources/
 
+
+# V2 local runtime data and copied third-party sources
+/app-next/data/
+/app-next/.skillhub-next/
+/app-next/reports/
+/app-next/runtime/skillhub.config.json
+/app-next/src-tauri/target/
+/app-next/node_modules/
+/app-next/dist/
 # Local config/state generated on each computer
 /skillhub.config.json
-/app/skillhub.config.json
 /.skillhub/
-/app/.skillhub/
 
 # Reports, diagnostics, caches, and backups
 /reports/
-/app/reports/
 /archives/
-/app/archives/
-/app/webview2-data/
-/app/packages/
 /release/
 /dist/
 /claude_skills_备份/
@@ -37,7 +39,6 @@
 /TECHNICAL_ROADMAP.md
 /AI SkillHub 2.0 产品方向与上下文防丢失机制.md
 /功能差距优先级与UI重构方案.md
-/app/docs/
 
 # Local launcher/build noise
 /AI SkillHub V2 Alpha.exe

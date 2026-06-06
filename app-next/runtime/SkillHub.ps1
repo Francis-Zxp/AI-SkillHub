@@ -55,11 +55,11 @@ function Write-JsonUtf8([string]$Path, $Object, [int]$Depth = 8) {
 function New-DefaultSkillHubConfig {
   [PSCustomObject]@{
     version = 2
-    githubSourcesFolder = 'github_sources'
-    activeSkillsFolder = '..\skills'
+    githubSourcesFolder = '..\data\github_sources'
+    activeSkillsFolder = '..\..\skills'
     manageAgentLinks = $false
     autoDiscoverManualRepos = $true
-    preferredPathFragments = @('\.claude\skills\', '\skills\', '\.agents\skills\')
+    preferredPathFragments = @('\.claude\skills\', '\skills\', '\dist\codex\skills\', '\dist\claude\skills\', '\dist\openclaw\skills\', '\.agents\skills\')
     repositories = @()
   }
 }
@@ -209,6 +209,21 @@ function Get-PathTieBreaker([string]$Path, [string]$RepoName) {
   $directAgentsRoot = "$repoRoot\.agents\skills\"
   if ($fullPath.StartsWith($directAgentsRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     return 2
+  }
+
+  $distCodexRoot = "$repoRoot\dist\codex\skills\"
+  if ($fullPath.StartsWith($distCodexRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return 3
+  }
+
+  $distClaudeRoot = "$repoRoot\dist\claude\skills\"
+  if ($fullPath.StartsWith($distClaudeRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return 4
+  }
+
+  $distOpenClawRoot = "$repoRoot\dist\openclaw\skills\"
+  if ($fullPath.StartsWith($distOpenClawRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return 5
   }
 
   if ($fullPath.StartsWith("$repoRoot\", [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -474,9 +489,9 @@ function Expand-SkillZipPackages([string]$RepoPath) {
 $Config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $SourceRoot = Resolve-AppPath $Config.githubSourcesFolder
 $SkillsRoot = Resolve-AppPath $Config.activeSkillsFolder
-$StateRoot = Join-Path $AppRoot '.skillhub'
-$ReportsRoot = Join-Path $AppRoot 'reports'
-$ArchivesRoot = Join-Path $AppRoot 'archives'
+$StateRoot = Join-Path (Split-Path -Parent $AppRoot) '.skillhub-next\sync-state'
+$ReportsRoot = Join-Path (Split-Path -Parent $AppRoot) 'reports'
+$ArchivesRoot = Join-Path (Split-Path -Parent $AppRoot) '.skillhub-next\archives'
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $ArchiveRoot = Join-Path $ArchivesRoot "replaced_active_skill_copies_$Stamp"
 $StatePath = Join-Path $StateRoot 'managed-links.json'
@@ -764,3 +779,5 @@ Write-Host "Managed state: $StatePath"
 Write-Host ''
 Write-Host 'Active managed skills:'
 $selected | Sort-Object Skill | Select-Object -ExpandProperty Skill
+
+
