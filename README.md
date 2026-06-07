@@ -1,6 +1,6 @@
-# AI SkillHub V2
+# AI SkillHub
 
-AI SkillHub V2 is a Windows desktop hub for managing AI agent Skills, Prompt
+AI SkillHub is a Windows desktop hub for managing AI agent Skills, Prompt
 materials, GitHub sources, and local AI-tool links from one place.
 
 The project has moved to the V2-only layout. The old V1 WebView/PowerShell app
@@ -11,7 +11,7 @@ folder has been removed.
 For local use, start:
 
 ```text
-AI SkillHub V2 Alpha.exe
+AI SkillHub.exe
 ```
 
 The executable in the repository root is a local build artifact and is ignored
@@ -19,7 +19,7 @@ by Git. Public releases should be created with the V2 release package workflow.
 
 ## Core Flow
 
-1. Open AI SkillHub V2.
+1. Open AI SkillHub.
 2. Go to `Sources`.
 3. Paste a GitHub repository URL, select source type, category, tags, and notes.
 4. Click `一键添加并刷新`.
@@ -37,6 +37,7 @@ material and are not installed as Skills.
 - Zip or `.skill` package previews.
 - Prompt/reference repositories.
 - Parent router Skills and child Skills.
+- Same-name child Skill conflict review and default-source choices.
 - Claude Code, Codex, and Antigravity shared-skill links.
 - Source categories, tags, notes, search, sorting, usage counters, and GitHub
   popularity metadata.
@@ -79,7 +80,7 @@ app-next/.skillhub-next/
 app-next/runtime/skillhub.config.json
 app-next/node_modules/
 app-next/src-tauri/target/
-AI SkillHub V2 Alpha.exe
+AI SkillHub.exe
 ```
 
 ## Developer Setup
@@ -125,6 +126,20 @@ Generated parent routers use `[ROUTER-HUB]`. Child entries use
 updates do not overwrite AI SkillHub's routing standard.
 
 See `docs/skill-router-standard.md` for the rule.
+
+## Same-Name Skill Conflicts
+
+Different sources can contain child Skills with the same callable name, such as
+`Nature-Paper-Skills / figure-planner` and `PaperSpine / figure-planner`.
+
+V2 does not delete, rename, overwrite, or silently choose between them. The
+Sources page shows a conflict selector where the user can set a default source,
+reset the conflict to unresolved, or ignore the reminder. The choice is stored
+in the local SQLite table `skill_conflict_choices`, outside author repositories,
+so GitHub updates do not overwrite it.
+
+Future slash-command dispatch should read that table before routing a direct
+call such as `/figure-planner`.
 
 ## Author
 

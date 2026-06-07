@@ -14,7 +14,7 @@ $ProjectRoot = Split-Path -Parent $V2Root
 $ReportsRoot = Join-Path $V2Root 'reports\share-recipient-test'
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
 $RunRoot = Join-Path $ReportsRoot $Stamp
-$SandboxRoot = Join-Path $RunRoot 'AI SkillHub V2 分享验收 用户 路径'
+$SandboxRoot = Join-Path $RunRoot 'AI SkillHub 分享验收 用户 路径'
 $SandboxV2 = Join-Path $SandboxRoot 'app-next'
 $SandboxRuntime = Join-Path $SandboxV2 'runtime'
 $Cases = New-Object System.Collections.Generic.List[object]
@@ -65,14 +65,14 @@ function Invoke-Captured([string]$FileName, [string]$Arguments, [string]$Working
 
 New-Item -ItemType Directory -Force -Path $SandboxRoot, $SandboxV2, $SandboxRuntime | Out-Null
 try {
-  Copy-FileRequired (Join-Path $ProjectRoot 'AI SkillHub V2 Alpha.exe') (Join-Path $SandboxRoot 'AI SkillHub.exe')
+  Copy-FileRequired (Join-Path $ProjectRoot 'AI SkillHub.exe') (Join-Path $SandboxRoot 'AI SkillHub.exe')
   foreach ($file in @('README.md', 'CHANGELOG.md', '使用说明.md')) {
     $source = Join-Path $ProjectRoot $file
     if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-FileRequired $source (Join-Path $SandboxRoot $file) }
   }
   Copy-DirContentsRequired $RuntimeRoot $SandboxRuntime @('skillhub.config.json')
   New-Item -ItemType Directory -Force -Path (Join-Path $SandboxRoot 'skills'), (Join-Path $SandboxV2 'data') | Out-Null
-  Add-Case 'clean-copy' $true '已复制 V2 最小运行结构。'
+  Add-Case 'clean-copy' $true '已复制 AI SkillHub 最小运行结构。'
 } catch {
   Add-Case 'clean-copy' $false $_.Exception.Message
 }
@@ -101,10 +101,10 @@ $json = Join-Path $RunRoot 'share-recipient-test.json'
 $md = Join-Path $RunRoot 'share-recipient-test.md'
 Write-Utf8Bom $json ($payload | ConvertTo-Json -Depth 8)
 Copy-Item -LiteralPath $json -Destination (Join-Path $ReportsRoot 'latest-share-recipient-test.json') -Force
-$lines = @('# V2 分享版真实验收', '', "- 状态：$(if ($payload.ok) { '通过' } else { '失败' })", "- 临时用户路径：$SandboxRoot", '', '| 场景 | 结果 | 细节 |', '|---|---|---|')
+$lines = @('# AI SkillHub 分享版真实验收', '', "- 状态：$(if ($payload.ok) { '通过' } else { '失败' })", "- 临时用户路径：$SandboxRoot", '', '| 场景 | 结果 | 细节 |', '|---|---|---|')
 foreach ($case in $Cases) { $lines += "| $($case.name) | $(if ($case.ok) { '通过' } else { '失败' }) | $($case.detail.Replace('|','/')) |" }
 Write-Utf8Bom $md ($lines -join [Environment]::NewLine)
 Copy-Item -LiteralPath $md -Destination (Join-Path $ReportsRoot 'latest-share-recipient-test.md') -Force
-if (-not $Quiet) { Write-Host "V2 分享验收报告：$md" }
+if (-not $Quiet) { Write-Host "AI SkillHub 分享验收报告：$md" }
 if (-not $KeepSandbox -and $payload.ok) { Remove-Item -LiteralPath $RunRoot -Recurse -Force -ErrorAction SilentlyContinue }
 if ($failed.Count -gt 0) { exit 1 }

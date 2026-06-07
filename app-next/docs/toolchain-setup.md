@@ -2,7 +2,7 @@
 
 Checked on: 2026-05-25
 
-This file records the tools needed to run the AI SkillHub v2 `app-next` Tauri project.
+This file records the tools needed to run the AI SkillHub `app-next` Tauri project.
 
 ## What to install
 
@@ -144,7 +144,7 @@ failed to remove file ...\target\debug\ai-skillhub-next.exe
 拒绝访问。 (os error 5)
 ```
 
-Windows is still holding the previous debug executable. Usually this means the old AI SkillHub v2 desktop window is still open, or the process is closing slowly.
+Windows is still holding the previous debug executable. Usually this means the old AI SkillHub desktop window is still open, or the process is closing slowly.
 
 Fix:
 

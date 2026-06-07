@@ -1,4 +1,4 @@
-/* AI SkillHub V2 unified UI system.
+/* AI SkillHub unified UI system.
    One token layer, one component layer, no accumulated override stack. */
 
 :root {
@@ -911,6 +911,21 @@ p {
   height: 18px;
 }
 
+.command-metrics .metric span {
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.command-metrics .metric em {
+  width: 30px;
+  height: 30px;
+}
+
+.command-metrics .metric em .ui-icon {
+  width: 20px;
+  height: 20px;
+}
+
 .metric strong,
 .command-metric strong {
   display: block;
@@ -1759,6 +1774,14 @@ p {
   font-size: 12px;
 }
 
+.category-custom-field {
+  min-width: 0;
+}
+
+.category-custom-field input {
+  width: 100%;
+}
+
 .source-import-wizard .category-chip {
   min-height: 30px;
   padding-inline: var(--ui-space-3);
@@ -2129,6 +2152,17 @@ p {
     background var(--ui-duration) var(--ui-ease),
     box-shadow var(--ui-duration) var(--ui-ease),
     border-color var(--ui-duration) var(--ui-ease);
+}
+
+.sources-workbench.has-detail .source-row {
+  grid-template-columns: 32px minmax(180px, 1.6fr) 68px 78px 84px 112px 40px;
+  min-width: 0;
+}
+
+.sources-workbench.has-detail .source-row .source-usage,
+.sources-workbench.has-detail .source-row > span:nth-of-type(6),
+.sources-workbench.has-detail .source-row small {
+  display: none;
 }
 
 .source-row:hover {
@@ -3020,6 +3054,191 @@ p {
   color: var(--ui-router-accent);
   border-radius: 999px;
   background: var(--ui-router-soft);
+}
+
+.skill-conflict-panel {
+  display: grid;
+  gap: var(--ui-space-4);
+}
+
+.skill-conflict-panel.is-clear,
+.skill-conflict-head,
+.skill-conflict-detail header,
+.skill-conflict-actions {
+  display: flex;
+  gap: var(--ui-space-4);
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.skill-conflict-summary {
+  display: flex;
+  gap: var(--ui-space-2);
+  align-items: center;
+}
+
+.skill-conflict-summary span,
+.skill-conflict-summary strong {
+  min-height: 34px;
+  padding: 0 var(--ui-space-3);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--ui-text);
+  background: color-mix(in srgb, var(--ui-panel-soft) 72%, transparent);
+}
+
+.skill-conflict-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: var(--ui-space-4);
+  align-items: start;
+}
+
+.skill-conflict-list {
+  display: grid;
+  gap: var(--ui-space-2);
+  max-height: 420px;
+  overflow: auto;
+  padding-right: var(--ui-space-1);
+}
+
+.skill-conflict-tab {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--ui-space-1) var(--ui-space-3);
+  width: 100%;
+  padding: var(--ui-space-3);
+  color: var(--ui-text-muted);
+  text-align: left;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: color-mix(in srgb, var(--ui-panel-soft) 62%, transparent);
+  transition: border-color var(--ui-duration) var(--ui-ease),
+    background var(--ui-duration) var(--ui-ease),
+    transform var(--ui-duration) var(--ui-ease);
+}
+
+.skill-conflict-tab:hover {
+  border-color: var(--ui-border-strong);
+  transform: translateY(-1px);
+}
+
+.skill-conflict-tab.active {
+  color: var(--ui-text);
+  border-color: var(--ui-brand-soft);
+  background: color-mix(in srgb, var(--ui-brand-soft) 24%, var(--ui-panel-soft));
+}
+
+.skill-conflict-tab strong,
+.skill-conflict-tab small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-conflict-tab span {
+  color: var(--ui-text-soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.skill-conflict-tab small {
+  grid-column: 1 / -1;
+  color: var(--ui-text-muted);
+}
+
+.skill-conflict-detail {
+  display: grid;
+  gap: var(--ui-space-4);
+  min-width: 0;
+  padding: var(--ui-space-4);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-lg);
+  background: color-mix(in srgb, var(--ui-panel-soft) 72%, transparent);
+}
+
+.skill-conflict-detail h4 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.skill-conflict-detail p {
+  margin: 0;
+  color: var(--ui-text-muted);
+}
+
+.skill-conflict-detail code {
+  margin: 0 4px;
+  padding: 2px 7px;
+  color: var(--ui-router-accent);
+  border-radius: 999px;
+  background: var(--ui-router-soft);
+}
+
+.skill-conflict-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--ui-space-3);
+}
+
+.skill-conflict-choice {
+  display: grid;
+  gap: var(--ui-space-3);
+  min-width: 0;
+  padding: var(--ui-space-4);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-md);
+  background: color-mix(in srgb, var(--ui-panel) 78%, transparent);
+}
+
+.skill-conflict-choice.selected {
+  border-color: color-mix(in srgb, var(--ui-success) 72%, var(--ui-border));
+  background: color-mix(in srgb, var(--ui-success-soft) 42%, var(--ui-panel));
+}
+
+.skill-conflict-choice div {
+  display: flex;
+  gap: var(--ui-space-2);
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.skill-conflict-choice strong,
+.skill-conflict-choice small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-conflict-choice span {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  color: var(--ui-text-muted);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.skill-conflict-choice p {
+  display: -webkit-box;
+  min-height: 42px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.skill-conflict-choice small,
+.skill-conflict-note {
+  color: var(--ui-text-soft);
+}
+
+.skill-conflict-actions {
+  justify-content: flex-end;
 }
 
 .empty-state {

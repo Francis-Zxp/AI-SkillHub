@@ -41,7 +41,7 @@
 /功能差距优先级与UI重构方案.md
 
 # Local launcher/build noise
-/AI SkillHub V2 Alpha.exe
+/AI SkillHub.exe
 *.log
 *.tmp
 *.nupkg

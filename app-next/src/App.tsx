@@ -11,6 +11,7 @@ import type {
   ReleaseReportCard,
   RouterHubReport,
   SkillCard,
+  SkillConflictCard,
   SourceCard,
   SourceImportExecutionCard,
   SourceImportPlanCard,
@@ -276,7 +277,7 @@ export function App() {
       if (mode === "refresh") {
         setToast(
           shouldRunRealSync
-            ? "已执行 GitHub 更新、Skill 路由重建、AI 工具链接同步，并刷新 v2 索引。"
+            ? "已执行 GitHub 更新、Skill 路由重建、AI 工具链接同步，并刷新本地索引。"
             : "未开启真实写入授权：已刷新索引，但没有写入 Claude/Codex/Antigravity。"
         );
       }
@@ -354,7 +355,7 @@ export function App() {
       });
       setSnapshot(result);
       setLoadError("");
-      setToast("Skill 名称、分类、备注和多标签已永久保存到 v2 SQLite。");
+      setToast("Skill 名称、分类、备注和多标签已永久保存到本地 SQLite。");
       return "saved";
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
@@ -413,12 +414,65 @@ export function App() {
       });
       setSnapshot(result);
       setLoadError("");
-      setToast("来源元数据和多标签已永久保存到 v2 SQLite。");
+      setToast("来源元数据和多标签已永久保存到本地 SQLite。");
       return "saved";
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
       setToast("来源保存失败，请查看顶部错误提示。");
       return "failed";
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateSkillConflictChoice(
+    conflictKey: string,
+    defaultSkillId: string,
+    status: "default-set" | "ignored" | "unresolved"
+  ): Promise<void> {
+    if (!hasTauriRuntime()) {
+      setSnapshot(previous => {
+        const current = previous ?? createPreviewSnapshot();
+        return {
+          ...current,
+          skillConflicts: (current.skillConflicts ?? []).map(conflict =>
+            conflict.conflictKey === conflictKey
+              ? {
+                  ...conflict,
+                  status,
+                  defaultSkillId: status === "default-set" ? defaultSkillId : "",
+                  defaultSourceName:
+                    status === "default-set"
+                      ? conflict.choices.find(choice => choice.skillId === defaultSkillId)?.sourceName ?? ""
+                      : ""
+                }
+              : conflict
+          )
+        };
+      });
+      setToast("浏览器预览已模拟保存冲突选择。");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("set_skill_conflict_choice", {
+        conflictKey,
+        defaultSkillId,
+        status
+      });
+      setSnapshot(result);
+      setLoadError("");
+      setToast(
+        status === "default-set"
+          ? "同名 Skill 默认来源已保存。"
+          : status === "ignored"
+            ? "该同名 Skill 已标记为忽略；不会再作为待处理项提醒。"
+            : "该同名 Skill 已恢复为待选择状态。"
+      );
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setToast("保存冲突选择失败，请查看顶部错误提示。");
     } finally {
       setLoading(false);
     }
@@ -467,7 +521,7 @@ export function App() {
       });
       setSnapshot(result);
       setLoadError("");
-      setToast(`已批量更新 ${sourceIds.length} 个来源，结果已写入 v2 SQLite。`);
+      setToast(`已批量更新 ${sourceIds.length} 个来源，结果已写入本地 SQLite。`);
       return "saved";
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
@@ -512,7 +566,7 @@ export function App() {
       if (!hasTauriRuntime()) {
         setSnapshot(previous => updatePreviewOperationRunner(previous ?? createPreviewSnapshot(), runnerId));
         setLoadError("");
-        setToast("浏览器预览已模拟执行器状态；桌面版会写入 v2 SQLite 审计记录。");
+        setToast("浏览器预览已模拟执行器状态；桌面版会写入本地 SQLite 审计记录。");
         return;
       }
 
@@ -789,7 +843,7 @@ export function App() {
         <div className="brand">
           <img alt="AI SkillHub" className="brand-logo" src="/ai-skillhub-logo.png" />
           <div>
-            <strong>SkillHub V2</strong>
+            <strong>AI SkillHub</strong>
             <span>Management Platform</span>
           </div>
         </div>
@@ -983,6 +1037,7 @@ export function App() {
             onRefreshIndex={() => syncAndRefreshAll()}
             onRealWriteAuthorization={updateRealWriteAuthorization}
             onSaveMetadata={updateSourceMetadata}
+            onSetSkillConflictChoice={updateSkillConflictChoice}
             snapshot={snapshot}
             searchQuery={globalSearch}
           />
@@ -1216,14 +1271,14 @@ function Dashboard({
       icon: "refresh" as const,
       title: loading ? "Index Refresh Running" : "SQLite Index Ready",
       body: snapshot?.index.databaseFile
-        ? "Current dashboard is loaded from the v2 SQLite index."
-        : "Refresh once to seed the v2 SQLite index.",
+        ? "Current dashboard is loaded from the local SQLite index."
+        : "Refresh once to seed the local SQLite index.",
       action: loading ? "Watching" : "Open Index"
     },
     {
       icon: "info" as const,
-      title: "V2 Daily Driver Mode",
-      body: "V2 now manages sources, metadata, staging, QA, and calls the proven sync engine when real-write authorization is enabled.",
+      title: "Daily Driver Mode",
+      body: "AI SkillHub now manages sources, metadata, staging, QA, and calls the proven sync engine when real-write authorization is enabled.",
       action: "Open Sources"
     }
   ];
@@ -1765,7 +1820,7 @@ function UsageInsightPanel({
         {sourcePopularity.some(source => source.fetchedAt)
           ? "GitHub 星标来自手动刷新缓存；趋势从 AI SkillHub 开始同步后精确记录，创建日前的完整历史无法由 GitHub 仓库接口直接还原。"
           : usageStats.length > 0
-            ? "当前统计来自 v2 本地事件记录；GitHub 热度可手动刷新缓存。"
+            ? "当前统计来自本地事件记录；GitHub 热度可手动刷新缓存。"
             : "还没有真实使用事件，当前展示为索引健康度推算。"}
       </small>
     </section>
@@ -2088,7 +2143,7 @@ function Library({
         })}
         {filteredSkills.length === 0 && (
           <div className="empty-state library-empty">
-            {skills.length === 0 ? "正在等待 v1 Skill 扫描结果。" : "当前筛选条件下没有 Skill。"}
+            {skills.length === 0 ? "正在等待历史 Skill 扫描结果。" : "当前筛选条件下没有 Skill。"}
           </div>
         )}
       </section>
@@ -2543,7 +2598,7 @@ function Presets({
           <div>
             <p className="eyebrow">Distribution Matrix</p>
             <h3>Preset / 工作区分发矩阵</h3>
-            <p>这里只管理 v2 SQLite 中的分发计划，不会把 Skill 写入 Claude、Codex 或 Antigravity。</p>
+            <p>这里只管理本地 SQLite 中的分发计划，不会把 Skill 写入 Claude、Codex 或 Antigravity。</p>
           </div>
           <span className="status-badge info">{distributions.length} 条计划</span>
         </div>
@@ -2556,7 +2611,7 @@ function Presets({
               onToggle={enabled => void onToggleDistribution(item.presetId, item.workspaceId, enabled)}
             />
           ))}
-          {distributions.length === 0 && <EmptyState text="等待 v2 SQLite 生成 Preset/工作区矩阵。" />}
+          {distributions.length === 0 && <EmptyState text="等待本地 SQLite 生成 Preset/工作区矩阵。" />}
         </div>
       </section>
     </div>
@@ -2598,6 +2653,7 @@ function Sources({
   onRefreshIndex,
   onRealWriteAuthorization,
   onSaveMetadata,
+  onSetSkillConflictChoice,
   onStageImport,
   searchQuery,
   snapshot
@@ -2618,11 +2674,17 @@ function Sources({
   onRefreshIndex: () => Promise<LegacySnapshot | null>;
   onRealWriteAuthorization: (enabled: boolean) => Promise<void>;
   onSaveMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
+  onSetSkillConflictChoice: (
+    conflictKey: string,
+    defaultSkillId: string,
+    status: "default-set" | "ignored" | "unresolved"
+  ) => Promise<void>;
   onStageImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
   searchQuery: string;
   snapshot: LegacySnapshot | null;
 }) {
   const sources = snapshot?.sources ?? [];
+  const skillConflicts = snapshot?.skillConflicts ?? [];
   const importPreviews = snapshot?.importPreviews ?? [];
   const githubSources = sources.filter(source => source.url).length;
   const localSources = sources.filter(source => !source.url && source.localPath).length;
@@ -3028,6 +3090,12 @@ function Sources({
             realWritesEnabled={operatorConsent.realWritesEnabled}
           />
 
+          <SkillConflictSelectorPanel
+            conflicts={skillConflicts}
+            disabled={loading || importPending}
+            onResolve={onSetSkillConflictChoice}
+          />
+
           <SourceListToolbar
             resultCount={sortedSources.length}
             sortKey={sourceSortKey}
@@ -3269,7 +3337,10 @@ function RouterHubPanel({
 
           <div className="router-hub-plan-grid">
             {report.plans.map(plan => (
-              <article className={`router-hub-card status-${plan.status}`} key={plan.collectionName}>
+              <article
+                className={`router-hub-card status-${plan.status}`}
+                key={`${plan.collectionName}:${plan.routerSkillName || plan.status}`}
+              >
                 <header>
                   <strong>{plan.collectionName}</strong>
                   <span className={`router-hub-pill ${planStatusTone(plan.status)}`}>
@@ -3303,6 +3374,165 @@ function RouterHubPanel({
       )}
     </section>
   );
+}
+
+function SkillConflictSelectorPanel({
+  conflicts,
+  disabled,
+  onResolve
+}: {
+  conflicts: SkillConflictCard[];
+  disabled: boolean;
+  onResolve: (
+    conflictKey: string,
+    defaultSkillId: string,
+    status: "default-set" | "ignored" | "unresolved"
+  ) => Promise<void>;
+}) {
+  const activeConflicts = conflicts.filter(conflict => conflict.status !== "ignored");
+  const unresolvedCount = conflicts.filter(conflict => conflict.status === "unresolved").length;
+  const initialKey =
+    conflicts.find(conflict => conflict.status === "unresolved")?.conflictKey ??
+    conflicts[0]?.conflictKey ??
+    "";
+  const [activeKey, setActiveKey] = useState(initialKey);
+
+  useEffect(() => {
+    if (!conflicts.some(conflict => conflict.conflictKey === activeKey)) {
+      setActiveKey(initialKey);
+    }
+  }, [activeKey, conflicts, initialKey]);
+
+  if (conflicts.length === 0) {
+    return (
+      <section className="skill-conflict-panel glass-panel is-clear">
+        <div>
+          <p className="eyebrow">Conflict Selector</p>
+          <h3>同名 Skill 冲突</h3>
+          <p>当前没有需要选择默认来源的同名子 Skill。</p>
+        </div>
+        <span className="status-badge ok"><span className="status-dot ok" />0 个冲突</span>
+      </section>
+    );
+  }
+
+  const selectedConflict =
+    conflicts.find(conflict => conflict.conflictKey === activeKey) ??
+    conflicts.find(conflict => conflict.status === "unresolved") ??
+    conflicts[0];
+
+  return (
+    <section className="skill-conflict-panel glass-panel">
+      <div className="skill-conflict-head">
+        <div>
+          <p className="eyebrow">Conflict Selector</p>
+          <h3>同名 Skill 冲突选择器</h3>
+          <p>同名可以同时保留；这里只决定直接调用子 Skill 名时默认走哪个来源。</p>
+        </div>
+        <div className="skill-conflict-summary">
+          <span>{conflicts.length} 组重名</span>
+          <strong>{unresolvedCount} 待选择</strong>
+        </div>
+      </div>
+
+      <div className="skill-conflict-layout">
+        <div className="skill-conflict-list" role="list">
+          {conflicts.map(conflict => {
+            const isActive = selectedConflict.conflictKey === conflict.conflictKey;
+            const choiceLabel = conflict.defaultSourceName || conflictStatusLabel(conflict.status);
+            return (
+              <button
+                className={`skill-conflict-tab ${isActive ? "active" : ""} ${conflict.status}`}
+                key={conflict.conflictKey}
+                onClick={() => setActiveKey(conflict.conflictKey)}
+                type="button"
+              >
+                <strong>/{conflict.childName}</strong>
+                <span>{conflict.choices.length} 个候选</span>
+                <small>{choiceLabel}</small>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="skill-conflict-detail">
+          <header>
+            <div>
+              <small>冲突项</small>
+              <h4>/{selectedConflict.childName}</h4>
+            </div>
+            <span className={`status-badge ${conflictStatusTone(selectedConflict.status)}`}>
+              <span className={`status-dot ${conflictStatusTone(selectedConflict.status)}`} />
+              {conflictStatusLabel(selectedConflict.status)}
+            </span>
+          </header>
+          <p>
+            精确调用仍建议使用 <code>来源:Skill</code>。默认项只用于未来直接调用
+            <code>/{selectedConflict.childName}</code> 时的推荐来源。
+          </p>
+
+          <div className="skill-conflict-choice-grid">
+            {selectedConflict.choices.map(choice => {
+              const selected = choice.skillId === selectedConflict.defaultSkillId;
+              return (
+                <article className={`skill-conflict-choice ${selected ? "selected" : ""}`} key={choice.skillId}>
+                  <div>
+                    <strong>{choice.sourceName}:{choice.skillName}</strong>
+                    <span>{choice.category || "未分类"}</span>
+                  </div>
+                  <p>{choice.description || choice.relativePath || "没有描述。"}</p>
+                  <small>{choice.relativePath}</small>
+                  <button
+                    className={selected ? "ghost-action compact" : "primary-action compact"}
+                    disabled={disabled || selected}
+                    onClick={() => void onResolve(selectedConflict.conflictKey, choice.skillId, "default-set")}
+                    type="button"
+                  >
+                    {selected ? "当前默认" : "设为默认"}
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+
+          <div className="skill-conflict-actions">
+            <button
+              className="ghost-action compact"
+              disabled={disabled}
+              onClick={() => void onResolve(selectedConflict.conflictKey, "", "unresolved")}
+              type="button"
+            >
+              重置为待选择
+            </button>
+            <button
+              className="ghost-action compact"
+              disabled={disabled}
+              onClick={() => void onResolve(selectedConflict.conflictKey, "", "ignored")}
+              type="button"
+            >
+              忽略提醒
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {activeConflicts.length === 0 && (
+        <p className="skill-conflict-note">所有同名冲突都已忽略；可以随时重置。</p>
+      )}
+    </section>
+  );
+}
+
+function conflictStatusTone(status: string): "ok" | "warn" | "info" | "danger" {
+  if (status === "default-set") return "ok";
+  if (status === "ignored") return "info";
+  return "warn";
+}
+
+function conflictStatusLabel(status: string): string {
+  if (status === "default-set") return "已设默认";
+  if (status === "ignored") return "已忽略";
+  return "待选择";
 }
 
 function planStatusTone(status: string): "ok" | "warn" | "info" | "danger" {
@@ -3388,7 +3618,7 @@ function SourceBulkEditPanel({
       <div>
         <p className="eyebrow">Bulk Source Edit</p>
         <h3>批量来源编辑</h3>
-        <p>批量修改分类或启用状态；当前只写入 v2 SQLite 元数据，不会修改仓库文件。</p>
+        <p>批量修改分类或启用状态；当前只写入本地 SQLite 元数据，不会修改仓库文件。</p>
       </div>
       <div className="source-bulk-fields">
         <span className="selection-count">
@@ -3496,21 +3726,26 @@ function SourceImportPreviewPanel({ previews }: { previews: ImportPreviewCard[] 
 }
 
 function CategoryPicker({
+  customCategory,
   disabled,
   inferredIds,
   mode,
+  onCustomCategoryChange,
   onModeChange,
   onToggleCategory,
   selectedIds
 }: {
+  customCategory: string;
   disabled: boolean;
   inferredIds: string[];
   mode: "auto" | "manual";
+  onCustomCategoryChange: (category: string) => void;
   onModeChange: (mode: "auto" | "manual") => void;
   onToggleCategory: (categoryId: string) => void;
   selectedIds: string[];
 }) {
   const activeIds = mode === "auto" ? inferredIds : selectedIds;
+  const customCategoryLabel = customCategory.trim();
 
   return (
     <div className="category-picker">
@@ -3538,8 +3773,18 @@ function CategoryPicker({
           </button>
         ))}
       </div>
+      <label className="category-custom-field">
+        自定义分类
+        <input
+          disabled={disabled}
+          maxLength={80}
+          onChange={event => onCustomCategoryChange(event.target.value)}
+          placeholder="例如 Zotero / 文献管理"
+          value={customCategory}
+        />
+      </label>
       <small>
-        当前：{activeIds.length > 0 ? activeIds.map(categoryDisplayName).join("、") : "通用"}
+        当前：{customCategoryLabel || (activeIds.length > 0 ? activeIds.map(categoryDisplayName).join("、") : "通用")}
       </small>
     </div>
   );
@@ -3616,6 +3861,7 @@ function SourceImportWizardPanel({
   const [sourceType, setSourceType] = useState<SourceCard["sourceType"]>("skill");
   const [categoryMode, setCategoryMode] = useState<"auto" | "manual">("auto");
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
+  const [customCategory, setCustomCategory] = useState<string>("");
   const [note, setNote] = useState<string>("");
   const [tags, setTags] = useState<string>("");
   const [enabled, setEnabled] = useState<boolean>(true);
@@ -3649,8 +3895,13 @@ function SourceImportWizardPanel({
       showUiToast("请先粘贴 GitHub 地址、本地文件夹路径或 zip/.skill 文件路径。");
       return;
     }
-    const primaryCategory = categoryDisplayName(effectiveCategoryIds[0] ?? categoryIdForSourceType(sourceType));
-    const mergedTags = mergeTagInputs(tags, effectiveCategoryIds.slice(1).map(categoryDisplayName).join(", "));
+    const customCategoryLabel = customCategory.trim();
+    const primaryCategory =
+      customCategoryLabel || categoryDisplayName(effectiveCategoryIds[0] ?? categoryIdForSourceType(sourceType));
+    const categoryTags = customCategoryLabel
+      ? effectiveCategoryIds.map(categoryDisplayName).join(", ")
+      : effectiveCategoryIds.slice(1).map(categoryDisplayName).join(", ");
+    const mergedTags = mergeTagInputs(tags, categoryTags);
     onQuickAdd(importKind, value, { category: primaryCategory, enabled, note, sourceType, tags: mergedTags });
   }
 
@@ -3714,9 +3965,16 @@ function SourceImportWizardPanel({
         </label>
         <div className="quick-category-field source-add-category">
           <CategoryPicker
+            customCategory={customCategory}
             disabled={disabled}
             inferredIds={inferredCategoryIds}
             mode={categoryMode}
+            onCustomCategoryChange={value => {
+              setCustomCategory(value);
+              if (value.trim()) {
+                setCategoryMode("manual");
+              }
+            }}
             onModeChange={setCategoryMode}
             onToggleCategory={categoryId => {
               setCategoryMode("manual");
@@ -3754,7 +4012,7 @@ function SourceImportWizardPanel({
           <div className="quick-source-toggle">
             <div>
               <strong>加入后启用</strong>
-              <span>只控制 v2 来源库显示，不等于同步到 AI 工具。</span>
+              <span>只控制来源库显示，不等于同步到 AI 工具。</span>
             </div>
             <ToggleSwitch
               disabled={disabled}
@@ -4144,7 +4402,7 @@ function SourceEditPanel({
       <div className="source-editor-toggle">
         <div>
           <strong>启用此来源</strong>
-          <span>只影响 v2 管理视图，不会删除本地仓库。</span>
+          <span>只影响管理视图，不会删除本地仓库。</span>
         </div>
         <ToggleSwitch
           disabled={false}
@@ -4245,7 +4503,7 @@ function Agents({
         <p className="eyebrow">Agent Adapter Registry</p>
         <h3>统一 AI 工具适配器</h3>
         <p>
-          v2 会先维护“支持哪些工具”的清单，再读取本机检测结果。这样未安装的工具会显示为未检测，而不是报错。
+          AI SkillHub 会先维护“支持哪些工具”的清单，再读取本机检测结果。这样未安装的工具会显示为未检测，而不是报错。
         </p>
       </section>
 
@@ -4324,7 +4582,7 @@ function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
           <p className="eyebrow">Snapshot / Rollback Gate</p>
           <h2>先把退路修好，再开放真实同步</h2>
           <p>
-            当前阶段只记录 v2 SQLite 索引快照和回滚计划。真实恢复按钮会保持锁定，直到备份、dry-run
+            当前阶段只记录本地 SQLite 索引快照和回滚计划。真实恢复按钮会保持锁定，直到备份、dry-run
             和路径安全检查全部完成。
           </p>
         </div>
@@ -4553,13 +4811,13 @@ function ReleaseGate({
       status: releaseReportGateStatus(releasePreflight),
       title: "发布预检",
       label: releaseReportGateLabel(releasePreflight),
-      summary: releasePreflight?.summary ?? "还没有找到 v1 发布预检报告。"
+      summary: releasePreflight?.summary ?? "还没有找到发布预检报告。"
     },
     {
       status: releaseReportGateStatus(shareRecipient),
       title: "分享验证",
       label: releaseReportGateLabel(shareRecipient),
-      summary: shareRecipient?.summary ?? "还没有找到 v1 分享验收报告。"
+      summary: shareRecipient?.summary ?? "还没有找到分享验收报告。"
     },
     {
       status: releaseReportGateStatus(zipPreview),
@@ -4725,15 +4983,15 @@ function ReleaseGate({
               <small>{gate.nextAction}</small>
             </article>
           ))}
-          {writeGates.length === 0 && <EmptyState text="等待 v2 SQLite 生成真实写入解锁矩阵。" />}
+          {writeGates.length === 0 && <EmptyState text="等待本地 SQLite 生成真实写入解锁矩阵。" />}
         </div>
       </section>
 
       <section className="panel release-report-panel">
-        <p className="eyebrow">V1 Report Inputs</p>
-        <h3>已接入的 v1 报告摘要</h3>
+        <p className="eyebrow">Report Inputs</p>
+        <h3>已接入的报告摘要</h3>
         <p>
-          v2 当前只读取这些报告的摘要，不执行 v1 脚本，也不修改任何本机 AI 工具目录。
+          当前版本只读取这些报告的摘要，不执行历史脚本，也不修改任何本机 AI 工具目录。
         </p>
         <div className="release-report-grid">
           {releaseReports.map(report => (
@@ -4751,7 +5009,7 @@ function ReleaseGate({
               </div>
             </article>
           ))}
-          {releaseReports.length === 0 && <p>未找到 v1 报告。请先在 v1 生成诊断包、发布预检或分享验收。</p>}
+          {releaseReports.length === 0 && <p>未找到报告。请先生成诊断包、发布预检或分享验收。</p>}
         </div>
       </section>
 
@@ -4759,7 +5017,7 @@ function ReleaseGate({
         <p className="eyebrow">Next Safe Step</p>
         <h3>下一步执行 dry-run 发布工具</h3>
         <p>
-          v1 诊断、预检、分享和 zip 预览已经进入 v2 发布闸门；真实同步和正式打包先经过解锁检查，
+          诊断、预检、分享和 zip 预览已经进入发布闸门；真实同步和正式打包先经过解锁检查，
           没有通过前只允许生成可审计 dry-run 报告。
         </p>
       </section>
@@ -4840,7 +5098,7 @@ function ReleaseGate({
               </button>
             </article>
           ))}
-          {operationRunners.length === 0 && <EmptyState text="等待 v2 SQLite 生成 dry-run 执行器清单。" />}
+          {operationRunners.length === 0 && <EmptyState text="等待本地 SQLite 生成 dry-run 执行器清单。" />}
         </div>
       </section>
     </div>
@@ -4867,7 +5125,7 @@ function Settings({
       <section className="panel">
         <h3>迁移策略</h3>
         <p>
-          v2 现在作为日常 UI 使用：添加来源、搜索 Skill、刷新索引和同步入口都在 V2。真实写入 AI 工具目录仍需要在 Sources 里开启授权。
+          AI SkillHub 现在作为日常 UI 使用：添加来源、搜索 Skill、刷新索引和同步入口都在这里。真实写入 AI 工具目录仍需要在 Sources 里开启授权。
         </p>
         <div className="setting-row">
           <span>中央目录</span>
@@ -4903,7 +5161,7 @@ function Settings({
         <p className="eyebrow">Build / Release Guide</p>
         <h3>开发版 exe 和正式发布版不是一回事</h3>
         <p>
-          当前 v2 仍在开发线。日常测试请用开发命令启动桌面窗口；最终给别人使用的安装包，要等安全闸门和分享验证通过后再打包。
+          当前版本仍在开发线。日常测试请用开发命令启动桌面窗口；最终给别人使用的安装包，要等安全闸门和分享验证通过后再打包。
         </p>
         <div className="release-guide-grid">
           <article>
@@ -4931,7 +5189,7 @@ function Settings({
         <p className="eyebrow">Desktop QA Checklist</p>
         <h3>桌面窗口发布前检查</h3>
         <p>
-          每次准备打包前都要用真实 Tauri 桌面窗口检查，不用浏览器预览代替。这里的状态只写入 v2 SQLite，不会修改 v1 或 AI 工具目录。
+          每次准备打包前都要用真实 Tauri 桌面窗口检查，不用浏览器预览代替。这里的状态只写入本地 SQLite，不会修改历史目录或 AI 工具目录。
         </p>
         <div className="qa-checklist-grid">
           {desktopQaChecks.map(check => (
@@ -4968,7 +5226,7 @@ function Settings({
               <small className="qa-updated">更新：{formatScanTime(check.updatedAt)}</small>
             </article>
           ))}
-          {desktopQaChecks.length === 0 && <EmptyState text="等待 v2 SQLite 生成桌面 QA 检查项。" />}
+          {desktopQaChecks.length === 0 && <EmptyState text="等待本地 SQLite 生成桌面 QA 检查项。" />}
         </div>
       </section>
     </div>
@@ -5072,7 +5330,7 @@ function findCategoryOption(category: string): CategoryOption | undefined {
   if (!normalized) return undefined;
   return CATEGORY_OPTIONS.find(option => {
     const values = [option.id, option.label, ...option.keywords].map(normalizeSearch);
-    return values.some(value => value === normalized || value.includes(normalized) || normalized.includes(value));
+    return values.some(value => value === normalized);
   });
 }
 
@@ -5449,7 +5707,7 @@ function createPreviewSourceImportPlan(
       importKind === "github"
         ? [
             "校验 GitHub 普通仓库地址。",
-            "检查 v2 SQLite 是否已有同源仓库。",
+            "检查本地 SQLite 是否已有同源仓库。",
             "生成快照后 clone/pull 到 github_sources。",
             "扫描 SKILL.md，只把有效 Skill 进入候选库。"
           ]
@@ -5472,7 +5730,7 @@ function createPreviewSourceImportPlan(
             "创建来源导入快照。",
             "如果目标目录已存在，先备份到 source-imports。",
             "clone 或 pull 到 github_sources 的隔离目录。",
-            "重新扫描 SKILL.md 并更新 v2 SQLite 来源记录。",
+            "重新扫描 SKILL.md 并更新本地 SQLite 来源记录。",
             "如果已开启真实写入授权，点击“同步 / 刷新”会同步到 AI 工具。"
           ]
         : importKind === "local"
@@ -5480,7 +5738,7 @@ function createPreviewSourceImportPlan(
               "创建来源导入快照。",
               "把本地来源登记为可管理候选，不直接修改原目录。",
               "按有效 SKILL.md 目录生成候选索引。",
-              "更新 v2 SQLite 来源记录。",
+              "更新本地 SQLite 来源记录。",
               "如果已开启真实写入授权，点击“同步 / 刷新”会同步到 AI 工具。"
             ]
           : [
@@ -5566,7 +5824,7 @@ function createPreviewSourceImportPromotion(
       "浏览器预览不执行本机文件写入。",
       "AI 工具同步/接管仍锁定。"
     ],
-    rollbackSteps: ["删除受管理来源目录即可回滚。", "重新扫描 v2 SQLite 索引。"],
+    rollbackSteps: ["删除受管理来源目录即可回滚。", "重新扫描本地 SQLite 索引。"],
     realWriteScope: "preview-only"
   };
 }
@@ -5854,7 +6112,7 @@ function createPreviewSnapshot(): LegacySnapshot {
       },
       {
         id: "app-next",
-        name: "AI SkillHub v2 项目",
+        name: "AI SkillHub 项目",
         scope: "project",
         path: "../app-next",
         enabled: true,
@@ -6038,7 +6296,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         id: "preview-step-1",
         snapshotId: "preview-snapshot",
         stepOrder: 1,
-        title: "冻结 v2 SQLite 基线",
+        title: "冻结本地 SQLite 基线",
         riskLevel: "low",
         status: "ready",
         summary: "预览模式已生成示例基线；真实数据请在 Tauri 桌面窗口查看。"
@@ -6203,6 +6461,36 @@ function createPreviewSnapshot(): LegacySnapshot {
         ]
       }
     ],
+    skillConflicts: [
+      {
+        conflictKey: "figure-planner",
+        childName: "figure-planner",
+        status: "unresolved",
+        defaultSkillId: "",
+        defaultSourceName: "",
+        updatedAt: "",
+        choices: [
+          {
+            skillId: "Nature-Paper-Skills/skills/core/figure-planner",
+            skillName: "figure-planner",
+            folderName: "figure-planner",
+            sourceName: "Nature-Paper-Skills",
+            relativePath: "skills/core/figure-planner",
+            category: "科研图表",
+            description: "Nature 论文图表规划。"
+          },
+          {
+            skillId: "PaperSpine/dist/codex/skills/figure-planner",
+            skillName: "figure-planner",
+            folderName: "figure-planner",
+            sourceName: "PaperSpine",
+            relativePath: "dist/codex/skills/figure-planner",
+            category: "论文科研",
+            description: "PaperSpine 论文工作流图表规划。"
+          }
+        ]
+      }
+    ],
     operatorConsent: {
       realWritesEnabled: false,
       enabledAt: "",
@@ -6245,7 +6533,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         presetId: "design",
         presetName: "界面设计",
         workspaceId: "app-next",
-        workspaceName: "AI SkillHub v2 项目",
+        workspaceName: "AI SkillHub 项目",
         workspaceScope: "project",
         enabled: true,
         skillCount: 7,
@@ -6268,7 +6556,7 @@ function createPreviewSnapshot(): LegacySnapshot {
     operationRunners: [
       {
         id: "diagnostics-export",
-        title: "导出 v2 诊断包",
+        title: "导出诊断包",
         runnerType: "diagnostics",
         status: "ready",
         locked: false,
@@ -6333,7 +6621,7 @@ function createPreviewSnapshot(): LegacySnapshot {
       },
       {
         id: "v2-completion-audit",
-        title: "V2 完成度审计",
+        title: "完成度审计",
         runnerType: "completion-audit",
         status: "ready",
         locked: false,
@@ -6346,8 +6634,8 @@ function createPreviewSnapshot(): LegacySnapshot {
         manifestPath:
           "../app-next/.skillhub-next/reports/v2-completion-audit/latest-v2-completion-audit-manifest.json",
         fileCount: 0,
-        summary: "检查 V2 是否可以称为完整版本，并列出剩余发布阻断项。",
-        nextAction: "生成 V2 完成度审计报告。"
+        summary: "检查当前版本是否可以称为完整版本，并列出剩余发布阻断项。",
+        nextAction: "生成完成度审计报告。"
       },
       {
         id: "release-package",
@@ -6421,7 +6709,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         summary: "还有 4 个条件未满足；真实写入保持关闭。",
         nextAction: "先让备份、恢复、回滚和桌面 QA 全部变成可审计通过状态。",
         planSteps: [
-          "冻结 v2 SQLite 快照和启用 Skill 清单。",
+          "冻结本地 SQLite 快照和启用 Skill 清单。",
           "备份每个已接管 AI 工具的目标 skills 目录。",
           "生成将创建/替换/删除的链接或复制项清单。",
           "逐工具执行，同步后立即验证。"
@@ -6541,14 +6829,14 @@ function createPreviewSnapshot(): LegacySnapshot {
       {
         id: "preview-audit-index",
         eventType: "legacy_scan_indexed",
-        summary: "Indexed v1 data into v2 SQLite",
+        summary: "Indexed legacy data into local SQLite",
         detailJson: "{}",
         createdAt: new Date().toISOString()
       }
     ],
     diagnostics: {
       available: false,
-      appVersion: "v2 preview",
+      appVersion: "0.1.0 preview",
       generatedAt: new Date().toISOString(),
       overallStatus: "preview",
       ok: 6,

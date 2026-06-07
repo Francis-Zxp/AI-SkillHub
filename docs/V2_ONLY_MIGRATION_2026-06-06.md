@@ -9,14 +9,14 @@ AI SkillHub has been migrated to the V2 layout. The old V1 PowerShell/WebView ap
 Use this launcher:
 
 ```text
-D:\My Files\AI_global_skills\AI SkillHub V2 Alpha.exe
+D:\My Files\AI_global_skills\AI SkillHub.exe
 ```
 
 ## V2 runtime layout
 
 ```text
 D:\My Files\AI_global_skills\
-  AI SkillHub V2 Alpha.exe          # current desktop launcher
+  AI SkillHub.exe                   # current desktop launcher
   app-next\                         # V2 Tauri / React app
     runtime\                        # V2 PowerShell helper scripts
     data\github_sources\            # local cloned source repositories, private
@@ -61,9 +61,15 @@ V2 runtime sync/report-only: passed
 V2 diagnostics export: passed
 V2 share-recipient test: passed
 pnpm build: passed
-cargo test: 39 passed
+cargo test: 41 passed
 pnpm tauri build --no-bundle: passed
 ```
+
+Additional V2 behavior added after the migration cleanup:
+
+- Same-name child Skill conflicts are surfaced in the Sources page.
+- User choices are stored in local SQLite table `skill_conflict_choices`.
+- Author repositories are not modified to solve conflicts.
 
 Current active data:
 

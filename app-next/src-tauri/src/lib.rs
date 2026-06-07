@@ -37,6 +37,7 @@ struct LegacySnapshot {
     release_reports: Vec<ReleaseReportCard>,
     import_previews: Vec<ImportPreviewCard>,
     source_popularity: Vec<SourcePopularityCard>,
+    skill_conflicts: Vec<SkillConflictCard>,
     operator_consent: OperatorConsentCard,
     tags: Vec<TagCard>,
     preset_distributions: Vec<PresetDistributionCard>,
@@ -79,6 +80,37 @@ struct SkillCard {
     /// matches its source collection name (the convention used by
     /// docs/skill-router-standard.md).
     is_router_hub: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SkillConflictCard {
+    conflict_key: String,
+    child_name: String,
+    status: String,
+    default_skill_id: String,
+    default_source_name: String,
+    updated_at: String,
+    choices: Vec<SkillConflictChoiceCard>,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SkillConflictChoiceCard {
+    skill_id: String,
+    skill_name: String,
+    folder_name: String,
+    source_name: String,
+    relative_path: String,
+    category: String,
+    description: String,
+}
+
+#[derive(Clone, Default)]
+struct SkillConflictChoiceState {
+    default_skill_id: String,
+    status: String,
+    updated_at: String,
 }
 
 /// Mark string used in SKILL.md frontmatter to identify a parent / hub Skill.
@@ -195,6 +227,108 @@ fn resolve_skill_source_id(
     }
 
     source_ids.get(&skill.source.to_lowercase()).cloned()
+}
+
+fn skill_conflict_identity(skill: &SkillCard) -> String {
+    let relative_path = skill.relative_path.trim().replace('\\', "/");
+    if !relative_path.is_empty() {
+        return relative_path;
+    }
+    format!(
+        "{}::{}::{}",
+        skill.source.trim(),
+        skill.folder_name.trim(),
+        skill.name.trim()
+    )
+}
+
+fn derive_skill_conflicts(
+    skills: &[SkillCard],
+    saved_choices: &HashMap<String, SkillConflictChoiceState>,
+) -> Vec<SkillConflictCard> {
+    let mut grouped: BTreeMap<String, Vec<&SkillCard>> = BTreeMap::new();
+
+    for skill in skills {
+        if skill.is_router_hub {
+            continue;
+        }
+        let conflict_key = normalize_skill_lookup(&skill.name);
+        if conflict_key.is_empty() {
+            continue;
+        }
+        grouped.entry(conflict_key).or_default().push(skill);
+    }
+
+    let mut conflicts = Vec::new();
+    for (conflict_key, mut group) in grouped {
+        let mut seen_identities = HashSet::new();
+        group.retain(|skill| seen_identities.insert(skill_conflict_identity(skill)));
+        if group.len() < 2 {
+            continue;
+        }
+
+        group.sort_by(|left, right| {
+            left.source
+                .to_lowercase()
+                .cmp(&right.source.to_lowercase())
+                .then_with(|| {
+                    left.relative_path
+                        .to_lowercase()
+                        .cmp(&right.relative_path.to_lowercase())
+                })
+        });
+
+        let choices = group
+            .iter()
+            .map(|skill| SkillConflictChoiceCard {
+                skill_id: skill_conflict_identity(skill),
+                skill_name: skill.name.clone(),
+                folder_name: skill.folder_name.clone(),
+                source_name: skill.source.clone(),
+                relative_path: skill.relative_path.clone(),
+                category: skill.category.clone(),
+                description: skill.description.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let saved = saved_choices
+            .get(&conflict_key)
+            .cloned()
+            .unwrap_or_default();
+        let mut status = if saved.status.trim().is_empty() {
+            "unresolved".to_string()
+        } else {
+            saved.status.clone()
+        };
+        let default_choice = choices
+            .iter()
+            .find(|choice| choice.skill_id == saved.default_skill_id);
+        let (default_skill_id, default_source_name) = if status == "default-set" {
+            if let Some(choice) = default_choice {
+                (choice.skill_id.clone(), choice.source_name.clone())
+            } else {
+                status = "unresolved".to_string();
+                (String::new(), String::new())
+            }
+        } else {
+            (String::new(), String::new())
+        };
+
+        conflicts.push(SkillConflictCard {
+            child_name: choices
+                .first()
+                .map(|choice| choice.skill_name.clone())
+                .unwrap_or_else(|| conflict_key.clone()),
+            conflict_key,
+            status,
+            default_skill_id,
+            default_source_name,
+            updated_at: saved.updated_at,
+            choices,
+        });
+    }
+
+    conflicts
 }
 
 fn insert_source_id_alias(source_ids: &mut HashMap<String, String>, alias: &str, source_id: &str) {
@@ -770,6 +904,7 @@ fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
     let agents_detected = agents.iter().filter(|agent| agent.detected).count();
     let release_reports = derive_release_reports(&root);
     let import_previews = derive_import_previews(&sources_dir, &sources, &release_reports);
+    let skill_conflicts = derive_skill_conflicts(&skills, &HashMap::new());
 
     let mut snapshot = LegacySnapshot {
         root: root.display().to_string(),
@@ -802,6 +937,7 @@ fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
         release_reports,
         import_previews,
         source_popularity: Vec::new(),
+        skill_conflicts,
         operator_consent: OperatorConsentCard {
             real_writes_enabled: false,
             enabled_at: String::new(),
@@ -925,6 +1061,7 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     if let Ok(report) = plan_or_write_router_hubs(&root, true, true) {
         let _ = record_router_hub_audit(&connection, &report);
     }
+    run_agent_link_script(&root)?;
     scan_legacy_snapshot_blocking()
 }
 
@@ -958,6 +1095,42 @@ fn run_skillhub_script(root: &Path) -> Result<(), String> {
             detail
         };
         return Err(format!("SkillHub 同步脚本执行失败：{detail}"));
+    }
+
+    Ok(())
+}
+
+fn run_agent_link_script(root: &Path) -> Result<(), String> {
+    let script = agent_link_script_file(root);
+    if !script.exists() {
+        return Err(format!("找不到 AI 工具链接脚本：{}", script.display()));
+    }
+
+    let mut command = Command::new("powershell.exe");
+    command
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-Quiet");
+    let output = command_output_with_timeout(
+        &mut command,
+        Duration::from_secs(180),
+        "AI 工具链接同步超过 180 秒，已自动停止。请检查 Codex/Claude/Antigravity skills 目录权限。",
+    )?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = [stdout.trim(), stderr.trim()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = if detail.chars().count() > 1600 {
+            detail.chars().take(1600).collect::<String>()
+        } else {
+            detail
+        };
+        return Err(format!("AI 工具链接同步失败：{detail}"));
     }
 
     Ok(())
@@ -1307,11 +1480,47 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
 }
 
 fn resolve_legacy_root() -> Result<PathBuf, String> {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
+    if let Ok(value) = std::env::var("AI_SKILLHUB_ROOT") {
+        let root = PathBuf::from(value);
+        if is_skillhub_root(&root) {
+            return Ok(root);
+        }
+
+        return Err(format!(
+            "AI_SKILLHUB_ROOT does not point to an AI SkillHub project folder: {}",
+            root.display()
+        ));
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            if let Some(root) = find_skillhub_root_from(parent) {
+                return Ok(root);
+            }
+        }
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        if let Some(root) = find_skillhub_root_from(&current_dir) {
+            return Ok(root);
+        }
+    }
+
+    Err(
+        "Cannot resolve AI SkillHub root. Put AI SkillHub.exe inside the AI SkillHub project folder or set AI_SKILLHUB_ROOT."
+            .to_string(),
+    )
+}
+
+fn find_skillhub_root_from(start: &Path) -> Option<PathBuf> {
+    start
+        .ancestors()
+        .find(|candidate| is_skillhub_root(candidate))
         .map(PathBuf::from)
-        .and_then(|path| path.parent().map(PathBuf::from))
-        .ok_or_else(|| "Cannot resolve AI SkillHub root from app-next/src-tauri.".to_string())
+}
+
+fn is_skillhub_root(root: &Path) -> bool {
+    skillhub_script_file(root).is_file() && agent_link_script_file(root).is_file()
 }
 
 fn read_json(path: &Path) -> Option<Value> {
@@ -1349,6 +1558,10 @@ fn skillhub_config_file(root: &Path) -> PathBuf {
 
 fn skillhub_script_file(root: &Path) -> PathBuf {
     app_next_runtime_root(root).join("SkillHub.ps1")
+}
+
+fn agent_link_script_file(root: &Path) -> PathBuf {
+    app_next_runtime_root(root).join("Manage-AgentSkillLinks.ps1")
 }
 
 fn database_file(root: &Path) -> PathBuf {
@@ -1493,6 +1706,12 @@ fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
                 summary TEXT NOT NULL DEFAULT '',
                 report_path TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS skill_conflict_choices (
+                conflict_key TEXT PRIMARY KEY,
+                default_skill_id TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'unresolved',
+                updated_at TEXT NOT NULL
             );",
         )
         .map_err(|error| format!("Cannot ensure v2 metadata event tables: {}", error))?;
@@ -1603,6 +1822,8 @@ fn read_snapshot_from_database(
     let desktop_qa_checks = read_indexed_desktop_qa_checks(connection)?;
     let usage_stats = read_indexed_usage_stats(connection)?;
     let source_popularity = read_indexed_source_popularity(connection, &sources, &usage_stats)?;
+    let skill_conflict_choices = read_skill_conflict_choice_state(connection)?;
+    let skill_conflicts = derive_skill_conflicts(&skills, &skill_conflict_choices);
     let operator_consent = read_operator_consent(connection)?;
     let tags = read_indexed_tags(connection)?;
     let preset_distributions = read_indexed_preset_distributions(connection)?;
@@ -1672,6 +1893,7 @@ fn read_snapshot_from_database(
         release_reports,
         import_previews,
         source_popularity,
+        skill_conflicts,
         operator_consent,
         tags,
         preset_distributions,
@@ -3752,6 +3974,38 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
         skills.push(skill);
     }
     Ok(skills)
+}
+
+fn read_skill_conflict_choice_state(
+    connection: &Connection,
+) -> Result<HashMap<String, SkillConflictChoiceState>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT conflict_key, default_skill_id, status, updated_at
+            FROM skill_conflict_choices",
+        )
+        .map_err(|error| format!("Cannot prepare skill conflict choices query: {}", error))?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                SkillConflictChoiceState {
+                    default_skill_id: row.get(1)?,
+                    status: row.get(2)?,
+                    updated_at: row.get(3)?,
+                },
+            ))
+        })
+        .map_err(|error| format!("Cannot read skill conflict choices: {}", error))?;
+
+    let mut choices = HashMap::new();
+    for row in rows {
+        let (key, choice) =
+            row.map_err(|error| format!("Cannot decode skill conflict choice: {}", error))?;
+        choices.insert(normalize_skill_lookup(&key), choice);
+    }
+    Ok(choices)
 }
 
 fn usage_event_counts_as_skill_invocation(event_type: &str) -> bool {
@@ -8043,7 +8297,7 @@ fn tag_color(name: &str) -> String {
 fn runner_title(runner_id: &str) -> String {
     match runner_id {
         "diagnostics-export" => "V2 诊断包导出",
-        "share-validation" => "V2 分享验收",
+        "share-validation" => "分享验收",
         "report-bundle" => "V2 报告包索引",
         "write-execution-plan" => "V2 真实写入执行计划",
         "agent-sync-readiness" => "V2 AI 工具同步解锁检查",
@@ -9177,6 +9431,59 @@ fn router_hub_skill_name(collection: &str) -> String {
     normalize_skill_lookup(collection)
 }
 
+fn router_hub_alias_skill_names(
+    collection: &str,
+    router_name: &str,
+    children: &[String],
+) -> Vec<String> {
+    if children.len() < 2 {
+        return Vec::new();
+    }
+
+    let normalized_children: Vec<String> = children
+        .iter()
+        .map(|child| normalize_skill_lookup(child))
+        .filter(|child| !child.is_empty())
+        .collect();
+    if normalized_children.len() != children.len() {
+        return Vec::new();
+    }
+
+    let Some(first_child) = normalized_children.first() else {
+        return Vec::new();
+    };
+    let Some(prefix) = first_child.split('-').next() else {
+        return Vec::new();
+    };
+    if prefix.len() < 5 {
+        return Vec::new();
+    }
+    const TOO_GENERIC_PREFIXES: &[&str] = &[
+        "agent", "agents", "paper", "papers", "prompt", "prompts", "skill", "skills",
+    ];
+    if TOO_GENERIC_PREFIXES.contains(&prefix) {
+        return Vec::new();
+    }
+
+    let prefix_with_separator = format!("{}-", prefix);
+    if !normalized_children
+        .iter()
+        .all(|child| child.starts_with(&prefix_with_separator))
+    {
+        return Vec::new();
+    }
+
+    let alias = prefix.to_string();
+    if alias == normalize_skill_lookup(collection) || alias == normalize_skill_lookup(router_name) {
+        return Vec::new();
+    }
+    if normalized_children.iter().any(|child| child == &alias) {
+        return Vec::new();
+    }
+
+    vec![alias]
+}
+
 /// Compose the body of a generated router-hub SKILL.md.
 fn build_router_hub_skill_md(collection: &str, router_name: &str, children: &[String]) -> String {
     let mut child_lines = String::new();
@@ -9504,10 +9811,10 @@ fn plan_or_write_router_hubs(
 
         plans.push(RouterHubPlanCard {
             collection_name: collection_name.clone(),
-            router_skill_name: router_name,
+            router_skill_name: router_name.clone(),
             router_skill_md_path: router_skill_md.display().to_string(),
             child_count: children.len(),
-            children,
+            children: children.clone(),
             status: if allow_write {
                 "written".to_string()
             } else {
@@ -9519,6 +9826,55 @@ fn plan_or_write_router_hubs(
                 "dry-run plan; enable real writes to materialize".to_string()
             },
         });
+
+        for alias_name in router_hub_alias_skill_names(&collection_name, &router_name, &children) {
+            let alias_folder = routers_root.join(&alias_name);
+            let alias_skill_md = alias_folder.join("SKILL.md");
+            let alias_body = build_router_hub_skill_md(&collection_name, &alias_name, &children);
+
+            if allow_write {
+                fs::create_dir_all(&alias_folder).map_err(|error| {
+                    format!(
+                        "Cannot create router alias folder {}: {}",
+                        alias_folder.display(),
+                        error
+                    )
+                })?;
+                let needs_write = match fs::read_to_string(&alias_skill_md) {
+                    Ok(existing) => existing != alias_body,
+                    Err(_) => true,
+                };
+                if needs_write {
+                    fs::write(&alias_skill_md, &alias_body).map_err(|error| {
+                        format!(
+                            "Cannot write router alias SKILL.md {}: {}",
+                            alias_skill_md.display(),
+                            error
+                        )
+                    })?;
+                    written_count += 1;
+                }
+            }
+
+            plans.push(RouterHubPlanCard {
+                collection_name: collection_name.clone(),
+                router_skill_name: alias_name,
+                router_skill_md_path: alias_skill_md.display().to_string(),
+                child_count: children.len(),
+                children: children.clone(),
+                status: if allow_write {
+                    "written".to_string()
+                } else {
+                    "planned".to_string()
+                },
+                summary: if allow_write {
+                    "short alias router SKILL.md regenerated under AI-SkillHub-local-routers"
+                        .to_string()
+                } else {
+                    "dry-run alias plan; enable real writes to materialize".to_string()
+                },
+            });
+        }
     }
 
     plans.sort_by(|a, b| {
@@ -9557,7 +9913,11 @@ fn plan_or_write_router_hubs(
         .collect();
     duplicate_children.sort_by(|a, b| a.child_name.cmp(&b.child_name));
 
-    let total_collections = plans.len();
+    let total_collections = plans
+        .iter()
+        .map(|plan| plan.collection_name.to_lowercase())
+        .collect::<HashSet<_>>()
+        .len();
     let summary = if allow_write {
         format!(
             "router-hub regeneration committed: {} written, {} skipped, {} duplicate-children",
@@ -9643,6 +10003,84 @@ fn regenerate_router_hubs(commit: bool) -> Result<RouterHubReport, String> {
     Ok(report)
 }
 
+#[tauri::command]
+fn set_skill_conflict_choice(
+    conflict_key: String,
+    default_skill_id: String,
+    status: String,
+) -> Result<LegacySnapshot, String> {
+    let normalized_key = normalize_skill_lookup(&conflict_key);
+    if normalized_key.is_empty() {
+        return Err("Skill 冲突名不能为空。".to_string());
+    }
+
+    let normalized_status = match status.trim() {
+        "default-set" => "default-set",
+        "ignored" => "ignored",
+        "unresolved" => "unresolved",
+        _ => return Err("Unsupported skill conflict status.".to_string()),
+    };
+
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let skills = read_indexed_skills(&connection)?;
+    let conflicts = derive_skill_conflicts(&skills, &HashMap::new());
+    let conflict = conflicts
+        .iter()
+        .find(|item| item.conflict_key == normalized_key)
+        .ok_or_else(|| format!("Cannot find duplicated Skill '{}'.", normalized_key))?;
+
+    let selected_skill_id = if normalized_status == "default-set" {
+        let candidate = default_skill_id.trim();
+        if !conflict
+            .choices
+            .iter()
+            .any(|choice| choice.skill_id == candidate)
+        {
+            return Err(format!(
+                "Selected Skill is not a candidate for '{}'.",
+                normalized_key
+            ));
+        }
+        candidate.to_string()
+    } else {
+        String::new()
+    };
+
+    let timestamp = unix_timestamp_string();
+    connection
+        .execute(
+            "INSERT INTO skill_conflict_choices (
+                conflict_key, default_skill_id, status, updated_at
+            ) VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(conflict_key) DO UPDATE SET
+                default_skill_id = excluded.default_skill_id,
+                status = excluded.status,
+                updated_at = excluded.updated_at",
+            params![
+                normalized_key,
+                selected_skill_id,
+                normalized_status,
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot save Skill conflict choice: {}", error))?;
+
+    write_audit_event(
+        &connection,
+        "skill_conflict_choice_updated",
+        &format!("Updated Skill conflict choice for {}", conflict.child_name),
+        serde_json::json!({
+            "conflictKey": conflict.conflict_key,
+            "childName": conflict.child_name,
+            "status": normalized_status,
+            "defaultSkillId": default_skill_id,
+        }),
+    )?;
+
+    read_snapshot_from_database(&root, &connection)
+}
+
 fn normalize_source_type(value: &str) -> String {
     match value.to_lowercase().as_str() {
         "skills" | "skill" => "skill".to_string(),
@@ -9701,7 +10139,8 @@ pub fn run() {
             promote_staged_source_import,
             record_usage_event,
             refresh_source_popularity,
-            regenerate_router_hubs
+            regenerate_router_hubs,
+            set_skill_conflict_choice
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AI SkillHub v2 app");
@@ -9710,6 +10149,55 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_runtime_markers(root: &Path) {
+        let runtime = app_next_runtime_root(root);
+        fs::create_dir_all(&runtime).expect("runtime folder should be created");
+        fs::write(runtime.join("SkillHub.ps1"), "# test skillhub runner")
+            .expect("SkillHub marker should be written");
+        fs::write(
+            runtime.join("Manage-AgentSkillLinks.ps1"),
+            "# test agent link runner",
+        )
+        .expect("agent link marker should be written");
+    }
+
+    #[test]
+    fn runtime_root_probe_finds_project_from_nested_exe_folder() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-root-probe-test-{}",
+            unix_timestamp_string()
+        ));
+        let nested = root
+            .join("app-next")
+            .join("src-tauri")
+            .join("target")
+            .join("release");
+        fs::create_dir_all(&nested).expect("nested release folder should be created");
+        write_runtime_markers(&root);
+
+        let resolved = find_skillhub_root_from(&nested).expect("root should resolve");
+        assert_eq!(resolved, root);
+
+        let _ = fs::remove_dir_all(resolved);
+    }
+
+    #[test]
+    fn runtime_root_probe_rejects_incomplete_project_folder() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-root-probe-missing-test-{}",
+            unix_timestamp_string()
+        ));
+        let runtime = app_next_runtime_root(&root);
+        fs::create_dir_all(&runtime).expect("runtime folder should be created");
+        fs::write(runtime.join("SkillHub.ps1"), "# missing agent linker")
+            .expect("partial marker should be written");
+
+        assert!(!is_skillhub_root(&root));
+        assert!(find_skillhub_root_from(&runtime).is_none());
+
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn scan_legacy_snapshot_is_read_only_and_resolves_root() {
@@ -9768,6 +10256,108 @@ mod tests {
         assert!(second.starts_with("preset-"));
     }
 
+    fn test_skill_card(
+        name: &str,
+        source: &str,
+        relative_path: &str,
+        is_router_hub: bool,
+    ) -> SkillCard {
+        SkillCard {
+            name: name.to_string(),
+            folder_name: name.to_string(),
+            category: "test".to_string(),
+            description: "test skill".to_string(),
+            note: String::new(),
+            source: source.to_string(),
+            health: "ok".to_string(),
+            enabled: true,
+            relative_path: relative_path.to_string(),
+            tags: Vec::new(),
+            is_router_hub,
+        }
+    }
+
+    #[test]
+    fn skill_conflict_selector_keeps_duplicate_children_as_candidates() {
+        let skills = vec![
+            test_skill_card(
+                "figure-planner",
+                "Nature-Paper-Skills",
+                "Nature-Paper-Skills/skills/core/figure-planner",
+                false,
+            ),
+            test_skill_card(
+                "figure-planner",
+                "PaperSpine",
+                "PaperSpine/dist/codex/skills/figure-planner",
+                false,
+            ),
+            test_skill_card(
+                "figure-planner",
+                ROUTER_HUB_FOLDER,
+                "AI-SkillHub-local-routers/figure-planner",
+                true,
+            ),
+        ];
+
+        let conflicts = derive_skill_conflicts(&skills, &HashMap::new());
+
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].conflict_key, "figure-planner");
+        assert_eq!(conflicts[0].choices.len(), 2);
+        assert!(conflicts[0]
+            .choices
+            .iter()
+            .any(|choice| choice.source_name == "Nature-Paper-Skills"));
+        assert!(conflicts[0]
+            .choices
+            .iter()
+            .any(|choice| choice.source_name == "PaperSpine"));
+    }
+
+    #[test]
+    fn skill_conflict_selector_preserves_default_and_resets_missing_choice() {
+        let skills = vec![
+            test_skill_card(
+                "figure-planner",
+                "Nature-Paper-Skills",
+                "Nature-Paper-Skills/skills/core/figure-planner",
+                false,
+            ),
+            test_skill_card(
+                "figure-planner",
+                "PaperSpine",
+                "PaperSpine/dist/codex/skills/figure-planner",
+                false,
+            ),
+        ];
+        let mut saved = HashMap::new();
+        saved.insert(
+            "figure-planner".to_string(),
+            SkillConflictChoiceState {
+                default_skill_id: "PaperSpine/dist/codex/skills/figure-planner".to_string(),
+                status: "default-set".to_string(),
+                updated_at: "1780000000".to_string(),
+            },
+        );
+
+        let conflicts = derive_skill_conflicts(&skills, &saved);
+        assert_eq!(conflicts[0].status, "default-set");
+        assert_eq!(conflicts[0].default_source_name, "PaperSpine");
+
+        saved.insert(
+            "figure-planner".to_string(),
+            SkillConflictChoiceState {
+                default_skill_id: "missing/figure-planner".to_string(),
+                status: "default-set".to_string(),
+                updated_at: "1780000001".to_string(),
+            },
+        );
+        let conflicts = derive_skill_conflicts(&skills, &saved);
+        assert_eq!(conflicts[0].status, "unresolved");
+        assert!(conflicts[0].default_skill_id.is_empty());
+    }
+
     #[test]
     fn router_hub_name_preserves_original_collection_name() {
         // Per skill-router-standard.md rule 3, parent must remain callable as /<collection>.
@@ -9777,6 +10367,25 @@ mod tests {
         assert_eq!(
             router_hub_skill_name("research_writing_skill"),
             "research-writing-skill"
+        );
+    }
+
+    #[test]
+    fn router_hub_alias_uses_specific_common_child_prefix() {
+        let litmind_children = vec![
+            "litmind-analyzer".to_string(),
+            "litmind-review".to_string(),
+            "litmind-zotero".to_string(),
+        ];
+        assert_eq!(
+            router_hub_alias_skill_names("Literature-Mind", "literature-mind", &litmind_children),
+            vec!["litmind".to_string()]
+        );
+
+        let generic_children = vec!["paper-reviewer".to_string(), "paper-writer".to_string()];
+        assert!(
+            router_hub_alias_skill_names("paper-pack", "paper-pack", &generic_children).is_empty(),
+            "generic short aliases should not be generated"
         );
     }
 
@@ -9960,6 +10569,49 @@ mod tests {
             .expect("duplicate aggregation should include shared-skill");
         assert!(dup.collections.contains(&"alpha".to_string()));
         assert!(dup.collections.contains(&"beta".to_string()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn router_hub_writes_specific_short_alias() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-router-alias-test-{}",
+            unix_timestamp_string()
+        ));
+        let sources_dir = active_sources_dir(&root);
+        let collection = sources_dir.join("Literature-Mind");
+        for child in &["litmind-analyzer", "litmind-review", "litmind-zotero"] {
+            let folder = collection.join(child);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(
+                folder.join("SKILL.md"),
+                format!("---\nname: {child}\ndescription: \"litmind child\"\n---\nbody\n"),
+            )
+            .unwrap();
+        }
+
+        let report =
+            plan_or_write_router_hubs(&root, true, true).expect("router report should build");
+        assert_eq!(report.total_collections, 1);
+        assert_eq!(report.written_count, 2);
+        assert!(report
+            .plans
+            .iter()
+            .any(|plan| plan.router_skill_name == "literature-mind"));
+        assert!(report
+            .plans
+            .iter()
+            .any(|plan| plan.router_skill_name == "litmind"));
+
+        let alias = sources_dir
+            .join("AI-SkillHub-local-routers")
+            .join("litmind")
+            .join("SKILL.md");
+        assert!(alias.exists(), "short alias router should be written");
+        let body = fs::read_to_string(alias).unwrap();
+        assert!(body.contains("name: litmind"));
+        assert!(body.contains("- [CHILD-SKILL] /litmind-zotero"));
+
         let _ = fs::remove_dir_all(&root);
     }
 

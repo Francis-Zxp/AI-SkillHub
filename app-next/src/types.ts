@@ -33,6 +33,7 @@ export type LegacySnapshot = {
   releaseReports: ReleaseReportCard[];
   importPreviews: ImportPreviewCard[];
   sourcePopularity: SourcePopularityCard[];
+  skillConflicts: SkillConflictCard[];
   operatorConsent: OperatorConsentCard;
   tags: TagCard[];
   presetDistributions: PresetDistributionCard[];
@@ -73,6 +74,26 @@ export type SkillCard = {
    * Optional during the rollout window; older SQLite snapshots may omit it.
    */
   isRouterHub?: boolean;
+};
+
+export type SkillConflictCard = {
+  conflictKey: string;
+  childName: string;
+  status: "unresolved" | "default-set" | "ignored" | string;
+  defaultSkillId: string;
+  defaultSourceName: string;
+  updatedAt: string;
+  choices: SkillConflictChoiceCard[];
+};
+
+export type SkillConflictChoiceCard = {
+  skillId: string;
+  skillName: string;
+  folderName: string;
+  sourceName: string;
+  relativePath: string;
+  category: string;
+  description: string;
 };
 
 /**

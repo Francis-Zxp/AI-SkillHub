@@ -30,3 +30,14 @@ UI surfaces may translate these markers into Chinese labels, badges, or icons, b
 2. A Source row click should open the right-side detail/editor panel. The panel must show project address, GitHub heat, local invocation count, parent router Skills, child Skills, tags, note, type, category, and enabled state.
 3. GitHub stars/forks belong to the original source repository. Generated router collections under `AI-SkillHub-local-routers` are local AI SkillHub artifacts and should not pretend to have upstream GitHub heat.
 4. Router generation must run after daily auto-update, manual sync, and adding a new source. This keeps new child Skills and new repositories aligned with the same parent/child standard.
+
+## Same-Name Child Skill Conflicts
+
+Router hubs are excluded from child-name conflict statistics. If two or more
+non-router child Skills share the same normalized name, V2 must surface that in
+the Sources page conflict selector instead of renaming, deleting, overwriting,
+or silently choosing one candidate.
+
+The user's default/reset/ignore choice is stored in local SQLite table
+`skill_conflict_choices`. See `app-next/SKILL_CONFLICT_SELECTOR.md` for the
+full product rule.

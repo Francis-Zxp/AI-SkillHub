@@ -1,4 +1,4 @@
-# AI SkillHub V2 app-next
+# AI SkillHub app-next
 
 `app-next` is the maintained V2 workspace for AI SkillHub.
 
@@ -57,7 +57,7 @@ pnpm dev:desktop
 The local root launcher is:
 
 ```text
-D:\My Files\AI_global_skills\AI SkillHub V2 Alpha.exe
+D:\My Files\AI_global_skills\AI SkillHub.exe
 ```
 
 The shareable release package should be produced through the V2 release package
@@ -73,3 +73,13 @@ app-next/data/github_sources/AI-SkillHub-local-routers/
 
 Generated routers use `[ROUTER-HUB]`; child entries use `[CHILD-SKILL]`.
 Author-owned source repositories are not modified.
+
+## Same-Name Child Skill Conflicts
+
+V2 detects duplicate non-router child Skill names across sources and shows them
+in the Sources page conflict selector. Users can set a default source, reset the
+choice, or ignore the reminder. The local SQLite table
+`skill_conflict_choices` stores the decision, so GitHub updates do not modify
+or erase it.
+
+See `SKILL_CONFLICT_SELECTOR.md` for the detailed rule.

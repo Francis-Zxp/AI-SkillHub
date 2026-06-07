@@ -1,4 +1,4 @@
-# AI SkillHub V2 Roadmap Status
+# AI SkillHub Roadmap Status
 
 Updated: 2026-06-06
 
@@ -45,7 +45,7 @@ The V2 app is built with:
 - Old V1 app files were deleted.
 - Git ignore rules were updated so private Skills, local sources, reports,
   configs, and build outputs stay out of GitHub.
-- Root launcher was refreshed as `AI SkillHub V2 Alpha.exe`.
+- Root launcher was refreshed as `AI SkillHub.exe`.
 
 ## Current User Flow
 
@@ -77,10 +77,11 @@ Author-owned `SKILL.md` files are not edited.
 
 These are product improvements, not V1 blockers:
 
-- Conflict selector for same-name child Skills from different repositories.
 - Continued page-by-page UI polish.
 - Cleaner formal release package workflow.
 - More complete first-run onboarding for users with no existing local sources.
+- Codex/Claude slash-command dispatch should read `skill_conflict_choices`
+  when a same-name child Skill default has been selected.
 
 ## Validation
 
@@ -88,7 +89,7 @@ Last validated after V2-only migration:
 
 ```text
 pnpm build: passed
-cargo test: 39 passed
+cargo test: 41 passed
 pnpm tauri build --no-bundle: passed
 runtime SkillHub.ps1 -NoPull -ReportOnly: passed
 ```

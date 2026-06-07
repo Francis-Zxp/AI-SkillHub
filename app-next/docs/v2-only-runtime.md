@@ -31,12 +31,14 @@ Important rules:
    personal Skills.
 5. Keep PowerShell runtime scripts in UTF-8 with BOM for Windows PowerShell
    compatibility.
+6. Store same-name child Skill conflict choices in local SQLite metadata, not
+   in author-owned repositories.
 
 Validation after migration:
 
 ```text
 pnpm build: passed
-cargo test: 39 passed
+cargo test: 41 passed
 pnpm tauri build --no-bundle: passed
 runtime SkillHub.ps1 -NoPull -ReportOnly: passed
 ```

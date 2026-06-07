@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-  [string]$Version = 'v2-alpha',
+  [string]$Version = 'alpha',
   [switch]$Quiet,
   [switch]$NoZip
 )
@@ -14,7 +14,7 @@ $V2Root = Split-Path -Parent $RuntimeRoot
 $ProjectRoot = Split-Path -Parent $V2Root
 $ReleaseRoot = Join-Path $ProjectRoot 'release'
 $ReportsRoot = Join-Path $V2Root 'reports\release-preflight'
-$PackageName = "AI-SkillHub-V2-$Version"
+$PackageName = "AI-SkillHub-$Version"
 $StagingRoot = Join-Path $ReleaseRoot $PackageName
 $ZipPath = Join-Path $ReleaseRoot ($PackageName + '.zip')
 $ShaPath = Join-Path $ReleaseRoot ($PackageName + '.sha256.txt')
@@ -62,7 +62,7 @@ if (Test-Path -LiteralPath $ShaPath) { Remove-Item -LiteralPath $ShaPath -Force 
 New-Item -ItemType Directory -Force -Path $StagingRoot | Out-Null
 
 try {
-  Copy-FileRequired (Join-Path $ProjectRoot 'AI SkillHub V2 Alpha.exe') (Join-Path $StagingRoot 'AI SkillHub.exe')
+  Copy-FileRequired (Join-Path $ProjectRoot 'AI SkillHub.exe') (Join-Path $StagingRoot 'AI SkillHub.exe')
   foreach ($file in @('README.md', 'CHANGELOG.md', '使用说明.md')) {
     $source = Join-Path $ProjectRoot $file
     if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-FileRequired $source (Join-Path $StagingRoot $file) }
@@ -73,7 +73,7 @@ try {
   Copy-DirContentsRequired $RuntimeRoot (Join-Path $StagingRoot 'app-next\runtime') @('skillhub.config.json')
   New-Item -ItemType Directory -Force -Path (Join-Path $StagingRoot 'skills') | Out-Null
   New-Item -ItemType Directory -Force -Path (Join-Path $StagingRoot 'app-next\data') | Out-Null
-  Add-Check 'copy.allowlist' 'ok' 'V2 发布包已按白名单复制。'
+  Add-Check 'copy.allowlist' 'ok' 'AI SkillHub 发布包已按白名单复制。'
 } catch {
   Add-Check 'copy.allowlist' 'error' $_.Exception.Message
 }
@@ -89,7 +89,7 @@ if ($forbidden.Count -eq 0) {
 }
 
 if (-not $NoZip) {
-  Compress-Archive -LiteralPath (Join-Path $StagingRoot '*') -DestinationPath $ZipPath -Force
+  Compress-Archive -Path (Join-Path $StagingRoot '*') -DestinationPath $ZipPath -Force
   $hash = Get-HashText $ZipPath
   Write-Utf8Bom $ShaPath ($hash + '  ' + (Split-Path -Leaf $ZipPath))
   Add-Check 'zip.package' 'ok' "已生成 zip：$ZipPath"
@@ -113,9 +113,9 @@ $json = Join-Path $ReportsRoot "release-preflight_$stamp.json"
 $md = Join-Path $ReportsRoot "release-preflight_$stamp.md"
 Write-Utf8Bom $json ($payload | ConvertTo-Json -Depth 8)
 Copy-Item -LiteralPath $json -Destination (Join-Path $ReportsRoot 'latest-release-preflight.json') -Force
-$lines = @('# V2 发布包预检', '', "- 状态：$overall", "- 发布目录：$StagingRoot", "- zip：$($payload.zipPath)", '', '| 检查项 | 状态 | 说明 |', '|---|---|---|')
+$lines = @('# AI SkillHub 发布包预检', '', "- 状态：$overall", "- 发布目录：$StagingRoot", "- zip：$($payload.zipPath)", '', '| 检查项 | 状态 | 说明 |', '|---|---|---|')
 foreach ($check in $Checks) { $lines += "| $($check.id) | $($check.status) | $($check.summary.Replace('|','/')) |" }
 Write-Utf8Bom $md ($lines -join [Environment]::NewLine)
 Copy-Item -LiteralPath $md -Destination (Join-Path $ReportsRoot 'latest-release-preflight.md') -Force
-if (-not $Quiet) { Write-Host "V2 发布包预检：$md" }
+if (-not $Quiet) { Write-Host "AI SkillHub 发布包预检：$md" }
 if ($overall -ne 'ok') { exit 1 }

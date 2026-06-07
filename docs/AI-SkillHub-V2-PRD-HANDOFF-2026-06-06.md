@@ -1,10 +1,10 @@
-# AI SkillHub V2 PRD and Handoff
+# AI SkillHub PRD and Handoff
 
 Date: 2026-06-06
 
 ## 1. Product Positioning
 
-AI SkillHub V2 is a Windows desktop management hub for AI agent capabilities.
+AI SkillHub is a Windows desktop management hub for AI agent capabilities.
 It manages GitHub Skill repositories, local Skill folders, Prompt materials,
 parent/child Skill routing, and AI-tool linking for Claude Code, Codex, and
 Antigravity.
@@ -56,7 +56,7 @@ app-next/.skillhub-next/
 app-next/runtime/skillhub.config.json
 app-next/node_modules/
 app-next/src-tauri/target/
-AI SkillHub V2 Alpha.exe
+AI SkillHub.exe
 ```
 
 ## 5. Current Functional Scope
@@ -70,6 +70,8 @@ V2 currently covers:
   under nested payload folders such as `dist/.../skills`.
 - Parent router generation for multi-Skill repositories.
 - `[ROUTER-HUB]` and `[CHILD-SKILL]` routing markers.
+- Same-name child Skill conflict detection, Sources-page default selection,
+  reset, ignore, and local SQLite persistence through `skill_conflict_choices`.
 - Claude Code, Codex, and Antigravity link synchronization through authorized
   helper flow.
 - Diagnostics and preflight report generation.
@@ -111,7 +113,8 @@ Important product decisions:
 
 Important remaining work:
 
-1. Same-name Skill conflict selector.
+1. Wire Codex/Claude slash-command dispatch to `skill_conflict_choices` so
+   direct calls such as `/figure-planner` use the user's selected default.
 2. More complete third-panel editing pattern.
 3. Page-by-page UI polish using the established grid and component tokens.
 4. Fresh install packaging so a new user can download V2, start it, create the
@@ -124,7 +127,7 @@ After the V2-only migration:
 
 ```text
 pnpm build: passed
-cargo test: 39 passed
+cargo test: 41 passed
 pnpm tauri build --no-bundle: passed
 runtime SkillHub.ps1 -NoPull -ReportOnly: passed
 ```
@@ -142,6 +145,6 @@ skills: 363 active Skill folders
 - Do not depend on `app/SkillHub.ps1`.
 - Do not delete `skills/`; it is the active shared Skill view, not V1.
 - Do not commit personal cloned sources or private Skills.
-- Do not silently choose between duplicate same-name Skills; surface a conflict
-  selector.
+- Do not silently choose between duplicate same-name Skills; use the visible
+  conflict selector and persist the user's choice in local V2 metadata.
 - Keep the Sources workflow simple enough for non-technical users.
