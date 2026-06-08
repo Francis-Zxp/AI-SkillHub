@@ -23,6 +23,7 @@ struct LegacySnapshot {
     skills: Vec<SkillCard>,
     sources: Vec<SourceCard>,
     agents: Vec<AgentCard>,
+    agent_skill_statuses: Vec<AgentSkillStatusCard>,
     agent_adapters: Vec<AgentAdapterCard>,
     adapter_safety_checks: Vec<AdapterSafetyCheckCard>,
     adapter_capabilities: Vec<AdapterCapabilityCard>,
@@ -338,7 +339,7 @@ fn insert_source_id_alias(source_ids: &mut HashMap<String, String>, alias: &str,
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SourceCard {
     id: String,
@@ -416,6 +417,20 @@ struct AgentCard {
     managed: bool,
     enabled: bool,
     skill_count: usize,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AgentSkillStatusCard {
+    id: String,
+    agent_id: String,
+    agent_name: String,
+    skill_name: String,
+    skill_folder_name: String,
+    status: String,
+    expected_path: String,
+    target_path: String,
+    summary: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -923,6 +938,7 @@ fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
         skills,
         sources,
         agents,
+        agent_skill_statuses: Vec::new(),
         agent_adapters,
         adapter_safety_checks,
         adapter_capabilities,
@@ -970,6 +986,8 @@ fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
         let enabled_state = load_enabled_state(&connection);
         apply_enabled_state(&mut snapshot, &enabled_state);
     }
+    snapshot.agent_skill_statuses =
+        derive_agent_skill_statuses(&root, &snapshot.skills, &snapshot.agents);
     snapshot.backup_targets = derive_backup_targets(&root, &snapshot.agent_adapters);
     snapshot.backup_dry_run = derive_backup_dry_run(&snapshot.backup_targets);
     snapshot.restore_dry_run = derive_restore_dry_run(&snapshot.backup_targets);
@@ -1251,6 +1269,55 @@ fn set_source_tags(source_id: String, tags: Vec<String>) -> Result<LegacySnapsho
     let connection = open_index_database(&root)?;
     set_source_tags_in_connection(&connection, &source_id, &tags)?;
     load_indexed_snapshot_blocking()
+}
+
+#[tauri::command]
+fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
+    let root = resolve_legacy_root()?;
+    if !database_file(&root).exists() {
+        let _ = scan_legacy_snapshot_blocking()?;
+    }
+    let connection = open_index_database(&root)?;
+    let sources = read_indexed_sources(&connection)?;
+    let source = sources
+        .iter()
+        .find(|source| source.id == source_id)
+        .cloned()
+        .ok_or_else(|| format!("Cannot find indexed source {}.", source_id))?;
+    let source_path = validate_managed_source_delete_path(&root, &source)?;
+    let removed_folder = if source_path.exists() {
+        fs::remove_dir_all(&source_path).map_err(|error| {
+            format!(
+                "Cannot delete source folder {}: {}",
+                source_path.display(),
+                error
+            )
+        })?;
+        true
+    } else {
+        false
+    };
+    let config_pruned = remove_source_from_runtime_config(&root, &source)?;
+    cleanup_deleted_source_sqlite_state(&connection, &source.id)?;
+    write_audit_event(
+        &connection,
+        "source_deleted",
+        &format!("Deleted managed source {}", source.name),
+        serde_json::json!({
+            "sourceId": source.id,
+            "sourceName": source.name,
+            "path": source_path.display().to_string(),
+            "removedFolder": removed_folder,
+            "configPruned": config_pruned,
+        }),
+    )?;
+
+    run_skillhub_script(&root)?;
+    if let Ok(report) = plan_or_write_router_hubs(&root, true, true) {
+        let _ = record_router_hub_audit(&connection, &report);
+    }
+    run_agent_link_script(&root)?;
+    scan_legacy_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -1808,6 +1875,7 @@ fn read_snapshot_from_database(
     let mut sources = read_indexed_sources(connection)?;
     hydrate_source_urls_from_git(root, &mut sources);
     let agents = read_indexed_agents(connection)?;
+    let agent_skill_statuses = derive_agent_skill_statuses(root, &skills, &agents);
     let agent_adapters = read_indexed_agent_adapters(connection)?;
     let adapter_safety_checks = read_indexed_adapter_safety_checks(connection)?;
     let adapter_capabilities = read_indexed_adapter_capabilities(connection)?;
@@ -1879,6 +1947,7 @@ fn read_snapshot_from_database(
         skills,
         sources,
         agents,
+        agent_skill_statuses,
         agent_adapters,
         adapter_safety_checks,
         adapter_capabilities,
@@ -4297,6 +4366,154 @@ fn source_import_target_path(root: &Path, display_name: &str) -> String {
         .join(sanitize_source_folder_name(display_name))
         .to_string_lossy()
         .to_string()
+}
+
+fn validate_managed_source_delete_path(
+    root: &Path,
+    source: &SourceCard,
+) -> Result<PathBuf, String> {
+    if source.name.eq_ignore_ascii_case(ROUTER_HUB_FOLDER) {
+        return Err("不能删除 AI SkillHub 本地母 Skill 路由仓库；它会由同步自动维护。".to_string());
+    }
+    if source.local_path.trim().is_empty() {
+        return Err("该来源没有本地路径，无法执行删除。".to_string());
+    }
+
+    let sources_root = active_sources_dir(root);
+    let canonical_sources_root = sources_root.canonicalize().map_err(|error| {
+        format!(
+            "Cannot read managed sources root {}: {}",
+            sources_root.display(),
+            error
+        )
+    })?;
+    let source_path = PathBuf::from(source.local_path.trim());
+    if source_path == canonical_sources_root {
+        return Err("拒绝删除整个来源根目录。".to_string());
+    }
+
+    if source_path.exists() {
+        let canonical_source_path = source_path.canonicalize().map_err(|error| {
+            format!(
+                "Cannot read source path {}: {}",
+                source_path.display(),
+                error
+            )
+        })?;
+        if canonical_source_path == canonical_sources_root
+            || !canonical_source_path.starts_with(&canonical_sources_root)
+        {
+            return Err(format!(
+                "拒绝删除 AI SkillHub 管理目录之外的来源：{}",
+                canonical_source_path.display()
+            ));
+        }
+    } else {
+        let parent = source_path
+            .parent()
+            .ok_or_else(|| "Cannot resolve source parent folder.".to_string())?;
+        let canonical_parent = parent.canonicalize().map_err(|error| {
+            format!("Cannot read source parent {}: {}", parent.display(), error)
+        })?;
+        if !canonical_parent.starts_with(&canonical_sources_root) {
+            return Err(format!(
+                "拒绝删除 AI SkillHub 管理目录之外的来源：{}",
+                source_path.display()
+            ));
+        }
+    }
+
+    Ok(source_path)
+}
+
+fn remove_source_from_runtime_config(root: &Path, source: &SourceCard) -> Result<bool, String> {
+    let config_file = skillhub_config_file(root);
+    if !config_file.exists() {
+        return Ok(false);
+    }
+    let raw = fs::read_to_string(&config_file).map_err(|error| {
+        format!(
+            "Cannot read runtime config {}: {}",
+            config_file.display(),
+            error
+        )
+    })?;
+    let mut config: Value = serde_json::from_str(raw.trim_start_matches('\u{feff}'))
+        .map_err(|error| format!("Cannot parse runtime config: {}", error))?;
+    let Some(repositories) = config.get_mut("repositories").and_then(Value::as_array_mut) else {
+        return Ok(false);
+    };
+    let before = repositories.len();
+    repositories.retain(|repo| !runtime_config_repo_matches_source(repo, source));
+    let changed = repositories.len() != before;
+    if changed {
+        let text = serde_json::to_string_pretty(&config)
+            .map_err(|error| format!("Cannot serialize runtime config: {}", error))?;
+        fs::write(&config_file, format!("{text}\n")).map_err(|error| {
+            format!(
+                "Cannot update runtime config {}: {}",
+                config_file.display(),
+                error
+            )
+        })?;
+    }
+    Ok(changed)
+}
+
+fn runtime_config_repo_matches_source(repo: &Value, source: &SourceCard) -> bool {
+    let source_url = parse_github_repo(&source.url)
+        .map(|(owner, repo)| normalized_github_repo_url(&owner, &repo))
+        .unwrap_or_else(|| source.url.trim().trim_end_matches('/').to_lowercase());
+    let repo_url = json_string(repo, "url");
+    if !source_url.is_empty() {
+        if let Some((owner, name)) = parse_github_repo(&repo_url) {
+            if normalized_github_repo_url(&owner, &name).eq_ignore_ascii_case(&source_url) {
+                return true;
+            }
+        }
+        if repo_url
+            .trim()
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case(&source_url)
+        {
+            return true;
+        }
+    }
+
+    let source_name = source.name.trim();
+    let repo_name = json_string(repo, "name");
+    if !source_name.is_empty() && repo_name.eq_ignore_ascii_case(source_name) {
+        return true;
+    }
+    if let Some((_owner, name)) = parse_github_repo(&repo_url) {
+        if name.eq_ignore_ascii_case(source_name) {
+            return true;
+        }
+    }
+    false
+}
+
+fn cleanup_deleted_source_sqlite_state(
+    connection: &Connection,
+    source_id: &str,
+) -> Result<(), String> {
+    for (table, column) in [
+        ("source_overrides", "source_id"),
+        ("source_tag_overrides", "source_id"),
+        ("source_tags", "source_id"),
+        ("source_popularity_cache", "source_id"),
+        ("source_popularity_history", "source_id"),
+    ] {
+        connection
+            .execute(
+                &format!("DELETE FROM {table} WHERE {column} = ?1"),
+                params![source_id],
+            )
+            .map_err(|error| {
+                format!("Cannot clean deleted source state from {table}: {}", error)
+            })?;
+    }
+    Ok(())
 }
 
 fn source_import_backup_path(root: &Path, display_name: &str) -> String {
@@ -7603,6 +7820,80 @@ fn derive_agent_adapters(agents: &[AgentCard]) -> Vec<AgentAdapterCard> {
         .collect()
 }
 
+fn derive_agent_skill_statuses(
+    _root: &Path,
+    skills: &[SkillCard],
+    agents: &[AgentCard],
+) -> Vec<AgentSkillStatusCard> {
+    let mut statuses = Vec::new();
+
+    for agent in agents {
+        for skill in skills {
+            let expected_path = if agent.path.trim().is_empty() {
+                PathBuf::new()
+            } else {
+                PathBuf::from(&agent.path).join(&skill.folder_name)
+            };
+            let expected_path_text = if expected_path.as_os_str().is_empty() {
+                String::new()
+            } else {
+                expected_path.display().to_string()
+            };
+            let installed = !expected_path.as_os_str().is_empty() && expected_path.exists();
+            let target_path = if installed {
+                expected_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| expected_path.clone())
+                    .display()
+                    .to_string()
+            } else {
+                String::new()
+            };
+            let (status, summary) = if !agent.detected {
+                (
+                    "agent-missing",
+                    format!("{} 未检测到，暂不能判断此 Skill。", agent.name),
+                )
+            } else if !agent.enabled {
+                (
+                    "agent-disabled",
+                    format!("{} 已检测但未启用接管。", agent.name),
+                )
+            } else if installed {
+                (
+                    "installed",
+                    format!("{} 已能看到 /{}。", agent.name, skill.folder_name),
+                )
+            } else {
+                (
+                    "missing",
+                    format!(
+                        "{} 缺少 /{}；点击同步可重建托管链接。",
+                        agent.name, skill.folder_name
+                    ),
+                )
+            };
+
+            statuses.push(AgentSkillStatusCard {
+                id: stable_id(
+                    "agent-skill-status",
+                    &format!("{}::{}", agent.id, skill.folder_name),
+                ),
+                agent_id: agent.id.clone(),
+                agent_name: agent.name.clone(),
+                skill_name: skill.name.clone(),
+                skill_folder_name: skill.folder_name.clone(),
+                status: status.to_string(),
+                expected_path: expected_path_text,
+                target_path,
+                summary,
+            });
+        }
+    }
+
+    statuses
+}
+
 fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSafetyCheckCard> {
     let mut checks = Vec::new();
 
@@ -10130,6 +10421,7 @@ pub fn run() {
             set_sources_bulk_metadata,
             set_skill_tags,
             set_source_tags,
+            delete_managed_source,
             set_preset_workspace_enabled,
             set_real_write_authorization,
             run_release_gate_runner,
@@ -10275,6 +10567,115 @@ mod tests {
             tags: Vec::new(),
             is_router_hub,
         }
+    }
+
+    fn test_source_card(id: &str, name: &str, local_path: &Path, url: &str) -> SourceCard {
+        SourceCard {
+            id: id.to_string(),
+            name: name.to_string(),
+            source_type: "skill".to_string(),
+            health: "ok".to_string(),
+            url: url.to_string(),
+            skill_count: 1,
+            mode: "scan".to_string(),
+            category_id: "test".to_string(),
+            note: String::new(),
+            local_path: local_path.display().to_string(),
+            enabled: true,
+            tags: Vec::new(),
+            created_at: "0".to_string(),
+        }
+    }
+
+    #[test]
+    fn agent_skill_statuses_report_installed_missing_and_agent_gaps() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-agent-status-test-{}",
+            unix_timestamp_string()
+        ));
+        let agent_root = root.join("codex-skills");
+        fs::create_dir_all(agent_root.join("paper-workflow")).unwrap();
+        let skills = vec![
+            test_skill_card("paper-workflow", "paper-pack", "paper-workflow", false),
+            test_skill_card("figure-planner", "paper-pack", "figure-planner", false),
+        ];
+        let agents = vec![
+            AgentCard {
+                id: "codex".to_string(),
+                name: "OpenAI Codex".to_string(),
+                path: agent_root.display().to_string(),
+                detected: true,
+                managed: true,
+                enabled: true,
+                skill_count: 0,
+            },
+            AgentCard {
+                id: "antigravity".to_string(),
+                name: "Antigravity".to_string(),
+                path: root.join("antigravity-skills").display().to_string(),
+                detected: false,
+                managed: false,
+                enabled: false,
+                skill_count: 0,
+            },
+        ];
+
+        let statuses = derive_agent_skill_statuses(&root, &skills, &agents);
+        assert!(statuses.iter().any(|status| {
+            status.agent_id == "codex"
+                && status.skill_folder_name == "paper-workflow"
+                && status.status == "installed"
+        }));
+        assert!(statuses.iter().any(|status| {
+            status.agent_id == "codex"
+                && status.skill_folder_name == "figure-planner"
+                && status.status == "missing"
+        }));
+        assert!(statuses.iter().any(|status| {
+            status.agent_id == "antigravity" && status.status == "agent-missing"
+        }));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn managed_source_delete_path_rejects_outside_folder() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-delete-path-test-{}",
+            unix_timestamp_string()
+        ));
+        fs::create_dir_all(active_sources_dir(&root)).unwrap();
+        let outside = std::env::temp_dir().join(format!(
+            "skillhub-delete-outside-{}",
+            unix_timestamp_string()
+        ));
+        fs::create_dir_all(&outside).unwrap();
+        let outside_source = test_source_card("source-outside", "outside", &outside, "");
+
+        assert!(validate_managed_source_delete_path(&root, &outside_source).is_err());
+
+        let managed = active_sources_dir(&root).join("paper-pack");
+        fs::create_dir_all(&managed).unwrap();
+        let managed_source = test_source_card("source-paper-pack", "paper-pack", &managed, "");
+        assert!(validate_managed_source_delete_path(&root, &managed_source).is_ok());
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn runtime_config_repo_matches_source_by_github_url() {
+        let repo = serde_json::json!({
+            "url": "https://github.com/example/paper-pack"
+        });
+        let source = test_source_card(
+            "source-paper-pack",
+            "paper-pack",
+            Path::new("paper-pack"),
+            "https://github.com/example/paper-pack.git",
+        );
+
+        assert!(runtime_config_repo_matches_source(&repo, &source));
     }
 
     #[test]

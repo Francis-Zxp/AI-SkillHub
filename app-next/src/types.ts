@@ -19,6 +19,7 @@ export type LegacySnapshot = {
   skills: SkillCard[];
   sources: SourceCard[];
   agents: AgentCard[];
+  agentSkillStatuses: AgentSkillStatusCard[];
   agentAdapters: AgentAdapterCard[];
   adapterSafetyChecks: AdapterSafetyCheckCard[];
   adapterCapabilities: AdapterCapabilityCard[];
@@ -164,6 +165,18 @@ export type AgentCard = {
   managed: boolean;
   enabled: boolean;
   skillCount: number;
+};
+
+export type AgentSkillStatusCard = {
+  id: string;
+  agentId: string;
+  agentName: string;
+  skillName: string;
+  skillFolderName: string;
+  status: "installed" | "missing" | "agent-missing" | "agent-disabled" | string;
+  expectedPath: string;
+  targetPath: string;
+  summary: string;
 };
 
 export type AgentAdapterCard = {

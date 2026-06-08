@@ -772,6 +772,7 @@ p {
 
 .primary-action,
 .secondary-action,
+.danger-action,
 .ghost-button,
 .ghost-action,
 .pipeline-link,
@@ -815,6 +816,7 @@ p {
 }
 
 .secondary-action,
+.danger-action,
 .ghost-button,
 .ghost-action,
 .pipeline-link,
@@ -827,8 +829,15 @@ p {
   background: color-mix(in srgb, var(--ui-panel) 82%, transparent);
 }
 
+.danger-action {
+  color: var(--ui-danger);
+  border-color: color-mix(in srgb, var(--ui-danger) 40%, var(--ui-border));
+  background: color-mix(in srgb, var(--ui-danger) 10%, var(--ui-panel));
+}
+
 .primary-action:hover:not(:disabled),
 .secondary-action:hover:not(:disabled),
+.danger-action:hover:not(:disabled),
 .ghost-button:hover:not(:disabled),
 .ghost-action:hover:not(:disabled),
 .usage-refresh:hover:not(:disabled),
@@ -839,6 +848,7 @@ p {
 
 .primary-action:active:not(:disabled),
 .secondary-action:active:not(:disabled),
+.danger-action:active:not(:disabled),
 .ghost-button:active:not(:disabled),
 .ghost-action:active:not(:disabled),
 .usage-refresh:active:not(:disabled),
@@ -1456,6 +1466,52 @@ p {
   display: flex;
   flex-wrap: wrap;
   gap: var(--ui-space-2);
+}
+
+.skill-agent-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-2);
+  min-width: 0;
+}
+
+.agent-skill-pill {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 0 var(--ui-space-2);
+  color: var(--ui-text-muted);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ui-panel-soft) 70%, transparent);
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1;
+}
+
+.agent-skill-pill b {
+  color: var(--ui-text);
+  font-weight: 800;
+}
+
+.agent-skill-pill.ok {
+  color: var(--ui-success);
+  border-color: color-mix(in srgb, var(--ui-success) 36%, var(--ui-border));
+  background: color-mix(in srgb, var(--ui-success-soft) 42%, transparent);
+}
+
+.agent-skill-pill.danger {
+  color: var(--ui-danger);
+  border-color: color-mix(in srgb, var(--ui-danger) 36%, var(--ui-border));
+  background: color-mix(in srgb, var(--ui-danger) 10%, transparent);
+}
+
+.agent-skill-pill.warn {
+  color: var(--ui-warning);
+  border-color: color-mix(in srgb, var(--ui-warning) 42%, var(--ui-border));
+  background: color-mix(in srgb, var(--ui-warning) 12%, transparent);
 }
 
 .skill-note {
@@ -2812,6 +2868,18 @@ p {
   border-radius: var(--ui-radius-lg);
   background: var(--ui-panel);
   box-shadow: var(--ui-shadow);
+}
+
+.source-editor-panel footer,
+.skill-editor-panel footer {
+  display: flex;
+  gap: var(--ui-space-2);
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.source-editor-footer-spacer {
+  flex: 1 1 auto;
 }
 
 .workspace-card,

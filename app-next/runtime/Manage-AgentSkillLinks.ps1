@@ -45,6 +45,17 @@ function Resolve-AppPath([string]$Path) {
   return [System.IO.Path]::GetFullPath((Join-Path $AppRoot $Path))
 }
 
+function Convert-ToFullPath([string]$Path) {
+  return [System.IO.Path]::GetFullPath($Path)
+}
+
+function Test-UnderRoot([string]$Child, [string]$Root) {
+  if ([string]::IsNullOrWhiteSpace($Child) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
+  $childFull = Convert-ToFullPath $Child
+  $rootFull = (Convert-ToFullPath $Root).TrimEnd('\') + '\'
+  return $childFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 $Shared = Resolve-AppPath $Config.activeSkillsFolder
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 
@@ -118,6 +129,10 @@ function Test-AntigravityPresent {
 $activeSkillDirs = Get-ChildItem -LiteralPath $Shared -Force -Directory |
   Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') } |
   Sort-Object Name
+$activeSkillNames = @{}
+foreach ($skill in $activeSkillDirs) {
+  $activeSkillNames[$skill.Name] = $true
+}
 
 $rows = New-Object System.Collections.Generic.List[object]
 
@@ -150,6 +165,18 @@ if (Test-CodexPresent) {
       }
     }
   }
+
+  Get-ChildItem -LiteralPath $codexRoot -Force -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ne '.system' } |
+    ForEach-Object {
+      $item = Get-Item -LiteralPath $_.FullName -Force
+      if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        $target = [string]$item.Target
+        if ((Test-UnderRoot $target $Shared) -and -not $activeSkillNames.ContainsKey($item.Name)) {
+          Remove-ReparsePointPath $item.FullName
+        }
+      }
+    }
 
   foreach ($skill in $activeSkillDirs) {
     $dest = Join-Path $codexRoot $skill.Name

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Fragment, type CSSProperties, useEffect, useMemo, useState } from "react";
 import type {
+  AgentSkillStatusCard,
   DesktopQaCheckCard,
   ImportPreviewCard,
   LegacySnapshot,
@@ -419,6 +420,39 @@ export function App() {
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
       setToast("来源保存失败，请查看顶部错误提示。");
+      return "failed";
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteSource(source: SourceCard): Promise<"failed" | "preview" | "deleted"> {
+    if (!hasTauriRuntime()) {
+      setSnapshot(previous => {
+        const current = previous ?? createPreviewSnapshot();
+        return {
+          ...current,
+          sources: current.sources.filter(item => item.id !== source.id),
+          skills: current.skills.filter(skill => !skillBelongsToSource(skill, source)),
+          agentSkillStatuses: (current.agentSkillStatuses ?? []).filter(
+            status => !current.skills.some(skill => skillBelongsToSource(skill, source) && skill.folderName === status.skillFolderName)
+          )
+        };
+      });
+      setToast("浏览器预览已模拟删除来源。");
+      return "preview";
+    }
+
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("delete_managed_source", { sourceId: source.id });
+      setSnapshot(result);
+      setLoadError("");
+      setToast("来源已删除，并已刷新共享 Skills 与 AI 工具托管链接。");
+      return "deleted";
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : String(error));
+      setToast("删除来源失败，请查看顶部错误提示。");
       return "failed";
     } finally {
       setLoading(false);
@@ -1031,6 +1065,7 @@ export function App() {
           <Sources
             loading={loading}
             onBulkSaveMetadata={updateSourcesBulkMetadata}
+            onDeleteSource={deleteSource}
             onPreviewImport={previewSourceImportCandidate}
             onStageImport={stageSourceImportCandidate}
             onPromoteImport={promoteStagedSourceImport}
@@ -1882,6 +1917,13 @@ function Library({
   const [editingSkillId, setEditingSkillId] = useState<string>("");
   const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
   const displaySkills = skills.map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]));
+  const agentStatusesBySkill = useMemo(() => {
+    const groups = new Map<string, AgentSkillStatusCard[]>();
+    for (const status of snapshot?.agentSkillStatuses ?? []) {
+      groups.set(status.skillFolderName, [...(groups.get(status.skillFolderName) ?? []), status]);
+    }
+    return groups;
+  }, [snapshot?.agentSkillStatuses]);
   const searchActive = searchQuery.trim().length > 0;
   const collectionGroups = useMemo(() => deriveSkillCollectionGroups(displaySkills), [displaySkills]);
   const categories = CATEGORY_OPTIONS.filter(option =>
@@ -2058,6 +2100,7 @@ function Library({
       <section className={viewMode === "grid" ? "skill-library-grid" : "skill-library-grid list-mode"}>
         {filteredSkills.map(skill => {
           const isRouter = isRouterHubSkill(skill);
+          const agentStatuses = agentStatusesBySkill.get(skill.folderName) ?? [];
           return (
           <article className={`skill-library-card glow-card ${skill.health}${isRouter ? " is-router" : ""}`} key={skill.folderName}>
             <div className="skill-card-top">
@@ -2123,6 +2166,20 @@ function Library({
                 <span className={`tag-chip ${categoryTone(tag)}`} key={tag}>{tag}</span>
               ))}
             </div>
+            {agentStatuses.length > 0 && (
+              <div className="skill-agent-status-strip" aria-label={`${skill.name} Agent install status`}>
+                {agentStatuses.slice(0, 4).map(status => (
+                  <span
+                    className={`agent-skill-pill ${agentSkillStatusTone(status.status)}`}
+                    key={status.id}
+                    title={status.summary}
+                  >
+                    {compactAgentName(status.agentName)}
+                    <b>{agentSkillStatusLabel(status.status)}</b>
+                  </span>
+                ))}
+              </div>
+            )}
             {skill.note && <div className="skill-note">备注：{skill.note}</div>}
             <footer>
               <div>
@@ -2648,6 +2705,7 @@ function PresetDistributionRow({
 function Sources({
   loading,
   onBulkSaveMetadata,
+  onDeleteSource,
   onPromoteImport,
   onPreviewImport,
   onRefreshIndex,
@@ -2664,6 +2722,7 @@ function Sources({
     category: string,
     enabled: boolean | null
   ) => Promise<"failed" | "preview" | "saved">;
+  onDeleteSource: (source: SourceCard) => Promise<"failed" | "preview" | "deleted">;
   onPromoteImport: (
     importKind: string,
     stagedPath: string,
@@ -2755,6 +2814,18 @@ function Sources({
         delete next[source.id];
         return next;
       });
+    }
+  }
+
+  async function deleteSourceFromPanel(source: SourceCard) {
+    const confirmed = window.confirm(
+      `删除来源「${source.name}」？\n\n会删除 AI SkillHub 管理目录中的来源，并刷新共享 Skills 与 Agent 托管链接。不会删除 GitHub 上的原仓库。`
+    );
+    if (!confirmed) return;
+    const result = await onDeleteSource(source);
+    if (result !== "failed") {
+      setEditingSourceId("");
+      setSelectedSourceIds(previous => previous.filter(id => id !== source.id));
     }
   }
 
@@ -3171,6 +3242,7 @@ function Sources({
           <SourceEditPanel
             draft={sourceDrafts[editingSource.id]}
             onClose={() => setEditingSourceId("")}
+            onDelete={() => void deleteSourceFromPanel(editingSource)}
             onSave={draft => void saveSourceDraft(editingSource, draft)}
             popularity={editingSourcePopularity}
             source={editingSource}
@@ -4279,6 +4351,7 @@ function SourceImportWizardPanel({
 function SourceEditPanel({
   draft,
   onClose,
+  onDelete,
   onSave,
   popularity,
   sourceSkills = [],
@@ -4286,6 +4359,7 @@ function SourceEditPanel({
 }: {
   draft?: SourceDraft;
   onClose: () => void;
+  onDelete: () => void;
   onSave: (draft: SourceDraft) => void;
   popularity?: SourcePopularityCard;
   source: SourceCard;
@@ -4412,6 +4486,8 @@ function SourceEditPanel({
         />
       </div>
       <footer>
+        <button className="danger-action" onClick={onDelete} type="button">删除来源</button>
+        <span className="source-editor-footer-spacer" />
         <button className="secondary-action" onClick={onClose} type="button">取消</button>
         <button
           className="primary-action"
@@ -5534,6 +5610,29 @@ function skillStatusLabel(health: string): string {
   return health;
 }
 
+function agentSkillStatusTone(status: string): "ok" | "warn" | "info" | "danger" {
+  if (status === "installed") return "ok";
+  if (status === "missing") return "danger";
+  if (status === "agent-disabled") return "warn";
+  return "info";
+}
+
+function agentSkillStatusLabel(status: string): string {
+  if (status === "installed") return "已安装";
+  if (status === "missing") return "缺失";
+  if (status === "agent-disabled") return "未启用";
+  if (status === "agent-missing") return "未检测";
+  return status;
+}
+
+function compactAgentName(name: string): string {
+  const normalized = name.toLowerCase();
+  if (normalized.includes("claude")) return "Claude";
+  if (normalized.includes("codex")) return "Codex";
+  if (normalized.includes("antigravity")) return "Antigravity";
+  return name.replace(/\s+code$/i, "").trim();
+}
+
 function sourceTypeLabel(sourceType: string): string {
   if (sourceType === "skill") return "Skill";
   if (sourceType === "prompt") return "Prompt";
@@ -5992,6 +6091,41 @@ function createPreviewSnapshot(): LegacySnapshot {
         managed: false,
         enabled: false,
         skillCount: 0
+      }
+    ],
+    agentSkillStatuses: [
+      {
+        id: "preview-claude-paper-workflow",
+        agentId: "claude",
+        agentName: "Claude / Claude Code",
+        skillName: "paper-workflow",
+        skillFolderName: "paper-workflow",
+        status: "installed",
+        expectedPath: "~\\.claude\\skills\\paper-workflow",
+        targetPath: "../skills/paper-workflow",
+        summary: "Claude 已能看到 /paper-workflow。"
+      },
+      {
+        id: "preview-codex-paper-workflow",
+        agentId: "codex",
+        agentName: "OpenAI Codex",
+        skillName: "paper-workflow",
+        skillFolderName: "paper-workflow",
+        status: "agent-disabled",
+        expectedPath: "~\\.codex\\skills\\paper-workflow",
+        targetPath: "",
+        summary: "Codex 已检测但未启用接管。"
+      },
+      {
+        id: "preview-antigravity-paper-workflow",
+        agentId: "antigravity",
+        agentName: "Antigravity",
+        skillName: "paper-workflow",
+        skillFolderName: "paper-workflow",
+        status: "agent-missing",
+        expectedPath: "~\\.gemini\\antigravity\\skills\\paper-workflow",
+        targetPath: "",
+        summary: "Antigravity 未检测到，暂不能判断此 Skill。"
       }
     ],
     agentAdapters: [
