@@ -150,6 +150,7 @@ struct RouterHubReport {
     committed: bool,
     total_collections: usize,
     written_count: usize,
+    unchanged_count: usize,
     skipped_count: usize,
     health_warnings: Vec<RouterHubHealthWarning>,
     /// Same child Skill name appearing in 2+ collections — Claude only loads one,
@@ -175,7 +176,7 @@ struct RouterHubPlanCard {
     router_skill_md_path: String,
     child_count: usize,
     children: Vec<String>,
-    /// "planned" | "written" | "skipped-single-child" | "skipped-collision" | "skipped-empty"
+    /// "planned" | "written" | "unchanged" | "skipped-single-child" | "skipped-collision" | "skipped-empty"
     status: String,
     summary: String,
 }
@@ -10101,6 +10102,7 @@ fn plan_or_write_router_hubs(
     let mut plans: Vec<RouterHubPlanCard> = Vec::new();
     let mut warnings: Vec<RouterHubHealthWarning> = Vec::new();
     let mut written_count = 0usize;
+    let mut unchanged_count = 0usize;
     let mut skipped_count = 0usize;
 
     let allow_write = commit && real_writes_enabled;
@@ -10113,6 +10115,7 @@ fn plan_or_write_router_hubs(
             committed: allow_write,
             total_collections: 0,
             written_count: 0,
+            unchanged_count: 0,
             skipped_count: 0,
             health_warnings: warnings,
             duplicate_children: Vec::new(),
@@ -10210,6 +10213,14 @@ fn plan_or_write_router_hubs(
         let router_folder = routers_root.join(&router_name);
         let router_skill_md = router_folder.join("SKILL.md");
         let body = build_router_hub_skill_md(&collection_name, &router_name, &children);
+        let needs_write = if allow_write {
+            match fs::read_to_string(&router_skill_md) {
+                Ok(existing) => existing != body,
+                Err(_) => true,
+            }
+        } else {
+            true
+        };
 
         if allow_write {
             fs::create_dir_all(&router_folder).map_err(|error| {
@@ -10219,11 +10230,6 @@ fn plan_or_write_router_hubs(
                     error
                 )
             })?;
-            // Only rewrite when content actually changes — avoids touching mtimes on every sync.
-            let needs_write = match fs::read_to_string(&router_skill_md) {
-                Ok(existing) => existing != body,
-                Err(_) => true,
-            };
             if needs_write {
                 fs::write(&router_skill_md, &body).map_err(|error| {
                     format!(
@@ -10233,6 +10239,8 @@ fn plan_or_write_router_hubs(
                     )
                 })?;
                 written_count += 1;
+            } else {
+                unchanged_count += 1;
             }
         }
 
@@ -10242,12 +10250,16 @@ fn plan_or_write_router_hubs(
             router_skill_md_path: router_skill_md.display().to_string(),
             child_count: children.len(),
             children: children.clone(),
-            status: if allow_write {
+            status: if allow_write && !needs_write {
+                "unchanged".to_string()
+            } else if allow_write {
                 "written".to_string()
             } else {
                 "planned".to_string()
             },
-            summary: if allow_write {
+            summary: if allow_write && !needs_write {
+                "router SKILL.md already matched the generated version".to_string()
+            } else if allow_write {
                 "router SKILL.md regenerated under AI-SkillHub-local-routers".to_string()
             } else {
                 "dry-run plan; enable real writes to materialize".to_string()
@@ -10258,6 +10270,14 @@ fn plan_or_write_router_hubs(
             let alias_folder = routers_root.join(&alias_name);
             let alias_skill_md = alias_folder.join("SKILL.md");
             let alias_body = build_router_hub_skill_md(&collection_name, &alias_name, &children);
+            let alias_needs_write = if allow_write {
+                match fs::read_to_string(&alias_skill_md) {
+                    Ok(existing) => existing != alias_body,
+                    Err(_) => true,
+                }
+            } else {
+                true
+            };
 
             if allow_write {
                 fs::create_dir_all(&alias_folder).map_err(|error| {
@@ -10267,11 +10287,7 @@ fn plan_or_write_router_hubs(
                         error
                     )
                 })?;
-                let needs_write = match fs::read_to_string(&alias_skill_md) {
-                    Ok(existing) => existing != alias_body,
-                    Err(_) => true,
-                };
-                if needs_write {
+                if alias_needs_write {
                     fs::write(&alias_skill_md, &alias_body).map_err(|error| {
                         format!(
                             "Cannot write router alias SKILL.md {}: {}",
@@ -10280,6 +10296,8 @@ fn plan_or_write_router_hubs(
                         )
                     })?;
                     written_count += 1;
+                } else {
+                    unchanged_count += 1;
                 }
             }
 
@@ -10289,12 +10307,16 @@ fn plan_or_write_router_hubs(
                 router_skill_md_path: alias_skill_md.display().to_string(),
                 child_count: children.len(),
                 children: children.clone(),
-                status: if allow_write {
+                status: if allow_write && !alias_needs_write {
+                    "unchanged".to_string()
+                } else if allow_write {
                     "written".to_string()
                 } else {
                     "planned".to_string()
                 },
-                summary: if allow_write {
+                summary: if allow_write && !alias_needs_write {
+                    "short alias router SKILL.md already matched the generated version".to_string()
+                } else if allow_write {
                     "short alias router SKILL.md regenerated under AI-SkillHub-local-routers"
                         .to_string()
                 } else {
@@ -10347,8 +10369,9 @@ fn plan_or_write_router_hubs(
         .len();
     let summary = if allow_write {
         format!(
-            "router-hub regeneration committed: {} written, {} skipped, {} duplicate-children",
+            "router-hub regeneration committed: {} written, {} unchanged, {} skipped, {} duplicate-children",
             written_count,
+            unchanged_count,
             skipped_count,
             duplicate_children.len()
         )
@@ -10373,6 +10396,7 @@ fn plan_or_write_router_hubs(
         committed: allow_write,
         total_collections,
         written_count,
+        unchanged_count,
         skipped_count,
         health_warnings: warnings,
         duplicate_children,
@@ -10390,6 +10414,7 @@ fn record_router_hub_audit(
         "realWritesEnabled": report.real_writes_enabled,
         "totalCollections": report.total_collections,
         "writtenCount": report.written_count,
+        "unchangedCount": report.unchanged_count,
         "skippedCount": report.skipped_count,
         "duplicateCount": report.duplicate_children.len(),
         "warningCount": report.health_warnings.len(),
@@ -10397,8 +10422,9 @@ fn record_router_hub_audit(
     });
     let summary = if report.committed {
         format!(
-            "router-hub committed: {} written, {} skipped, {} duplicate-children, {} health warnings",
+            "router-hub committed: {} written, {} unchanged, {} skipped, {} duplicate-children, {} health warnings",
             report.written_count,
+            report.unchanged_count,
             report.skipped_count,
             report.duplicate_children.len(),
             report.health_warnings.len()
@@ -11226,6 +11252,7 @@ mod tests {
         let live = plan_or_write_router_hubs(&root, true, true).expect("commit should succeed");
         assert!(live.committed);
         assert_eq!(live.written_count, 1, "only paper-pack should be written");
+        assert_eq!(live.unchanged_count, 0);
         let written = sources_dir
             .join("AI-SkillHub-local-routers")
             .join("paper-pack")
@@ -11242,6 +11269,18 @@ mod tests {
         assert!(body.contains("name: paper-pack"));
         assert!(body.contains("- [CHILD-SKILL] /paper-workflow"));
         assert!(body.contains("- [CHILD-SKILL] /figure-planner"));
+
+        let rerun = plan_or_write_router_hubs(&root, true, true)
+            .expect("rerun should leave current routers untouched");
+        assert!(rerun.committed);
+        assert_eq!(rerun.written_count, 0);
+        assert_eq!(rerun.unchanged_count, 1);
+        let unchanged = rerun
+            .plans
+            .iter()
+            .find(|plan| plan.collection_name == "paper-pack")
+            .expect("paper-pack plan should still exist");
+        assert_eq!(unchanged.status, "unchanged");
 
         let _ = fs::remove_dir_all(&root);
     }

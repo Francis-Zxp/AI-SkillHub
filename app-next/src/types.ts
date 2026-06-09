@@ -108,6 +108,7 @@ export type RouterHubReport = {
   committed: boolean;
   totalCollections: number;
   writtenCount: number;
+  unchangedCount?: number;
   skippedCount: number;
   healthWarnings: RouterHubHealthWarning[];
   /** Same child Skill `name:` appearing in 2+ collections; only one wins on Claude. */
@@ -129,6 +130,7 @@ export type RouterHubPlanCard = {
   status:
     | "planned"
     | "written"
+    | "unchanged"
     | "skipped-single-child"
     | "skipped-collision"
     | "skipped-empty"

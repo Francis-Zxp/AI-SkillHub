@@ -3041,6 +3041,7 @@ p {
 }
 
 .router-hub-head,
+.router-hub-result-head,
 .router-hub-name,
 .router-hub-card header,
 .router-hub-duplicates li {
@@ -3051,9 +3052,27 @@ p {
   min-width: 0;
 }
 
+.router-hub-result-head > div {
+  display: grid;
+  gap: var(--ui-space-1);
+  min-width: 0;
+}
+
+.router-hub-result-head strong {
+  color: var(--ui-text);
+  font-size: 16px;
+}
+
+.router-hub-result-head span,
+.router-hub-summary {
+  color: var(--ui-text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .router-hub-stats {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
   gap: var(--ui-space-3);
 }
 
@@ -3097,6 +3116,11 @@ p {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: var(--ui-space-3);
+}
+
+.router-hub-result-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .router-hub-card {

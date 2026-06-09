@@ -3269,7 +3269,7 @@ function RouterHubPanel({
       setReport(next);
       showUiToast(
         commit
-          ? `母 Skill 路由已重建：写入 ${next.writtenCount}，跳过 ${next.skippedCount}。`
+          ? routerHubCommitMessage(next)
           : `母 Skill 路由 dry-run：${next.totalCollections} 个集合，${next.duplicateChildren.length} 个重名子 Skill。`
       );
     } catch (caught) {
@@ -3283,6 +3283,7 @@ function RouterHubPanel({
 
   const writtenPlans = report?.plans.filter(plan => plan.status === "written") ?? [];
   const plannedPlans = report?.plans.filter(plan => plan.status === "planned") ?? [];
+  const unchangedPlans = report?.plans.filter(plan => plan.status === "unchanged") ?? [];
   const skippedPlans = report?.plans.filter(plan => plan.status.startsWith("skipped")) ?? [];
 
   return (
@@ -3335,29 +3336,42 @@ function RouterHubPanel({
 
       {report && (
         <>
+          <div className="router-hub-result-head">
+            <div>
+              <strong>{routerHubResultTitle(report)}</strong>
+              <span>{routerHubSummaryText(report)}</span>
+            </div>
+            <button className="ghost-action compact" onClick={() => setReport(null)} type="button">
+              收起结果
+            </button>
+          </div>
           <div className="router-hub-stats">
             <span className="router-hub-stat ok">
               <strong>{report.totalCollections}</strong>
-              <em>collections</em>
+              <em>集合</em>
             </span>
             <span className="router-hub-stat brand">
               <strong>{writtenPlans.length + plannedPlans.length}</strong>
-              <em>{report.committed ? "written" : "planned"}</em>
+              <em>{report.committed ? "新增/更新" : "待写入"}</em>
+            </span>
+            <span className="router-hub-stat ok">
+              <strong>{report.committed ? routerHubUnchangedCount(report) : unchangedPlans.length}</strong>
+              <em>已是最新</em>
             </span>
             <span className="router-hub-stat warn">
               <strong>{skippedPlans.length}</strong>
-              <em>skipped</em>
+              <em>无需生成</em>
             </span>
             <span className="router-hub-stat danger">
               <strong>{report.duplicateChildren.length}</strong>
-              <em>duplicate child</em>
+              <em>重名子 Skill</em>
             </span>
             <span className="router-hub-stat warn">
               <strong>{report.healthWarnings.length}</strong>
-              <em>unquoted</em>
+              <em>格式提醒</em>
             </span>
           </div>
-          <div className="router-hub-summary">{report.summary}</div>
+          <div className="router-hub-summary">{routerHubSummaryText(report)}</div>
 
           {report.duplicateChildren.length > 0 && (
             <div className="router-hub-duplicates">
@@ -3423,6 +3437,11 @@ function RouterHubPanel({
                 )}
               </article>
             ))}
+          </div>
+          <div className="router-hub-result-actions">
+            <button className="ghost-action compact" onClick={() => setReport(null)} type="button">
+              收起结果
+            </button>
           </div>
         </>
       )}
@@ -3591,6 +3610,7 @@ function conflictStatusLabel(status: string): string {
 
 function planStatusTone(status: string): "ok" | "warn" | "info" | "danger" {
   if (status === "written") return "ok";
+  if (status === "unchanged") return "ok";
   if (status === "planned") return "info";
   if (status === "skipped-collision") return "danger";
   return "warn";
@@ -3600,6 +3620,8 @@ function planStatusLabel(status: string): string {
   switch (status) {
     case "written":
       return "已写入";
+    case "unchanged":
+      return "已是最新";
     case "planned":
       return "待写入";
     case "skipped-empty":
@@ -3611,6 +3633,40 @@ function planStatusLabel(status: string): string {
     default:
       return status;
   }
+}
+
+function routerHubUnchangedCount(report: RouterHubReport): number {
+  return report.unchangedCount ?? report.plans.filter(plan => plan.status === "unchanged").length;
+}
+
+function routerHubCommitMessage(report: RouterHubReport): string {
+  const unchanged = routerHubUnchangedCount(report);
+  const skipped = report.skippedCount;
+  const duplicateCount = report.duplicateChildren.length;
+  const warningCount = report.healthWarnings.length;
+  const suffixParts = [
+    skipped > 0 ? `${skipped} 个无需生成` : "",
+    duplicateCount > 0 ? `${duplicateCount} 个重名提醒` : "",
+    warningCount > 0 ? `${warningCount} 个格式提醒` : ""
+  ].filter(Boolean);
+  const suffix = suffixParts.length > 0 ? `；${suffixParts.join("，")}` : "";
+  if (report.writtenCount === 0 && unchanged > 0) {
+    return `母 Skill 路由已是最新：${unchanged} 个无需改写${suffix}。`;
+  }
+  return `母 Skill 路由已重建：新增/更新 ${report.writtenCount} 个，已是最新 ${unchanged} 个${suffix}。`;
+}
+
+function routerHubResultTitle(report: RouterHubReport): string {
+  if (!report.committed) return "预览结果";
+  if (report.writtenCount === 0 && routerHubUnchangedCount(report) > 0) return "路由已是最新";
+  return "路由重建完成";
+}
+
+function routerHubSummaryText(report: RouterHubReport): string {
+  if (!report.committed) {
+    return `发现 ${report.totalCollections} 个来源集合；预览不会写入文件。`;
+  }
+  return routerHubCommitMessage(report).replace(/。$/, "");
 }
 
 function SourceListToolbar({

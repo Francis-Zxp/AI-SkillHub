@@ -6,6 +6,10 @@ All notable changes to AI SkillHub are documented here.
 
 ### Fixed
 
+- Rebuilding parent router Skills now separates updated routers from routers
+  that were already current, so repeated rebuilds show "already up to date"
+  instead of a misleading skipped count.
+- Router Hub rebuild results now include clear collapse controls.
 - GitHub heat refresh no longer reports rate limits or temporary network
   failures as repository sync failures. These states are shown as deferred and
   keep the previous cache when available.
