@@ -266,21 +266,12 @@ export function App() {
         return preview;
       }
 
-      const shouldRunRealSync = mode === "refresh" && snapshot?.operatorConsent?.realWritesEnabled === true;
-      const command = shouldRunRealSync
-        ? "run_skillhub_sync"
-        : mode === "refresh"
-          ? "scan_legacy_snapshot"
-          : "load_indexed_snapshot";
+      const command = mode === "refresh" ? "run_skillhub_sync" : "load_indexed_snapshot";
       const result = await invoke<LegacySnapshot>(command);
       setSnapshot(result);
       setLoadError("");
       if (mode === "refresh") {
-        setToast(
-          shouldRunRealSync
-            ? "已执行 GitHub 更新、Skill 路由重建、AI 工具链接同步，并刷新本地索引。"
-            : "未开启真实写入授权：已刷新索引，但没有写入 Claude/Codex/Antigravity。"
-        );
+        setToast("已执行 GitHub 更新、Skill 路由重建、AI 工具链接同步，并刷新本地索引。");
       }
       return result;
     } catch (error) {
@@ -683,10 +674,9 @@ export function App() {
       const result = await invoke<LegacySnapshot>("refresh_source_popularity");
       setSnapshot(result);
       setLoadError("");
-      const refreshed = result.sourcePopularity.filter(source => source.cacheStatus === "fresh").length;
-      const failed = result.sourcePopularity.filter(source => source.cacheStatus === "error").length;
+      const popularitySummary = summarizeSourcePopularity(result);
       if (!options.quiet) {
-        setToast(`GitHub 热度已刷新：${refreshed} 个成功，${failed} 个失败。趋势需要至少两次刷新才会出现变化。`);
+        setToast(sourcePopularityRefreshMessage(popularitySummary));
       }
       return result;
     } catch (error) {
@@ -710,7 +700,7 @@ export function App() {
 
     setOperation({
       title: "同步并刷新",
-      detail: realWritesEnabled ? "正在更新 GitHub 来源并同步 AI 工具链接。" : "正在刷新索引，不写入 AI 工具目录。",
+      detail: "正在更新 GitHub 来源并同步 AI 工具链接。",
       step: 1,
       total: 3,
       percent: 8
@@ -735,11 +725,8 @@ export function App() {
       return refreshedIndex;
     }
 
-    const refreshed = refreshedPopularity.sourcePopularity.filter(source => source.cacheStatus === "fresh").length;
-    const failed = refreshedPopularity.sourcePopularity.filter(source => source.cacheStatus === "error").length;
-    const syncSummary = refreshedIndex?.operatorConsent?.realWritesEnabled
-      ? "已同步 AI 工具并刷新索引"
-      : "已刷新索引，未写入 AI 工具";
+    const popularitySummary = summarizeSourcePopularity(refreshedPopularity);
+    const syncSummary = "已同步 AI 工具并刷新索引";
     setOperation({
       title: "同步并刷新",
       detail: "完成，正在更新界面。",
@@ -747,7 +734,7 @@ export function App() {
       total: 3,
       percent: 100
     });
-    setToast(`${syncSummary}；GitHub 热度 ${refreshed} 个成功、${failed} 个失败。`);
+    setToast(`${syncSummary}；${sourcePopularityRefreshMessage(popularitySummary)}`);
     window.setTimeout(() => setOperation(null), 900);
     return refreshedPopularity;
   }
@@ -1070,7 +1057,6 @@ export function App() {
             onStageImport={stageSourceImportCandidate}
             onPromoteImport={promoteStagedSourceImport}
             onRefreshIndex={() => syncAndRefreshAll()}
-            onRealWriteAuthorization={updateRealWriteAuthorization}
             onSaveMetadata={updateSourceMetadata}
             onSetSkillConflictChoice={updateSkillConflictChoice}
             snapshot={snapshot}
@@ -2709,7 +2695,6 @@ function Sources({
   onPromoteImport,
   onPreviewImport,
   onRefreshIndex,
-  onRealWriteAuthorization,
   onSaveMetadata,
   onSetSkillConflictChoice,
   onStageImport,
@@ -2731,7 +2716,6 @@ function Sources({
   ) => Promise<SourceImportPromotionCard>;
   onPreviewImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportPlanCard>;
   onRefreshIndex: () => Promise<LegacySnapshot | null>;
-  onRealWriteAuthorization: (enabled: boolean) => Promise<void>;
   onSaveMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
   onSetSkillConflictChoice: (
     conflictKey: string,
@@ -3038,20 +3022,20 @@ function Sources({
           note: draft.note,
           tags: draft.tags
         });
-        const syncWasExecuted = operatorConsent.realWritesEnabled;
+        const syncWasExecuted = promotion.realWriteScope.includes("agent-links");
         setQuickAddStatus({
           tone: "ok",
           title: promotion.status === "already-managed" ? "来源已存在，已刷新" : "已添加到来源库",
           body: syncWasExecuted
-            ? "已添加来源、执行 GitHub 更新和 AI 工具链接同步，并保存分类、备注和标签。"
-            : "已添加来源并刷新索引；打开真实写入授权后点击同步，即可写入 Claude/Codex/Antigravity。"
+            ? "已添加来源、刷新共享 Skills 和 AI 工具链接，并保存分类、备注和标签。"
+            : "已添加来源并刷新索引；AI 工具链接同步未完成，请查看状态说明后重试同步。"
         });
         showUiToast(
           syncWasExecuted
             ? "已添加来源并同步到 AI 工具。"
             : promotion.status === "already-managed"
               ? "来源已存在，已刷新索引并保存分类/备注/标签。"
-              : "已添加来源并刷新索引；打开授权后可一键同步到 AI 工具。"
+              : "已添加来源并刷新索引；AI 工具同步未完成。"
         );
       } else {
         setQuickAddStatus({
@@ -3131,11 +3115,9 @@ function Sources({
         disabled={loading || importPending}
         onPreview={(importKind, input) => void previewImportPlan(importKind, input)}
         onQuickAdd={(importKind, input, draft) => void quickAddImport(importKind, input, draft)}
-        onRealWriteAuthorization={onRealWriteAuthorization}
         onStage={(importKind, input) => void stageImportPlan(importKind, input)}
         onPromote={execution => void promoteImportExecution(execution, importPlan)}
         execution={importExecution}
-        operatorConsent={operatorConsent}
         promotion={importPromotion}
         plan={importPlan}
         quickAddStatus={quickAddStatus}
@@ -3327,7 +3309,7 @@ function RouterHubPanel({
             type="button"
             title={
               !realWritesEnabled
-                ? "需要先在上方一键添加来源面板里打开「同步到 AI 工具授权」"
+                ? "手动重建需要在 Release Gate 开启高级写入授权；日常同步会自动重建"
                 : !runtimeAvailable
                   ? "浏览器预览模式只读"
                 : "立即重建母 Skill 入口"
@@ -3909,9 +3891,7 @@ function SourceImportWizardPanel({
   onPreview,
   onQuickAdd,
   onPromote,
-  onRealWriteAuthorization,
   onStage,
-  operatorConsent,
   plan,
   promotion,
   quickAddStatus
@@ -3921,9 +3901,7 @@ function SourceImportWizardPanel({
   onPreview: (importKind: string, input: string) => void;
   onQuickAdd: (importKind: string, input: string, draft: QuickSourceDraft) => void;
   onPromote: (execution: SourceImportExecutionCard) => void;
-  onRealWriteAuthorization: (enabled: boolean) => Promise<void>;
   onStage: (importKind: string, input: string) => void;
-  operatorConsent: LegacySnapshot["operatorConsent"];
   plan: SourceImportPlanCard | null;
   promotion: SourceImportPromotionCard | null;
   quickAddStatus: QuickAddStatus | null;
@@ -4079,12 +4057,12 @@ function SourceImportWizardPanel({
           value={note}
         />
       </label>
-      <div className="quick-source-state-grid">
+      <div className="quick-source-state-grid single">
         <div className="quick-source-setting-row">
           <div className="quick-source-toggle">
             <div>
               <strong>加入后启用</strong>
-              <span>只控制来源库显示，不等于同步到 AI 工具。</span>
+              <span>启用后会出现在来源库，并参与共享 Skills 与 Agent 链接同步。</span>
             </div>
             <ToggleSwitch
               disabled={disabled}
@@ -4094,25 +4072,11 @@ function SourceImportWizardPanel({
             />
           </div>
         </div>
-        <div className={`source-sync-state ${operatorConsent.realWritesEnabled ? "authorized" : "locked"}`}>
-          <div>
-            <strong>同步到 AI 工具授权</strong>
-            <span>
-              打开后，“同步 / 刷新”会执行 GitHub 更新、Skill 路由重建，并把共享 Skills 链接同步到 Claude/Codex/Antigravity。
-            </span>
-          </div>
-          <ToggleSwitch
-            disabled={disabled}
-            enabled={operatorConsent.realWritesEnabled}
-            label={operatorConsent.realWritesEnabled ? "已授权" : "未授权"}
-            onClick={() => void onRealWriteAuthorization(!operatorConsent.realWritesEnabled)}
-          />
-        </div>
       </div>
       <div className="quick-source-action-row">
         <div className="quick-source-action-copy">
           <strong>最后一步</strong>
-          <span>点击后会加入来源库、刷新索引，并按授权状态同步到 AI 工具。</span>
+          <span>点击后会加入来源库、刷新索引，并同步到已接管的 AI 工具。</span>
         </div>
         <button className="primary-action import-quick-add-button" disabled={disabled} onClick={submitQuickAdd} type="button">
           {disabled ? "正在添加" : "一键添加并刷新"}
@@ -4274,7 +4238,7 @@ function SourceImportWizardPanel({
           <div className="staging-action-row">
             <div>
               <strong>提升为受管理来源</strong>
-              <span>写入 app/github_sources 后，v2 会重新扫描；AI 工具同步仍然保持锁定。</span>
+              <span>写入来源库后，AI SkillHub 会重新扫描；高级安全详情用于排错和复核。</span>
             </div>
             <button
               className="primary-action"
@@ -4632,7 +4596,7 @@ function Agents({
               <strong>{agent.name}</strong>
               <span>{agent.detected ? "已检测" : "未检测"}</span>
               <span>{agent.managed ? "已接管" : "未接管"}</span>
-              <span>{agent.enabled ? "v2 启用" : "v2 停用"}</span>
+              <span>{agent.enabled ? "已启用" : "已停用"}</span>
               <small>{agent.path}</small>
             </div>
           ))}
@@ -4668,7 +4632,7 @@ function Snapshots({ snapshot }: { snapshot: LegacySnapshot | null }) {
         <article className="panel">
           <p className="eyebrow">最新快照</p>
           <h3>{latest?.name ?? "等待生成快照"}</h3>
-          <p>{latest?.summary ?? "点击刷新后，v2 会把当前只读索引写入 SQLite 快照记录。"}</p>
+          <p>{latest?.summary ?? "点击刷新后，AI SkillHub 会把当前索引写入 SQLite 快照记录。"}</p>
           <div className="snapshot-meta">
             <span>{latest ? formatScanTime(latest.createdAt) : "未生成"}</span>
             <span>{snapshot?.index.snapshotId ?? "无快照 ID"}</span>
@@ -5645,6 +5609,78 @@ function sourceIsGithub(source: SourceCard): boolean {
   return /(^https?:\/\/github\.com\/|^git@github\.com:)/i.test(url);
 }
 
+type SourcePopularitySummary = {
+  deferred: number;
+  failed: number;
+  fresh: number;
+  githubTotal: number;
+  missing: number;
+};
+
+function summarizeSourcePopularity(snapshot: LegacySnapshot): SourcePopularitySummary {
+  const popularityBySourceId = new Map(snapshot.sourcePopularity.map(item => [item.sourceId, item]));
+  const summary: SourcePopularitySummary = {
+    deferred: 0,
+    failed: 0,
+    fresh: 0,
+    githubTotal: 0,
+    missing: 0
+  };
+
+  for (const source of snapshot.sources) {
+    if (!sourceIsGithub(source)) continue;
+    summary.githubTotal += 1;
+    const popularity = popularityBySourceId.get(source.id);
+    if (!popularity || popularity.cacheStatus === "missing") {
+      summary.missing += 1;
+    } else if (popularity.cacheStatus === "fresh") {
+      summary.fresh += 1;
+    } else if (sourcePopularityIsDeferred(popularity.cacheStatus, popularity.error)) {
+      summary.deferred += 1;
+    } else if (popularity.cacheStatus === "error") {
+      summary.failed += 1;
+    } else {
+      summary.deferred += 1;
+    }
+  }
+
+  return summary;
+}
+
+function sourcePopularityRefreshMessage(summary: SourcePopularitySummary): string {
+  if (summary.githubTotal === 0) {
+    return "没有需要请求 GitHub 热度的来源。";
+  }
+
+  const parts = [`GitHub 热度 ${summary.fresh} 个已更新`];
+  if (summary.deferred > 0) {
+    parts.push(`${summary.deferred} 个暂缓（限流或网络不可用，已保留旧缓存）`);
+  }
+  if (summary.missing > 0) {
+    parts.push(`${summary.missing} 个待刷新`);
+  }
+  if (summary.failed > 0) {
+    parts.push(`${summary.failed} 个需要检查`);
+  }
+  return `${parts.join("，")}。`;
+}
+
+function sourcePopularityIsDeferred(status: string, error = ""): boolean {
+  const text = `${status} ${error}`.toLowerCase();
+  return (
+    status === "deferred" ||
+    status === "stale" ||
+    status === "rate-limited" ||
+    text.includes("status 403") ||
+    text.includes("status code 403") ||
+    text.includes("status 429") ||
+    text.includes("rate limit") ||
+    text.includes("network") ||
+    text.includes("timed out") ||
+    text.includes("timeout")
+  );
+}
+
 function sourcePopularityInfo(
   source: SourceCard,
   popularity?: SourcePopularityCard
@@ -5665,9 +5701,19 @@ function sourcePopularityInfo(
     };
   }
 
+  if (sourcePopularityIsDeferred(popularity.cacheStatus, popularity.error)) {
+    return {
+      label: popularity.stars > 0 ? `★ ${formatCompactNumber(popularity.stars)}` : "★ 暂缓",
+      title: popularity.error
+        ? `GitHub 热度暂未更新，已保留旧缓存：${popularity.error}`
+        : "GitHub 热度暂未更新；通常是 GitHub 限流或网络不可用，稍后可再次刷新。",
+      tone: "pending"
+    };
+  }
+
   if (popularity.cacheStatus === "error") {
     return {
-      label: "★ 失败",
+      label: "★ 需检查",
       title: popularity.error ? `GitHub 热度刷新失败：${popularity.error}` : "GitHub 热度刷新失败；可能是网络、限流或仓库不可访问。",
       tone: "error"
     };
@@ -6672,7 +6718,7 @@ function createPreviewSnapshot(): LegacySnapshot {
         enabled: true,
         skillCount: 7,
         status: "enabled",
-        summary: "v2 项目工作区启用 UI 审查和交互打磨组合。"
+        summary: "AI SkillHub 项目工作区启用 UI 审查和交互打磨组合。"
       },
       {
         id: "dist-security-global",

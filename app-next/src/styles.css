@@ -1858,6 +1858,10 @@ p {
   align-items: stretch;
 }
 
+.quick-source-state-grid.single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .quick-source-setting-row,
 .quick-source-action-row,
 .source-sync-state {
@@ -2050,9 +2054,14 @@ p {
 .source-list-toolbar,
 .source-bulk-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(240px, .82fr) minmax(0, 1.18fr);
   gap: var(--ui-space-4);
   align-items: center;
+  min-width: 0;
+}
+
+.source-bulk-panel > div {
+  min-width: 0;
 }
 
 .advanced-import-details {
@@ -2128,9 +2137,10 @@ p {
 
 .source-bulk-fields {
   display: grid;
-  grid-template-columns: 112px minmax(220px, 1fr) 168px 72px 72px 128px;
+  grid-template-columns: minmax(104px, max-content) minmax(180px, 1fr) minmax(150px, 180px) 72px 72px minmax(118px, 140px);
   gap: var(--ui-space-2);
   align-items: center;
+  min-width: 0;
 }
 
 .source-bulk-fields button {
@@ -2175,6 +2185,7 @@ p {
 }
 
 .sources-workbench {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--ui-space-5);
@@ -2182,7 +2193,7 @@ p {
 }
 
 .sources-workbench.has-detail {
-  grid-template-columns: minmax(0, 1fr) clamp(320px, 24vw, 392px);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .sources-main-column {
@@ -2208,17 +2219,6 @@ p {
     background var(--ui-duration) var(--ui-ease),
     box-shadow var(--ui-duration) var(--ui-ease),
     border-color var(--ui-duration) var(--ui-ease);
-}
-
-.sources-workbench.has-detail .source-row {
-  grid-template-columns: 32px minmax(180px, 1.6fr) 68px 78px 84px 112px 40px;
-  min-width: 0;
-}
-
-.sources-workbench.has-detail .source-row .source-usage,
-.sources-workbench.has-detail .source-row > span:nth-of-type(6),
-.sources-workbench.has-detail .source-row small {
-  display: none;
 }
 
 .source-row:hover {
@@ -2284,6 +2284,12 @@ p {
 }
 
 .source-detail-panel {
+  position: fixed;
+  top: calc(var(--ui-topbar-height) + var(--ui-space-4));
+  right: var(--ui-space-5);
+  z-index: 30;
+  width: clamp(340px, 28vw, 430px);
+  max-height: calc(100vh - var(--ui-topbar-height) - var(--ui-space-8));
   min-width: 0;
   animation: sourceDetailSlideIn .22s var(--ui-ease);
 }
@@ -3392,6 +3398,15 @@ p {
     padding-inline: 20px;
   }
 
+  .source-bulk-panel {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .source-bulk-fields {
+    grid-template-columns: minmax(104px, max-content) minmax(180px, 1fr) minmax(150px, 180px) repeat(3, minmax(72px, auto));
+  }
+
   .page-header,
   .library-header,
   .command-hero,
@@ -3481,6 +3496,7 @@ p {
   .source-detail-panel,
   .source-detail-empty {
     position: static;
+    width: auto;
     max-height: none;
   }
 

@@ -1061,21 +1061,11 @@ fn load_indexed_snapshot_blocking() -> Result<LegacySnapshot, String> {
 fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
-    let consent = read_operator_consent(&connection).unwrap_or(OperatorConsentCard {
-        real_writes_enabled: false,
-        enabled_at: String::new(),
-        updated_at: String::new(),
-        summary: "真实写入授权未开启；当前只允许 dry-run、报告和 SQLite 元数据。".to_string(),
-    });
-
-    if !consent.real_writes_enabled {
-        return Err("真实写入授权未开启。请先在 Sources 或 Release Gate 打开授权开关，然后再同步到 Claude/Codex/Antigravity。".to_string());
-    }
 
     run_skillhub_script(&root)?;
     // After the PowerShell sync rebuilds links, regenerate router-hub Skills so any
     // newly-added collections automatically get their parent entry. Failures are
-    // recorded but not fatal — the v1 sync already succeeded at this point.
+    // recorded but not fatal because the source sync already succeeded at this point.
     if let Ok(report) = plan_or_write_router_hubs(&root, true, true) {
         let _ = record_router_hub_audit(&connection, &report);
     }
@@ -1083,7 +1073,23 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     scan_legacy_snapshot_blocking()
 }
 
+fn sync_local_sources_to_agents(root: &Path, connection: &Connection) -> Result<(), String> {
+    run_skillhub_script_no_pull(root)?;
+    if let Ok(report) = plan_or_write_router_hubs(root, true, true) {
+        let _ = record_router_hub_audit(connection, &report);
+    }
+    run_agent_link_script(root)
+}
+
 fn run_skillhub_script(root: &Path) -> Result<(), String> {
+    run_skillhub_script_with_options(root, false)
+}
+
+fn run_skillhub_script_no_pull(root: &Path) -> Result<(), String> {
+    run_skillhub_script_with_options(root, true)
+}
+
+fn run_skillhub_script_with_options(root: &Path, no_pull: bool) -> Result<(), String> {
     let script = skillhub_script_file(root);
     if !script.exists() {
         return Err(format!("找不到同步脚本：{}", script.display()));
@@ -1093,6 +1099,9 @@ fn run_skillhub_script(root: &Path) -> Result<(), String> {
     command
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script);
+    if no_pull {
+        command.arg("-NoPull");
+    }
     let output = command_output_with_timeout(
         &mut command,
         Duration::from_secs(240),
@@ -1312,11 +1321,7 @@ fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
         }),
     )?;
 
-    run_skillhub_script(&root)?;
-    if let Ok(report) = plan_or_write_router_hubs(&root, true, true) {
-        let _ = record_router_hub_audit(&connection, &report);
-    }
-    run_agent_link_script(&root)?;
+    sync_local_sources_to_agents(&root, &connection)?;
     scan_legacy_snapshot_blocking()
 }
 
@@ -1443,13 +1448,51 @@ fn promote_staged_source_import(
 ) -> Result<SourceImportPromotionCard, String> {
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
-    promote_staged_source_import_in_connection(
+    let mut promotion = promote_staged_source_import_in_connection(
         &root,
         &connection,
         &import_kind,
         &staged_path,
         &source_name,
-    )
+    )?;
+    if promotion.status == "promoted" || promotion.status == "already-managed" {
+        match sync_local_sources_to_agents(&root, &connection) {
+            Ok(()) => {
+                promotion.summary = format!(
+                    "{} 已刷新共享 Skills、母/子 Skill 路由和 Agent 托管链接。",
+                    promotion.summary
+                );
+                promotion.real_write_scope =
+                    "app-next/data/github_sources + skills + agent-links".to_string();
+                promotion.blocking_checks.retain(|check| {
+                    !check.contains("不写入 skills")
+                        && !check.contains("如已开启真实写入授权")
+                        && !check.contains("AI 工具链接")
+                });
+                promotion.blocking_checks.push(
+                    "已执行本地扫描同步：共享 Skills、母子路由、Claude/Codex/Antigravity 链接已刷新。"
+                        .to_string(),
+                );
+            }
+            Err(error) => {
+                promotion.summary = format!(
+                    "{} 来源已添加，但 Agent 链接同步未完成：{}",
+                    promotion.summary, error
+                );
+                promotion.blocking_checks.push(format!(
+                    "Agent 链接同步未完成：{}。可稍后点击同步 / 刷新重试。",
+                    error
+                ));
+            }
+        }
+        return write_source_import_promotion_report(
+            &root,
+            &connection,
+            promotion,
+            &unix_timestamp_string(),
+        );
+    }
+    Ok(promotion)
 }
 
 #[tauri::command]
@@ -1477,6 +1520,7 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
     hydrate_source_urls_from_git(&root, &mut sources);
     let fetched_at = unix_timestamp_string();
     let mut refreshed = 0usize;
+    let mut deferred = 0usize;
     let mut failed = 0usize;
 
     for source in sources {
@@ -1499,6 +1543,7 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
                 refreshed += 1;
             }
             Err(error) => {
+                let cache_status = source_popularity_cache_status_for_error(&error);
                 let fallback = GithubPopularityFetch {
                     created_at: String::new(),
                     stars: 0,
@@ -1513,10 +1558,14 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
                     &repo,
                     &fallback,
                     &fetched_at,
-                    "error",
+                    cache_status,
                     &error,
                 )?;
-                failed += 1;
+                if cache_status == "error" {
+                    failed += 1;
+                } else {
+                    deferred += 1;
+                }
             }
         }
     }
@@ -1529,11 +1578,12 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
             params![
                 format!("audit-source-popularity-{}", fetched_at),
                 format!(
-                    "GitHub popularity cache refreshed: {} ok, {} failed.",
-                    refreshed, failed
+                    "GitHub popularity cache refreshed: {} ok, {} deferred, {} failed.",
+                    refreshed, deferred, failed
                 ),
                 serde_json::to_string(&serde_json::json!({
                     "refreshed": refreshed,
+                    "deferred": deferred,
                     "failed": failed,
                     "scope": "github-api-cache"
                 }))
@@ -4263,6 +4313,11 @@ fn read_indexed_source_popularity(
         if card.url.is_empty() {
             card.url = source.url.clone();
         }
+        if card.cache_status == "error"
+            && source_popularity_cache_status_for_error(&card.error) != "error"
+        {
+            card.cache_status = "deferred".to_string();
+        }
         card.trend_points = read_source_popularity_history(connection, &source.id)?;
         output.push(card);
     }
@@ -4980,7 +5035,7 @@ fn promote_staged_source_import_in_connection(
         blocking_checks: Vec::new(),
         rollback_steps: vec![
             format!("删除受管理来源目录：{}", target_path.display()),
-            "重新运行 v2 扫描以刷新 SQLite 索引。".to_string(),
+            "重新运行扫描以刷新 SQLite 索引。".to_string(),
             "Claude/Codex/Antigravity 目录没有被本步骤写入。".to_string(),
         ],
         real_write_scope: "app-next/data/github_sources-only".to_string(),
@@ -5013,7 +5068,7 @@ fn promote_staged_source_import_in_connection(
         if !canonical_staged_path.starts_with(&canonical_staging_root) {
             promotion
                 .blocking_checks
-                .push("只能提升 AI SkillHub v2 自己创建的 staging 目录。".to_string());
+                .push("只能提升 AI SkillHub 自己创建的 staging 目录。".to_string());
         }
 
         let (skill_count, prompt_count) = count_skill_dirs_in_path(&canonical_staged_path)?;
@@ -5038,7 +5093,7 @@ fn promote_staged_source_import_in_connection(
         promotion.status = "already-managed".to_string();
         promotion.risk_level = "low".to_string();
         promotion.summary = format!(
-            "来源已在来源库中：{} file(s), {} Skill folder(s), {} Prompt-like Markdown file(s)。本次没有覆盖或删除任何文件，已可直接刷新索引。",
+            "来源已在来源库中：{} file(s), {} Skill folder(s), {} Prompt-like Markdown file(s)。本次没有覆盖或删除任何文件。",
             copied_files, skill_count, prompt_count
         );
         promotion.copied_files = copied_files;
@@ -5048,12 +5103,12 @@ fn promote_staged_source_import_in_connection(
         promotion.blocking_checks = vec![
             "目标来源目录已存在；本次按“已添加过”处理。".to_string(),
             "没有覆盖、合并或删除任何正式来源文件。".to_string(),
-            "如已开启真实写入授权，可直接点击同步刷新 AI 工具链接。".to_string(),
+            "安装动作会刷新共享 Skills、母子路由和 Agent 链接。".to_string(),
         ];
         promotion.rollback_steps = vec![
             "本次没有执行新写入；通常无需回滚。".to_string(),
             "如需移除该来源，请在来源库中删除对应来源并重新扫描。".to_string(),
-            "Claude/Codex/Antigravity 目录没有被本步骤写入。".to_string(),
+            "如需撤销 Agent 链接，请删除该来源后重新同步。".to_string(),
         ];
         promotion.real_write_scope = "app-next/data/github_sources-existing".to_string();
         return write_source_import_promotion_report(root, connection, promotion, &timestamp);
@@ -5072,7 +5127,7 @@ fn promote_staged_source_import_in_connection(
     promotion.status = "promoted".to_string();
     promotion.risk_level = if preserve_git { "medium" } else { "low" }.to_string();
     promotion.summary = format!(
-        "已提升为受管理来源：{} file(s), {} Skill folder(s), {} Prompt-like Markdown file(s)。下一步点击同步刷新 AI 工具链接。",
+        "已提升为受管理来源：{} file(s), {} Skill folder(s), {} Prompt-like Markdown file(s)。正在刷新共享 Skills、母子路由和 Agent 链接。",
         copied_files, skill_count, prompt_count
     );
     promotion.copied_files = copied_files;
@@ -5080,8 +5135,8 @@ fn promote_staged_source_import_in_connection(
     promotion.skill_count = skill_count;
     promotion.prompt_count = prompt_count;
     promotion.blocking_checks = vec![
-        "本步骤只写入 app-next/data/github_sources，不写入 skills 或 AI 工具目录。".to_string(),
-        "如已开启真实写入授权，同步按钮会写入 Claude/Codex/Antigravity 链接。".to_string(),
+        "本步骤先写入 app-next/data/github_sources，再由安装动作刷新共享 Skills 和 Agent 链接。"
+            .to_string(),
     ];
     write_source_import_promotion_report(root, connection, promotion, &timestamp)
 }
@@ -5105,6 +5160,11 @@ fn write_source_import_promotion_report(
     let manifest_path = report_dir.join(format!("{}-manifest.json", safe_id));
     promotion.report_path = md_path.to_string_lossy().to_string();
     promotion.manifest_path = manifest_path.to_string_lossy().to_string();
+    let ai_tool_sync = promotion.real_write_scope.contains("agent-links")
+        && !promotion
+            .blocking_checks
+            .iter()
+            .any(|check| check.contains("Agent 链接同步未完成"));
 
     let report_body = serde_json::json!({
         "kind": "v2-source-import-promotion",
@@ -5125,7 +5185,7 @@ fn write_source_import_promotion_report(
         "rollbackSteps": &promotion.rollback_steps,
         "realWriteScope": &promotion.real_write_scope,
         "formalSourceInstall": promotion.status == "promoted" || promotion.status == "already-managed",
-        "aiToolSync": false
+        "aiToolSync": ai_tool_sync
     });
     fs::write(
         &json_path,
@@ -5134,12 +5194,13 @@ fn write_source_import_promotion_report(
     )
     .map_err(|error| format!("Cannot write promotion JSON report: {}", error))?;
     let markdown = format!(
-        "# Source Import Promotion\n\nStatus: `{}`\n\n{}\n\nTarget path: `{}`\n\nSkills: `{}`\n\nFiles: `{}`\n\nAI tool sync: `false`\n",
+        "# Source Import Promotion\n\nStatus: `{}`\n\n{}\n\nTarget path: `{}`\n\nSkills: `{}`\n\nFiles: `{}`\n\nAI tool sync: `{}`\n",
         promotion.status,
         promotion.summary,
         promotion.target_path,
         promotion.skill_count,
-        promotion.copied_files
+        promotion.copied_files,
+        ai_tool_sync
     );
     fs::write(&md_path, markdown)
         .map_err(|error| format!("Cannot write promotion Markdown report: {}", error))?;
@@ -5149,8 +5210,8 @@ fn write_source_import_promotion_report(
         "status": &promotion.status,
         "report": path_file_name(&md_path),
         "json": path_file_name(&json_path),
-        "realWrites": promotion.status == "promoted",
-        "writeScope": "app-next/data/github_sources only"
+        "realWrites": promotion.status == "promoted" || ai_tool_sync,
+        "writeScope": &promotion.real_write_scope
     });
     fs::write(
         &manifest_path,
@@ -6204,16 +6265,16 @@ fn parse_git_origin_url(config: &str) -> Option<String> {
 
 fn fetch_github_popularity(owner: &str, repo: &str) -> Result<GithubPopularityFetch, String> {
     let url = format!("https://api.github.com/repos/{}/{}", owner, repo);
-    let response = ureq::get(&url)
-        .set("User-Agent", "AI-SkillHub-v2")
-        .set("Accept", "application/vnd.github+json")
+    let mut request = ureq::get(&url)
+        .set("User-Agent", "AI-SkillHub")
+        .set("Accept", "application/vnd.github+json");
+    let token = github_api_token();
+    if let Some(token) = token.as_deref() {
+        request = request.set("Authorization", &format!("Bearer {token}"));
+    }
+    let response = request
         .call()
-        .map_err(|error| {
-            format!(
-                "GitHub API request failed for {}/{}: {}",
-                owner, repo, error
-            )
-        })?;
+        .map_err(|error| github_api_error_message(owner, repo, error))?;
     let payload: Value = response.into_json().map_err(|error| {
         format!(
             "Cannot parse GitHub API response for {}/{}: {}",
@@ -6237,6 +6298,81 @@ fn fetch_github_popularity(owner: &str, repo: &str) -> Result<GithubPopularityFe
             .unwrap_or("")
             .to_string(),
     })
+}
+
+fn github_api_token() -> Option<String> {
+    for key in ["GITHUB_TOKEN", "GH_TOKEN"] {
+        if let Ok(value) = std::env::var(key) {
+            let token = value.trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn github_api_error_message(owner: &str, repo: &str, error: ureq::Error) -> String {
+    match error {
+        ureq::Error::Status(code, response) => {
+            let remaining = response
+                .header("x-ratelimit-remaining")
+                .unwrap_or("")
+                .to_string();
+            let reset = response
+                .header("x-ratelimit-reset")
+                .unwrap_or("")
+                .to_string();
+            let body = response
+                .into_string()
+                .unwrap_or_default()
+                .chars()
+                .take(240)
+                .collect::<String>();
+            let mut details = vec![format!("GitHub API status {} for {}/{}", code, owner, repo)];
+            if !remaining.is_empty() {
+                details.push(format!("remaining={remaining}"));
+            }
+            if !reset.is_empty() {
+                details.push(format!("reset={reset}"));
+            }
+            if !body.trim().is_empty() {
+                details.push(compact_note(&body));
+            }
+            details.join("; ")
+        }
+        other => format!(
+            "GitHub API request failed for {}/{}: {}",
+            owner, repo, other
+        ),
+    }
+}
+
+fn source_popularity_cache_status_for_error(error: &str) -> &'static str {
+    let text = error.to_lowercase();
+    if text.contains("status 403")
+        || text.contains("status code 403")
+        || text.contains("status 429")
+        || text.contains("status code 429")
+        || text.contains("rate limit")
+        || text.contains("api rate limit")
+        || text.contains("too many requests")
+        || text.contains("network")
+        || text.contains("failed to connect")
+        || text.contains("dns")
+        || text.contains("timed out")
+        || text.contains("timeout")
+        || text.contains("proxy")
+        || text.contains("tls")
+        || text.contains("status 500")
+        || text.contains("status 502")
+        || text.contains("status 503")
+        || text.contains("status 504")
+    {
+        "deferred"
+    } else {
+        "error"
+    }
 }
 
 fn upsert_source_popularity_cache(
@@ -12141,6 +12277,26 @@ mod tests {
         assert!(card.local_seven_day_count >= 1);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn github_rate_limit_popularity_errors_are_deferred_not_failed() {
+        assert_eq!(
+            source_popularity_cache_status_for_error(
+                "GitHub API status 403 for owner/repo; remaining=0; API rate limit exceeded"
+            ),
+            "deferred"
+        );
+        assert_eq!(
+            source_popularity_cache_status_for_error(
+                "GitHub API request failed for owner/repo: network error"
+            ),
+            "deferred"
+        );
+        assert_eq!(
+            source_popularity_cache_status_for_error("GitHub API status 404 for owner/repo"),
+            "error"
+        );
     }
 
     #[test]

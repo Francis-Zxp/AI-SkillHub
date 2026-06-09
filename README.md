@@ -5,8 +5,8 @@ materials, GitHub sources, and local AI-tool links from one place.
 
 <img width="1910" height="1044" alt="PixPin_2026-06-07_21-06-11" src="https://github.com/user-attachments/assets/49af89bb-5715-4a36-bcf0-4990be0f31df" />
 
-The project has moved to the V2-only layout. The old V1 WebView/PowerShell app
-folder has been removed.
+The project is now maintained as a single current desktop app. Older prototype
+folders are not part of the product.
 
 ## Current Launcher
 
@@ -17,7 +17,7 @@ AI SkillHub.exe
 ```
 
 The executable in the repository root is a local build artifact and is ignored
-by Git. Public releases should be created with the V2 release package workflow.
+by Git. Public releases should be created with the release package workflow.
 
 ## Core Flow
 
@@ -25,14 +25,15 @@ by Git. Public releases should be created with the V2 release package workflow.
 2. Go to `Sources`.
 3. Paste a GitHub repository URL, select source type, category, tags, and notes.
 4. Click `一键添加并刷新`.
-5. Confirm whether the source should be visible only inside AI SkillHub or also
-   synchronized into Claude Code, Codex, or Antigravity.
+5. AI SkillHub scans real `SKILL.md` folders, rebuilds parent router Skills,
+   refreshes the local index, and can synchronize the active Skill view into
+   Claude Code, Codex, and Antigravity.
 
 AI SkillHub installs only real Skills. A folder must contain `SKILL.md` before
 it is treated as a callable Skill. Prompt-only repositories remain source
 material and are not installed as Skills.
 
-## What V2 Manages
+## What AI SkillHub Manages
 
 - GitHub Skill repositories.
 - Local Skill folders.
@@ -50,21 +51,19 @@ material and are not installed as Skills.
 
 ```text
 AI_global_skills/
-  app-next/                         # V2 Tauri / React / Rust app
-    runtime/                        # V2 helper scripts
+  app-next/                         # Tauri / React / Rust app
+    runtime/                        # helper scripts
     data/github_sources/            # local cloned sources, private
     reports/                        # generated reports, private
     .skillhub-next/                 # generated sync state, private
   skills/                           # active shared Skills view, private
-  docs/                             # product docs and handoff notes
+  docs/                             # product docs
 ```
 
-The old V1 paths are no longer part of the product:
+Older prototype paths are no longer part of the product:
 
 ```text
 app/
-AI SkillHub.exe
-release/
 ```
 
 ## Privacy Boundary
@@ -107,7 +106,7 @@ pnpm tauri build --no-bundle
 
 ## Runtime Scripts
 
-The V2 helper scripts live in:
+The helper scripts live in:
 
 ```text
 app-next/runtime/
@@ -134,14 +133,11 @@ See `docs/skill-router-standard.md` for the rule.
 Different sources can contain child Skills with the same callable name, such as
 `Nature-Paper-Skills / figure-planner` and `PaperSpine / figure-planner`.
 
-V2 does not delete, rename, overwrite, or silently choose between them. The
+AI SkillHub does not delete, rename, overwrite, or silently choose between them. The
 Sources page shows a conflict selector where the user can set a default source,
 reset the conflict to unresolved, or ignore the reminder. The choice is stored
 in the local SQLite table `skill_conflict_choices`, outside author repositories,
 so GitHub updates do not overwrite it.
-
-Future slash-command dispatch should read that table before routing a direct
-call such as `/figure-planner`.
 
 ## Author
 

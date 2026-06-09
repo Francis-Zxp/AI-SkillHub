@@ -83,7 +83,7 @@ foreach ($relative in @('app', 'skills\SKILL.md', 'app-next\data\github_sources'
   if (Test-Path -LiteralPath (Join-Path $StagingRoot $relative)) { $forbidden += $relative }
 }
 if ($forbidden.Count -eq 0) {
-  Add-Check 'privacy.boundary' 'ok' '发布包未包含 V1 app、个人来源库、个人配置、报告、node_modules 或构建缓存。'
+  Add-Check 'privacy.boundary' 'ok' '发布包未包含旧原型 app、个人来源库、个人配置、报告、node_modules 或构建缓存。'
 } else {
   Add-Check 'privacy.boundary' 'error' ('发现不应发布的内容：' + ($forbidden -join ', '))
 }

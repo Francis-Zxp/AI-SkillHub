@@ -456,7 +456,7 @@ export type SourcePopularityCard = {
   openIssues: number;
   lastUpdatedAt: string;
   fetchedAt: string;
-  cacheStatus: "fresh" | "stale" | "missing" | "error" | string;
+  cacheStatus: "fresh" | "stale" | "missing" | "deferred" | "error" | string;
   error: string;
   localTotalCount: number;
   localSevenDayCount: number;
@@ -470,7 +470,7 @@ export type SourcePopularityTrendPointCard = {
   forks: number;
   openIssues: number;
   lastUpdatedAt: string;
-  cacheStatus: "fresh" | "stale" | "missing" | "error" | string;
+  cacheStatus: "fresh" | "stale" | "missing" | "deferred" | "error" | string;
 };
 
 export type OperatorConsentCard = {

@@ -1,8 +1,8 @@
-# AI SkillHub app-next
+# AI SkillHub Desktop App
 
-`app-next` is the maintained V2 workspace for AI SkillHub.
+`app-next` is the maintained desktop workspace for AI SkillHub.
 
-V2 uses:
+It uses:
 
 - Tauri 2 desktop shell
 - React + TypeScript + Vite frontend
@@ -10,13 +10,13 @@ V2 uses:
 - SQLite local state
 - PowerShell helper scripts under `runtime/`
 
-The old V1 `app/` directory is no longer part of the product.
+Older prototype app directories are no longer part of the product.
 
 ## Runtime Boundary
 
 ```text
 app-next/
-  runtime/                    # V2 helper scripts and config template
+  runtime/                    # helper scripts and config template
   data/github_sources/        # local source repositories, private
   reports/                    # generated reports, private
   .skillhub-next/             # generated state, private
@@ -28,7 +28,7 @@ The shared active Skill view remains at the repository root:
 ../skills/
 ```
 
-That directory is private and ignored by Git. It is not V1.
+That directory is private and ignored by Git.
 
 ## Development Commands
 
@@ -60,7 +60,7 @@ The local root launcher is:
 D:\My Files\AI_global_skills\AI SkillHub.exe
 ```
 
-The shareable release package should be produced through the V2 release package
+The shareable release package should be produced through the release package
 workflow instead of copying the development folder directly.
 
 ## Router Hubs
@@ -76,8 +76,8 @@ Author-owned source repositories are not modified.
 
 ## Same-Name Child Skill Conflicts
 
-V2 detects duplicate non-router child Skill names across sources and shows them
-in the Sources page conflict selector. Users can set a default source, reset the
+AI SkillHub detects duplicate non-router child Skill names across sources and
+shows them in the Sources page conflict selector. Users can set a default source, reset the
 choice, or ignore the reminder. The local SQLite table
 `skill_conflict_choices` stores the decision, so GitHub updates do not modify
 or erase it.
