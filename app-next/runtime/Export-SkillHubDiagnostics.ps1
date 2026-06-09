@@ -478,7 +478,7 @@ if (Test-Path -LiteralPath $LastSyncPath) {
 
 $payload = [PSCustomObject]@{
   schemaVersion = 1
-    appVersion = '2.0.0-alpha.4'
+    appVersion = '2.0.0'
   generatedAt = (Get-Date).ToString('o')
   scenario = [PSCustomObject]@{
     name = $scenarioName

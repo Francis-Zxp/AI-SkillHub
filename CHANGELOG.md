@@ -2,6 +2,18 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 2.0.0 - Official release
+
+### Fixed
+
+- GitHub Actions frontend CI now uses Node.js 24, matching pnpm 11's runtime
+  requirement and avoiding the `node:sqlite` install failure seen on Node 20.
+- CI display name is now `AI SkillHub CI` instead of `V2 CI`.
+
+### Release
+
+- Promoted AI SkillHub from alpha builds to the official `2.0.0` release line.
+
 ## 2026-06-09 - Refresh and install stability
 
 ### Fixed

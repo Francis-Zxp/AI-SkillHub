@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "ai-skillhub-next"
-version = "2.0.0-alpha.4"
+version = "2.0.0"
 dependencies = [
  "rusqlite",
  "serde",

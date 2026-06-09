@@ -1,6 +1,6 @@
-name: V2 CI
+name: AI SkillHub CI
 
-# Minimum gate before merging V2 changes: Rust tests, TypeScript types, frontend build.
+# Minimum gate before merging AI SkillHub changes: Rust tests, TypeScript types, frontend build.
 # Does NOT run `pnpm tauri build` here — that needs platform-specific bundling assets
 # and is run from the release workflow on tagged commits.
 
@@ -57,7 +57,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
