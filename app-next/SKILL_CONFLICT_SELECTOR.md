@@ -31,7 +31,7 @@ Generated router Skills use:
 - `[ROUTER-HUB]` for the parent collection entry
 - `[CHILD-SKILL]` for listed children
 
-GitHub pull/update operations may update original sources, but must not overwrite user conflict choices because those choices are stored in V2 SQLite metadata.
+GitHub pull/update operations may update original sources, but must not overwrite user conflict choices because those choices are stored in AI SkillHub SQLite metadata.
 
 ## User Choice Rules
 
@@ -47,7 +47,7 @@ If a previously selected default disappears after an update, the conflict return
 
 ## Product Behavior
 
-The conflict selector belongs in the Sources / Skill management path, not in hidden logs.
+The conflict selector belongs in the Skill Library management path, not in hidden logs.
 It must be visible, reversible, and persistent.
 
 Future slash-command dispatch should read this table:

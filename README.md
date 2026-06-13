@@ -22,7 +22,7 @@ by Git. Public releases should be created with the release package workflow.
 ## Core Flow
 
 1. Open AI SkillHub.
-2. Go to `Sources`.
+2. Go to `Skill Library`.
 3. Paste a GitHub repository URL, select source type, category, tags, and notes.
 4. Click `一键添加并刷新`.
 5. AI SkillHub scans real `SKILL.md` folders, rebuilds parent router Skills,
@@ -134,7 +134,7 @@ Different sources can contain child Skills with the same callable name, such as
 `Nature-Paper-Skills / figure-planner` and `PaperSpine / figure-planner`.
 
 AI SkillHub does not delete, rename, overwrite, or silently choose between them. The
-Sources page shows a conflict selector where the user can set a default source,
+Skill Library maintenance area shows a conflict selector where the user can set a default source,
 reset the conflict to unresolved, or ignore the reminder. The choice is stored
 in the local SQLite table `skill_conflict_choices`, outside author repositories,
 so GitHub updates do not overwrite it.

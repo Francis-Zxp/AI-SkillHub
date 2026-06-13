@@ -4,6 +4,25 @@ All notable changes to AI SkillHub are documented here.
 
 ## 2.0.0 - Official release
 
+### Added
+
+- Added the redesigned AI SkillHub interface with a cleaner app shell, icon
+  controls, glass surfaces, motion, particle dashboard background, four themes,
+  and Chinese / English / Korean language switching.
+- Merged source management and child Skill management into one `Skill Library`
+  view. Expanding a source now shows its parent router Skill and child Skills
+  directly beneath that source, with edit and enable controls kept in place.
+
+### Changed
+
+- Kept the existing same-name child Skill conflict selector, parent router
+  rebuild flow, Agent sync flow, SQLite persistence, and GitHub heat palette
+  while adopting the improved visual layout.
+- Kept advanced safety and release checks, but moved them out of the daily Skill
+  Library path so the normal install/manage workflow stays simpler.
+- The browser title and visible product name now show `AI SkillHub`; version
+  labels live in release metadata instead of the product name.
+
 ### Fixed
 
 - GitHub Actions frontend CI now uses Node.js 24, matching pnpm 11's runtime
@@ -25,7 +44,7 @@ All notable changes to AI SkillHub are documented here.
 - GitHub heat refresh no longer reports rate limits or temporary network
   failures as repository sync failures. These states are shown as deferred and
   keep the previous cache when available.
-- Opening a source edit panel no longer compresses the Sources page into a
+- Opening a source edit panel no longer compresses the Skill Library page into a
   narrow column.
 
 ### Changed
@@ -46,7 +65,7 @@ All notable changes to AI SkillHub are documented here.
 ### Added
 
 - Added same-name child Skill conflict detection in the desktop app.
-- Added the Sources page conflict selector for duplicate child Skill names.
+- Added the Skill Library conflict selector for duplicate child Skill names.
 - Added persistent local conflict choices in SQLite table
   `skill_conflict_choices`.
 - Added `app-next/SKILL_CONFLICT_SELECTOR.md` as the product rule for this
