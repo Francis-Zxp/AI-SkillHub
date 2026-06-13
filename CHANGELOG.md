@@ -2,7 +2,7 @@
 
 All notable changes to AI SkillHub are documented here.
 
-## 2.0.0 - Official release
+## 2.0.1 - UI refresh and Skill Library redesign
 
 ### Added
 
@@ -22,6 +22,8 @@ All notable changes to AI SkillHub are documented here.
   Library path so the normal install/manage workflow stays simpler.
 - The browser title and visible product name now show `AI SkillHub`; version
   labels live in release metadata instead of the product name.
+
+## 2.0.0 - Official release
 
 ### Fixed
 
