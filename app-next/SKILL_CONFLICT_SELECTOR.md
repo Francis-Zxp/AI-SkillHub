@@ -50,8 +50,17 @@ If a previously selected default disappears after an update, the conflict return
 The conflict selector belongs in the Skill Library management path, not in hidden logs.
 It must be visible, reversible, and persistent.
 
-Future slash-command dispatch should read this table:
+Slash-command dispatch reads this table indirectly through generated local
+dispatchers:
 
 `skill_conflict_choices`
 
-so `/figure-planner` can route to the user's default, while fully qualified identities such as `Nature-Paper-Skills:figure-planner` and `PaperSpine:figure-planner` remain distinguishable.
+When the user sets a default, AI SkillHub generates a local dispatcher Skill under
+`app-next/data/github_sources/AI-SkillHub-local-routers/<conflict-name>/SKILL.md`.
+That generated Skill uses `[CONFLICT-DISPATCHER]`, points to the selected source's
+real `SKILL.md`, and is then synced to the managed Agent skills directory.
+
+Therefore `/figure-planner` can route to the user's default, while fully qualified
+identities such as `Nature-Paper-Skills:figure-planner` and
+`PaperSpine:figure-planner` remain distinguishable. Resetting or ignoring a
+conflict removes the generated dispatcher if it was previously created.

@@ -40,4 +40,7 @@ or silently choosing one candidate.
 
 The user's default/reset/ignore choice is stored in local SQLite table
 `skill_conflict_choices`. See `app-next/SKILL_CONFLICT_SELECTOR.md` for the
-full product rule.
+full product rule. When a default is selected, AI SkillHub writes a generated
+`[CONFLICT-DISPATCHER]` Skill under `AI-SkillHub-local-routers` so direct calls
+to the duplicated child name can follow the user's saved default without editing
+author repositories.

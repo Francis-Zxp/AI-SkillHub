@@ -139,6 +139,11 @@ reset the conflict to unresolved, or ignore the reminder. The choice is stored
 in the local SQLite table `skill_conflict_choices`, outside author repositories,
 so GitHub updates do not overwrite it.
 
+When a default is selected, AI SkillHub also generates a local conflict dispatcher
+under `AI-SkillHub-local-routers` and syncs it to managed Agents, so direct calls
+such as `/figure-planner` can follow the user's default without modifying any
+author-owned repository.
+
 ## Author
 
 Developed by FrancisZhu.

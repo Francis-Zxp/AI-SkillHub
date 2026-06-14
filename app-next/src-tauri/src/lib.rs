@@ -117,6 +117,7 @@ struct SkillConflictChoiceState {
 /// Mark string used in SKILL.md frontmatter to identify a parent / hub Skill.
 const ROUTER_HUB_MARKER: &str = "[ROUTER-HUB]";
 const CHILD_SKILL_MARKER: &str = "[CHILD-SKILL]";
+const CONFLICT_DISPATCHER_MARKER: &str = "[CONFLICT-DISPATCHER]";
 /// Folder under app-next/data/github_sources/ where AI SkillHub writes generated parent SKILL.md files.
 /// The folder name lives OUTSIDE the upstream author's repository, per skill-router-standard.md rule 1.
 const ROUTER_HUB_FOLDER: &str = "AI-SkillHub-local-routers";
@@ -198,7 +199,7 @@ fn compute_is_router_hub(
     folder_name: &str,
     name: &str,
 ) -> bool {
-    if description.contains(ROUTER_HUB_MARKER) {
+    if description.contains(ROUTER_HUB_MARKER) || description.contains(CONFLICT_DISPATCHER_MARKER) {
         return true;
     }
     if relative_path.contains(ROUTER_HUB_FOLDER) {
@@ -408,7 +409,7 @@ struct OperatorConsentCard {
     summary: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct AgentCard {
     id: String,
@@ -858,6 +859,11 @@ async fn run_skillhub_sync() -> Result<LegacySnapshot, String> {
 }
 
 #[tauri::command]
+async fn refresh_agent_detection() -> Result<LegacySnapshot, String> {
+    run_blocking_task(refresh_agent_detection_blocking).await
+}
+
+#[tauri::command]
 async fn refresh_source_popularity() -> Result<LegacySnapshot, String> {
     run_blocking_task(refresh_source_popularity_blocking).await
 }
@@ -909,8 +915,8 @@ fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
         source.skill_count = *source_counts.get(&source.name.to_lowercase()).unwrap_or(&0);
     }
 
-    skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    sources.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    skills.sort_by_key(|skill| skill.name.to_lowercase());
+    sources.sort_by_key(|source| source.name.to_lowercase());
 
     let prompts = sources
         .iter()
@@ -1070,11 +1076,30 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     if let Ok(report) = plan_or_write_router_hubs(&root, true, true) {
         let _ = record_router_hub_audit(&connection, &report);
     }
+    if sync_skill_conflict_dispatchers(&root, &connection).unwrap_or(0) > 0 {
+        run_skillhub_script_no_pull(&root)?;
+    }
     run_agent_link_script(&root)?;
     scan_legacy_snapshot_blocking()
 }
 
+fn refresh_agent_detection_blocking() -> Result<LegacySnapshot, String> {
+    let root = resolve_legacy_root()?;
+
+    if !database_file(&root).exists() {
+        return scan_legacy_snapshot_blocking();
+    }
+
+    run_diagnostics_export_script(&root)?;
+
+    let diagnostics_json = read_json(&diagnostics_file(&root));
+    let mut connection = open_index_database(&root)?;
+    persist_agent_detection_refresh(&root, &mut connection, diagnostics_json.as_ref())?;
+    read_snapshot_from_database(&root, &connection)
+}
+
 fn sync_local_sources_to_agents(root: &Path, connection: &Connection) -> Result<(), String> {
+    sync_skill_conflict_dispatchers(root, connection)?;
     run_skillhub_script_no_pull(root)?;
     if let Ok(report) = plan_or_write_router_hubs(root, true, true) {
         let _ = record_router_hub_audit(connection, &report);
@@ -1159,6 +1184,42 @@ fn run_agent_link_script(root: &Path) -> Result<(), String> {
             detail
         };
         return Err(format!("AI 工具链接同步失败：{detail}"));
+    }
+
+    Ok(())
+}
+
+fn run_diagnostics_export_script(root: &Path) -> Result<(), String> {
+    let script = diagnostics_export_script_file(root);
+    if !script.exists() {
+        return Err(format!("找不到诊断脚本：{}", script.display()));
+    }
+
+    let mut command = Command::new("powershell.exe");
+    command
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .arg("-Quiet");
+    let output = command_output_with_timeout(
+        &mut command,
+        Duration::from_secs(90),
+        "AI 工具检测超过 90 秒，已自动停止。请检查本机 AI 工具命令是否卡住。",
+    )?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = [stdout.trim(), stderr.trim()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = if detail.chars().count() > 1600 {
+            detail.chars().take(1600).collect::<String>()
+        } else {
+            detail
+        };
+        return Err(format!("AI 工具检测脚本执行失败：{detail}"));
     }
 
     Ok(())
@@ -1369,19 +1430,19 @@ fn validate_release_gate_export_path(root: &Path, path: &str) -> Result<PathBuf,
 
     let reports_root = app_next_root(root).join(".skillhub-next").join("reports");
     if !reports_root.exists() {
-        return Err("还没有生成 v2 报告，请先运行 Release Gate 执行器。".to_string());
+        return Err("还没有生成 AI SkillHub 报告，请先运行 Release Gate 执行器。".to_string());
     }
 
     let canonical_reports_root = reports_root
         .canonicalize()
-        .map_err(|error| format!("无法读取 v2 报告目录：{error}"))?;
+        .map_err(|error| format!("无法读取 AI SkillHub 报告目录：{error}"))?;
     let requested_path = PathBuf::from(trimmed);
     let canonical_target = requested_path
         .canonicalize()
         .map_err(|error| format!("无法读取导出路径：{error}"))?;
 
     if !canonical_target.starts_with(&canonical_reports_root) {
-        return Err("只能打开 AI SkillHub v2 自己生成的报告导出路径。".to_string());
+        return Err("只能打开 AI SkillHub 自己生成的报告导出路径。".to_string());
     }
 
     Ok(canonical_target)
@@ -1594,7 +1655,7 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
         )
         .map_err(|error| format!("Cannot write source popularity audit event: {}", error))?;
 
-    read_snapshot_from_database(&root, &connection)
+    scan_legacy_snapshot_blocking()
 }
 
 fn resolve_legacy_root() -> Result<PathBuf, String> {
@@ -1680,6 +1741,10 @@ fn skillhub_script_file(root: &Path) -> PathBuf {
 
 fn agent_link_script_file(root: &Path) -> PathBuf {
     app_next_runtime_root(root).join("Manage-AgentSkillLinks.ps1")
+}
+
+fn diagnostics_export_script_file(root: &Path) -> PathBuf {
+    app_next_runtime_root(root).join("Export-SkillHubDiagnostics.ps1")
 }
 
 fn database_file(root: &Path) -> PathBuf {
@@ -1964,8 +2029,8 @@ fn read_snapshot_from_database(
     let warnings = skills.iter().filter(|skill| skill.health != "ok").count();
     let agents_detected = agents.iter().filter(|agent| agent.detected).count();
     let skills_dir = root.join("skills");
-    let sources_dir = active_sources_dir(&root);
-    let diagnostics_file = diagnostics_file(&root);
+    let sources_dir = active_sources_dir(root);
+    let diagnostics_file = diagnostics_file(root);
     let release_reports = derive_release_reports(root);
     let import_previews = derive_import_previews(&sources_dir, &sources, &release_reports);
     let write_gates = derive_write_gates(
@@ -3281,70 +3346,69 @@ fn build_v2_completion_audit_report(
     timestamp: &str,
 ) -> Result<(String, String, Value), String> {
     let snapshot = read_snapshot_from_database(root, connection)?;
-    let mut checks = Vec::new();
-    checks.push(completion_check(
-        "sqlite-index",
-        "SQLite index",
-        snapshot.index.persisted && snapshot.index.skills_indexed > 0,
-        "v2 SQLite index exists and contains indexed Skills.",
-        "Refresh v1 into the v2 SQLite index.",
-    ));
-    checks.push(completion_check(
-        "metadata-management",
-        "Metadata management",
-        !snapshot.tags.is_empty() && !snapshot.preset_distributions.is_empty(),
-        "Tags, Source/Skill metadata, and Preset/workspace policies are available.",
-        "Seed tags and Preset/workspace policies before release.",
-    ));
-    checks.push(completion_check(
-        "diagnostics",
-        "Diagnostics",
-        snapshot.diagnostics.available && snapshot.diagnostics.error == 0,
-        "Diagnostics are readable and have no blocking errors.",
-        "Run diagnostics export and resolve blocking errors.",
-    ));
-    checks.push(completion_check(
-        "desktop-qa",
-        "Desktop QA",
-        required_desktop_qa_passed(&snapshot.desktop_qa_checks),
-        "All required desktop QA checks are marked passed.",
-        "Complete default-window, DPI, Release Gate, snapshot, and build-guidance QA.",
-    ));
-    checks.push(completion_check(
-        "report-bundle",
-        "Report bundle",
-        operation_runner_has_latest(&snapshot.operation_runners, "report-bundle"),
-        "Latest report bundle index exists.",
-        "Run diagnostics/share/release plan runners, then run report-bundle.",
-    ));
-    checks.push(completion_check(
-        "write-gates",
-        "Real write gates",
-        snapshot
-            .operation_runners
-            .iter()
-            .any(|runner| runner.id == "agent-sync-readiness" && runner.file_count > 0)
-            && snapshot
+    let checks = vec![
+        completion_check(
+            "sqlite-index",
+            "SQLite index",
+            snapshot.index.persisted && snapshot.index.skills_indexed > 0,
+            "SQLite index exists and contains indexed Skills.",
+            "Refresh the AI SkillHub SQLite index.",
+        ),
+        completion_check(
+            "metadata-management",
+            "Metadata management",
+            !snapshot.tags.is_empty() && !snapshot.preset_distributions.is_empty(),
+            "Tags, Source/Skill metadata, and Preset/workspace policies are available.",
+            "Seed tags and Preset/workspace policies before release.",
+        ),
+        completion_check(
+            "diagnostics",
+            "Diagnostics",
+            snapshot.diagnostics.available && snapshot.diagnostics.error == 0,
+            "Diagnostics are readable and have no blocking errors.",
+            "Run diagnostics export and resolve blocking errors.",
+        ),
+        completion_check(
+            "desktop-qa",
+            "Desktop QA",
+            required_desktop_qa_passed(&snapshot.desktop_qa_checks),
+            "All required desktop QA checks are marked passed.",
+            "Complete default-window, DPI, Release Gate, snapshot, and build-guidance QA.",
+        ),
+        completion_check(
+            "report-bundle",
+            "Report bundle",
+            operation_runner_has_latest(&snapshot.operation_runners, "report-bundle"),
+            "Latest report bundle index exists.",
+            "Run diagnostics/share/release plan runners, then run report-bundle.",
+        ),
+        completion_check(
+            "write-gates",
+            "Real write gates",
+            snapshot
                 .operation_runners
                 .iter()
-                .any(|runner| runner.id == "release-package-readiness" && runner.file_count > 0),
-        "Real write readiness checkers are available and report-only.",
-        "Run agent-sync and release-package readiness checkers before claiming V2 complete.",
-    ));
-    checks.push(completion_check(
-        "real-execution-guard",
-        "Final execution guard",
-        snapshot
-            .operation_runners
-            .iter()
-            .any(|runner| runner.id == "agent-sync-executor" && runner.file_count > 0)
-            && snapshot
+                .any(|runner| runner.id == "agent-sync-readiness" && runner.file_count > 0)
+                && snapshot.operation_runners.iter().any(|runner| {
+                    runner.id == "release-package-readiness" && runner.file_count > 0
+                }),
+            "Real write readiness checkers are available and report-only.",
+            "Run agent-sync and release-package readiness checkers before claiming release complete.",
+        ),
+        completion_check(
+            "real-execution-guard",
+            "Final execution guard",
+            snapshot
                 .operation_runners
                 .iter()
-                .any(|runner| runner.id == "release-package-executor" && runner.file_count > 0),
-        "Final execution attempts are routed through auditable guard-rail reports.",
-        "Run agent-sync and release-package final executor attempts; blocked reports are acceptable until real writes are explicitly approved.",
-    ));
+                .any(|runner| runner.id == "agent-sync-executor" && runner.file_count > 0)
+                && snapshot.operation_runners.iter().any(|runner| {
+                    runner.id == "release-package-executor" && runner.file_count > 0
+                }),
+            "Final execution attempts are routed through auditable guard-rail reports.",
+            "Run agent-sync and release-package final executor attempts; blocked reports are acceptable until real writes are explicitly approved.",
+        ),
+    ];
 
     let ready_count = checks
         .iter()
@@ -3353,7 +3417,7 @@ fn build_v2_completion_audit_report(
     let blocked_count = checks.len().saturating_sub(ready_count);
     let status = if blocked_count == 0 { "ok" } else { "warn" };
     let summary = format!(
-        "V2 completion audit: {} ready area(s), {} remaining area(s); real write executors remain gated.",
+        "AI SkillHub completion audit: {} ready area(s), {} remaining area(s); real write executors remain gated.",
         ready_count, blocked_count
     );
     let body = serde_json::json!({
@@ -3367,9 +3431,9 @@ fn build_v2_completion_audit_report(
         "checks": checks,
         "realWrites": false,
         "releaseAdvice": if blocked_count == 0 {
-            "V2 is ready to enter final release packaging review."
+            "AI SkillHub is ready to enter final release packaging review."
         } else {
-            "Do not call V2 complete yet. Resolve remaining gates before opening real writes or public release."
+            "Do not call the release complete yet. Resolve remaining gates before opening real writes or public release."
         }
     });
 
@@ -3986,6 +4050,172 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
     })
 }
 
+fn persist_agent_detection_refresh(
+    root: &Path,
+    connection: &mut Connection,
+    diagnostics_json: Option<&Value>,
+) -> Result<(), String> {
+    let enabled_state = load_enabled_state(connection);
+    let mut snapshot = read_snapshot_from_database(root, connection)?;
+    snapshot.agents = parse_agents(diagnostics_json);
+    snapshot.agent_adapters = derive_agent_adapters(&snapshot.agents);
+    snapshot.adapter_safety_checks = derive_adapter_safety_checks(&snapshot.agent_adapters);
+    snapshot.adapter_capabilities = derive_adapter_capabilities(&snapshot.agent_adapters);
+    snapshot.diagnostics = parse_diagnostic_summary(diagnostics_json);
+    snapshot.summary.agents_detected = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.detected)
+        .count();
+    snapshot.summary.diagnostics_status = snapshot.diagnostics.overall_status.clone();
+    snapshot.workspaces = derive_workspaces(root, &snapshot.agents, snapshot.skills.len());
+    snapshot.project_scans = derive_project_scans(root, &snapshot.workspaces);
+    snapshot.backup_targets = derive_backup_targets(root, &snapshot.agent_adapters);
+    snapshot.backup_dry_run = derive_backup_dry_run(&snapshot.backup_targets);
+    snapshot.restore_dry_run = derive_restore_dry_run(&snapshot.backup_targets);
+    snapshot.mode = "agent-detection-refresh".to_string();
+    apply_enabled_state(&mut snapshot, &enabled_state);
+
+    let indexed_at = unix_timestamp_string();
+    let snapshot_id = format!("agent-detection-{}", indexed_at);
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot start agent detection transaction: {}", error))?;
+
+    transaction
+        .execute("DELETE FROM workspace_agents", [])
+        .map_err(|error| format!("Cannot clear workspace agent index: {}", error))?;
+    transaction
+        .execute("DELETE FROM adapter_safety_checks", [])
+        .map_err(|error| format!("Cannot clear adapter safety checks: {}", error))?;
+    transaction
+        .execute("DELETE FROM adapter_capabilities", [])
+        .map_err(|error| format!("Cannot clear adapter capabilities: {}", error))?;
+    transaction
+        .execute("DELETE FROM restore_dry_run_items", [])
+        .map_err(|error| format!("Cannot clear restore dry-run items: {}", error))?;
+    transaction
+        .execute("DELETE FROM backup_dry_run_items", [])
+        .map_err(|error| format!("Cannot clear backup dry-run items: {}", error))?;
+    transaction
+        .execute("DELETE FROM backup_targets", [])
+        .map_err(|error| format!("Cannot clear backup targets: {}", error))?;
+    transaction
+        .execute("DELETE FROM project_scans", [])
+        .map_err(|error| format!("Cannot clear project scans: {}", error))?;
+    transaction
+        .execute("DELETE FROM workspaces", [])
+        .map_err(|error| format!("Cannot clear workspace index: {}", error))?;
+    transaction
+        .execute("DELETE FROM agents", [])
+        .map_err(|error| format!("Cannot clear agent index: {}", error))?;
+    transaction
+        .execute("DELETE FROM agent_adapters", [])
+        .map_err(|error| format!("Cannot clear agent adapter registry: {}", error))?;
+
+    for agent in &snapshot.agents {
+        transaction
+            .execute(
+                "INSERT INTO agents (
+                    id, name, skills_path, detected, managed, enabled, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    stable_id("agent", &agent.id),
+                    agent.name,
+                    agent.path,
+                    if agent.detected { 1 } else { 0 },
+                    if agent.managed { 1 } else { 0 },
+                    if enabled_state
+                        .agents
+                        .get(&stable_id("agent", &agent.id))
+                        .copied()
+                        .unwrap_or(agent.detected)
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                    indexed_at
+                ],
+            )
+            .map_err(|error| format!("Cannot index agent {}: {}", agent.name, error))?;
+    }
+
+    seed_agent_adapters(
+        &transaction,
+        &snapshot.agent_adapters,
+        &snapshot.adapter_safety_checks,
+        &snapshot.adapter_capabilities,
+        &enabled_state,
+        &indexed_at,
+    )?;
+    seed_workspaces(
+        &transaction,
+        root,
+        &snapshot.agents,
+        snapshot.skills.len(),
+        &enabled_state,
+        &indexed_at,
+    )?;
+    seed_project_scans(&transaction, &snapshot.project_scans)?;
+    seed_backup_targets(&transaction, &snapshot.backup_targets, &indexed_at)?;
+    seed_backup_dry_run(&transaction, &snapshot.backup_dry_run, &indexed_at)?;
+    seed_restore_dry_run(&transaction, &snapshot.restore_dry_run, &indexed_at)?;
+
+    let manifest_json = serde_json::to_string(&serde_json::json!({
+        "root": &snapshot.root,
+        "summary": &snapshot.summary,
+        "diagnostics": &snapshot.diagnostics,
+        "mode": &snapshot.mode,
+    }))
+    .map_err(|error| format!("Cannot serialize agent detection manifest: {}", error))?;
+    transaction
+        .execute(
+            "INSERT OR REPLACE INTO snapshots (
+                id, name, summary, manifest_json, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                snapshot_id,
+                "Latest AI tool detection refresh",
+                format!(
+                    "{} skills, {} sources, {} agents",
+                    snapshot.skills.len(),
+                    snapshot.sources.len(),
+                    snapshot.agents.len()
+                ),
+                manifest_json,
+                indexed_at
+            ],
+        )
+        .map_err(|error| format!("Cannot write agent detection snapshot record: {}", error))?;
+    seed_rollback_plan(&transaction, &snapshot, &snapshot_id, &indexed_at)?;
+
+    transaction
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'agent_detection_refreshed', ?2, ?3, ?4)",
+            params![
+                format!("audit-agent-detection-{}", indexed_at),
+                "Refreshed AI tool detection without touching Skill Library metadata",
+                serde_json::to_string(&serde_json::json!({
+                    "agents": snapshot.agents.len(),
+                    "detected": snapshot.agents.iter().filter(|agent| agent.detected).count(),
+                    "scope": "agents-only"
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                indexed_at
+            ],
+        )
+        .map_err(|error| format!("Cannot write agent detection audit event: {}", error))?;
+
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit agent detection refresh: {}", error))?;
+
+    Ok(())
+}
+
 fn read_indexed_sources(connection: &Connection) -> Result<Vec<SourceCard>, String> {
     let mut tag_map = read_tag_map(connection, "source")?;
     let mut statement = connection
@@ -4131,7 +4361,7 @@ fn read_skill_conflict_choice_state(
 fn usage_event_counts_as_skill_invocation(event_type: &str) -> bool {
     matches!(
         event_type.trim(),
-        "copy_prompt" | "invoke_skill" | "skill_invoked" | "skill_call" | "run_skill"
+        "invoke_skill" | "skill_invoked" | "skill_call" | "run_skill"
     )
 }
 
@@ -4211,8 +4441,6 @@ fn read_indexed_usage_stats(connection: &Connection) -> Result<Vec<UsageStatCard
             .then_with(|| right.last_used_at.cmp(&left.last_used_at))
             .then_with(|| left.target_name.cmp(&right.target_name))
     });
-    output.truncate(24);
-
     Ok(output)
 }
 
@@ -5585,8 +5813,6 @@ fn build_package_source_import_plan(
     };
     let risk_level = if !extension_ok || duplicate.is_some() {
         "high"
-    } else if safe_to_continue {
-        "medium"
     } else {
         "medium"
     };
@@ -5771,7 +5997,7 @@ fn inspect_package_archive(path: &Path) -> Result<PackageArchiveInspection, Stri
     let mut skill_dirs = HashSet::new();
     let mut prompt_count = 0usize;
 
-    if archive.len() == 0 {
+    if archive.is_empty() {
         blocking_checks.push("包是空的。".to_string());
     }
 
@@ -6216,7 +6442,7 @@ fn infer_source_github_url(root: &Path, source: &SourceCard) -> Option<String> {
 }
 
 fn source_candidate_paths(root: &Path, source: &SourceCard) -> Vec<PathBuf> {
-    let sources_dir = active_sources_dir(&root);
+    let sources_dir = active_sources_dir(root);
     let mut candidates = Vec::new();
     for value in [&source.local_path, &source.id, &source.name] {
         let value = value.trim();
@@ -6376,6 +6602,7 @@ fn source_popularity_cache_status_for_error(error: &str) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn upsert_source_popularity_cache(
     connection: &Connection,
     source: &SourceCard,
@@ -6439,6 +6666,7 @@ fn upsert_source_popularity_cache(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_source_popularity_history(
     connection: &Connection,
     source: &SourceCard,
@@ -7833,6 +8061,7 @@ fn seed_presets(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_preset(
     transaction: &rusqlite::Transaction<'_>,
     preset_id: &str,
@@ -8497,7 +8726,7 @@ fn derive_workspaces(root: &Path, agents: &[AgentCard], total_skills: usize) -> 
     if app_next.exists() {
         workspaces.push(WorkspaceCard {
             id: "workspace-project-app-next".to_string(),
-            name: "AI SkillHub v2 项目工作区".to_string(),
+            name: "AI SkillHub 项目工作区".to_string(),
             scope: "project".to_string(),
             path: app_next.display().to_string(),
             enabled: true,
@@ -8724,17 +8953,17 @@ fn tag_color(name: &str) -> String {
 
 fn runner_title(runner_id: &str) -> String {
     match runner_id {
-        "diagnostics-export" => "V2 诊断包导出",
+        "diagnostics-export" => "诊断包导出",
         "share-validation" => "分享验收",
-        "report-bundle" => "V2 报告包索引",
-        "write-execution-plan" => "V2 真实写入执行计划",
-        "agent-sync-readiness" => "V2 AI 工具同步解锁检查",
-        "release-package-readiness" => "V2 发布打包解锁检查",
-        "agent-sync-executor" => "V2 AI 工具同步最终执行器",
-        "release-package-executor" => "V2 发布打包最终执行器",
-        "v2-completion-audit" => "V2 完成度审计",
-        "release-package" => "V2 发布打包计划",
-        _ => "V2 执行器",
+        "report-bundle" => "报告包索引",
+        "write-execution-plan" => "真实写入执行计划",
+        "agent-sync-readiness" => "AI 工具同步解锁检查",
+        "release-package-readiness" => "发布打包解锁检查",
+        "agent-sync-executor" => "AI 工具同步最终执行器",
+        "release-package-executor" => "发布打包最终执行器",
+        "v2-completion-audit" => "完成度审计",
+        "release-package" => "发布打包计划",
+        _ => "执行器",
     }
     .to_string()
 }
@@ -8818,8 +9047,8 @@ fn operation_runner_catalog() -> Vec<(&'static str, &'static str, bool, &'static
             "v2-completion-audit",
             "completion-audit",
             false,
-            "检查 V2 是否可以称为完整版本，并列出剩余发布阻断项。",
-            "生成 V2 完成度审计报告。",
+            "检查 AI SkillHub 是否可以称为完整版本，并列出剩余发布阻断项。",
+            "生成完成度审计报告。",
         ),
         (
             "release-package",
@@ -9005,6 +9234,7 @@ fn derive_import_previews(
     ]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn derive_write_gates(
     diagnostics: &DiagnosticSummary,
     release_reports: &[ReleaseReportCard],
@@ -9193,6 +9423,7 @@ fn derive_write_gates(
     ]
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_gate_card(
     id: &str,
     title: &str,
@@ -9953,6 +10184,210 @@ fn build_router_hub_skill_md(collection: &str, router_name: &str, children: &[St
     )
 }
 
+fn yaml_double_quoted(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn generated_skill_folder_name(value: &str) -> String {
+    let normalized = normalize_skill_lookup(value);
+    let mut out = String::with_capacity(normalized.len());
+    let mut last_was_dash = false;
+    for ch in normalized.chars() {
+        let next = if ch.is_ascii_alphanumeric() || ch == '.' {
+            ch
+        } else {
+            '-'
+        };
+        if next == '-' {
+            if !last_was_dash {
+                out.push(next);
+            }
+            last_was_dash = true;
+        } else {
+            out.push(next);
+            last_was_dash = false;
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        "conflict-skill".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn conflict_candidate_skill_md_link(choice: &SkillConflictChoiceCard) -> String {
+    let relative = choice.relative_path.trim().replace('\\', "/");
+    if relative.is_empty() {
+        return String::new();
+    }
+    let relative = relative.trim_start_matches('/').trim_end_matches('/');
+    if relative.ends_with("/SKILL.md") || relative == "SKILL.md" {
+        format!("../../{}", relative)
+    } else {
+        format!("../../{}/SKILL.md", relative)
+    }
+}
+
+fn build_conflict_dispatcher_skill_md(conflict: &SkillConflictCard) -> Option<String> {
+    let default_choice = conflict
+        .choices
+        .iter()
+        .find(|choice| choice.skill_id == conflict.default_skill_id)?;
+    let skill_name = generated_skill_folder_name(&conflict.conflict_key);
+    let default_link = conflict_candidate_skill_md_link(default_choice);
+    let description = format!(
+        "{} {} AI SkillHub generated dispatcher for duplicate child Skill /{}.",
+        ROUTER_HUB_MARKER, CONFLICT_DISPATCHER_MARKER, conflict.child_name
+    );
+
+    let mut candidate_lines = String::new();
+    for choice in &conflict.choices {
+        let link = conflict_candidate_skill_md_link(choice);
+        let default_marker = if choice.skill_id == conflict.default_skill_id {
+            " default"
+        } else {
+            ""
+        };
+        candidate_lines.push_str(&format!(
+            "-{} `{}` from `{}` -> `{}`\n",
+            default_marker,
+            choice.skill_name,
+            choice.source_name,
+            if link.is_empty() {
+                &choice.relative_path
+            } else {
+                &link
+            }
+        ));
+    }
+
+    Some(format!(
+        "---\n\
+        name: {name}\n\
+        description: \"{description}\"\n\
+        ---\n\n\
+        # {dispatcher_marker} /{name}\n\n\
+        > {router_marker} This AI SkillHub dispatcher is generated from the local SQLite table `skill_conflict_choices`.\n\n\
+        This Skill exists because more than one installed source exposes the same child Skill name. It is generated under `AI-SkillHub-local-routers`, outside every author repository, so GitHub updates do not overwrite the user's local default.\n\n\
+        Default route:\n\
+        - Source: `{default_source}`\n\
+        - Skill: `/{default_skill}`\n\
+        - Skill file: `{default_link}`\n\n\
+        Dispatch rules:\n\
+        - When the user invokes `/{name}` without naming a source, use the default route above.\n\
+        - Open and follow the default Skill file if it is available in this workspace.\n\
+        - If the user explicitly names another source, use that source instead of the default.\n\
+        - If the default file is missing, tell the user to reselect the default in AI SkillHub's same-name Skill conflict selector.\n\n\
+        Available candidates:\n\
+        {candidates}",
+        name = skill_name,
+        description = yaml_double_quoted(&description),
+        dispatcher_marker = CONFLICT_DISPATCHER_MARKER,
+        router_marker = ROUTER_HUB_MARKER,
+        default_source = default_choice.source_name,
+        default_skill = default_choice.skill_name,
+        default_link = default_link,
+        candidates = candidate_lines,
+    ))
+}
+
+fn sync_skill_conflict_dispatchers(
+    legacy_root: &Path,
+    connection: &Connection,
+) -> Result<usize, String> {
+    let skills = read_indexed_skills(connection)?;
+    let saved_choices = read_skill_conflict_choice_state(connection)?;
+    sync_skill_conflict_dispatchers_for_skills(legacy_root, &skills, &saved_choices)
+}
+
+fn sync_skill_conflict_dispatchers_for_skills(
+    legacy_root: &Path,
+    skills: &[SkillCard],
+    saved_choices: &HashMap<String, SkillConflictChoiceState>,
+) -> Result<usize, String> {
+    let sources_dir = active_sources_dir(legacy_root);
+    let routers_root = sources_dir.join(ROUTER_HUB_FOLDER);
+    let conflicts = derive_skill_conflicts(skills, saved_choices);
+    let mut active_dispatchers = HashSet::new();
+    let mut changed = 0usize;
+
+    for conflict in conflicts.iter().filter(|conflict| {
+        conflict.status == "default-set" && !conflict.default_skill_id.is_empty()
+    }) {
+        let dispatcher_name = generated_skill_folder_name(&conflict.conflict_key);
+        let Some(body) = build_conflict_dispatcher_skill_md(conflict) else {
+            continue;
+        };
+        active_dispatchers.insert(dispatcher_name.clone());
+        let dispatcher_folder = routers_root.join(&dispatcher_name);
+        let dispatcher_file = dispatcher_folder.join("SKILL.md");
+        fs::create_dir_all(&dispatcher_folder).map_err(|error| {
+            format!(
+                "Cannot create conflict dispatcher folder {}: {}",
+                dispatcher_folder.display(),
+                error
+            )
+        })?;
+        let needs_write = match fs::read_to_string(&dispatcher_file) {
+            Ok(existing) => existing != body,
+            Err(_) => true,
+        };
+        if needs_write {
+            fs::write(&dispatcher_file, body).map_err(|error| {
+                format!(
+                    "Cannot write conflict dispatcher {}: {}",
+                    dispatcher_file.display(),
+                    error
+                )
+            })?;
+            changed += 1;
+        }
+    }
+
+    if routers_root.exists() {
+        let entries = fs::read_dir(&routers_root)
+            .map_err(|error| format!("Cannot read generated router folder: {}", error))?;
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let folder_name = entry.file_name().to_string_lossy().to_string();
+            if active_dispatchers.contains(&folder_name) {
+                continue;
+            }
+            let skill_md = entry.path().join("SKILL.md");
+            let Ok(existing) = fs::read_to_string(&skill_md) else {
+                continue;
+            };
+            if !existing.contains(CONFLICT_DISPATCHER_MARKER) {
+                continue;
+            }
+            fs::remove_file(&skill_md).map_err(|error| {
+                format!(
+                    "Cannot remove stale conflict dispatcher {}: {}",
+                    skill_md.display(),
+                    error
+                )
+            })?;
+            if entry
+                .path()
+                .read_dir()
+                .map(|mut dir| dir.next().is_none())
+                .unwrap_or(false)
+            {
+                let _ = fs::remove_dir(entry.path());
+            }
+            changed += 1;
+        }
+    }
+
+    Ok(changed)
+}
+
 /// Check a SKILL.md file for the "unquoted [ROUTER-HUB] description" pitfall.
 /// Returns Some(issue) when the description carries the marker but has no surrounding quote,
 /// which YAML loaders treat as a flow sequence and drop silently.
@@ -10531,7 +10966,9 @@ fn set_skill_conflict_choice(
         }),
     )?;
 
-    read_snapshot_from_database(&root, &connection)
+    sync_local_sources_to_agents(&root, &connection)?;
+
+    scan_legacy_snapshot_blocking()
 }
 
 fn normalize_source_type(value: &str) -> String {
@@ -10573,6 +11010,7 @@ pub fn run() {
             load_indexed_snapshot,
             scan_legacy_snapshot,
             run_skillhub_sync,
+            refresh_agent_detection,
             set_agent_adapter_enabled,
             set_workspace_enabled,
             set_preset_enabled,
@@ -10597,7 +11035,7 @@ pub fn run() {
             set_skill_conflict_choice
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run AI SkillHub v2 app");
+        .expect("failed to run AI SkillHub app");
 }
 
 #[cfg(test)]
@@ -10747,6 +11185,163 @@ mod tests {
             tags: Vec::new(),
             created_at: "0".to_string(),
         }
+    }
+
+    fn test_snapshot(
+        root: &Path,
+        sources: Vec<SourceCard>,
+        skills: Vec<SkillCard>,
+        agents: Vec<AgentCard>,
+    ) -> LegacySnapshot {
+        let agent_adapters = derive_agent_adapters(&agents);
+        let adapter_safety_checks = derive_adapter_safety_checks(&agent_adapters);
+        let adapter_capabilities = derive_adapter_capabilities(&agent_adapters);
+        let backup_targets = derive_backup_targets(root, &agent_adapters);
+        let backup_dry_run = derive_backup_dry_run(&backup_targets);
+        let restore_dry_run = derive_restore_dry_run(&backup_targets);
+        let diagnostics = DiagnosticSummary {
+            available: true,
+            app_version: "test".to_string(),
+            generated_at: "0".to_string(),
+            overall_status: "ok".to_string(),
+            ok: 1,
+            warn: 0,
+            error: 0,
+            info: 0,
+        };
+
+        LegacySnapshot {
+            root: root.display().to_string(),
+            skills_dir: root.join("skills").display().to_string(),
+            sources_dir: active_sources_dir(root).display().to_string(),
+            diagnostics_file: diagnostics_file(root).display().to_string(),
+            mode: "test".to_string(),
+            summary: LegacySummary {
+                skills: skills.len(),
+                sources: sources.len(),
+                prompts: 0,
+                agents_detected: agents.iter().filter(|agent| agent.detected).count(),
+                warnings: 0,
+                diagnostics_status: diagnostics.overall_status.clone(),
+            },
+            skills,
+            sources,
+            agents,
+            agent_skill_statuses: Vec::new(),
+            agent_adapters,
+            adapter_safety_checks,
+            adapter_capabilities,
+            workspaces: Vec::new(),
+            project_scans: Vec::new(),
+            presets: Vec::new(),
+            snapshots: Vec::new(),
+            backup_targets,
+            backup_dry_run,
+            restore_dry_run,
+            rollback_plan: Vec::new(),
+            release_reports: Vec::new(),
+            import_previews: Vec::new(),
+            source_popularity: Vec::new(),
+            skill_conflicts: Vec::new(),
+            operator_consent: OperatorConsentCard {
+                real_writes_enabled: false,
+                enabled_at: String::new(),
+                updated_at: String::new(),
+                summary: "test".to_string(),
+            },
+            tags: Vec::new(),
+            preset_distributions: Vec::new(),
+            operation_runners: Vec::new(),
+            write_gates: Vec::new(),
+            desktop_qa_checks: Vec::new(),
+            usage_stats: Vec::new(),
+            audit_events: Vec::new(),
+            diagnostics,
+            index: IndexReport {
+                persisted: false,
+                database_file: database_file(root).display().to_string(),
+                indexed_at: String::new(),
+                sources_indexed: 0,
+                skills_indexed: 0,
+                agents_indexed: 0,
+                snapshot_id: String::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn agent_detection_refresh_preserves_skill_library_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-agent-refresh-preserve-test-{}",
+            unix_timestamp_string()
+        ));
+        let source_dir = active_sources_dir(&root).join("alpha-pack");
+        fs::create_dir_all(&source_dir).unwrap();
+        let source = test_source_card(
+            "source-alpha-pack",
+            "alpha-pack",
+            &source_dir,
+            "https://github.com/example/alpha-pack.git",
+        );
+        let skill = test_skill_card("alpha-skill", "alpha-pack", "alpha-pack/alpha-skill", false);
+        let initial_agent = AgentCard {
+            id: "claude".to_string(),
+            name: "Claude / Claude Code".to_string(),
+            path: root.join("claude-skills").display().to_string(),
+            detected: true,
+            managed: true,
+            enabled: true,
+            skill_count: 0,
+        };
+        let snapshot = test_snapshot(&root, vec![source], vec![skill], vec![initial_agent]);
+
+        persist_snapshot(&root, &snapshot).expect("test snapshot should persist");
+        let mut connection = open_index_database(&root).expect("test database should open");
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO source_overrides (
+                    source_id, display_name, source_type, category_id, note, enabled, updated_at
+                ) VALUES (?1, '', '', '', ?2, NULL, ?3)",
+                params![
+                    "source-alpha-pack",
+                    "keep this source note",
+                    unix_timestamp_string()
+                ],
+            )
+            .expect("source note override should persist");
+
+        let diagnostics = serde_json::json!({
+            "appVersion": "test",
+            "generatedAt": "now",
+            "overallStatus": "ok",
+            "summary": { "ok": 1, "warn": 0, "error": 0, "info": 0 },
+            "agents": [{
+                "id": "codex",
+                "name": "OpenAI Codex",
+                "command": "codex",
+                "detected": true,
+                "skillsDirs": [{
+                    "path": root.join("codex-skills").display().to_string(),
+                    "exists": true,
+                    "isLink": false,
+                    "writable": true
+                }]
+            }]
+        });
+        persist_agent_detection_refresh(&root, &mut connection, Some(&diagnostics))
+            .expect("agent-only refresh should persist");
+
+        let refreshed = read_snapshot_from_database(&root, &connection)
+            .expect("refreshed snapshot should read");
+        assert_eq!(refreshed.sources.len(), 1);
+        assert_eq!(refreshed.skills.len(), 1);
+        assert_eq!(refreshed.sources[0].note, "keep this source note");
+        assert!(refreshed
+            .agent_adapters
+            .iter()
+            .any(|adapter| adapter.id == "codex" && adapter.detected));
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -10919,6 +11514,112 @@ mod tests {
         let conflicts = derive_skill_conflicts(&skills, &saved);
         assert_eq!(conflicts[0].status, "unresolved");
         assert!(conflicts[0].default_skill_id.is_empty());
+    }
+
+    #[test]
+    fn conflict_default_writes_and_removes_generated_dispatcher() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-conflict-dispatcher-test-{}",
+            unix_timestamp_string()
+        ));
+        let skills = vec![
+            test_skill_card(
+                "figure-planner",
+                "Nature-Paper-Skills",
+                "Nature-Paper-Skills/skills/core/figure-planner",
+                false,
+            ),
+            test_skill_card(
+                "figure-planner",
+                "PaperSpine",
+                "PaperSpine/dist/codex/skills/figure-planner",
+                false,
+            ),
+        ];
+        let mut saved = HashMap::new();
+        saved.insert(
+            "figure-planner".to_string(),
+            SkillConflictChoiceState {
+                default_skill_id: "PaperSpine/dist/codex/skills/figure-planner".to_string(),
+                status: "default-set".to_string(),
+                updated_at: "1780000000".to_string(),
+            },
+        );
+
+        let changed = sync_skill_conflict_dispatchers_for_skills(&root, &skills, &saved)
+            .expect("conflict dispatcher should sync");
+        assert_eq!(changed, 1);
+        let dispatcher = active_sources_dir(&root)
+            .join(ROUTER_HUB_FOLDER)
+            .join("figure-planner")
+            .join("SKILL.md");
+        let body = fs::read_to_string(&dispatcher).expect("dispatcher should be written");
+        assert!(body.contains(CONFLICT_DISPATCHER_MARKER));
+        assert!(body.contains("Source: `PaperSpine`"));
+        assert!(body.contains("../../PaperSpine/dist/codex/skills/figure-planner/SKILL.md"));
+
+        saved.insert(
+            "figure-planner".to_string(),
+            SkillConflictChoiceState {
+                default_skill_id: String::new(),
+                status: "unresolved".to_string(),
+                updated_at: "1780000001".to_string(),
+            },
+        );
+        let removed = sync_skill_conflict_dispatchers_for_skills(&root, &skills, &saved)
+            .expect("stale dispatcher should be removed");
+        assert_eq!(removed, 1);
+        assert!(!dispatcher.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parse_agents_keeps_command_detected_antigravity() {
+        let diagnostics = serde_json::json!({
+            "agents": [
+                {
+                    "id": "antigravity",
+                    "name": "Antigravity",
+                    "detected": true,
+                    "command": "D:/Tools/Antigravity/bin/antigravity.cmd",
+                    "skillsDirs": [
+                        {
+                            "path": "C:/Users/Test/.gemini/antigravity/skills",
+                            "exists": true,
+                            "writable": true,
+                            "isLink": false
+                        }
+                    ]
+                }
+            ]
+        });
+        let agents = parse_agents(Some(&diagnostics));
+        let antigravity = agents.first().expect("agent should parse");
+        assert!(antigravity.detected);
+        assert!(antigravity.managed);
+
+        let directory_only = serde_json::json!({
+            "agents": [
+                {
+                    "id": "antigravity",
+                    "name": "Antigravity",
+                    "detected": true,
+                    "command": "",
+                    "skillsDirs": [
+                        {
+                            "path": "C:/Users/Test/.gemini/antigravity/skills",
+                            "exists": true,
+                            "writable": true,
+                            "isLink": false
+                        }
+                    ]
+                }
+            ]
+        });
+        let agents = parse_agents(Some(&directory_only));
+        let antigravity = agents.first().expect("agent should parse");
+        assert!(!antigravity.detected);
+        assert!(!antigravity.managed);
     }
 
     #[test]
@@ -11783,7 +12484,7 @@ mod tests {
             "paper-workflow",
             "paper-workflow",
             "Nature-Paper-Skills",
-            "copy_prompt",
+            "skill_call",
         )
         .expect("usage event should save");
         record_usage_event_row_in_connection(
@@ -11792,9 +12493,18 @@ mod tests {
             "paper-workflow",
             "paper-workflow",
             "Nature-Paper-Skills",
-            "copy_prompt",
+            "skill_call",
         )
         .expect("second usage event should save");
+        record_usage_event_row_in_connection(
+            &connection,
+            "skill",
+            "academic-paper-reviewer",
+            "academic-paper-reviewer",
+            "academic-research-skills",
+            "copy_prompt",
+        )
+        .expect("copy prompt event should save");
         record_usage_event_row_in_connection(
             &connection,
             "source",
@@ -11813,6 +12523,12 @@ mod tests {
 
         assert_eq!(skill_stat.total_count, 2);
         assert!(skill_stat.seven_day_count >= 2);
+        assert!(
+            stats
+                .iter()
+                .all(|item| item.target_id != "academic-paper-reviewer"),
+            "copying a prompt in the UI must not count as a real Skill invocation"
+        );
         assert!(
             stats.iter().all(
                 |item| !(item.target_type == "source" && item.target_id == "source-impeccable")
@@ -12296,7 +13012,7 @@ mod tests {
             "impeccable",
             "impeccable",
             "impeccable",
-            "copy_prompt",
+            "skill_call",
         )
         .expect("skill usage should save");
 

@@ -1,10 +1,10 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 $processes = Get-Process -ErrorAction SilentlyContinue |
   Where-Object { $_.ProcessName -eq 'ai-skillhub-next' }
 
 if (-not $processes) {
-  Write-Host 'AI SkillHub v2 dev runtime is not running.'
+  Write-Host 'AI SkillHub dev runtime is not running.'
   exit 0
 }
 
@@ -22,5 +22,5 @@ foreach ($process in $processes) {
   }
 
   Stop-Process -Id $process.Id -Force
-  Write-Host "Stopped AI SkillHub v2 dev runtime process $($process.Id)."
+  Write-Host "Stopped AI SkillHub dev runtime process $($process.Id)."
 }

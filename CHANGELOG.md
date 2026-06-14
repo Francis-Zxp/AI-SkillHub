@@ -2,6 +2,33 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 2.0.2 - Stability and release readiness
+
+### Fixed
+
+- Fixed local usage charts so copy-only actions no longer appear as real Skill
+  calls, and dashboard charts show all indexed rows inside adaptive scrolling
+  panels.
+- Fixed the Windows release executable so it opens as a normal desktop app
+  without an extra console window.
+- Kept AI tool re-detection isolated from Skill Library metadata, so checking
+  Claude Code, Codex, or Antigravity no longer clears user notes or categories.
+- Updated release and diagnostics scripts to use the real app version instead
+  of stale alpha or old-version labels.
+- Fixed diagnostics so an installed system WebView2 Runtime is accepted for the
+  Tauri desktop app instead of requiring an obsolete packaged WebView2 DLL.
+
+### Validation
+
+- `pnpm build`: passed.
+- `cargo test`: passed.
+- `cargo clippy --all-targets -- -D warnings`: passed.
+- `pnpm tauri build --no-bundle`: passed.
+- Diagnostics export: passed with 0 errors and 0 warnings.
+- Release package preflight: passed for `AI-SkillHub-2.0.2.zip`.
+- Share-recipient test: passed.
+- `pnpm audit --prod`: no known vulnerabilities.
+
 ## 2.0.1 - UI refresh and Skill Library redesign
 
 ### Added

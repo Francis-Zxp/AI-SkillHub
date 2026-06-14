@@ -1,4 +1,4 @@
-# v2 toolchain setup
+# AI SkillHub toolchain setup
 
 Checked on: 2026-05-25
 
@@ -83,9 +83,9 @@ pnpm build
 pnpm tauri info
 ```
 
-## How to start V2 during development
+## How to start AI SkillHub during development
 
-V2 is now the maintained app line. Development still uses the Tauri dev command
+AI SkillHub is now the maintained app line. Development still uses the Tauri dev command
 for hot reload and diagnostics.
 
 Use this command while developing:
@@ -114,13 +114,13 @@ D:\My Files\AI_global_skills\app-next\src-tauri\target\debug\ai-skillhub-next.ex
 
 That debug executable is not the final shareable installer. It may still expect the dev server/runtime context and should not be copied to other computers.
 
-The v2 app also explains this inside the Settings page, under "Build / Release Guide", so a tester can see the difference without reading this document first.
+The app also explains this inside the Settings page, under "Build / Release Guide", so a tester can see the difference without reading this document first.
 
 The Settings page also contains a "Desktop QA Checklist" panel. Before packaging, use the real Tauri desktop window to confirm the default window layout, Snapshot safety gate, Settings release guidance, and screenshot evidence.
 
-## Where the final v2 exe will be
+## Where the final exe will be
 
-When v2 is ready to package, use:
+When AI SkillHub is ready to package, use:
 
 ```powershell
 cd "D:\My Files\AI_global_skills\app-next"
@@ -133,7 +133,7 @@ The final Windows installer/executable will be generated under:
 D:\My Files\AI_global_skills\app-next\src-tauri\target\release\bundle\
 ```
 
-Do not publish that v2 build yet unless the backup, restore dry-run, release preflight, and share validation steps have passed.
+Do not publish that build unless the backup, restore dry-run, release preflight, and share validation steps have passed.
 
 ## Troubleshooting: failed to remove debug exe
 
@@ -178,7 +178,7 @@ The npm registry reported these versions on 2026-05-24:
 - `typescript`: `6.0.3`
 - `react`: `19.2.6`
 
-These are pinned in `package.json` so v2 development is reproducible.
+These are pinned in `package.json` so AI SkillHub development is reproducible.
 
 ## Verification on 2026-05-25
 

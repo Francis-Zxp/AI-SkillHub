@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 function Add-PathEntries {
   param([string]$Value)
@@ -117,7 +117,7 @@ if (-not $buildTools) { $missing += "Visual Studio C++ Build Tools" }
 
 Write-Host ""
 if ($missing.Count -eq 0) {
-  Write-Host "AI SkillHub v2 toolchain is ready."
+  Write-Host "AI SkillHub toolchain is ready."
   exit 0
 }
 

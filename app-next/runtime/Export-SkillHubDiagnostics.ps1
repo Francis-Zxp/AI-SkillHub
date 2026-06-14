@@ -31,6 +31,34 @@ $UnicodeWarnings = New-Object System.Collections.Generic.List[object]
 
 New-Item -ItemType Directory -Force -Path $DiagnosticsRoot | Out-Null
 
+function Get-AppVersion {
+  $tauriConfig = Join-Path $V2Root 'src-tauri\tauri.conf.json'
+  if (Test-Path -LiteralPath $tauriConfig -PathType Leaf) {
+    try {
+      $config = Get-Content -LiteralPath $tauriConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+      if (-not [string]::IsNullOrWhiteSpace([string]$config.version)) {
+        return [string]$config.version
+      }
+    } catch {
+    }
+  }
+
+  $packageJson = Join-Path $V2Root 'package.json'
+  if (Test-Path -LiteralPath $packageJson -PathType Leaf) {
+    try {
+      $package = Get-Content -LiteralPath $packageJson -Raw -Encoding UTF8 | ConvertFrom-Json
+      if (-not [string]::IsNullOrWhiteSpace([string]$package.version)) {
+        return [string]$package.version
+      }
+    } catch {
+    }
+  }
+
+  return 'unknown'
+}
+
+$AppVersion = Get-AppVersion
+
 function Protect-Text([AllowNull()][object]$Value) {
   if ($null -eq $Value) { return '' }
   $text = [string]$Value
@@ -176,10 +204,10 @@ Add-Check 'project.root' 'AI SkillHub 根目录' $projectRootStatus '已定位 A
 $projectSkillsStatus = if (Test-Path -LiteralPath $SkillsRoot -PathType Container) { 'ok' } else { 'error' }
 Add-Check 'project.skills' 'skills 目录' $projectSkillsStatus '已检查启用技能目录。' $SkillsRoot '缺失时请重新部署 AI SkillHub 文件夹。'
 $projectSourcesStatus = if (Test-Path -LiteralPath $SourcesRoot -PathType Container) { 'ok' } else { 'warn' }
-Add-Check 'project.sources' 'V2 data/github_sources 目录' $projectSourcesStatus '已检查 GitHub 来源目录。' $SourcesRoot '首次同步会自动创建来源目录。'
+Add-Check 'project.sources' '来源数据目录' $projectSourcesStatus '已检查 GitHub 来源目录。' $SourcesRoot '首次同步会自动创建来源目录。'
 $projectConfigStatus = if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) { 'ok' } else { 'info' }
 $projectConfigSummary = if ($projectConfigStatus -eq 'ok') { '已检查配置文件。' } else { '尚未创建个人配置文件；首次运行会自动生成空配置。' }
-Add-Check 'project.config' '配置文件' $projectConfigStatus $projectConfigSummary $ConfigPath '首次运行 AI SkillHub V2 后会自动创建；公开仓库不会包含个人配置。'
+Add-Check 'project.config' '配置文件' $projectConfigStatus $projectConfigSummary $ConfigPath '首次运行 AI SkillHub 后会自动创建；公开仓库不会包含个人配置。'
 $reportsWritableStatus = if (Test-DirWritable $DiagnosticsRoot) { 'ok' } else { 'error' }
 Add-Check 'project.reportsWritable' '报告目录可写' $reportsWritableStatus '已检查诊断报告目录可写。' $DiagnosticsRoot '请确认当前用户对 AI SkillHub 文件夹有写入权限。'
 
@@ -202,7 +230,7 @@ if ($nodeCommand) {
   $nodeFix = if ($nodeStatus -eq 'warn') { '后续做 Tauri/前端/CLI 开发建议使用 Node LTS 22 或 24。当前版本不影响普通同步。' } else { '当前 Node 版本适合后续前端/Tauri 准备工作；普通同步不强制需要 Node。' }
   Add-Check 'tool.node' 'Node.js' $nodeStatus "Node.js $nodeVersion" $nodeCommand.Source $nodeFix
 } else {
-  Add-Check 'tool.node' 'Node.js' 'info' '没有检测到 Node.js；普通同步不强制需要。' '' '后续做 v2/Tauri 开发时安装 Node LTS 22 或 24。'
+  Add-Check 'tool.node' 'Node.js' 'info' '没有检测到 Node.js；普通同步不强制需要。' '' '后续做 AI SkillHub/Tauri 开发时安装 Node LTS 22 或 24。'
 }
 
 $runtimeDll = Join-Path $V2Root 'runtime\Microsoft.Web.WebView2.Core.dll'
@@ -220,13 +248,13 @@ if ($SimulateMissingWebView2) {
   $webviewDllExists = $false
   $runtimeDirs = @()
 }
-$webviewStatus = if ($webviewDllExists -and $runtimeDirs.Count -gt 0) { 'ok' } elseif ($webviewDllExists) { 'warn' } else { 'error' }
-$webviewSummary = if ($SimulateMissingWebView2) { '分享验收：已模拟缺少 WebView2；界面可能无法打开。' } elseif ($webviewStatus -eq 'ok') { 'WebView2 运行组件已检测到。' } elseif ($webviewStatus -eq 'warn') { 'AI SkillHub 自带 WebView2 DLL，但未确认系统 Runtime。' } else { '缺少 WebView2 组件。' }
+$webviewStatus = if ($runtimeDirs.Count -gt 0) { 'ok' } elseif ($webviewDllExists) { 'warn' } else { 'error' }
+$webviewSummary = if ($SimulateMissingWebView2) { '分享验收：已模拟缺少 WebView2；界面可能无法打开。' } elseif ($webviewStatus -eq 'ok') { 'WebView2 Runtime 已检测到。' } elseif ($webviewStatus -eq 'warn') { 'AI SkillHub 找到旧版 WebView2 DLL，但未确认系统 Runtime。' } else { '缺少 WebView2 Runtime。' }
 Add-Check 'tool.webview2' 'Microsoft Edge WebView2' $webviewStatus $webviewSummary (($runtimeDirs -join '; ') + '; packaged=' + $runtimeDll) '若界面无法打开，请安装 Microsoft Edge WebView2 Runtime。'
 
 Add-AgentStatus 'claude' 'Claude / Claude Code' (Join-Path $HomePath '.claude') @((Join-Path $HomePath '.claude\skills')) 'claude'
 Add-AgentStatus 'codex' 'OpenAI Codex' (Join-Path $HomePath '.codex') @((Join-Path $HomePath '.codex\skills'), (Join-Path $HomePath '.agents\skills')) 'codex'
-Add-AgentStatus 'antigravity' 'Antigravity' (Join-Path $HomePath '.gemini\antigravity') @((Join-Path $HomePath '.gemini\antigravity\skills')) ''
+Add-AgentStatus 'antigravity' 'Antigravity' (Join-Path $HomePath '.gemini\antigravity') @((Join-Path $HomePath '.gemini\antigravity\skills'), (Join-Path $HomePath '.antigravity\skills')) 'antigravity'
 
 if ((@($Agents | Where-Object { $_.detected }).Count) -eq 0) {
   Add-Check 'agent.noneDetected' 'AI Coding 工具' 'info' '未识别到可接管的 AI Coding 工具。' '' '安装 Claude Code、Codex 或 Antigravity 后，再点击“接管 AI 软件链接”。AI SkillHub 不会创建假的工具目录。'
@@ -478,7 +506,7 @@ if (Test-Path -LiteralPath $LastSyncPath) {
 
 $payload = [PSCustomObject]@{
   schemaVersion = 1
-    appVersion = '2.0.0'
+  appVersion = $AppVersion
   generatedAt = (Get-Date).ToString('o')
   scenario = [PSCustomObject]@{
     name = $scenarioName

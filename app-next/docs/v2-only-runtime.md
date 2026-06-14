@@ -1,20 +1,20 @@
-# V2-only runtime
+# Current desktop runtime
 
 Date: 2026-06-06
 
-AI SkillHub now uses the V2 runtime layout only.
+AI SkillHub now uses the current desktop runtime layout only.
 
 Removed:
 
 ```text
 app/
-AI SkillHub.exe
 release/
 ```
 
 Current runtime:
 
 ```text
+AI SkillHub.exe
 app-next/runtime/
 app-next/data/github_sources/
 app-next/reports/

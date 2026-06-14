@@ -121,8 +121,13 @@ function Test-ClaudePresent {
 }
 
 function Test-AntigravityPresent {
+  $antigravityCommand = Get-Command antigravity -ErrorAction SilentlyContinue
+  if ($null -ne $antigravityCommand) { return $true }
+
   $antigravityHome = Join-Path $HOME '.gemini\antigravity'
   if (Test-Path -LiteralPath $antigravityHome -PathType Container) { return $true }
+  $legacyAntigravityHome = Join-Path $HOME '.antigravity'
+  if (Test-Path -LiteralPath $legacyAntigravityHome -PathType Container) { return $true }
   return $false
 }
 

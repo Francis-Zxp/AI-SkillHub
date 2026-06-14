@@ -147,6 +147,11 @@ export function App() {
     showUiToast(t("lang.toast"), "ok");
   }
 
+  function changeTheme(nextTheme: ThemeName) {
+    setTheme(nextTheme);
+    toastMessage(t("theme.toast", { theme: themeLabel(nextTheme) }), "info");
+  }
+
   function toastMessage(message: string, tone: ToastTone = "info") {
     setToast({ message, tone });
   }
@@ -155,7 +160,7 @@ export function App() {
 
   async function loadSnapshot(
     mode: "indexed" | "refresh" = "indexed",
-    options: { background?: boolean } = {}
+    options: { background?: boolean; quiet?: boolean } = {}
   ): Promise<LegacySnapshot | null> {
     if (!options.background) setLoading(true);
     try {
@@ -169,7 +174,7 @@ export function App() {
       const result = await invoke<LegacySnapshot>(command);
       setSnapshot(result);
       setLoadError("");
-      if (mode === "refresh") toastMessage(t("toast.refreshDone"), "ok");
+      if (mode === "refresh" && !options.quiet) toastMessage(t("toast.refreshDone"), "ok");
       return result;
     } catch (error) {
       setLoadError(messageFromError(error));
@@ -483,7 +488,7 @@ export function App() {
       return snapshot;
     }
     setOperation({ title: t("op.syncTitle"), detail: t("op.step1"), step: 1, total: 3, percent: 8 });
-    const refreshed = await loadSnapshot("refresh", { background: true });
+    const refreshed = await loadSnapshot("refresh", { background: true, quiet: true });
     if (!runtimeAvailable) {
       setOperation(null);
       return refreshed;
@@ -502,6 +507,28 @@ export function App() {
     );
     window.setTimeout(() => setOperation(null), 900);
     return popularity;
+  }
+
+  async function refreshLocalAgents(): Promise<LegacySnapshot | null> {
+    if (!runtimeAvailable) {
+      const preview = createPreviewSnapshot();
+      setSnapshot(preview);
+      toastMessage(t("agents.detectToast"), "ok");
+      return preview;
+    }
+    setLoading(true);
+    try {
+      const refreshed = await invoke<LegacySnapshot>("refresh_agent_detection");
+      setSnapshot(refreshed);
+      setLoadError("");
+      toastMessage(t("agents.detectToast"), "ok");
+      return refreshed;
+    } catch (error) {
+      setLoadError(messageFromError(error));
+      return null;
+    } finally {
+      setLoading(false);
+    }
   }
 
   /* ---- import wizard bridges ---- */
@@ -707,19 +734,7 @@ export function App() {
           </div>
           <div className="topbar-actions">
             <LanguageSwitcher current={lang} onChange={changeLang} />
-            <button
-              className="icon-button"
-              aria-label={t("theme.cycle", { current: themeLabel(theme) })}
-              title={t("theme.cycle", { current: themeLabel(theme) })}
-              onClick={() => {
-                const next = nextTheme(theme);
-                setTheme(next);
-                toastMessage(t("theme.toast", { theme: themeLabel(next) }), "info");
-              }}
-              type="button"
-            >
-              <Icon name={themeIcon(theme)} />
-            </button>
+            <ThemeSwitcher current={theme} onChange={changeTheme} />
             <button
               className="primary-pill"
               disabled={loading || Boolean(operation)}
@@ -800,6 +815,7 @@ export function App() {
               loading={loading}
               onCopySkill={skill => void copySkillPrompt(skill, recordUsage)}
               onOpenAdvanced={() => setActive("release")}
+              onOpenAgents={() => setActive("agents")}
               onOpenLibrary={() => setActive("library")}
               onRefreshPopularity={() => void refreshSourcePopularity()}
               onSync={() => void syncAndRefreshAll()}
@@ -838,7 +854,14 @@ export function App() {
               snapshot={snapshot}
             />
           )}
-          {active === "agents" && <Agents disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />}
+          {active === "agents" && (
+            <Agents
+              disabled={loading}
+              onRefreshAgents={() => void refreshLocalAgents()}
+              onToggle={updateEnabled}
+              snapshot={snapshot}
+            />
+          )}
           {(active === "release" || active === "snapshots") && (
             <Advanced
               disabled={loading}
@@ -853,7 +876,7 @@ export function App() {
               currentTheme={theme}
               disabled={loading}
               onChangeLang={changeLang}
-              onChangeTheme={setTheme}
+              onChangeTheme={changeTheme}
               onOpenAdvanced={() => setActive("release")}
               onQaStatus={updateDesktopQaStatus}
               snapshot={snapshot}
@@ -923,6 +946,61 @@ function LanguageSwitcher({ current, onChange }: { current: Lang; onChange: (lan
               >
                 <strong>{option.label}</strong>
                 <small>{option.short}</small>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ThemeSwitcher({ current, onChange }: { current: ThemeName; onChange: (theme: ThemeName) => void }) {
+  const [open, setOpen] = useState(false);
+  const currentOption = THEME_OPTIONS.find(option => option.value === current) ?? THEME_OPTIONS[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.(".theme-switcher")) return;
+      setOpen(false);
+    };
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [open]);
+
+  return (
+    <div className={open ? "theme-switcher open" : "theme-switcher"}>
+      <button
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className="theme-trigger"
+        onClick={event => {
+          event.stopPropagation();
+          setOpen(value => !value);
+        }}
+        type="button"
+        title={t("theme.choose", { current: themeLabel(current) })}
+      >
+        <Icon name={themeIcon(current)} />
+      </button>
+      {open && (
+        <ul className="theme-menu" role="listbox">
+          {THEME_OPTIONS.map(option => (
+            <li key={option.value}>
+              <button
+                aria-selected={option.value === current}
+                className={option.value === current ? "active" : ""}
+                onClick={() => {
+                  onChange(option.value);
+                  setOpen(false);
+                }}
+                role="option"
+                type="button"
+              >
+                <span aria-hidden="true"><Icon name={option.icon} /></span>
+                <strong>{t(option.labelKey)}</strong>
               </button>
             </li>
           ))}
@@ -1012,6 +1090,7 @@ function Dashboard({
   loading,
   onCopySkill,
   onOpenAdvanced,
+  onOpenAgents,
   onOpenLibrary,
   onRefreshPopularity,
   onSync,
@@ -1022,6 +1101,7 @@ function Dashboard({
   loading: boolean;
   onCopySkill: (skill: SkillCard) => void;
   onOpenAdvanced: () => void;
+  onOpenAgents: () => void;
   onOpenLibrary: () => void;
   onRefreshPopularity: () => void;
   onSync: () => void;
@@ -1032,40 +1112,7 @@ function Dashboard({
   const backupBlocked = countByStatus(snapshot?.backupDryRun ?? [], "blocked");
   const restoreBlocked = countByStatus(snapshot?.restoreDryRun ?? [], "blocked");
   const lockedRollback = (snapshot?.rollbackPlan ?? []).filter(step => step.status === "locked").length;
-  const desktopQaStatus = desktopQaGateStatus(snapshot?.desktopQaChecks ?? []);
-  const releaseReportsOk = (snapshot?.releaseReports ?? []).filter(report => report.ok).length;
-  const releaseReportsTotal = Math.max((snapshot?.releaseReports ?? []).length, 1);
-  const readinessScore = Math.max(
-    20,
-    Math.min(
-      92,
-      Math.round(
-        (summary.diagnosticsStatus === "ok" ? 28 : 10) +
-          (backupBlocked === 0 ? 22 : 8) +
-          (restoreBlocked === 0 ? 18 : 6) +
-          (desktopQaStatus === "done" ? 16 : desktopQaStatus === "blocked" ? 3 : 8) +
-          (releaseReportsOk / releaseReportsTotal) * 8
-      )
-    )
-  );
   const healthIssues = summary.warnings + backupBlocked + restoreBlocked + lockedRollback;
-  const readinessRows = [
-    {
-      label: t("dash.gateCore"),
-      value: readinessScore,
-      caption: t("dash.gateCoreCaption", { status: summary.diagnosticsStatus, n: summary.warnings })
-    },
-    {
-      label: t("dash.gateBackup"),
-      value: backupBlocked + restoreBlocked === 0 ? 72 : 38,
-      caption: t("dash.gateBackupCaption", { n: backupBlocked + restoreBlocked })
-    },
-    {
-      label: t("dash.gateRelease"),
-      value: desktopQaStatus === "done" ? 66 : 24,
-      caption: desktopQaGateLabel(snapshot?.desktopQaChecks ?? [])
-    }
-  ];
   const alerts = [
     {
       icon: "alert" as const,
@@ -1116,6 +1163,7 @@ function Dashboard({
           accent="violet"
           icon="sparkle"
           label={t("dash.metricSkills")}
+          onClick={onOpenLibrary}
           trend={t("dash.trendSources", { n: summary.sources })}
           value={summary.skills}
         />
@@ -1123,6 +1171,7 @@ function Dashboard({
           accent="indigo"
           icon="sources"
           label={t("dash.metricSources")}
+          onClick={onOpenLibrary}
           trend={t("dash.trendPrompts", { n: summary.prompts })}
           value={summary.sources}
         />
@@ -1130,6 +1179,7 @@ function Dashboard({
           accent="amber"
           icon="agent"
           label={t("dash.metricAgents")}
+          onClick={onOpenAgents}
           trend={t("dash.trendAgents", { n: summary.agentsDetected })}
           value={summary.agentsDetected}
         />
@@ -1137,6 +1187,7 @@ function Dashboard({
           accent="rose"
           icon="alert"
           label={t("dash.metricIssues")}
+          onClick={onOpenAdvanced}
           trend={healthIssues > 0 ? t("dash.trendAttention") : t("dash.trendClear")}
           value={healthIssues}
         />
@@ -1150,31 +1201,7 @@ function Dashboard({
       />
 
       <section className="dashboard-grid">
-        <article className="panel readiness-panel glow-card">
-          <header className="panel-head">
-            <div>
-              <span className="eyebrow">{t("dash.readiness")}</span>
-              <h3>{t("dash.readiness")}</h3>
-            </div>
-            <button className="ghost-action" onClick={onOpenAdvanced} type="button">
-              {t("dash.viewPipeline")}
-            </button>
-          </header>
-          <div className="readiness-stack">
-            {readinessRows.map(row => (
-              <div className="readiness-row" key={row.label}>
-                <div>
-                  <strong>{row.label}</strong>
-                  <span>{row.caption}</span>
-                </div>
-                <b>{row.value}%</b>
-                <div className="linear-progress">
-                  <i style={{ width: `${row.value}%` }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </article>
+        <UsageInsightPanel loading={loading} onRefreshPopularity={onRefreshPopularity} snapshot={snapshot} />
 
         <aside className="panel alerts-panel glow-card">
           <header className="panel-head">
@@ -1198,8 +1225,6 @@ function Dashboard({
           <ActivityTimeline snapshot={snapshot} />
         </aside>
       </section>
-
-      <UsageInsightPanel loading={loading} onRefreshPopularity={onRefreshPopularity} snapshot={snapshot} />
     </div>
   );
 }
@@ -1378,7 +1403,7 @@ function UsageInsightPanel({
           skills: source.skillCount,
           stars: 0,
           thirtyDay: usage?.thirtyDayCount ?? 0,
-          usage: usage ? statScore(usage) : Math.max(0, source.skillCount)
+          usage: usage ? statScore(usage) : 0
         }
       });
     });
@@ -1398,25 +1423,34 @@ function UsageInsightPanel({
   );
 
   const rankedSkills = useMemo(() => {
-    const stats = usageStats
-      .filter(stat => stat.targetType === "skill")
-      .map(stat => ({
-        name: stat.targetName,
-        category: skills.find(skill => skill.folderName === stat.targetId)?.category || "usage",
-        score: statScore(stat)
-      }))
-      .filter(stat => stat.score > 0)
-      .sort((a, b) => b.score - a.score);
-    if (stats.length > 0) return stats;
+    const statsBySkill = new Map(
+      usageStats
+        .filter(stat => stat.targetType === "skill")
+        .map(stat => [stat.targetId, stat])
+    );
     return skills
-      .slice(0, 6)
-      .map(skill => ({ name: skill.name, category: skill.category, score: skill.enabled ? 1 : 0 }));
+      .map(skill => {
+        const stat = statsBySkill.get(skill.folderName) ?? statsBySkill.get(skill.name);
+        return {
+          id: skill.folderName,
+          name: skill.name,
+          category: skill.category,
+          score: stat ? statScore(stat) : 0
+        };
+      })
+      .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
   }, [range, skills, usageStats]);
 
   const rankedSources = sourcePopularity
     .map(source => ({ name: sourcePopularityDisplayName(source), stars: source.stars, score: sourceScore(source) }))
-    .sort((a, b) => b.stars - a.stars || b.score - a.score)
-    .slice(0, 5);
+    .sort((a, b) => b.stars - a.stars || b.score - a.score);
+  const maxSkillScore = Math.max(...rankedSkills.map(row => row.score), 1);
+  const maxSourceHeat = Math.max(...rankedSources.map(row => Math.max(row.stars, row.score)), 1);
+  const skillBarWidth = (score: number) => (score <= 0 ? "0%" : `${Math.max(6, Math.min(100, (score / maxSkillScore) * 100))}%`);
+  const sourceBarWidth = (row: { score: number; stars: number }) => {
+    const value = Math.max(row.stars, row.score);
+    return value <= 0 ? "0%" : `${Math.max(6, Math.min(100, (value / maxSourceHeat) * 100))}%`;
+  };
 
   return (
     <section className="usage-insight glow-card" aria-label="Usage insight panel">
@@ -1492,17 +1526,17 @@ function UsageInsightPanel({
         {viewMode === "bars" && (
           <div className="usage-bars">
             {rankedSkills.length === 0 && rankedSources.length === 0 && <p>{t("usage.noEvents")}</p>}
-            {rankedSkills.slice(0, 6).map(row => (
-              <div className="usage-bar-row" key={`skill-${row.name}`}>
+            {rankedSkills.map(row => (
+              <div className="usage-bar-row" key={`skill-${row.id}`} title={row.name}>
                 <span>{row.name}</span>
-                <i><b style={{ width: `${Math.max(8, Math.min(100, row.score * 8))}%` }} /></i>
+                <i><b style={{ width: skillBarWidth(row.score) }} /></i>
                 <em>{row.score}</em>
               </div>
             ))}
-            {rankedSources.slice(0, 6).map(row => (
-              <div className="usage-bar-row source" key={`source-${row.name}`}>
+            {rankedSources.map(row => (
+              <div className="usage-bar-row source" key={`source-${row.name}`} title={row.name}>
                 <span>{row.name}</span>
-                <i><b style={{ width: `${Math.max(8, Math.min(100, (row.stars || row.score) / 20))}%` }} /></i>
+                <i><b style={{ width: sourceBarWidth(row) }} /></i>
                 <em>{row.stars > 0 ? `★ ${formatCompactNumber(row.stars)}` : row.score}</em>
               </div>
             ))}
@@ -1517,7 +1551,7 @@ function UsageInsightPanel({
               const last = points[points.length - 1]?.stars ?? source.stars;
               const delta = points.length >= 2 ? last - first : 0;
               return (
-                <article className="trend-row" key={source.sourceId}>
+                <article className="trend-row" key={source.sourceId} title={sourcePopularityDisplayName(source)}>
                   <div>
                     <strong>{sourcePopularityDisplayName(source)}</strong>
                     <span>
@@ -3001,10 +3035,12 @@ function Presets({
 
 function Agents({
   disabled,
+  onRefreshAgents,
   onToggle,
   snapshot
 }: {
   disabled: boolean;
+  onRefreshAgents: () => void;
   onToggle: (command: string, id: string, enabled: boolean) => Promise<void>;
   snapshot: LegacySnapshot | null;
 }) {
@@ -3019,10 +3055,15 @@ function Agents({
           <h2>{t("agents.title")}</h2>
           <p>{t("agents.subtitle")}</p>
         </div>
-        <div className="page-header-stats">
-          <span>{t("agents.supported", { n: adapters.length })}</span>
-          <span>{t("agents.detected", { n: adapters.filter(adapter => adapter.detected).length })}</span>
-          <span>{t("agents.enabled", { n: adapters.filter(adapter => adapter.enabled).length })}</span>
+        <div className="page-header-side">
+          <div className="page-header-stats">
+            <span>{t("agents.supported", { n: adapters.length })}</span>
+            <span>{t("agents.detected", { n: adapters.filter(adapter => adapter.detected).length })}</span>
+            <span>{t("agents.enabled", { n: adapters.filter(adapter => adapter.enabled).length })}</span>
+          </div>
+          <button className="secondary-action" disabled={disabled} onClick={onRefreshAgents} type="button">
+            <Icon name="refresh" /> {disabled ? t("agents.detecting") : t("agents.detectNow")}
+          </button>
         </div>
       </section>
 
@@ -3596,24 +3637,31 @@ function Metric({
   accent = "violet",
   icon,
   label,
+  onClick,
   trend,
   value
 }: {
   accent?: string;
   icon?: IconName;
   label: string;
+  onClick?: () => void;
   trend?: string;
   value: number;
 }) {
   return (
-    <article className={`metric glow-card metric-${accent}`}>
+    <button
+      aria-label={label}
+      className={`metric glow-card metric-${accent}${onClick ? " interactive" : ""}`}
+      onClick={onClick}
+      type="button"
+    >
       <div>
         <span>{label}</span>
         {icon && <em aria-hidden="true"><Icon name={icon} /></em>}
       </div>
       <strong><CountUp value={value} /></strong>
       {trend && <small>{trend}</small>}
-    </article>
+    </button>
   );
 }
 
@@ -3645,11 +3693,6 @@ function initialTheme(): ThemeName {
 
 function isThemeName(value: string | null): value is ThemeName {
   return value === "dark" || value === "light" || value === "classic-dark" || value === "classic-light";
-}
-
-function nextTheme(theme: ThemeName): ThemeName {
-  const index = THEME_OPTIONS.findIndex(option => option.value === theme);
-  return THEME_OPTIONS[(index + 1) % THEME_OPTIONS.length]?.value ?? "dark";
 }
 
 function themeLabel(theme: ThemeName): string {

@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-  [string]$Version = 'alpha',
+  [string]$Version = '',
   [switch]$Quiet,
   [switch]$NoZip
 )
@@ -14,11 +14,45 @@ $V2Root = Split-Path -Parent $RuntimeRoot
 $ProjectRoot = Split-Path -Parent $V2Root
 $ReleaseRoot = Join-Path $ProjectRoot 'release'
 $ReportsRoot = Join-Path $V2Root 'reports\release-preflight'
+$Checks = New-Object System.Collections.Generic.List[object]
+
+function Get-ProjectVersion {
+  $tauriConfig = Join-Path $V2Root 'src-tauri\tauri.conf.json'
+  if (Test-Path -LiteralPath $tauriConfig -PathType Leaf) {
+    try {
+      $config = Get-Content -LiteralPath $tauriConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+      if (-not [string]::IsNullOrWhiteSpace([string]$config.version)) {
+        return [string]$config.version
+      }
+    } catch {
+    }
+  }
+
+  $packageJson = Join-Path $V2Root 'package.json'
+  if (Test-Path -LiteralPath $packageJson -PathType Leaf) {
+    try {
+      $package = Get-Content -LiteralPath $packageJson -Raw -Encoding UTF8 | ConvertFrom-Json
+      if (-not [string]::IsNullOrWhiteSpace([string]$package.version)) {
+        return [string]$package.version
+      }
+    } catch {
+    }
+  }
+
+  throw '无法从 tauri.conf.json 或 package.json 读取 AI SkillHub 版本。'
+}
+
+if ([string]::IsNullOrWhiteSpace($Version)) {
+  $Version = Get-ProjectVersion
+}
+if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z._-]*$') {
+  throw "版本号只能包含字母、数字、点、下划线和短横线：$Version"
+}
+
 $PackageName = "AI-SkillHub-$Version"
 $StagingRoot = Join-Path $ReleaseRoot $PackageName
 $ZipPath = Join-Path $ReleaseRoot ($PackageName + '.zip')
 $ShaPath = Join-Path $ReleaseRoot ($PackageName + '.sha256.txt')
-$Checks = New-Object System.Collections.Generic.List[object]
 
 function Write-Utf8Bom([string]$Path, [string]$Text) {
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
