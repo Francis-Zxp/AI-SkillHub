@@ -1285,7 +1285,7 @@ function SkillShowcase({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphRef = useRef<SkillGraphRuntime | null>(null);
   const graphData = useMemo(() => buildSkillGraphData(skills, sources), [skills, sources]);
-  const categoryLegend = useMemo(() => buildConstellationLegend(skills), [skills]);
+  const categoryLegend = useMemo(() => buildConstellationLegend(skills, sources), [skills, sources]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1362,7 +1362,7 @@ function SkillShowcase({
     }
     const hovered = findGraphHit(runtime, runtime.pointerX, runtime.pointerY);
     runtime.hoverId = hovered?.id ?? "";
-    canvas.style.cursor = hovered?.skill ? "copy" : hovered?.source ? "pointer" : "grab";
+    canvas.style.cursor = hovered?.skill ? "copy" : hovered?.kind === "source" ? "pointer" : "grab";
   };
 
   const startGraphDrag = (event: PointerEvent<HTMLCanvasElement>) => {
@@ -1390,10 +1390,10 @@ function SkillShowcase({
     runtime.dragging = false;
     runtime.dragged = false;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
-    canvas.style.cursor = hovered?.skill ? "copy" : hovered?.source ? "pointer" : "grab";
+    canvas.style.cursor = hovered?.skill ? "copy" : hovered?.kind === "source" ? "pointer" : "grab";
     if (wasDragged || !hovered) return;
     if (hovered.skill) onCopySkill(hovered.skill);
-    else if (hovered.source) onOpenLibrary();
+    else if (hovered.kind === "source") onOpenLibrary();
   };
 
   return (
@@ -4151,43 +4151,24 @@ type SkillGraphRuntime = {
 };
 
 function buildSkillGraphData(skills: SkillCard[], sources: SourceCard[]): SkillGraphData {
-  const assignedSkills = new Set<string>();
-  const groups: Array<{ category: string; id: string; label: string; skills: SkillCard[]; source?: SourceCard }> = [];
-
-  for (const source of sources) {
-    if (source.name === "AI-SkillHub-local-routers") continue;
-    const sourceSkills = skills.filter(skill => skillBelongsToSource(skill, source));
-    if (sourceSkills.length === 0) continue;
-    for (const skill of sourceSkills) assignedSkills.add(skillGraphSkillId(skill));
-    groups.push({
-      category: source.categoryId || "general",
-      id: source.id,
-      label: source.name,
-      skills: sourceSkills.sort((left, right) => left.name.localeCompare(right.name)),
-      source
-    });
-  }
-
-  const looseBuckets = new Map<string, SkillCard[]>();
+  const sourceCategories = buildSourceCategoryLookup(sources);
+  const groups = new Map<string, SkillCard[]>();
   for (const skill of skills) {
-    if (assignedSkills.has(skillGraphSkillId(skill))) continue;
-    const key = skill.source?.trim() || "local";
-    looseBuckets.set(key, [...(looseBuckets.get(key) ?? []), skill]);
-  }
-  for (const [label, bucket] of looseBuckets) {
-    groups.push({
-      category: bucket[0] ? skillVisualCategory(bucket[0]) : "general",
-      id: `loose-${normalizeLookup(label)}`,
-      label: label === "local" ? "Local Skills" : label,
-      skills: bucket.sort((left, right) => left.name.localeCompare(right.name))
-    });
+    const category = skillGraphCategory(skill, sourceCategories);
+    groups.set(category, [...(groups.get(category) ?? []), skill]);
   }
 
-  groups.sort((left, right) => right.skills.length - left.skills.length || left.label.localeCompare(right.label));
+  const orderedGroups = [...groups.entries()]
+    .map(([category, bucket]) => ({
+      category,
+      id: `category-${normalizeLookup(category)}`,
+      label: displayCategoryName(category),
+      skills: bucket.sort((left, right) => left.name.localeCompare(right.name))
+    }))
+    .sort((left, right) => right.skills.length - left.skills.length || left.label.localeCompare(right.label));
 
   const nodes: SkillGraphNode[] = [];
-  const edges: SkillGraphEdge[] = [];
-  groups.forEach((group, groupIndex) => {
+  orderedGroups.forEach((group, groupIndex) => {
     const category = group.category || "general";
     const sourceIndex = nodes.length;
     nodes.push({
@@ -4196,18 +4177,16 @@ function buildSkillGraphData(skills: SkillCard[], sources: SourceCard[]): SkillG
       groupIndex,
       hue: skillCategoryHue(category),
       id: `source-${group.id}`,
-      itemCount: groups.length,
+      itemCount: group.skills.length,
       itemIndex: groupIndex,
       kind: "source",
       label: group.label,
       parentIndex: -1,
       router: false,
-      seed: stableSkillHash(group.id),
-      source: group.source
+      seed: stableSkillHash(group.id)
     });
     group.skills.forEach((skill, itemIndex) => {
       const skillCategory = skillVisualCategory(skill);
-      const targetIndex = nodes.length;
       nodes.push({
         category: skillCategory,
         enabled: skill.enabled,
@@ -4223,15 +4202,30 @@ function buildSkillGraphData(skills: SkillCard[], sources: SourceCard[]): SkillG
         seed: stableSkillHash(`${skill.folderName}:${skill.relativePath}:${itemIndex}`),
         skill
       });
-      edges.push({ hue: skillCategoryHue(skillCategory), sourceIndex, targetIndex });
     });
   });
 
-  return { edges, nodes, sourceCount: groups.length };
+  return { edges: [], nodes, sourceCount: orderedGroups.length };
 }
 
 function skillGraphSkillId(skill: SkillCard) {
   return `${skill.folderName}::${skill.relativePath || skill.name}`;
+}
+
+function buildSourceCategoryLookup(sources: SourceCard[]) {
+  const sourceCategories = new Map<string, string>();
+  for (const source of sources) {
+    const category = source.categoryId || "general";
+    sourceCategories.set(normalizeLookup(source.name), category);
+    const sourceUrlName = normalizeLookup((source.url.split("/").pop() ?? "").replace(/\.git$/i, ""));
+    if (sourceUrlName) sourceCategories.set(sourceUrlName, category);
+  }
+  return sourceCategories;
+}
+
+function skillGraphCategory(skill: SkillCard, sourceCategories: Map<string, string>) {
+  const sourceCategory = sourceCategories.get(normalizeLookup(skill.source));
+  return sourceCategory && sourceCategory !== "auto" ? sourceCategory : skillVisualCategory(skill);
 }
 
 function drawSkillGraph(
@@ -4245,80 +4239,98 @@ function drawSkillGraph(
   const styles = getComputedStyle(context.canvas);
   const textColor = styles.getPropertyValue("--text").trim() || "#191426";
   const mutedColor = styles.getPropertyValue("--text-muted").trim() || "rgba(110, 102, 130, .76)";
-  const centerX = width / 2 + runtime.panX;
-  const centerY = height / 2 + runtime.panY;
-  const sourceRadiusX = Math.max(118, width * 0.31);
-  const sourceRadiusY = Math.max(74, height * 0.22);
-  const sourcePositions = new Map<number, { x: number; y: number }>();
+  const surfaceColor = styles.getPropertyValue("--surface").trim() || "rgba(255, 255, 255, .9)";
+  const clusterNodes = graph.nodes.filter(node => node.kind === "source");
+  const sourcePositions = new Map<number, { radius: number; x: number; y: number }>();
   const nodePositions = new Map<number, SkillGraphHitNode>();
   runtime.hitNodes = [];
 
   context.save();
-  const glow = context.createRadialGradient(width * 0.52, height * 0.5, 8, width * 0.52, height * 0.5, Math.max(width, height) * 0.62);
-  glow.addColorStop(0, "rgba(100, 92, 255, .14)");
-  glow.addColorStop(0.48, "rgba(80, 210, 180, .07)");
+  const glow = context.createRadialGradient(width * 0.5, height * 0.46, 8, width * 0.5, height * 0.48, Math.max(width, height) * 0.58);
+  glow.addColorStop(0, "rgba(100, 92, 255, .10)");
+  glow.addColorStop(0.54, "rgba(80, 210, 180, .045)");
   glow.addColorStop(1, "rgba(0, 0, 0, 0)");
   context.fillStyle = glow;
   context.fillRect(0, 0, width, height);
 
+  const columns = skillGraphColumns(clusterNodes.length, width);
+  const rows = Math.max(1, Math.ceil(clusterNodes.length / columns));
+  const paddingX = 26;
+  const plotTop = 58;
+  const plotBottom = 72;
+  const plotWidth = Math.max(1, width - paddingX * 2);
+  const plotHeight = Math.max(1, height - plotTop - plotBottom);
+  const cellWidth = plotWidth / columns;
+  const cellHeight = plotHeight / rows;
+
   graph.nodes.forEach((node, index) => {
     if (node.kind !== "source") return;
-    const angle = -Math.PI / 2 + (node.itemIndex / Math.max(1, graph.sourceCount)) * Math.PI * 2;
-    const drift = Math.sin(time * 0.00018 + node.seed * 0.01) * 7;
-    const x = centerX + Math.cos(angle) * (sourceRadiusX + drift);
-    const y = centerY + Math.sin(angle) * (sourceRadiusY + drift * 0.55);
-    const radius = 9 + Math.min(8, Math.sqrt(node.itemCount));
-    const hitNode = { ...node, radius: radius + 10, screenX: x, screenY: y };
-    sourcePositions.set(index, { x, y });
+    const column = node.itemIndex % columns;
+    const row = Math.floor(node.itemIndex / columns);
+    const drift = Math.sin(time * 0.00016 + node.seed * 0.01) * 3.5;
+    const x = paddingX + cellWidth * (column + 0.5) + runtime.panX * 0.28 + drift;
+    const y = plotTop + cellHeight * (row + 0.5) + runtime.panY * 0.28 + drift * 0.35;
+    const radius = clampNumber(Math.min(cellWidth, cellHeight) * 0.34, 34, 68);
+    const highlighted = runtime.hoverId === node.id;
+    const haloRadius = radius + (highlighted ? 14 : 10);
+
+    context.beginPath();
+    context.arc(x, y, haloRadius, 0, Math.PI * 2);
+    context.fillStyle = `hsla(${node.hue}, 84%, 60%, ${highlighted ? 0.16 : 0.075})`;
+    context.fill();
+    context.strokeStyle = `hsla(${node.hue}, 80%, 56%, ${highlighted ? 0.42 : 0.22})`;
+    context.lineWidth = highlighted ? 1.6 : 1;
+    context.stroke();
+
+    context.beginPath();
+    context.arc(x, y, 4.5, 0, Math.PI * 2);
+    context.fillStyle = `hsla(${node.hue}, 82%, 56%, .86)`;
+    context.shadowBlur = highlighted ? 18 : 10;
+    context.shadowColor = `hsla(${node.hue}, 82%, 58%, .34)`;
+    context.fill();
+    context.shadowBlur = 0;
+
+    const countLabel = `${node.label} · ${node.itemCount}`;
+    drawGraphText(context, countLabel, x - radius, y - haloRadius - 12, textColor, radius * 2 + 22);
+
+    const hitNode = { ...node, radius: haloRadius, screenX: x, screenY: y };
+    sourcePositions.set(index, { radius, x, y });
     nodePositions.set(index, hitNode);
   });
 
   graph.nodes.forEach((node, index) => {
     if (node.kind !== "skill") return;
-    const parent = sourcePositions.get(node.parentIndex) ?? { x: centerX, y: centerY };
-    const ring = Math.floor(node.itemIndex / 18);
-    const ringStart = ring * 18;
-    const ringCount = Math.max(1, Math.min(18, node.itemCount - ringStart));
-    const localIndex = node.itemIndex - ringStart;
+    const parent = sourcePositions.get(node.parentIndex) ?? { radius: 48, x: width / 2, y: height / 2 };
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    const normalized = (node.itemIndex + 0.5) / Math.max(1, node.itemCount);
     const angle =
-      (localIndex / ringCount) * Math.PI * 2 +
+      node.itemIndex * goldenAngle +
       (node.seed % 360) * (Math.PI / 180) +
-      Math.sin(time * 0.00016 + node.seed) * 0.08;
-    const spread = 30 + ring * 22 + Math.min(34, node.itemCount * 0.5);
+      Math.sin(time * 0.00012 + node.seed) * 0.045;
+    const spread = Math.sqrt(normalized) * parent.radius * 0.88;
     const x = parent.x + Math.cos(angle) * spread;
-    const y = parent.y + Math.sin(angle) * spread * 0.72;
-    const radius = node.router ? 5.8 : 3.6 + (node.seed % 4) * 0.45;
-    const hitNode = { ...node, radius: radius + 8, screenX: x, screenY: y };
+    const y = parent.y + Math.sin(angle) * spread * 0.82;
+    const dotSize = node.itemCount > 120 ? 2.1 : node.itemCount > 80 ? 2.5 : node.itemCount > 45 ? 3 : 3.7;
+    const radius = node.router ? dotSize + 1.4 : dotSize + (node.seed % 3) * 0.18;
+    const hitNode = { ...node, radius: radius + 6, screenX: x, screenY: y };
     nodePositions.set(index, hitNode);
   });
-
-  for (const edge of graph.edges) {
-    const source = nodePositions.get(edge.sourceIndex);
-    const target = nodePositions.get(edge.targetIndex);
-    if (!source || !target) continue;
-    const highlighted = runtime.hoverId === source.id || runtime.hoverId === target.id;
-    context.beginPath();
-    context.moveTo(source.screenX, source.screenY);
-    context.lineTo(target.screenX, target.screenY);
-    context.strokeStyle = `hsla(${edge.hue}, 78%, 58%, ${highlighted ? 0.34 : 0.12})`;
-    context.lineWidth = highlighted ? 1.45 : 0.75;
-    context.stroke();
-  }
 
   for (const [index, node] of nodePositions) {
     if (node.kind === "source") continue;
     const highlighted = runtime.hoverId === node.id;
-    const alpha = node.enabled ? (highlighted ? 1 : 0.78) : 0.34;
+    const clusterHighlighted = runtime.hoverId === graph.nodes[node.parentIndex]?.id;
+    const alpha = node.enabled ? (highlighted ? 1 : clusterHighlighted ? 0.92 : 0.72) : 0.3;
     context.beginPath();
-    context.arc(node.screenX, node.screenY, node.radius - 8, 0, Math.PI * 2);
+    context.arc(node.screenX, node.screenY, node.radius - 6, 0, Math.PI * 2);
     context.fillStyle = `hsla(${node.hue}, 86%, 60%, ${alpha})`;
-    context.shadowBlur = highlighted ? 18 : node.router ? 12 : 7;
+    context.shadowBlur = highlighted ? 16 : node.router ? 10 : 4;
     context.shadowColor = `hsla(${node.hue}, 86%, 58%, .48)`;
     context.fill();
     context.shadowBlur = 0;
     if (node.router) {
       context.beginPath();
-      context.arc(node.screenX, node.screenY, node.radius - 4, 0, Math.PI * 2);
+      context.arc(node.screenX, node.screenY, node.radius - 2, 0, Math.PI * 2);
       context.strokeStyle = `hsla(${node.hue}, 86%, 72%, .34)`;
       context.lineWidth = 1;
       context.stroke();
@@ -4329,20 +4341,6 @@ function drawSkillGraph(
 
   for (const [index, node] of nodePositions) {
     if (node.kind !== "source") continue;
-    const highlighted = runtime.hoverId === node.id;
-    context.beginPath();
-    context.arc(node.screenX, node.screenY, node.radius - 4, 0, Math.PI * 2);
-    context.fillStyle = `hsla(${node.hue}, 80%, ${highlighted ? 58 : 50}%, .92)`;
-    context.shadowBlur = highlighted ? 24 : 14;
-    context.shadowColor = `hsla(${node.hue}, 82%, 58%, .38)`;
-    context.fill();
-    context.shadowBlur = 0;
-    context.beginPath();
-    context.arc(node.screenX, node.screenY, node.radius + 2, 0, Math.PI * 2);
-    context.strokeStyle = `hsla(${node.hue}, 86%, 70%, .28)`;
-    context.lineWidth = 1.2;
-    context.stroke();
-    drawGraphText(context, node.label, node.screenX + node.radius + 8, node.screenY - 2, textColor, 118);
     runtime.hitNodes.push(node);
     nodePositions.set(index, node);
   }
@@ -4351,9 +4349,17 @@ function drawSkillGraph(
     ? runtime.hitNodes.find(node => node.id === runtime.hoverId)
     : undefined;
   if (hovered) {
-    drawGraphTooltip(context, hovered, textColor, mutedColor, width, height);
+    drawGraphTooltip(context, hovered, textColor, mutedColor, surfaceColor, width, height);
   }
   context.restore();
+}
+
+function skillGraphColumns(count: number, width: number) {
+  if (count <= 1) return 1;
+  if (width < 620) return Math.min(2, count);
+  if (count <= 4) return count;
+  if (count <= 9) return 3;
+  return 4;
 }
 
 function drawGraphText(
@@ -4377,13 +4383,14 @@ function drawGraphTooltip(
   node: SkillGraphHitNode,
   textColor: string,
   mutedColor: string,
+  surfaceColor: string,
   width: number,
   height: number
 ) {
   const title = node.label;
   const subtitle = node.skill
     ? cleanSkillDescription(node.skill.description) || displayCategoryName(node.category)
-    : displayCategoryName(node.category);
+    : t("lib.skillsTotal", { n: node.itemCount });
   context.save();
   context.font = "800 12px Inter, system-ui, sans-serif";
   const titleWidth = context.measureText(title).width;
@@ -4393,7 +4400,7 @@ function drawGraphTooltip(
   const boxHeight = 54;
   const x = clampNumber(node.screenX + 16, 12, width - boxWidth - 12);
   const y = clampNumber(node.screenY - boxHeight - 14, 12, height - boxHeight - 12);
-  context.fillStyle = "rgba(255, 255, 255, .88)";
+  context.fillStyle = surfaceColor;
   context.strokeStyle = `hsla(${node.hue}, 76%, 62%, .32)`;
   context.lineWidth = 1;
   roundedCanvasRect(context, x, y, boxWidth, boxHeight, 12);
@@ -4443,10 +4450,11 @@ function findGraphHit(runtime: SkillGraphRuntime, x: number, y: number) {
   return null;
 }
 
-function buildConstellationLegend(skills: SkillCard[]) {
+function buildConstellationLegend(skills: SkillCard[], sources: SourceCard[]) {
+  const sourceCategories = buildSourceCategoryLookup(sources);
   const counts = new Map<string, number>();
   for (const skill of skills) {
-    const category = skillVisualCategory(skill);
+    const category = skillGraphCategory(skill, sourceCategories);
     counts.set(category, (counts.get(category) ?? 0) + 1);
   }
   return [...counts.entries()]

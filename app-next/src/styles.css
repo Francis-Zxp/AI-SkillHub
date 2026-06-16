@@ -994,16 +994,8 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .skill-graph::after {
   content: "";
   position: absolute;
-  inset: 38px 8%;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 55%, transparent);
-  border-radius: 50%;
-  opacity: .28;
+  display: none;
   pointer-events: none;
-}
-.skill-graph::after {
-  inset: 78px 19%;
-  transform: rotate(-7deg);
-  opacity: .18;
 }
 .skill-graph-canvas {
   position: absolute;
