@@ -1,5 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import { type CSSProperties, Fragment, useEffect, useMemo, useState } from "react";
+import {
+  type CSSProperties,
+  Fragment,
+  type PointerEvent,
+  type MouseEvent as ReactMouseEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { Icon, type IconName } from "./icons";
 import { CountUp, ParticleField, useCardGlow } from "./effects";
 import { LANG_OPTIONS, type Lang, categoryName, getLang, initialLang, setLang, t } from "./i18n";
@@ -1273,10 +1282,56 @@ function SkillShowcase({
   snapshot: LegacySnapshot | null;
 }) {
   const skills = snapshot?.skills ?? [];
-  const showcaseSkills = useMemo(() => {
-    const enabled = skills.filter(skill => skill.enabled);
-    return (enabled.length > 0 ? enabled : skills).slice(0, 18);
-  }, [skills]);
+  const [rotation, setRotation] = useState({ x: -10, y: -18 });
+  const [dragging, setDragging] = useState(false);
+  const dragRef = useRef<{ x: number; y: number; rotationX: number; rotationY: number } | null>(null);
+  const hasDraggedRef = useRef(false);
+  const constellationSkills = useMemo(() => interleaveConstellationSkills(skills), [skills]);
+  const categoryLegend = useMemo(() => buildConstellationLegend(skills), [skills]);
+  const featuredStride = constellationSkills.length >= 24 ? Math.max(1, Math.floor(constellationSkills.length / 16)) : 0;
+
+  const startConstellationDrag = (event: PointerEvent<HTMLElement>) => {
+    if (event.button !== 0) return;
+    dragRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      rotationX: rotation.x,
+      rotationY: rotation.y
+    };
+    hasDraggedRef.current = false;
+    setDragging(true);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const moveConstellationDrag = (event: PointerEvent<HTMLElement>) => {
+    if (!dragRef.current) return;
+    const deltaX = event.clientX - dragRef.current.x;
+    const deltaY = event.clientY - dragRef.current.y;
+    if (Math.abs(deltaX) + Math.abs(deltaY) > 4) hasDraggedRef.current = true;
+    setRotation({
+      x: clampNumber(dragRef.current.rotationX - deltaY * 0.16, -56, 56),
+      y: dragRef.current.rotationY + deltaX * 0.18
+    });
+  };
+
+  const endConstellationDrag = (event: PointerEvent<HTMLElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    setDragging(false);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    window.setTimeout(() => {
+      hasDraggedRef.current = false;
+    }, 0);
+  };
+
+  const copyConstellationSkill = (event: ReactMouseEvent<HTMLButtonElement>, skill: SkillCard) => {
+    if (hasDraggedRef.current) {
+      event.preventDefault();
+      hasDraggedRef.current = false;
+      return;
+    }
+    onCopySkill(skill);
+  };
 
   return (
     <section className="skill-showcase glow-card">
@@ -1293,24 +1348,53 @@ function SkillShowcase({
       {loading && skills.length === 0 ? (
         <p className="skill-showcase-empty">{t("showcase.empty")}</p>
       ) : (
-        <div className="skill-showcase-grid">
-          {showcaseSkills.map((skill, index) => (
-            <button
-              className={`skill-chip glow-card tone-${skillTone(skill.category)}`}
-              key={skill.folderName}
-              onClick={() => onCopySkill(skill)}
-              style={{ "--enter-delay": `${index * 40}ms` } as CSSProperties}
-              type="button"
-              title={cleanSkillDescription(skill.description)}
-            >
-              <span className="skill-chip-icon" aria-hidden="true"><Icon name={skillIcon(skill.category)} /></span>
-              <span className="skill-chip-main">
-                <strong>/{skill.name}</strong>
-                <small>{displayCategoryName(skill.category) || skill.source}</small>
+        <div
+          className={`skill-constellation${dragging ? " dragging" : ""}`}
+          onPointerCancel={endConstellationDrag}
+          onPointerDown={startConstellationDrag}
+          onPointerLeave={endConstellationDrag}
+          onPointerMove={moveConstellationDrag}
+          onPointerUp={endConstellationDrag}
+          style={
+            {
+              "--rotate-x": `${rotation.x}deg`,
+              "--rotate-y": `${rotation.y}deg`
+            } as CSSProperties
+          }
+        >
+          <div className="skill-constellation-aura" />
+          <div className="skill-constellation-stage">
+            <div className="skill-constellation-orbit">
+              {constellationSkills.map((skill, index) => (
+                <button
+                  aria-label={`/${skill.name}`}
+                  className={`skill-orb${isRouterHubSkill(skill) ? " router" : ""}${skill.enabled ? "" : " muted"}${
+                    featuredStride > 0 && index % featuredStride === 0 ? " featured" : ""
+                  }`}
+                  key={`${skill.folderName}-${skill.relativePath}`}
+                  onClick={event => copyConstellationSkill(event, skill)}
+                  style={skillConstellationStyle(skill, index, constellationSkills.length)}
+                  title={`/${skill.name}\n${cleanSkillDescription(skill.description) || displayCategoryName(skillVisualCategory(skill))}`}
+                  type="button"
+                >
+                  <span className="skill-orb-core" aria-hidden="true" />
+                  <span className="skill-orb-label">/{skill.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="skill-constellation-meta" aria-hidden="true">
+            <strong><CountUp value={skills.length} /></strong>
+            <span>{t("showcase.nodes")}</span>
+          </div>
+          <div className="skill-constellation-legend" aria-label={t("showcase.legend")}>
+            {categoryLegend.map(item => (
+              <span key={item.category} style={{ "--node-hue": `${item.hue}` } as CSSProperties}>
+                <i />
+                {item.label}
               </span>
-              <span className="skill-chip-copy" aria-hidden="true"><Icon name="copy" /></span>
-            </button>
-          ))}
+            ))}
+          </div>
         </div>
       )}
     </section>
@@ -3950,6 +4034,10 @@ function normalizeLookup(value: string) {
   return value.trim().toLowerCase().replace(/[_\s]+/g, "-");
 }
 
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function isRouterHubSkill(skill: SkillCard): boolean {
   if (typeof skill.isRouterHub === "boolean") return skill.isRouterHub;
   const description = String(skill.description || "");
@@ -3965,6 +4053,110 @@ function isRouterHubSkill(skill: SkillCard): boolean {
 function cleanSkillDescription(value: string | undefined | null) {
   if (!value) return "";
   return String(value).replace(/^\s*\[(?:ROUTER-HUB|CHILD-SKILL)\]\s*/i, "").trim();
+}
+
+function interleaveConstellationSkills(skills: SkillCard[]) {
+  const buckets = new Map<string, SkillCard[]>();
+  for (const skill of skills) {
+    const category = skillVisualCategory(skill);
+    const bucket = buckets.get(category) ?? [];
+    bucket.push(skill);
+    buckets.set(category, bucket);
+  }
+  for (const bucket of buckets.values()) {
+    bucket.sort((left, right) => {
+      if (Number(isRouterHubSkill(right)) !== Number(isRouterHubSkill(left))) {
+        return Number(isRouterHubSkill(right)) - Number(isRouterHubSkill(left));
+      }
+      return left.name.localeCompare(right.name);
+    });
+  }
+
+  const orderedBuckets = [...buckets.entries()].sort(
+    ([leftCategory, left], [rightCategory, right]) =>
+      right.length - left.length || displayCategoryName(leftCategory).localeCompare(displayCategoryName(rightCategory))
+  );
+  const result: SkillCard[] = [];
+  let index = 0;
+  while (result.length < skills.length) {
+    let added = false;
+    for (const [, bucket] of orderedBuckets) {
+      const skill = bucket[index];
+      if (skill) {
+        result.push(skill);
+        added = true;
+      }
+    }
+    if (!added) break;
+    index += 1;
+  }
+  return result;
+}
+
+function skillVisualCategory(skill: SkillCard) {
+  const raw = normalizeLookup(skill.category || "");
+  if (raw && !["auto", "general", "local"].includes(raw)) return raw;
+  const inferred = inferCategoryIds(
+    [skill.name, skill.source, skill.description, skill.tags.join(" ")].filter(Boolean).join(" ")
+  );
+  return inferred[0] ?? "general";
+}
+
+function skillConstellationStyle(skill: SkillCard, index: number, total: number): CSSProperties {
+  const safeTotal = Math.max(1, total);
+  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+  const y = safeTotal === 1 ? 0 : 1 - (index / (safeTotal - 1)) * 2;
+  const radius = Math.sqrt(Math.max(0, 1 - y * y));
+  const theta = index * goldenAngle;
+  const x = Math.cos(theta) * radius;
+  const z = Math.sin(theta) * radius;
+  const depth = (z + 1) / 2;
+  const category = skillVisualCategory(skill);
+  const hash = stableSkillHash(`${skill.folderName}:${skill.relativePath}`);
+  const size = isRouterHubSkill(skill) ? 16 + (hash % 5) : skill.enabled ? 8 + (hash % 5) : 6 + (hash % 4);
+
+  return {
+    "--node-x": x.toFixed(4),
+    "--node-y": y.toFixed(4),
+    "--node-z": z.toFixed(4),
+    "--node-size": `${size}px`,
+    "--node-hue": `${skillCategoryHue(category)}`,
+    "--node-opacity": `${(0.42 + depth * 0.48).toFixed(2)}`,
+    "--node-delay": `${-(hash % 12000)}ms`,
+    zIndex: Math.round(depth * 1000)
+  } as CSSProperties;
+}
+
+function buildConstellationLegend(skills: SkillCard[]) {
+  const counts = new Map<string, number>();
+  for (const skill of skills) {
+    const category = skillVisualCategory(skill);
+    counts.set(category, (counts.get(category) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort(([leftCategory, leftCount], [rightCategory, rightCount]) => {
+      return rightCount - leftCount || displayCategoryName(leftCategory).localeCompare(displayCategoryName(rightCategory));
+    })
+    .slice(0, 7)
+    .map(([category, count]) => ({
+      category,
+      count,
+      hue: skillCategoryHue(category),
+      label: `${displayCategoryName(category)} · ${count}`
+    }));
+}
+
+function skillCategoryHue(category: string) {
+  const hash = stableSkillHash(category);
+  return (hash * 47 + 162) % 360;
+}
+
+function stableSkillHash(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash;
 }
 
 function inferCategoryIds(input: string): string[] {

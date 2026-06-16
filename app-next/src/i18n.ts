@@ -116,7 +116,9 @@ const en: Dict = {
   // Skill showcase
   "showcase.title": "Local Skill Constellation",
   "showcase.eyebrow": "Installed Skills",
-  "showcase.subtitle": "{n} skills live in your local library. Click any chip to copy its invocation.",
+  "showcase.subtitle": "{n} skills live in your local library, grouped by type and status.",
+  "showcase.nodes": "Skill nodes",
+  "showcase.legend": "Skill type legend",
   "showcase.empty": "Waiting for the first skill scan.",
 
   // Usage insights
@@ -806,7 +808,9 @@ const zh: Dict = {
 
   "showcase.title": "本地技能星图",
   "showcase.eyebrow": "已安装 Skills",
-  "showcase.subtitle": "本地技能库中有 {n} 个 Skill；点击任意标签即可复制调用提示。",
+  "showcase.subtitle": "本地技能库中有 {n} 个 Skill，按类型与状态聚合显示。",
+  "showcase.nodes": "Skill 星点",
+  "showcase.legend": "Skill 类型图例",
   "showcase.empty": "正在等待第一次 Skill 扫描。",
 
   "usage.eyebrow": "使用洞察",
@@ -1479,7 +1483,9 @@ const ko: Dict = {
 
   "showcase.title": "로컬 스킬 성좌",
   "showcase.eyebrow": "설치된 스킬",
-  "showcase.subtitle": "로컬 라이브러리에 스킬 {n}개가 있습니다. 칩을 클릭하면 호출 프롬프트가 복사됩니다.",
+  "showcase.subtitle": "로컬 라이브러리의 스킬 {n}개를 유형과 상태별로 보여줍니다.",
+  "showcase.nodes": "스킬 노드",
+  "showcase.legend": "스킬 유형 범례",
   "showcase.empty": "첫 스킬 스캔을 기다리는 중입니다.",
 
   "usage.eyebrow": "사용 인사이트",
