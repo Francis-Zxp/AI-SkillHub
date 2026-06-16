@@ -89,7 +89,16 @@ function Get-HashText([string]$Path) {
   return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
 }
 
+function Assert-PathInsideRoot([string]$Path, [string]$Root, [string]$Label) {
+  $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+  $targetFull = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+  if ($targetFull -eq $rootFull.TrimEnd('\') -or -not $targetFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "$Label 路径不在预期目录内：$targetFull"
+  }
+}
+
 New-Item -ItemType Directory -Force -Path $ReleaseRoot, $ReportsRoot | Out-Null
+Assert-PathInsideRoot $StagingRoot $ReleaseRoot '发布暂存目录'
 if (Test-Path -LiteralPath $StagingRoot) { Remove-Item -LiteralPath $StagingRoot -Recurse -Force }
 if (Test-Path -LiteralPath $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
 if (Test-Path -LiteralPath $ShaPath) { Remove-Item -LiteralPath $ShaPath -Force }

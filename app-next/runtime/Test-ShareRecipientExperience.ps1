@@ -63,6 +63,15 @@ function Invoke-Captured([string]$FileName, [string]$Arguments, [string]$Working
   return [PSCustomObject]@{ ok = ($p.ExitCode -eq 0); exitCode = $p.ExitCode; stdout = $stdout; stderr = $stderr }
 }
 
+function Assert-PathInsideRoot([string]$Path, [string]$Root, [string]$Label) {
+  $rootFull = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+  $targetFull = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+  if ($targetFull -eq $rootFull.TrimEnd('\') -or -not $targetFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "$Label 路径不在预期目录内：$targetFull"
+  }
+}
+
+Assert-PathInsideRoot $RunRoot $ReportsRoot '分享验收临时目录'
 New-Item -ItemType Directory -Force -Path $SandboxRoot, $SandboxV2, $SandboxRuntime | Out-Null
 try {
   Copy-FileRequired (Join-Path $ProjectRoot 'AI SkillHub.exe') (Join-Path $SandboxRoot 'AI SkillHub.exe')

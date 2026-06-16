@@ -1772,6 +1772,20 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .settings-row strong { font-size: 13px; font-weight: 500; }
 .settings-row .segmented { min-width: min(420px, 100%); justify-content: flex-end; }
 .settings-row .segmented button { flex: 1 0 auto; }
+.version-row { align-items: center; }
+.version-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
 .settings-paths { display: flex; flex-direction: column; gap: var(--space-2); }
 .path-row {
   display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: center; gap: var(--space-3);

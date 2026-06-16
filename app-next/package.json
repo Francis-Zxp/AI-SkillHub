@@ -1,6 +1,6 @@
 {
   "name": "ai-skillhub-next",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.2.2",
@@ -9,6 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "tauri",
+    "test:zip-preview": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./runtime/Test-ZipPreviewImport.ps1",
     "stop:dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/stop-dev-runtime.ps1",
     "dev:desktop": "pnpm stop:dev && tauri dev",
     "check:toolchain": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/check-toolchain.ps1"

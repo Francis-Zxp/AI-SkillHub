@@ -444,19 +444,19 @@ $zipPreviewMdPath = Join-Path $ReportsRoot 'zip-preview-test\latest-zip-preview-
 $zipPreviewStatus = 'info'
 $zipPreviewSummary = '尚未运行 zip 导入预览自动测试。'
 $zipPreviewDetail = ''
-$zipPreviewFix = '开发或排错时可运行 AI SkillHub.exe --zip-preview-test；普通日常使用不强制。'
+$zipPreviewFix = '开发或发版前可运行 app-next\runtime\Test-ZipPreviewImport.ps1；普通日常使用不强制。'
 if (Test-Path -LiteralPath $zipPreviewJsonPath -PathType Leaf) {
   try {
     $zipPreview = Get-Content -LiteralPath $zipPreviewJsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $zipPreviewStatus = if ($zipPreview.ok) { 'ok' } else { 'warn' }
     $zipPreviewSummary = if ($zipPreview.ok) { 'zip 导入预览自动测试已通过。' } else { 'zip 导入预览自动测试未通过。' }
     $zipPreviewDetail = Protect-Text ("runId=$($zipPreview.runId); workDir=$($zipPreview.workDir)")
-    $zipPreviewFix = if ($zipPreview.ok) { '无。' } else { '请查看 app-next\reports\zip-preview-test\latest-zip-preview-test.md。' }
+    $zipPreviewFix = if ($zipPreview.ok) { '无。' } else { '请查看 app-next\reports\zip-preview-test\latest-zip-preview-test.md，并重新运行 app-next\runtime\Test-ZipPreviewImport.ps1。' }
   } catch {
     $zipPreviewStatus = 'warn'
     $zipPreviewSummary = 'zip 导入预览自动测试报告无法读取。'
     $zipPreviewDetail = $_.Exception.Message
-    $zipPreviewFix = '请重新运行 AI SkillHub.exe --zip-preview-test。'
+    $zipPreviewFix = '请重新运行 app-next\runtime\Test-ZipPreviewImport.ps1。'
   }
 }
 Add-Check 'import.zipPreviewTest' 'zip 导入预览自动测试' $zipPreviewStatus $zipPreviewSummary $zipPreviewDetail $zipPreviewFix

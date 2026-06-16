@@ -36,6 +36,8 @@ import type {
    Types and constants
    ============================================================= */
 
+declare const __APP_VERSION__: string;
+
 type ThemeName = "dark" | "light" | "classic-dark" | "classic-light";
 
 type SkillDraft = { name: string; category: string; description: string; note: string; tags: string };
@@ -60,6 +62,7 @@ type SourceSortKey = "recent" | "usage" | "heat" | "skillCount" | "health" | "na
 type ToastTone = "info" | "ok" | "warn" | "error";
 
 const TOAST_EVENT = "ai-skillhub-toast";
+const APP_VERSION = __APP_VERSION__;
 const THEME_OPTIONS: Array<{ icon: IconName; labelKey: string; value: ThemeName }> = [
   { value: "dark", labelKey: "theme.dark", icon: "moon" },
   { value: "light", labelKey: "theme.light", icon: "sun" },
@@ -1111,8 +1114,8 @@ function Dashboard({
 }) {
   const backupBlocked = countByStatus(snapshot?.backupDryRun ?? [], "blocked");
   const restoreBlocked = countByStatus(snapshot?.restoreDryRun ?? [], "blocked");
-  const lockedRollback = (snapshot?.rollbackPlan ?? []).filter(step => step.status === "locked").length;
-  const healthIssues = summary.warnings + backupBlocked + restoreBlocked + lockedRollback;
+  const rollbackBlocked = countByStatus(snapshot?.rollbackPlan ?? [], "blocked");
+  const healthIssues = summary.warnings + backupBlocked + restoreBlocked + rollbackBlocked;
   const alerts = [
     {
       icon: "alert" as const,
@@ -3158,7 +3161,8 @@ function Advanced({
   const plannedBackups = countByStatus(backupDryRun, "planned");
   const blockedRestores = countByStatus(restoreDryRun, "blocked");
   const plannedRestores = countByStatus(restoreDryRun, "planned");
-  const lockedRollbackSteps = rollbackPlan.filter(step => step.status === "locked").length;
+  const blockedRollbackSteps = countByStatus(rollbackPlan, "blocked");
+  const lockedRollbackSteps = countByStatus(rollbackPlan, "locked");
   const diagnosticsReady = Boolean(diagnosticsReport?.ok ?? (diagnostics?.available && diagnostics.error === 0));
 
   const gateItems = [
@@ -3176,7 +3180,7 @@ function Advanced({
         : t("gate.diagnosticsBad")
     },
     {
-      status: backupDryRun.length > 0 && blockedBackups === 0 && plannedBackups === 0 ? "done" : "planned",
+      status: backupDryRun.length === 0 ? "planned" : blockedBackups > 0 ? "blocked" : "done",
       title: t("gate.backup"),
       label: backupDryRun.length > 0 ? t("gate.dryRunOnly") : t("gate.toGenerate"),
       summary:
@@ -3185,7 +3189,7 @@ function Advanced({
           : t("gate.backupWaiting")
     },
     {
-      status: restoreDryRun.length > 0 && blockedRestores === 0 && plannedRestores === 0 ? "done" : "planned",
+      status: restoreDryRun.length === 0 ? "planned" : blockedRestores > 0 ? "blocked" : "done",
       title: t("gate.restore"),
       label: restoreDryRun.length > 0 ? t("gate.dryRunOnly") : t("gate.toGenerate"),
       summary:
@@ -3194,12 +3198,21 @@ function Advanced({
           : t("gate.restoreWaiting")
     },
     {
-      status: lockedRollbackSteps === 0 && rollbackPlan.length > 0 ? "done" : "blocked",
+      status: rollbackPlan.length === 0 ? "planned" : blockedRollbackSteps > 0 ? "blocked" : "done",
       title: t("gate.rollback"),
-      label: lockedRollbackSteps === 0 ? t("gate.rollbackUnlocked") : t("gate.rollbackLocked"),
+      label:
+        blockedRollbackSteps > 0
+          ? t("adv.labelBlocked")
+          : lockedRollbackSteps > 0
+            ? t("gate.rollbackSafeLock")
+            : t("gate.rollbackUnlocked"),
       summary:
         rollbackPlan.length > 0
-          ? t("gate.rollbackSummary", { total: rollbackPlan.length, locked: lockedRollbackSteps })
+          ? t("gate.rollbackSummary", {
+              total: rollbackPlan.length,
+              locked: lockedRollbackSteps,
+              blocked: blockedRollbackSteps
+            })
           : t("gate.rollbackWaiting")
     },
     {
@@ -3437,6 +3450,10 @@ function Settings({
           </div>
         </header>
         <div className="settings-grid">
+          <div className="settings-row version-row">
+            <strong>{t("set.version")}</strong>
+            <span className="version-badge">AI SkillHub v{APP_VERSION}</span>
+          </div>
           <div className="settings-row">
             <strong>{t("set.theme")}</strong>
             <SegmentedToggle

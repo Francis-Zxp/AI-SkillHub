@@ -2,6 +2,21 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 2.0.3 - Desktop polish and safety hardening
+
+### Fixed
+
+- Hid backend PowerShell/Git child processes during sync, refresh, diagnostics,
+  AI tool link sync, and GitHub source staging so the desktop app no longer
+  flashes a separate console window.
+- Added the current app version to Settings.
+- Fixed dashboard Health Issues and Advanced Release Gates so a deliberately
+  locked real-rollback safety step is no longer treated as a release blocker.
+- Added a repeatable zip import preview test report generator for release
+  readiness checks.
+- Hardened release/share helper scripts with root-boundary checks before
+  recursive cleanup of temporary package folders.
+
 ## 2.0.2 - Stability and release readiness
 
 ### Fixed

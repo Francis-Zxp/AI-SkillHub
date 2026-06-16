@@ -11,6 +11,12 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::ZipArchive;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LegacySnapshot {
@@ -1230,6 +1236,7 @@ fn command_output_with_timeout(
     timeout: Duration,
     timeout_message: &str,
 ) -> Result<std::process::Output, String> {
+    configure_background_command(command);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
         .spawn()
@@ -1258,6 +1265,14 @@ fn command_output_with_timeout(
         }
     }
 }
+
+#[cfg(target_os = "windows")]
+fn configure_background_command(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_background_command(_command: &mut Command) {}
 
 #[tauri::command]
 fn set_agent_adapter_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {

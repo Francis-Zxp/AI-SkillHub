@@ -1,6 +1,6 @@
 [package]
 name = "ai-skillhub-next"
-version = "2.0.2"
+version = "2.0.3"
 description = "AI SkillHub desktop app"
 authors = ["FrancisZhu"]
 edition = "2021"
