@@ -975,7 +975,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   gap: var(--space-4);
   overflow: hidden;
 }
-.skill-constellation {
+.skill-graph {
   position: relative;
   height: clamp(330px, 31vw, 460px);
   min-height: 0;
@@ -984,137 +984,36 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   overflow: hidden;
   cursor: grab;
   touch-action: none;
-  perspective: 980px;
   background:
     radial-gradient(circle at 50% 48%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 32%),
     radial-gradient(circle at 16% 22%, color-mix(in srgb, var(--info) 16%, transparent), transparent 28%),
     radial-gradient(circle at 82% 78%, color-mix(in srgb, var(--brand) 14%, transparent), transparent 30%),
     color-mix(in srgb, var(--surface-soft) 74%, transparent);
-  --cloud-radius-x: min(38vw, 510px);
-  --cloud-radius-y: min(17vw, 210px);
-  --cloud-radius-z: 210px;
 }
-.skill-constellation.dragging { cursor: grabbing; }
-.skill-constellation::before,
-.skill-constellation::after,
-.skill-constellation-aura {
+.skill-graph::before,
+.skill-graph::after {
   content: "";
   position: absolute;
-  inset: 44px 9%;
+  inset: 38px 8%;
   border: 1px solid color-mix(in srgb, var(--border-strong) 55%, transparent);
   border-radius: 50%;
-  opacity: .42;
+  opacity: .28;
   pointer-events: none;
 }
-.skill-constellation::after {
-  inset: 72px 18%;
-  transform: rotate(-10deg);
-  opacity: .26;
-}
-.skill-constellation-aura {
-  inset: 92px 24%;
-  transform: rotate(18deg);
+.skill-graph::after {
+  inset: 78px 19%;
+  transform: rotate(-7deg);
   opacity: .18;
 }
-.skill-constellation-stage {
+.skill-graph-canvas {
   position: absolute;
   inset: 0;
-  transform: rotateX(var(--rotate-x)) rotateY(var(--rotate-y));
-  transform-style: preserve-3d;
-  transition: transform 120ms linear;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
 }
-.skill-constellation-orbit {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-  animation: constellation-spin 88s linear infinite;
-}
-.skill-constellation.dragging .skill-constellation-orbit { animation-play-state: paused; }
-@keyframes constellation-spin { to { transform: rotateY(360deg); } }
-.skill-orb {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: var(--node-size);
-  height: var(--node-size);
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: hsl(var(--node-hue) 88% 66%);
-  opacity: var(--node-opacity);
-  transform:
-    translate3d(
-      calc(var(--node-x) * var(--cloud-radius-x)),
-      calc(var(--node-y) * var(--cloud-radius-y)),
-      calc(var(--node-z) * var(--cloud-radius-z))
-    );
-  transform-style: preserve-3d;
-  transition: opacity var(--duration) var(--ease), filter var(--duration) var(--ease);
-}
-.skill-orb-core {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background:
-    radial-gradient(circle at 36% 32%, #fff, hsl(var(--node-hue) 92% 72%) 28%, hsl(var(--node-hue) 78% 46%) 64%, transparent 72%);
-  box-shadow:
-    0 0 10px hsl(var(--node-hue) 88% 60% / .45),
-    0 0 28px hsl(var(--node-hue) 88% 60% / .28);
-  animation: orb-breathe 3200ms var(--ease) infinite;
-  animation-delay: var(--node-delay);
-}
-@keyframes orb-breathe {
-  0%, 100% { transform: scale(.92); filter: saturate(1); }
-  50% { transform: scale(1.18); filter: saturate(1.24); }
-}
-.skill-orb.router .skill-orb-core {
-  box-shadow:
-    0 0 0 2px hsl(var(--node-hue) 92% 72% / .24),
-    0 0 18px hsl(var(--node-hue) 88% 60% / .58),
-    0 0 42px hsl(var(--node-hue) 88% 60% / .32);
-}
-.skill-orb.muted { opacity: calc(var(--node-opacity) * .58); }
-.skill-orb:hover,
-.skill-orb:focus-visible {
-  opacity: 1;
-  filter: brightness(1.18);
-  outline: 0;
-}
-.skill-orb:focus-visible .skill-orb-core { box-shadow: 0 0 0 3px color-mix(in srgb, var(--surface) 90%, transparent), 0 0 0 5px currentColor; }
-.skill-orb-label {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 8px);
-  max-width: 190px;
-  padding: 5px 8px;
-  border: 1px solid color-mix(in srgb, currentColor 28%, var(--border));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  color: var(--text);
-  box-shadow: var(--shadow-soft);
-  font-family: var(--ui-mono);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1.1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(-50%) translateY(5px) translateZ(24px);
-  transition: opacity var(--duration) var(--ease), transform var(--duration) var(--ease);
-}
-.skill-orb.featured .skill-orb-label,
-.skill-orb:hover .skill-orb-label,
-.skill-orb:focus-visible .skill-orb-label {
-  opacity: .92;
-  transform: translateX(-50%) translateY(0) translateZ(24px);
-}
-.skill-orb:not(:hover):not(:focus-visible).featured .skill-orb-label {
-  opacity: .52;
-}
-.skill-constellation-meta {
+.skill-graph-meta {
   position: absolute;
   left: 20px;
   top: 18px;
@@ -1125,15 +1024,16 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   border-radius: 14px;
   background: color-mix(in srgb, var(--surface) 78%, transparent);
   box-shadow: var(--shadow-soft);
+  pointer-events: none;
 }
-.skill-constellation-meta strong {
+.skill-graph-meta strong {
   font-size: 28px;
   line-height: 1;
   font-weight: 800;
   color: var(--text);
 }
-.skill-constellation-meta span { color: var(--text-muted); font-size: 11px; }
-.skill-constellation-legend {
+.skill-graph-meta span { color: var(--text-muted); font-size: 11px; }
+.skill-graph-legend {
   position: absolute;
   left: 20px;
   right: 20px;
@@ -1145,7 +1045,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   justify-content: center;
   pointer-events: none;
 }
-.skill-constellation-legend span {
+.skill-graph-legend span {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1162,7 +1062,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.skill-constellation-legend i {
+.skill-graph-legend i {
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -1173,22 +1073,18 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .skill-showcase-empty { padding: var(--space-5); color: var(--text-muted); font-size: 13px; }
 
 @media (max-width: 760px) {
-  .skill-constellation {
+  .skill-graph {
     height: 330px;
-    --cloud-radius-x: min(34vw, 170px);
-    --cloud-radius-y: 120px;
-    --cloud-radius-z: 120px;
   }
-  .skill-orb:not(:hover):not(:focus-visible).featured .skill-orb-label { opacity: 0; }
-  .skill-constellation-meta { left: 16px; top: 16px; }
-  .skill-constellation-meta strong { font-size: 24px; }
-  .skill-constellation-legend {
+  .skill-graph-meta { left: 16px; top: 16px; }
+  .skill-graph-meta strong { font-size: 24px; }
+  .skill-graph-legend {
     left: 14px;
     right: 14px;
     bottom: 12px;
     gap: 6px;
   }
-  .skill-constellation-legend span {
+  .skill-graph-legend span {
     max-width: 145px;
     min-height: 24px;
     font-size: 10.5px;
@@ -1196,15 +1092,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .skill-constellation-orbit,
-  .skill-orb-core {
-    animation: none;
-  }
-  .skill-constellation-stage,
-  .skill-orb,
-  .skill-orb-label {
-    transition: none;
-  }
+  .skill-graph-canvas { scroll-behavior: auto; }
 }
 
 /* Dashboard grid */

@@ -905,6 +905,13 @@ fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
         &diagnostic_skills,
         &configured_sources,
     );
+    skills.extend(scan_source_tree_skills(
+        &sources_dir,
+        &sources,
+        &configured_sources,
+        &skills,
+    ));
+    demote_single_source_root_skills(&mut skills);
     let agents = parse_agents(diagnostics_json.as_ref());
     let agent_adapters = derive_agent_adapters(&agents);
     let adapter_safety_checks = derive_adapter_safety_checks(&agent_adapters);
@@ -9936,6 +9943,224 @@ fn scan_skills(
     skills
 }
 
+fn scan_source_tree_skills(
+    sources_dir: &Path,
+    sources: &[SourceCard],
+    configured_sources: &HashMap<String, SourceConfig>,
+    existing_skills: &[SkillCard],
+) -> Vec<SkillCard> {
+    let mut skills = Vec::new();
+    let mut known_identity_keys: HashSet<String> = HashSet::new();
+    let mut used_folder_names: HashSet<String> = HashSet::new();
+
+    for skill in existing_skills {
+        known_identity_keys.insert(source_skill_identity_key(&skill.source, &skill.name));
+        used_folder_names.insert(skill.folder_name.to_lowercase());
+    }
+
+    for source in sources {
+        if source.name.eq_ignore_ascii_case(ROUTER_HUB_FOLDER) {
+            continue;
+        }
+
+        let source_path = PathBuf::from(&source.local_path);
+        if !source_path.exists() || !source_path.starts_with(sources_dir) {
+            continue;
+        }
+        if source.source_type.eq_ignore_ascii_case("prompt")
+            && !has_skill_md_descendant(&source_path)
+        {
+            continue;
+        }
+
+        for skill_dir in collect_skill_dirs_from_source(&source_path) {
+            let skill_md = skill_dir.join("SKILL.md");
+            let name = read_skill_name(&skill_md)
+                .or_else(|| {
+                    skill_dir
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .map(|value| value.to_string())
+                })
+                .unwrap_or_else(|| source.name.clone());
+            let identity_key = source_skill_identity_key(&source.name, &name);
+            if known_identity_keys.contains(&identity_key) {
+                continue;
+            }
+
+            let folder_name =
+                source_tree_skill_folder_name(source, &skill_dir, &name, &mut used_folder_names);
+            let category = configured_sources
+                .get(&source.name.to_lowercase())
+                .map(|source| source.category_id.clone())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| source.category_id.clone());
+            let description = read_skill_description(&skill_dir);
+            let relative_path = source_tree_relative_path(sources_dir, &skill_dir);
+            let is_router_hub = compute_is_router_hub(
+                &description,
+                &relative_path,
+                &source.name,
+                &folder_name,
+                &name,
+            );
+
+            known_identity_keys.insert(identity_key);
+            skills.push(SkillCard {
+                name,
+                folder_name,
+                category,
+                description,
+                note: String::new(),
+                source: source.name.clone(),
+                health: source_tree_skill_health(&skill_dir),
+                enabled: source.enabled,
+                relative_path,
+                tags: Vec::new(),
+                is_router_hub,
+            });
+        }
+    }
+
+    skills
+}
+
+fn collect_skill_dirs_from_source(source_path: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    let mut stack = vec![(source_path.to_path_buf(), 0usize)];
+    let mut visited = 0usize;
+
+    while let Some((directory, depth)) = stack.pop() {
+        if visited >= 3_500 || depth > 10 {
+            continue;
+        }
+        visited += 1;
+
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        let mut has_skill_md = false;
+        for entry in entries.flatten() {
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+
+            if file_type.is_dir() {
+                if !should_skip_import_scan_dir(&file_name) && file_name != ROUTER_HUB_FOLDER {
+                    stack.push((entry.path(), depth + 1));
+                }
+            } else if file_type.is_file() && file_name.eq_ignore_ascii_case("SKILL.md") {
+                has_skill_md = true;
+            }
+        }
+
+        if has_skill_md {
+            result.push(directory);
+        }
+    }
+
+    result.sort_by_key(|path| path.display().to_string().to_lowercase());
+    result
+}
+
+fn source_skill_identity_key(source: &str, name: &str) -> String {
+    format!(
+        "{}::{}",
+        normalize_skill_lookup(source),
+        normalize_skill_lookup(name)
+    )
+}
+
+fn source_tree_skill_folder_name(
+    source: &SourceCard,
+    skill_dir: &Path,
+    skill_name: &str,
+    used_folder_names: &mut HashSet<String>,
+) -> String {
+    let fallback = normalize_skill_lookup(skill_name);
+    let raw_folder = skill_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.clone());
+    let mut candidate = raw_folder;
+    if candidate.eq_ignore_ascii_case("skills") || candidate.eq_ignore_ascii_case("skill") {
+        candidate = fallback.clone();
+    }
+    if candidate.trim().is_empty() {
+        candidate = normalize_skill_lookup(&source.name);
+    }
+
+    let base_candidate = candidate.clone();
+    if used_folder_names.contains(&candidate.to_lowercase()) {
+        let source_prefix = normalize_skill_lookup(&source.name);
+        candidate = format!("{}__{}", source_prefix, normalize_skill_lookup(skill_name));
+    }
+
+    let mut suffix = 2usize;
+    while used_folder_names.contains(&candidate.to_lowercase()) {
+        candidate = format!("{}-{}", base_candidate, suffix);
+        suffix += 1;
+    }
+    used_folder_names.insert(candidate.to_lowercase());
+    candidate
+}
+
+fn source_tree_relative_path(sources_dir: &Path, skill_dir: &Path) -> String {
+    let relative = skill_dir
+        .strip_prefix(sources_dir)
+        .unwrap_or(skill_dir)
+        .display()
+        .to_string();
+    format!("github_sources\\{}", relative)
+}
+
+fn source_tree_skill_health(skill_dir: &Path) -> String {
+    let skill_md = skill_dir.join("SKILL.md");
+    if skill_md.exists() && check_router_hub_description_quoting(&skill_md).is_some() {
+        return "warn".to_string();
+    }
+    if read_skill_name(&skill_md).is_some() && !read_skill_description(skill_dir).is_empty() {
+        "ok".to_string()
+    } else if skill_md.exists() {
+        "info".to_string()
+    } else {
+        "warn".to_string()
+    }
+}
+
+fn demote_single_source_root_skills(skills: &mut [SkillCard]) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for skill in skills.iter() {
+        *counts
+            .entry(normalize_skill_lookup(&skill.source))
+            .or_insert(0) += 1;
+    }
+
+    for skill in skills.iter_mut() {
+        if !skill.is_router_hub {
+            continue;
+        }
+        if counts
+            .get(&normalize_skill_lookup(&skill.source))
+            .copied()
+            .unwrap_or(0)
+            != 1
+        {
+            continue;
+        }
+        if skill.description.contains(ROUTER_HUB_MARKER)
+            || skill.description.contains(CONFLICT_DISPATCHER_MARKER)
+            || skill.relative_path.contains(ROUTER_HUB_FOLDER)
+        {
+            continue;
+        }
+        skill.is_router_hub = false;
+    }
+}
+
 fn parse_agents(diagnostics: Option<&Value>) -> Vec<AgentCard> {
     let Some(agents) = diagnostics
         .and_then(|root| root.get("agents"))
@@ -11702,6 +11927,70 @@ mod tests {
             "nature-figure",
             "nature-figure",
         ));
+    }
+
+    #[test]
+    fn source_tree_scan_indexes_unlinked_skill_dirs() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-source-tree-scan-test-{}",
+            unix_timestamp_string()
+        ));
+        let sources_dir = root.join("github_sources");
+        let source_dir = sources_dir.join("figure-pack");
+        let child_dir = source_dir.join("skills").join("figure-planner");
+        fs::create_dir_all(&child_dir).expect("source child should be created");
+        fs::write(
+            child_dir.join("SKILL.md"),
+            "---\nname: figure-planner\ndescription: Plan manuscript figures.\n---\nbody\n",
+        )
+        .expect("skill file should be written");
+
+        let source = SourceCard {
+            id: stable_id("source", "figure-pack"),
+            name: "figure-pack".to_string(),
+            source_type: "skill".to_string(),
+            health: "ok".to_string(),
+            url: String::new(),
+            skill_count: 0,
+            mode: "scan".to_string(),
+            category_id: "academic-writing".to_string(),
+            note: String::new(),
+            local_path: source_dir.display().to_string(),
+            enabled: true,
+            tags: Vec::new(),
+            created_at: "1".to_string(),
+        };
+
+        let scanned = scan_source_tree_skills(&sources_dir, &[source], &HashMap::new(), &[]);
+
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].name, "figure-planner");
+        assert_eq!(scanned[0].source, "figure-pack");
+        assert_eq!(scanned[0].health, "ok");
+        assert!(!scanned[0].is_router_hub);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn single_root_skill_is_not_reported_as_router_hub() {
+        let mut skills = vec![SkillCard {
+            name: "VibeSec-Skill".to_string(),
+            folder_name: "VibeSec-Skill".to_string(),
+            category: "security".to_string(),
+            description: "Secure coding guidance.".to_string(),
+            note: String::new(),
+            source: "VibeSec-Skill".to_string(),
+            health: "ok".to_string(),
+            enabled: true,
+            relative_path: "skills\\VibeSec-Skill".to_string(),
+            tags: Vec::new(),
+            is_router_hub: true,
+        }];
+
+        demote_single_source_root_skills(&mut skills);
+
+        assert!(!skills[0].is_router_hub);
     }
 
     #[test]

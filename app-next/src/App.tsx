@@ -3,7 +3,6 @@ import {
   type CSSProperties,
   Fragment,
   type PointerEvent,
-  type MouseEvent as ReactMouseEvent,
   useEffect,
   useMemo,
   useRef,
@@ -1282,55 +1281,119 @@ function SkillShowcase({
   snapshot: LegacySnapshot | null;
 }) {
   const skills = snapshot?.skills ?? [];
-  const [rotation, setRotation] = useState({ x: -10, y: -18 });
-  const [dragging, setDragging] = useState(false);
-  const dragRef = useRef<{ x: number; y: number; rotationX: number; rotationY: number } | null>(null);
-  const hasDraggedRef = useRef(false);
-  const constellationSkills = useMemo(() => interleaveConstellationSkills(skills), [skills]);
+  const sources = snapshot?.sources ?? [];
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const graphRef = useRef<SkillGraphRuntime | null>(null);
+  const graphData = useMemo(() => buildSkillGraphData(skills, sources), [skills, sources]);
   const categoryLegend = useMemo(() => buildConstellationLegend(skills), [skills]);
-  const featuredStride = constellationSkills.length >= 24 ? Math.max(1, Math.floor(constellationSkills.length / 16)) : 0;
 
-  const startConstellationDrag = (event: PointerEvent<HTMLElement>) => {
-    if (event.button !== 0) return;
-    dragRef.current = {
-      x: event.clientX,
-      y: event.clientY,
-      rotationX: rotation.x,
-      rotationY: rotation.y
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const host = canvas?.parentElement;
+    if (!canvas || !host) return;
+
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    const runtime: SkillGraphRuntime = {
+      dragStartX: 0,
+      dragStartY: 0,
+      dragged: false,
+      dragging: false,
+      hitNodes: [],
+      hoverId: "",
+      panX: 0,
+      panY: 0,
+      pointerX: 0,
+      pointerY: 0
     };
-    hasDraggedRef.current = false;
-    setDragging(true);
+    graphRef.current = runtime;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let frame = 0;
+    let disposed = false;
+
+    const resizeCanvas = () => {
+      const rect = host.getBoundingClientRect();
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+      canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    };
+
+    const draw = (time: number) => {
+      if (disposed) return;
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      context.clearRect(0, 0, width, height);
+      drawSkillGraph(context, graphData, runtime, width, height, reducedMotion ? 0 : time);
+      frame = window.requestAnimationFrame(draw);
+    };
+
+    const observer = new ResizeObserver(resizeCanvas);
+    observer.observe(host);
+    resizeCanvas();
+    frame = window.requestAnimationFrame(draw);
+
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      window.cancelAnimationFrame(frame);
+      if (graphRef.current === runtime) graphRef.current = null;
+    };
+  }, [graphData]);
+
+  const updateGraphHover = (event: PointerEvent<HTMLCanvasElement>) => {
+    const runtime = graphRef.current;
+    const canvas = canvasRef.current;
+    if (!runtime || !canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    runtime.pointerX = event.clientX - rect.left;
+    runtime.pointerY = event.clientY - rect.top;
+    if (runtime.dragging) {
+      runtime.panX += event.movementX;
+      runtime.panY += event.movementY;
+      if (Math.abs(runtime.pointerX - runtime.dragStartX) + Math.abs(runtime.pointerY - runtime.dragStartY) > 4) {
+        runtime.dragged = true;
+      }
+      canvas.style.cursor = "grabbing";
+      return;
+    }
+    const hovered = findGraphHit(runtime, runtime.pointerX, runtime.pointerY);
+    runtime.hoverId = hovered?.id ?? "";
+    canvas.style.cursor = hovered?.skill ? "copy" : hovered?.source ? "pointer" : "grab";
+  };
+
+  const startGraphDrag = (event: PointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0) return;
+    const runtime = graphRef.current;
+    const canvas = canvasRef.current;
+    if (!runtime || !canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    runtime.pointerX = event.clientX - rect.left;
+    runtime.pointerY = event.clientY - rect.top;
+    runtime.dragStartX = runtime.pointerX;
+    runtime.dragStartY = runtime.pointerY;
+    runtime.dragged = false;
+    runtime.dragging = true;
+    canvas.style.cursor = "grabbing";
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
-  const moveConstellationDrag = (event: PointerEvent<HTMLElement>) => {
-    if (!dragRef.current) return;
-    const deltaX = event.clientX - dragRef.current.x;
-    const deltaY = event.clientY - dragRef.current.y;
-    if (Math.abs(deltaX) + Math.abs(deltaY) > 4) hasDraggedRef.current = true;
-    setRotation({
-      x: clampNumber(dragRef.current.rotationX - deltaY * 0.16, -56, 56),
-      y: dragRef.current.rotationY + deltaX * 0.18
-    });
-  };
-
-  const endConstellationDrag = (event: PointerEvent<HTMLElement>) => {
-    if (!dragRef.current) return;
-    dragRef.current = null;
-    setDragging(false);
+  const endGraphDrag = (event: PointerEvent<HTMLCanvasElement>) => {
+    const runtime = graphRef.current;
+    const canvas = canvasRef.current;
+    if (!runtime || !canvas) return;
+    const hovered = findGraphHit(runtime, runtime.pointerX, runtime.pointerY);
+    const wasDragged = runtime.dragged;
+    runtime.dragging = false;
+    runtime.dragged = false;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
-    window.setTimeout(() => {
-      hasDraggedRef.current = false;
-    }, 0);
-  };
-
-  const copyConstellationSkill = (event: ReactMouseEvent<HTMLButtonElement>, skill: SkillCard) => {
-    if (hasDraggedRef.current) {
-      event.preventDefault();
-      hasDraggedRef.current = false;
-      return;
-    }
-    onCopySkill(skill);
+    canvas.style.cursor = hovered?.skill ? "copy" : hovered?.source ? "pointer" : "grab";
+    if (wasDragged || !hovered) return;
+    if (hovered.skill) onCopySkill(hovered.skill);
+    else if (hovered.source) onOpenLibrary();
   };
 
   return (
@@ -1348,46 +1411,23 @@ function SkillShowcase({
       {loading && skills.length === 0 ? (
         <p className="skill-showcase-empty">{t("showcase.empty")}</p>
       ) : (
-        <div
-          className={`skill-constellation${dragging ? " dragging" : ""}`}
-          onPointerCancel={endConstellationDrag}
-          onPointerDown={startConstellationDrag}
-          onPointerLeave={endConstellationDrag}
-          onPointerMove={moveConstellationDrag}
-          onPointerUp={endConstellationDrag}
-          style={
-            {
-              "--rotate-x": `${rotation.x}deg`,
-              "--rotate-y": `${rotation.y}deg`
-            } as CSSProperties
-          }
-        >
-          <div className="skill-constellation-aura" />
-          <div className="skill-constellation-stage">
-            <div className="skill-constellation-orbit">
-              {constellationSkills.map((skill, index) => (
-                <button
-                  aria-label={`/${skill.name}`}
-                  className={`skill-orb${isRouterHubSkill(skill) ? " router" : ""}${skill.enabled ? "" : " muted"}${
-                    featuredStride > 0 && index % featuredStride === 0 ? " featured" : ""
-                  }`}
-                  key={`${skill.folderName}-${skill.relativePath}`}
-                  onClick={event => copyConstellationSkill(event, skill)}
-                  style={skillConstellationStyle(skill, index, constellationSkills.length)}
-                  title={`/${skill.name}\n${cleanSkillDescription(skill.description) || displayCategoryName(skillVisualCategory(skill))}`}
-                  type="button"
-                >
-                  <span className="skill-orb-core" aria-hidden="true" />
-                  <span className="skill-orb-label">/{skill.name}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="skill-constellation-meta" aria-hidden="true">
+        <div className="skill-graph">
+          <canvas
+            aria-label={t("showcase.subtitle", { n: skills.length })}
+            className="skill-graph-canvas"
+            onPointerCancel={endGraphDrag}
+            onPointerDown={startGraphDrag}
+            onPointerLeave={updateGraphHover}
+            onPointerMove={updateGraphHover}
+            onPointerUp={endGraphDrag}
+            ref={canvasRef}
+            role="img"
+          />
+          <div className="skill-graph-meta" aria-hidden="true">
             <strong><CountUp value={skills.length} /></strong>
             <span>{t("showcase.nodes")}</span>
           </div>
-          <div className="skill-constellation-legend" aria-label={t("showcase.legend")}>
+          <div className="skill-graph-legend" aria-label={t("showcase.legend")}>
             {categoryLegend.map(item => (
               <span key={item.category} style={{ "--node-hue": `${item.hue}` } as CSSProperties}>
                 <i />
@@ -1930,12 +1970,18 @@ function Library(props: LibraryProps) {
           const sourceSkills = skills
             .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
             .filter(skill => skillBelongsToSource(skill, source));
-          const parentSkills = sourceSkills.filter(isRouterHubSkill);
-          const childSkills = sourceSkills.filter(skill => !isRouterHubSkill(skill));
+          const totalSkillCount = Math.max(source.skillCount ?? 0, sourceSkills.length);
+          const singleRootSkill = sourceSkills.length === 1;
+          const parentSkills = singleRootSkill ? [] : sourceSkills.filter(isRouterHubSkill);
+          const childSkills = singleRootSkill ? sourceSkills : sourceSkills.filter(skill => !isRouterHubSkill(skill));
           const popularity = popularityById.get(source.id);
           const matchesQuery = searchQuery.trim()
-            ? childSkills.some(skill => skillMatchesSearch(skill, searchQuery))
+            ? sourceSkills.some(skill => skillMatchesSearch(skill, searchQuery))
             : true;
+          const skillCountText =
+            source.sourceType === "prompt" && totalSkillCount === 0
+              ? t("lib.promptSource")
+              : t("lib.skillsTotal", { n: totalSkillCount });
           return (
             <article
               className={`source-group glow-card${isExpanded ? " expanded" : ""}${matchesQuery ? "" : " dimmed"}`}
@@ -1958,7 +2004,7 @@ function Library(props: LibraryProps) {
                     <strong>{source.name}</strong>
                     <span>
                       {displayCategoryName(source.categoryId)} · {sourceTypeLabel(source.sourceType)} ·{" "}
-                      {t("lib.children", { n: childSkills.length })}
+                      {skillCountText}
                     </span>
                   </div>
                 </button>
@@ -2047,7 +2093,7 @@ function Library(props: LibraryProps) {
                 </span>
                 <div className="source-group-title">
                   <strong>{t("lib.localGroup")}</strong>
-                  <span>{t("lib.localGroupHint")} · {t("lib.children", { n: localSkills.length })}</span>
+                  <span>{t("lib.localGroupHint")} · {t("lib.skillsTotal", { n: localSkills.length })}</span>
                 </div>
               </div>
             </header>
@@ -2282,8 +2328,11 @@ function SourceEditPanel({
   const [note, setNote] = useState(draft?.note ?? source.note ?? "");
   const [enabled, setEnabled] = useState(draft?.enabled ?? source.enabled);
   const [tags, setTags] = useState(draft?.tags ?? tagInputValue(source.tags ?? []));
-  const routerSkills = sourceSkills.filter(isRouterHubSkill);
-  const childSkills = sourceSkills.filter(skill => !isRouterHubSkill(skill));
+  const totalSkillCount = Math.max(source.skillCount ?? 0, sourceSkills.length);
+  const singleRootSkill = sourceSkills.length === 1;
+  const routerSkills = singleRootSkill ? [] : sourceSkills.filter(isRouterHubSkill);
+  const childSkills = singleRootSkill ? sourceSkills : sourceSkills.filter(skill => !isRouterHubSkill(skill));
+  const mapSkills = childSkills.length > 0 ? childSkills : sourceSkills;
   const projectAddress = source.url || source.localPath || t("srcEditor.noAddress");
 
   useEffect(() => {
@@ -2303,7 +2352,7 @@ function SourceEditPanel({
       </div>
       <div className="source-detail-metrics">
         <span>
-          <b>{source.skillCount}</b>
+          <b>{totalSkillCount}</b>
           <small>{t("srcEditor.skills")}</small>
         </span>
         <span>
@@ -2318,13 +2367,17 @@ function SourceEditPanel({
       <div className="source-detail-skill-map">
         <div className="source-detail-section-title">
           <strong>{t("srcEditor.map")}</strong>
-          <span>{t("srcEditor.mapCount", { routers: routerSkills.length, children: childSkills.length })}</span>
+          <span>{t("srcEditor.mapCount", { total: totalSkillCount, routers: routerSkills.length, children: childSkills.length })}</span>
           <button className="ghost-action small" onClick={onOpenChildren} type="button">
             <Icon name="chevron" />
           </button>
         </div>
-        {childSkills.length === 0 && <p className="source-detail-muted">{t("srcEditor.noChildren")}</p>}
-        {childSkills.slice(0, 10).map(skill => (
+        {mapSkills.length === 0 && (
+          <p className="source-detail-muted">
+            {source.sourceType === "prompt" ? t("lib.promptOnly") : t("srcEditor.noChildren")}
+          </p>
+        )}
+        {mapSkills.slice(0, 10).map(skill => (
           <article className="source-detail-child" key={skill.folderName}>
             <strong>{skill.name}</strong>
             <span>{cleanSkillDescription(skill.description) || displayCategoryName(skill.category)}</span>
@@ -4055,44 +4108,6 @@ function cleanSkillDescription(value: string | undefined | null) {
   return String(value).replace(/^\s*\[(?:ROUTER-HUB|CHILD-SKILL)\]\s*/i, "").trim();
 }
 
-function interleaveConstellationSkills(skills: SkillCard[]) {
-  const buckets = new Map<string, SkillCard[]>();
-  for (const skill of skills) {
-    const category = skillVisualCategory(skill);
-    const bucket = buckets.get(category) ?? [];
-    bucket.push(skill);
-    buckets.set(category, bucket);
-  }
-  for (const bucket of buckets.values()) {
-    bucket.sort((left, right) => {
-      if (Number(isRouterHubSkill(right)) !== Number(isRouterHubSkill(left))) {
-        return Number(isRouterHubSkill(right)) - Number(isRouterHubSkill(left));
-      }
-      return left.name.localeCompare(right.name);
-    });
-  }
-
-  const orderedBuckets = [...buckets.entries()].sort(
-    ([leftCategory, left], [rightCategory, right]) =>
-      right.length - left.length || displayCategoryName(leftCategory).localeCompare(displayCategoryName(rightCategory))
-  );
-  const result: SkillCard[] = [];
-  let index = 0;
-  while (result.length < skills.length) {
-    let added = false;
-    for (const [, bucket] of orderedBuckets) {
-      const skill = bucket[index];
-      if (skill) {
-        result.push(skill);
-        added = true;
-      }
-    }
-    if (!added) break;
-    index += 1;
-  }
-  return result;
-}
-
 function skillVisualCategory(skill: SkillCard) {
   const raw = normalizeLookup(skill.category || "");
   if (raw && !["auto", "general", "local"].includes(raw)) return raw;
@@ -4102,29 +4117,330 @@ function skillVisualCategory(skill: SkillCard) {
   return inferred[0] ?? "general";
 }
 
-function skillConstellationStyle(skill: SkillCard, index: number, total: number): CSSProperties {
-  const safeTotal = Math.max(1, total);
-  const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-  const y = safeTotal === 1 ? 0 : 1 - (index / (safeTotal - 1)) * 2;
-  const radius = Math.sqrt(Math.max(0, 1 - y * y));
-  const theta = index * goldenAngle;
-  const x = Math.cos(theta) * radius;
-  const z = Math.sin(theta) * radius;
-  const depth = (z + 1) / 2;
-  const category = skillVisualCategory(skill);
-  const hash = stableSkillHash(`${skill.folderName}:${skill.relativePath}`);
-  const size = isRouterHubSkill(skill) ? 16 + (hash % 5) : skill.enabled ? 8 + (hash % 5) : 6 + (hash % 4);
+type SkillGraphNodeKind = "source" | "skill";
+type SkillGraphNode = {
+  category: string;
+  enabled: boolean;
+  groupIndex: number;
+  hue: number;
+  id: string;
+  itemCount: number;
+  itemIndex: number;
+  kind: SkillGraphNodeKind;
+  label: string;
+  parentIndex: number;
+  router: boolean;
+  seed: number;
+  skill?: SkillCard;
+  source?: SourceCard;
+};
+type SkillGraphEdge = { hue: number; sourceIndex: number; targetIndex: number };
+type SkillGraphData = { edges: SkillGraphEdge[]; nodes: SkillGraphNode[]; sourceCount: number };
+type SkillGraphHitNode = SkillGraphNode & { radius: number; screenX: number; screenY: number };
+type SkillGraphRuntime = {
+  dragged: boolean;
+  dragging: boolean;
+  dragStartX: number;
+  dragStartY: number;
+  hitNodes: SkillGraphHitNode[];
+  hoverId: string;
+  panX: number;
+  panY: number;
+  pointerX: number;
+  pointerY: number;
+};
 
-  return {
-    "--node-x": x.toFixed(4),
-    "--node-y": y.toFixed(4),
-    "--node-z": z.toFixed(4),
-    "--node-size": `${size}px`,
-    "--node-hue": `${skillCategoryHue(category)}`,
-    "--node-opacity": `${(0.42 + depth * 0.48).toFixed(2)}`,
-    "--node-delay": `${-(hash % 12000)}ms`,
-    zIndex: Math.round(depth * 1000)
-  } as CSSProperties;
+function buildSkillGraphData(skills: SkillCard[], sources: SourceCard[]): SkillGraphData {
+  const assignedSkills = new Set<string>();
+  const groups: Array<{ category: string; id: string; label: string; skills: SkillCard[]; source?: SourceCard }> = [];
+
+  for (const source of sources) {
+    if (source.name === "AI-SkillHub-local-routers") continue;
+    const sourceSkills = skills.filter(skill => skillBelongsToSource(skill, source));
+    if (sourceSkills.length === 0) continue;
+    for (const skill of sourceSkills) assignedSkills.add(skillGraphSkillId(skill));
+    groups.push({
+      category: source.categoryId || "general",
+      id: source.id,
+      label: source.name,
+      skills: sourceSkills.sort((left, right) => left.name.localeCompare(right.name)),
+      source
+    });
+  }
+
+  const looseBuckets = new Map<string, SkillCard[]>();
+  for (const skill of skills) {
+    if (assignedSkills.has(skillGraphSkillId(skill))) continue;
+    const key = skill.source?.trim() || "local";
+    looseBuckets.set(key, [...(looseBuckets.get(key) ?? []), skill]);
+  }
+  for (const [label, bucket] of looseBuckets) {
+    groups.push({
+      category: bucket[0] ? skillVisualCategory(bucket[0]) : "general",
+      id: `loose-${normalizeLookup(label)}`,
+      label: label === "local" ? "Local Skills" : label,
+      skills: bucket.sort((left, right) => left.name.localeCompare(right.name))
+    });
+  }
+
+  groups.sort((left, right) => right.skills.length - left.skills.length || left.label.localeCompare(right.label));
+
+  const nodes: SkillGraphNode[] = [];
+  const edges: SkillGraphEdge[] = [];
+  groups.forEach((group, groupIndex) => {
+    const category = group.category || "general";
+    const sourceIndex = nodes.length;
+    nodes.push({
+      category,
+      enabled: true,
+      groupIndex,
+      hue: skillCategoryHue(category),
+      id: `source-${group.id}`,
+      itemCount: groups.length,
+      itemIndex: groupIndex,
+      kind: "source",
+      label: group.label,
+      parentIndex: -1,
+      router: false,
+      seed: stableSkillHash(group.id),
+      source: group.source
+    });
+    group.skills.forEach((skill, itemIndex) => {
+      const skillCategory = skillVisualCategory(skill);
+      const targetIndex = nodes.length;
+      nodes.push({
+        category: skillCategory,
+        enabled: skill.enabled,
+        groupIndex,
+        hue: skillCategoryHue(skillCategory),
+        id: `skill-${skillGraphSkillId(skill)}`,
+        itemCount: group.skills.length,
+        itemIndex,
+        kind: "skill",
+        label: `/${skill.name}`,
+        parentIndex: sourceIndex,
+        router: isRouterHubSkill(skill),
+        seed: stableSkillHash(`${skill.folderName}:${skill.relativePath}:${itemIndex}`),
+        skill
+      });
+      edges.push({ hue: skillCategoryHue(skillCategory), sourceIndex, targetIndex });
+    });
+  });
+
+  return { edges, nodes, sourceCount: groups.length };
+}
+
+function skillGraphSkillId(skill: SkillCard) {
+  return `${skill.folderName}::${skill.relativePath || skill.name}`;
+}
+
+function drawSkillGraph(
+  context: CanvasRenderingContext2D,
+  graph: SkillGraphData,
+  runtime: SkillGraphRuntime,
+  width: number,
+  height: number,
+  time: number
+) {
+  const styles = getComputedStyle(context.canvas);
+  const textColor = styles.getPropertyValue("--text").trim() || "#191426";
+  const mutedColor = styles.getPropertyValue("--text-muted").trim() || "rgba(110, 102, 130, .76)";
+  const centerX = width / 2 + runtime.panX;
+  const centerY = height / 2 + runtime.panY;
+  const sourceRadiusX = Math.max(118, width * 0.31);
+  const sourceRadiusY = Math.max(74, height * 0.22);
+  const sourcePositions = new Map<number, { x: number; y: number }>();
+  const nodePositions = new Map<number, SkillGraphHitNode>();
+  runtime.hitNodes = [];
+
+  context.save();
+  const glow = context.createRadialGradient(width * 0.52, height * 0.5, 8, width * 0.52, height * 0.5, Math.max(width, height) * 0.62);
+  glow.addColorStop(0, "rgba(100, 92, 255, .14)");
+  glow.addColorStop(0.48, "rgba(80, 210, 180, .07)");
+  glow.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.fillStyle = glow;
+  context.fillRect(0, 0, width, height);
+
+  graph.nodes.forEach((node, index) => {
+    if (node.kind !== "source") return;
+    const angle = -Math.PI / 2 + (node.itemIndex / Math.max(1, graph.sourceCount)) * Math.PI * 2;
+    const drift = Math.sin(time * 0.00018 + node.seed * 0.01) * 7;
+    const x = centerX + Math.cos(angle) * (sourceRadiusX + drift);
+    const y = centerY + Math.sin(angle) * (sourceRadiusY + drift * 0.55);
+    const radius = 9 + Math.min(8, Math.sqrt(node.itemCount));
+    const hitNode = { ...node, radius: radius + 10, screenX: x, screenY: y };
+    sourcePositions.set(index, { x, y });
+    nodePositions.set(index, hitNode);
+  });
+
+  graph.nodes.forEach((node, index) => {
+    if (node.kind !== "skill") return;
+    const parent = sourcePositions.get(node.parentIndex) ?? { x: centerX, y: centerY };
+    const ring = Math.floor(node.itemIndex / 18);
+    const ringStart = ring * 18;
+    const ringCount = Math.max(1, Math.min(18, node.itemCount - ringStart));
+    const localIndex = node.itemIndex - ringStart;
+    const angle =
+      (localIndex / ringCount) * Math.PI * 2 +
+      (node.seed % 360) * (Math.PI / 180) +
+      Math.sin(time * 0.00016 + node.seed) * 0.08;
+    const spread = 30 + ring * 22 + Math.min(34, node.itemCount * 0.5);
+    const x = parent.x + Math.cos(angle) * spread;
+    const y = parent.y + Math.sin(angle) * spread * 0.72;
+    const radius = node.router ? 5.8 : 3.6 + (node.seed % 4) * 0.45;
+    const hitNode = { ...node, radius: radius + 8, screenX: x, screenY: y };
+    nodePositions.set(index, hitNode);
+  });
+
+  for (const edge of graph.edges) {
+    const source = nodePositions.get(edge.sourceIndex);
+    const target = nodePositions.get(edge.targetIndex);
+    if (!source || !target) continue;
+    const highlighted = runtime.hoverId === source.id || runtime.hoverId === target.id;
+    context.beginPath();
+    context.moveTo(source.screenX, source.screenY);
+    context.lineTo(target.screenX, target.screenY);
+    context.strokeStyle = `hsla(${edge.hue}, 78%, 58%, ${highlighted ? 0.34 : 0.12})`;
+    context.lineWidth = highlighted ? 1.45 : 0.75;
+    context.stroke();
+  }
+
+  for (const [index, node] of nodePositions) {
+    if (node.kind === "source") continue;
+    const highlighted = runtime.hoverId === node.id;
+    const alpha = node.enabled ? (highlighted ? 1 : 0.78) : 0.34;
+    context.beginPath();
+    context.arc(node.screenX, node.screenY, node.radius - 8, 0, Math.PI * 2);
+    context.fillStyle = `hsla(${node.hue}, 86%, 60%, ${alpha})`;
+    context.shadowBlur = highlighted ? 18 : node.router ? 12 : 7;
+    context.shadowColor = `hsla(${node.hue}, 86%, 58%, .48)`;
+    context.fill();
+    context.shadowBlur = 0;
+    if (node.router) {
+      context.beginPath();
+      context.arc(node.screenX, node.screenY, node.radius - 4, 0, Math.PI * 2);
+      context.strokeStyle = `hsla(${node.hue}, 86%, 72%, .34)`;
+      context.lineWidth = 1;
+      context.stroke();
+    }
+    runtime.hitNodes.push(node);
+    nodePositions.set(index, node);
+  }
+
+  for (const [index, node] of nodePositions) {
+    if (node.kind !== "source") continue;
+    const highlighted = runtime.hoverId === node.id;
+    context.beginPath();
+    context.arc(node.screenX, node.screenY, node.radius - 4, 0, Math.PI * 2);
+    context.fillStyle = `hsla(${node.hue}, 80%, ${highlighted ? 58 : 50}%, .92)`;
+    context.shadowBlur = highlighted ? 24 : 14;
+    context.shadowColor = `hsla(${node.hue}, 82%, 58%, .38)`;
+    context.fill();
+    context.shadowBlur = 0;
+    context.beginPath();
+    context.arc(node.screenX, node.screenY, node.radius + 2, 0, Math.PI * 2);
+    context.strokeStyle = `hsla(${node.hue}, 86%, 70%, .28)`;
+    context.lineWidth = 1.2;
+    context.stroke();
+    drawGraphText(context, node.label, node.screenX + node.radius + 8, node.screenY - 2, textColor, 118);
+    runtime.hitNodes.push(node);
+    nodePositions.set(index, node);
+  }
+
+  const hovered = runtime.hoverId
+    ? runtime.hitNodes.find(node => node.id === runtime.hoverId)
+    : undefined;
+  if (hovered) {
+    drawGraphTooltip(context, hovered, textColor, mutedColor, width, height);
+  }
+  context.restore();
+}
+
+function drawGraphText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  color: string,
+  maxWidth: number
+) {
+  context.save();
+  context.font = "700 11px Inter, system-ui, sans-serif";
+  context.fillStyle = color;
+  context.textBaseline = "middle";
+  context.fillText(truncateCanvasText(context, text, maxWidth), x, y);
+  context.restore();
+}
+
+function drawGraphTooltip(
+  context: CanvasRenderingContext2D,
+  node: SkillGraphHitNode,
+  textColor: string,
+  mutedColor: string,
+  width: number,
+  height: number
+) {
+  const title = node.label;
+  const subtitle = node.skill
+    ? cleanSkillDescription(node.skill.description) || displayCategoryName(node.category)
+    : displayCategoryName(node.category);
+  context.save();
+  context.font = "800 12px Inter, system-ui, sans-serif";
+  const titleWidth = context.measureText(title).width;
+  context.font = "600 10.5px Inter, system-ui, sans-serif";
+  const subtitleWidth = context.measureText(subtitle).width;
+  const boxWidth = clampNumber(Math.max(titleWidth, subtitleWidth) + 24, 120, Math.min(260, width - 24));
+  const boxHeight = 54;
+  const x = clampNumber(node.screenX + 16, 12, width - boxWidth - 12);
+  const y = clampNumber(node.screenY - boxHeight - 14, 12, height - boxHeight - 12);
+  context.fillStyle = "rgba(255, 255, 255, .88)";
+  context.strokeStyle = `hsla(${node.hue}, 76%, 62%, .32)`;
+  context.lineWidth = 1;
+  roundedCanvasRect(context, x, y, boxWidth, boxHeight, 12);
+  context.fill();
+  context.stroke();
+  context.fillStyle = textColor;
+  context.font = "800 12px Inter, system-ui, sans-serif";
+  context.fillText(truncateCanvasText(context, title, boxWidth - 24), x + 12, y + 20);
+  context.fillStyle = mutedColor;
+  context.font = "600 10.5px Inter, system-ui, sans-serif";
+  context.fillText(truncateCanvasText(context, subtitle, boxWidth - 24), x + 12, y + 38);
+  context.restore();
+}
+
+function roundedCanvasRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+) {
+  context.beginPath();
+  context.moveTo(x + radius, y);
+  context.arcTo(x + width, y, x + width, y + height, radius);
+  context.arcTo(x + width, y + height, x, y + height, radius);
+  context.arcTo(x, y + height, x, y, radius);
+  context.arcTo(x, y, x + width, y, radius);
+  context.closePath();
+}
+
+function truncateCanvasText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  if (context.measureText(text).width <= maxWidth) return text;
+  let clipped = text;
+  while (clipped.length > 4 && context.measureText(`${clipped}...`).width > maxWidth) {
+    clipped = clipped.slice(0, -1);
+  }
+  return `${clipped}...`;
+}
+
+function findGraphHit(runtime: SkillGraphRuntime, x: number, y: number) {
+  for (let index = runtime.hitNodes.length - 1; index >= 0; index -= 1) {
+    const node = runtime.hitNodes[index];
+    const distance = Math.hypot(node.screenX - x, node.screenY - y);
+    if (distance <= node.radius) return node;
+  }
+  return null;
 }
 
 function buildConstellationLegend(skills: SkillCard[]) {
