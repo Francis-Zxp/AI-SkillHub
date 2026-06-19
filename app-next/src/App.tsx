@@ -3,6 +3,7 @@ import {
   type CSSProperties,
   Fragment,
   type PointerEvent,
+  startTransition,
   useEffect,
   useMemo,
   useRef,
@@ -167,6 +168,11 @@ export function App() {
     setToast({ message, tone });
   }
 
+  function applySnapshot(nextSnapshot: LegacySnapshot, background = false) {
+    if (background) startTransition(() => setSnapshot(nextSnapshot));
+    else setSnapshot(nextSnapshot);
+  }
+
   /* ---- backend bridges ---- */
 
   async function loadSnapshot(
@@ -183,7 +189,7 @@ export function App() {
       }
       const command = mode === "refresh" ? "run_skillhub_sync" : "load_indexed_snapshot";
       const result = await invoke<LegacySnapshot>(command);
-      setSnapshot(result);
+      applySnapshot(result, Boolean(options.background));
       setLoadError("");
       if (mode === "refresh" && !options.quiet) toastMessage(t("toast.refreshDone"), "ok");
       return result;
@@ -477,7 +483,7 @@ export function App() {
     if (!options.background) setLoading(true);
     try {
       const result = await invoke<LegacySnapshot>("refresh_source_popularity");
-      setSnapshot(result);
+      applySnapshot(result, Boolean(options.background));
       setLoadError("");
       if (!options.quiet) {
         const summaryText = sourcePopularityRefreshMessage(summarizeSourcePopularity(result));
@@ -498,13 +504,13 @@ export function App() {
       toastMessage(t("toast.syncBusy"), "warn");
       return snapshot;
     }
-    setOperation({ title: t("op.syncTitle"), detail: t("op.step1"), step: 1, total: 3, percent: 8 });
+    setOperation({ title: t("op.syncTitle"), detail: t("op.step1"), step: 1, total: 3, percent: 28 });
     const refreshed = await loadSnapshot("refresh", { background: true, quiet: true });
     if (!runtimeAvailable) {
       setOperation(null);
       return refreshed;
     }
-    setOperation({ title: t("op.syncTitle"), detail: t("op.step2"), step: 2, total: 3, percent: 42 });
+    setOperation({ title: t("op.syncTitle"), detail: t("op.step2"), step: 2, total: 3, percent: 68 });
     const popularity = await refreshSourcePopularity({ quiet: true, background: true });
     if (!popularity) {
       toastMessage(t("toast.indexNoHeat"), "warn");
@@ -641,19 +647,6 @@ export function App() {
     const timer = window.setTimeout(() => setToast(null), 3200);
     return () => window.clearTimeout(timer);
   }, [toast]);
-
-  useEffect(() => {
-    if (!operation || operation.percent >= 100) return;
-    const timer = window.setInterval(() => {
-      setOperation(current => {
-        if (!current || current.percent >= 100) return current;
-        const phaseEnd = Math.min(96, (current.step / current.total) * 100 - 3);
-        if (current.percent >= phaseEnd) return current;
-        return { ...current, percent: Math.min(phaseEnd, current.percent + 2) };
-      });
-    }, 520);
-    return () => window.clearInterval(timer);
-  }, [operation?.step, operation?.total]);
 
   /* ---- global search results ---- */
 
@@ -1310,6 +1303,7 @@ function SkillShowcase({
     graphRef.current = runtime;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let frame = 0;
+    let frameTimer = 0;
     let disposed = false;
 
     const resizeCanvas = () => {
@@ -1328,7 +1322,9 @@ function SkillShowcase({
       const height = canvas.clientHeight;
       context.clearRect(0, 0, width, height);
       drawSkillGraph(context, graphData, runtime, width, height, reducedMotion ? 0 : time);
-      frame = window.requestAnimationFrame(draw);
+      frameTimer = window.setTimeout(() => {
+        frame = window.requestAnimationFrame(draw);
+      }, reducedMotion ? 250 : 80);
     };
 
     const observer = new ResizeObserver(resizeCanvas);
@@ -1339,6 +1335,7 @@ function SkillShowcase({
     return () => {
       disposed = true;
       observer.disconnect();
+      window.clearTimeout(frameTimer);
       window.cancelAnimationFrame(frame);
       if (graphRef.current === runtime) graphRef.current = null;
     };
