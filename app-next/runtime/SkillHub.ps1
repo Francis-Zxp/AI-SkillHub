@@ -1,6 +1,8 @@
 ﻿param(
   [switch]$NoPull,
-  [switch]$ReportOnly
+  [switch]$ReportOnly,
+  [int]$GitCommandTimeoutSeconds = 18,
+  [int]$GitUpdateBudgetSeconds = 95
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +52,130 @@ function Convert-ToRelativePath([string]$Root, [string]$Path) {
 
 function Write-JsonUtf8([string]$Path, $Object, [int]$Depth = 8) {
   Write-Utf8Bom $Path ($Object | ConvertTo-Json -Depth $Depth)
+}
+
+$ScanSkipDirectoryNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($scanSkipName in @(
+  '.git',
+  'node_modules',
+  '.venv',
+  'venv',
+  'env',
+  '.mypy_cache',
+  '.pytest_cache',
+  '.ruff_cache',
+  '.cache',
+  '.next',
+  '__pycache__',
+  'target',
+  '.idea',
+  '.vscode'
+)) {
+  $ScanSkipDirectoryNames.Add($scanSkipName) | Out-Null
+}
+
+function Test-SkipScanDirectory([string]$DirectoryName, [bool]$SkipExtracted) {
+  if ($SkipExtracted -and $DirectoryName -ieq '.skillhub-extracted') { return $true }
+  return $ScanSkipDirectoryNames.Contains($DirectoryName)
+}
+
+function Get-FilesByPatternFast([string]$Root, [string]$Pattern, [switch]$SkipExtracted) {
+  $results = New-Object System.Collections.Generic.List[object]
+  if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return $results }
+
+  $stack = [System.Collections.Generic.Stack[string]]::new()
+  $stack.Push((Convert-ToFullPath $Root))
+
+  while ($stack.Count -gt 0) {
+    $current = $stack.Pop()
+    try {
+      foreach ($file in [System.IO.Directory]::EnumerateFiles($current, $Pattern, [System.IO.SearchOption]::TopDirectoryOnly)) {
+        $results.Add([System.IO.FileInfo]::new($file)) | Out-Null
+      }
+    } catch {
+      continue
+    }
+
+    try {
+      foreach ($directory in [System.IO.Directory]::EnumerateDirectories($current)) {
+        $name = [System.IO.Path]::GetFileName($directory)
+        if (Test-SkipScanDirectory $name ([bool]$SkipExtracted)) { continue }
+        $stack.Push($directory)
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return $results
+}
+
+function Join-ProcessArguments([string[]]$Arguments) {
+  (($Arguments | ForEach-Object {
+    $value = [string]$_
+    if ($value -match '[\s"]') {
+      '"' + ($value -replace '"', '\"') + '"'
+    } else {
+      $value
+    }
+  }) -join ' ')
+}
+
+function Stop-ProcessTreeQuietly([System.Diagnostics.Process]$Process) {
+  if (-not $Process -or $Process.HasExited) { return }
+  try {
+    & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null
+  } catch {
+    try { $Process.Kill() } catch {}
+  }
+  try { $Process.WaitForExit(5000) | Out-Null } catch {}
+}
+
+function Invoke-GitCommandWithTimeout([string[]]$Arguments, [string]$Label, [int]$TimeoutSeconds) {
+  $process = $null
+  try {
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'git'
+    $startInfo.Arguments = Join-ProcessArguments $Arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+    $startInfo.StandardOutputEncoding = $Utf8NoBom
+    $startInfo.StandardErrorEncoding = $Utf8NoBom
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+
+    if (-not $process.WaitForExit([Math]::Max(1, $TimeoutSeconds) * 1000)) {
+      Stop-ProcessTreeQuietly $process
+      return [PSCustomObject]@{
+        Label = $Label
+        ExitCode = 124
+        TimedOut = $true
+        Stdout = ''
+        Stderr = "Timed out after $TimeoutSeconds seconds."
+      }
+    }
+
+    [PSCustomObject]@{
+      Label = $Label
+      ExitCode = $process.ExitCode
+      TimedOut = $false
+      Stdout = $stdoutTask.Result
+      Stderr = $stderrTask.Result
+    }
+  } catch {
+    [PSCustomObject]@{
+      Label = $Label
+      ExitCode = 1
+      TimedOut = $false
+      Stdout = ''
+      Stderr = $_.Exception.Message
+    }
+  } finally {
+    if ($process) { $process.Dispose() }
+  }
 }
 
 function New-DefaultSkillHubConfig {
@@ -255,6 +381,68 @@ function Get-VersionScoreFromPath([string]$Path) {
   return $best
 }
 
+function Get-ZipPackageFamilyName([string]$ZipFileName) {
+  $name = [System.IO.Path]::GetFileNameWithoutExtension($ZipFileName)
+  $name = $name -replace '(?i)[-_]v?\d+\.\d+(?:\.\d+)?[a-z]?(?:[-_].*)?$', ''
+  $name = $name -replace '(?i)[-_]skill$', ''
+  if ([string]::IsNullOrWhiteSpace($name)) {
+    return [System.IO.Path]::GetFileNameWithoutExtension($ZipFileName)
+  }
+  return $name
+}
+
+function Get-GitCommitShortFast([string]$RepoPath) {
+  $gitPath = Join-Path $RepoPath '.git'
+  if (-not (Test-Path -LiteralPath $gitPath)) { return '' }
+
+  $gitDir = $gitPath
+  if (-not (Test-Path -LiteralPath $gitPath -PathType Container)) {
+    try {
+      $gitFile = Read-Utf8Text $gitPath
+      if ($gitFile -match '^gitdir:\s*(.+)$') {
+        $candidate = $matches[1].Trim()
+        if (-not [System.IO.Path]::IsPathRooted($candidate)) {
+          $candidate = Join-Path $RepoPath $candidate
+        }
+        $gitDir = Convert-ToFullPath $candidate
+      }
+    } catch {
+      return ''
+    }
+  }
+
+  $headPath = Join-Path $gitDir 'HEAD'
+  if (-not (Test-Path -LiteralPath $headPath)) { return '' }
+  $head = (Read-Utf8Text $headPath).Trim()
+  if ([string]::IsNullOrWhiteSpace($head)) { return '' }
+  if ($head -notmatch '^ref:\s*(.+)$') {
+    if ($head.Length -ge 7) { return $head.Substring(0, 7) }
+    return $head
+  }
+
+  $refName = $matches[1].Trim()
+  $refPath = Join-Path $gitDir ($refName -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+  if (Test-Path -LiteralPath $refPath) {
+    $commit = (Read-Utf8Text $refPath).Trim()
+    if ($commit.Length -ge 7) { return $commit.Substring(0, 7) }
+    return $commit
+  }
+
+  $packedRefsPath = Join-Path $gitDir 'packed-refs'
+  if (Test-Path -LiteralPath $packedRefsPath) {
+    foreach ($line in [System.IO.File]::ReadLines($packedRefsPath)) {
+      if ($line.StartsWith('#') -or $line.StartsWith('^')) { continue }
+      $parts = $line -split '\s+'
+      if ($parts.Count -ge 2 -and $parts[1] -eq $refName) {
+        if ($parts[0].Length -ge 7) { return $parts[0].Substring(0, 7) }
+        return $parts[0]
+      }
+    }
+  }
+
+  return ''
+}
+
 function Get-IsReparsePoint($Item) {
   return (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
 }
@@ -418,16 +606,61 @@ function Expand-SkillZipPackages([string]$RepoPath) {
     throw "Extract target escaped repository root: $extractRoot"
   }
 
-  $zipFiles = Get-ChildItem -LiteralPath $RepoPath -Recurse -Force -Filter '*.zip' -ErrorAction SilentlyContinue |
-    Where-Object {
-      $_.FullName -notmatch '\\\.git\\' -and
-      $_.FullName -notmatch '\\\.skillhub-extracted\\'
+  $zipFileCandidates = @(Get-FilesByPatternFast $RepoPath '*.zip' -SkipExtracted | ForEach-Object {
+      [PSCustomObject]@{
+        File = $_
+        Family = Get-ZipPackageFamilyName $_.Name
+        VersionScore = Get-VersionScoreFromPath $_.FullName
+      }
+    })
+  $zipFiles = New-Object System.Collections.Generic.List[object]
+  foreach ($zipGroup in ($zipFileCandidates | Group-Object Family)) {
+    $versioned = @($zipGroup.Group | Where-Object { $_.VersionScore -gt 0 } | Sort-Object VersionScore -Descending)
+    if ($versioned.Count -gt 0) {
+      $zipFiles.Add($versioned[0].File) | Out-Null
+    } else {
+      foreach ($item in $zipGroup.Group) {
+        $zipFiles.Add($item.File) | Out-Null
+      }
     }
+  }
 
   $expanded = New-Object System.Collections.Generic.List[object]
-  if (@($zipFiles).Count -eq 0) { return $expanded }
+  if ($zipFiles.Count -eq 0) { return $expanded }
 
   Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+  $expectedPackageNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($zipFile in $zipFiles) {
+    $expectedPackageNames.Add((Get-SafeSkillName ([System.IO.Path]::GetFileNameWithoutExtension($zipFile.Name)) ([System.IO.Path]::GetFileNameWithoutExtension($zipFile.Name)))) | Out-Null
+  }
+  if (Test-Path -LiteralPath $extractRoot) {
+    Get-ChildItem -LiteralPath $extractRoot -Force -Directory -ErrorAction SilentlyContinue |
+      Where-Object { -not $expectedPackageNames.Contains($_.Name) } |
+      ForEach-Object {
+        if (Test-UnderRoot $_.FullName $extractRoot) {
+          Remove-Item -LiteralPath $_.FullName -Recurse -Force
+        }
+      }
+  }
+
+  $manifestPath = Join-Path $extractRoot '.skillhub-zip-manifest.json'
+  $manifestByZip = @{}
+  $manifestChanged = $false
+  if (Test-Path -LiteralPath $manifestPath) {
+    try {
+      foreach ($entry in @((Get-Content -LiteralPath $manifestPath -Raw) | ConvertFrom-Json)) {
+        if ($entry.Zip) {
+          $manifestByZip[[string]$entry.Zip] = $entry
+        } else {
+          $manifestChanged = $true
+        }
+      }
+    } catch {
+      $manifestByZip = @{}
+      $manifestChanged = $true
+    }
+  }
 
   foreach ($zipFile in $zipFiles) {
     $archive = $null
@@ -441,6 +674,44 @@ function Expand-SkillZipPackages([string]$RepoPath) {
 
       $safePackageName = Get-SafeSkillName ([System.IO.Path]::GetFileNameWithoutExtension($zipFile.Name)) ([System.IO.Path]::GetFileNameWithoutExtension($zipFile.Name))
       $target = Join-Path $extractRoot $safePackageName
+      $markerPath = Join-Path $target '.skillhub-zip-cache.json'
+      $skillPaths = @($skillEntries | ForEach-Object {
+          $relative = $_.FullName.Replace('\', '/').TrimStart('/')
+          $parts = @($relative -split '/' | Where-Object { $_ })
+          if ($parts.Count -gt 0) {
+            [System.IO.Path]::Combine($target, ($parts -join [System.IO.Path]::DirectorySeparatorChar))
+          }
+        })
+      $zipKey = Convert-ToRelativePath $RepoPath $zipFile.FullName
+      $cached = $manifestByZip[$zipKey]
+      $marker = $null
+      if (Test-Path -LiteralPath $markerPath) {
+        try { $marker = (Get-Content -LiteralPath $markerPath -Raw) | ConvertFrom-Json } catch { $marker = $null }
+      }
+      $markerMatches = $marker -and
+        ([int64]$marker.Length -eq [int64]$zipFile.Length) -and
+        ([int64]$marker.LastWriteTimeUtcTicks -eq [int64]$zipFile.LastWriteTimeUtc.Ticks)
+      $manifestMatches = $cached -and
+        ([int64]$cached.Length -eq [int64]$zipFile.Length) -and
+        ([int64]$cached.LastWriteTimeUtcTicks -eq [int64]$zipFile.LastWriteTimeUtc.Ticks)
+      $cacheMatches = (Test-Path -LiteralPath $target -PathType Container) -and ($markerMatches -or $manifestMatches)
+      if ($cacheMatches) {
+        if (-not $markerMatches) {
+          Write-JsonUtf8 $markerPath ([PSCustomObject]@{
+              Zip = $zipKey
+              Length = [int64]$zipFile.Length
+              LastWriteTimeUtcTicks = [int64]$zipFile.LastWriteTimeUtc.Ticks
+            }) 4
+        }
+        $expanded.Add([PSCustomObject]@{
+          Zip = $zipFile.FullName
+          Target = $target
+          SkillCount = $skillEntries.Count
+          SkillPaths = $skillPaths
+        }) | Out-Null
+        continue
+      }
+
       if (-not (Test-UnderRoot $target $extractRoot)) {
         throw "Extract package target escaped generated root: $target"
       }
@@ -475,12 +746,30 @@ function Expand-SkillZipPackages([string]$RepoPath) {
         Zip = $zipFile.FullName
         Target = $target
         SkillCount = $skillEntries.Count
+        SkillPaths = $skillPaths
       }) | Out-Null
+      $manifestByZip[$zipKey] = [PSCustomObject]@{
+        Zip = $zipKey
+        Length = [int64]$zipFile.Length
+        LastWriteTimeUtcTicks = [int64]$zipFile.LastWriteTimeUtc.Ticks
+        Target = $safePackageName
+      }
+      Write-JsonUtf8 $markerPath ([PSCustomObject]@{
+          Zip = $zipKey
+          Length = [int64]$zipFile.Length
+          LastWriteTimeUtcTicks = [int64]$zipFile.LastWriteTimeUtc.Ticks
+        }) 4
+      $manifestChanged = $true
     } catch {
       Write-Warning "Skill zip extraction failed for $($zipFile.FullName): $($_.Exception.Message)"
     } finally {
       if ($archive) { $archive.Dispose() }
     }
+  }
+
+  if ($manifestChanged) {
+    $manifestRows = @($manifestByZip.GetEnumerator() | ForEach-Object { $_.Value } | Sort-Object Zip)
+    Write-Utf8Bom $manifestPath ($manifestRows | ConvertTo-Json -Depth 5)
   }
 
   return $expanded
@@ -499,6 +788,31 @@ $ReportPath = Join-Path $ReportsRoot 'last-sync.md'
 $AgentLinkScript = Join-Path $AppRoot 'Manage-AgentSkillLinks.ps1'
 
 New-Item -ItemType Directory -Force -Path $SourceRoot, $SkillsRoot, $StateRoot, $ReportsRoot, $ArchivesRoot | Out-Null
+$RepoUpdateLog = New-Object System.Collections.Generic.List[object]
+$GitUpdateStarted = Get-Date
+$SyncTimings = New-Object System.Collections.Generic.List[object]
+$SyncStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+function Add-SyncTiming([string]$Stage) {
+  $SyncTimings.Add([PSCustomObject]@{
+    Stage = $Stage
+    Seconds = [Math]::Round($SyncStopwatch.Elapsed.TotalSeconds, 2)
+  }) | Out-Null
+}
+
+function Test-GitUpdateBudget {
+  if ($GitUpdateBudgetSeconds -le 0) { return $true }
+  return (((Get-Date) - $GitUpdateStarted).TotalSeconds -lt $GitUpdateBudgetSeconds)
+}
+
+function Add-RepoUpdateLog([string]$Repository, [string]$Action, [string]$Status, [string]$Message) {
+  $RepoUpdateLog.Add([PSCustomObject]@{
+    Repository = $Repository
+    Action = $Action
+    Status = $Status
+    Message = $Message
+  }) | Out-Null
+}
 
 Write-Host "SkillHub project: $ProjectRoot"
 Write-Host "App package: $AppRoot"
@@ -527,18 +841,46 @@ foreach ($repo in $Config.repositories) {
 
   if (Test-Path -LiteralPath (Join-Path $target '.git')) {
     if (-not $NoPull) {
+      if (-not (Test-GitUpdateBudget)) {
+        Write-Warning "Git update budget exhausted. Skipping $($repo.name)."
+        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'skipped' 'Git update budget exhausted.'
+        continue
+      }
       Write-Host "Pulling $($repo.name)..."
-      & git -C $target pull --ff-only
-      if ($LASTEXITCODE -ne 0) { throw "git pull failed for $($repo.name)" }
+      $gitResult = Invoke-GitCommandWithTimeout @('-C', $target, 'pull', '--ff-only') ([string]$repo.name) $GitCommandTimeoutSeconds
+      if ($gitResult.ExitCode -eq 0) {
+        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'ok' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
+      } elseif ($gitResult.TimedOut) {
+        Write-Warning "git pull timed out for $($repo.name); continuing with local copy."
+        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'timeout' $gitResult.Stderr
+      } else {
+        Write-Warning "git pull failed for $($repo.name); continuing with local copy."
+        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'failed' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
+      }
     } else {
       Write-Host "Skipping pull for $($repo.name)."
+      Add-RepoUpdateLog ([string]$repo.name) 'pull' 'skipped' 'NoPull enabled.'
     }
   } elseif (Test-Path -LiteralPath $target) {
     Write-Warning "$target exists but is not a Git repository. Skipping clone."
+    Add-RepoUpdateLog ([string]$repo.name) 'clone' 'skipped' 'Target exists but is not a Git repository.'
   } else {
+    if (-not (Test-GitUpdateBudget)) {
+      Write-Warning "Git update budget exhausted. Skipping clone for $($repo.name)."
+      Add-RepoUpdateLog ([string]$repo.name) 'clone' 'skipped' 'Git update budget exhausted.'
+      continue
+    }
     Write-Host "Cloning $($repo.name)..."
-    & git clone -- ([string]$repo.url) $target
-    if ($LASTEXITCODE -ne 0) { throw "git clone failed for $($repo.name)" }
+    $gitResult = Invoke-GitCommandWithTimeout @('clone', '--', ([string]$repo.url), $target) ([string]$repo.name) $GitCommandTimeoutSeconds
+    if ($gitResult.ExitCode -eq 0) {
+      Add-RepoUpdateLog ([string]$repo.name) 'clone' 'ok' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
+    } elseif ($gitResult.TimedOut) {
+      Write-Warning "git clone timed out for $($repo.name); continuing."
+      Add-RepoUpdateLog ([string]$repo.name) 'clone' 'timeout' $gitResult.Stderr
+    } else {
+      Write-Warning "git clone failed for $($repo.name); continuing."
+      Add-RepoUpdateLog ([string]$repo.name) 'clone' 'failed' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
+    }
   }
 }
 
@@ -547,14 +889,29 @@ if ($ConfigChanged -and -not $ReportOnly) {
 }
 
 if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
-  Get-ChildItem -LiteralPath $SourceRoot -Force -Directory -ErrorAction SilentlyContinue |
-    Where-Object { -not (Get-ConfiguredRepo $_.Name) -and (Test-Path -LiteralPath (Join-Path $_.FullName '.git')) } |
-    ForEach-Object {
-      Write-Host "Pulling manual repository $($_.Name)..."
-      & git -C $_.FullName pull --ff-only
-      if ($LASTEXITCODE -ne 0) { Write-Warning "git pull failed for manual repository $($_.Name)" }
+  $manualRepos = Get-ChildItem -LiteralPath $SourceRoot -Force -Directory -ErrorAction SilentlyContinue |
+    Where-Object { -not (Get-ConfiguredRepo $_.Name) -and (Test-Path -LiteralPath (Join-Path $_.FullName '.git')) }
+  foreach ($manualRepo in $manualRepos) {
+    if (-not (Test-GitUpdateBudget)) {
+      Write-Warning "Git update budget exhausted. Skipping manual repository $($manualRepo.Name)."
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'skipped' 'Git update budget exhausted.'
+      continue
     }
+    Write-Host "Pulling manual repository $($manualRepo.Name)..."
+    $gitResult = Invoke-GitCommandWithTimeout @('-C', $manualRepo.FullName, 'pull', '--ff-only') $manualRepo.Name $GitCommandTimeoutSeconds
+    if ($gitResult.ExitCode -eq 0) {
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'ok' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
+    } elseif ($gitResult.TimedOut) {
+      Write-Warning "git pull timed out for manual repository $($manualRepo.Name); continuing with local copy."
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'timeout' $gitResult.Stderr
+    } else {
+      Write-Warning "git pull failed for manual repository $($manualRepo.Name); continuing with local copy."
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'failed' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
+    }
+  }
 }
+
+Add-SyncTiming 'repository updates'
 
 Write-Host ''
 Write-Host 'Discovering skills...'
@@ -564,9 +921,15 @@ $candidates = New-Object System.Collections.Generic.List[object]
 $sourceRepos = Get-ChildItem -LiteralPath $SourceRoot -Force -Directory -ErrorAction SilentlyContinue
 
 foreach ($repoDir in $sourceRepos) {
+  $repoScanStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+  $repoPhaseStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
   $repoConfig = Get-ConfiguredRepo $repoDir.Name
   if ($repoConfig -and $repoConfig.type -eq 'prompt') {
     $log.Add([PSCustomObject]@{ Kind = 'prompt'; Name = $repoDir.Name; Message = 'Prompt repository kept in github_sources only.' }) | Out-Null
+    $repoScanStopwatch.Stop()
+    if ($repoScanStopwatch.Elapsed.TotalSeconds -ge 2) {
+      Add-SyncTiming "scan $($repoDir.Name)"
+    }
     continue
   }
 
@@ -574,26 +937,68 @@ foreach ($repoDir in $sourceRepos) {
     foreach ($skillPath in $repoConfig.skillPaths) {
       Add-Candidate $candidates (Join-Path $repoDir.FullName $skillPath) $repoDir.Name $true
     }
+    $repoScanStopwatch.Stop()
+    if ($repoScanStopwatch.Elapsed.TotalSeconds -ge 2) {
+      Add-SyncTiming "scan $($repoDir.Name)"
+    }
     continue
   }
 
   if ($repoConfig -or $Config.autoDiscoverManualRepos) {
-    if (-not $ReportOnly) {
+    $nativeSkillFiles = Get-FilesByPatternFast $repoDir.FullName 'SKILL.md' -SkipExtracted
+    if ($repoPhaseStopwatch.Elapsed.TotalSeconds -ge 2) {
+      Add-SyncTiming "scan $($repoDir.Name) native"
+      $repoPhaseStopwatch.Restart()
+    }
+    $expandedSkillFiles = New-Object System.Collections.Generic.List[object]
+    if (@($nativeSkillFiles).Count -eq 0 -and -not $ReportOnly) {
       $expandedPackages = Expand-SkillZipPackages $repoDir.FullName
+      if ($repoPhaseStopwatch.Elapsed.TotalSeconds -ge 2) {
+        Add-SyncTiming "scan $($repoDir.Name) zip"
+        $repoPhaseStopwatch.Restart()
+      }
       foreach ($package in $expandedPackages) {
         $log.Add([PSCustomObject]@{
           Kind = 'skill-zip'
           Name = $repoDir.Name
           Message = "Expanded packaged skill zip: $($package.Zip)"
         }) | Out-Null
+        foreach ($skillPath in @($package.SkillPaths)) {
+          if (Test-Path -LiteralPath $skillPath) {
+            $expandedSkillFiles.Add([System.IO.FileInfo]::new($skillPath)) | Out-Null
+          }
+        }
       }
     }
 
-    $skillFiles = Get-ChildItem -LiteralPath $repoDir.FullName -Recurse -Force -Filter 'SKILL.md' -ErrorAction SilentlyContinue |
-      Where-Object { $_.FullName -notmatch '\\\.git\\' }
+    $skillFiles = if (@($nativeSkillFiles).Count -gt 0) {
+      $nativeSkillFiles
+    } elseif ($expandedSkillFiles.Count -gt 0) {
+      $expandedSkillFiles
+    } else {
+      $extractedRoot = Join-Path $repoDir.FullName '.skillhub-extracted'
+      if (Test-Path -LiteralPath $extractedRoot -PathType Container) {
+        Get-FilesByPatternFast $extractedRoot 'SKILL.md'
+      } else {
+        @()
+      }
+    }
+    if ($repoPhaseStopwatch.Elapsed.TotalSeconds -ge 2) {
+      Add-SyncTiming "scan $($repoDir.Name) collect"
+      $repoPhaseStopwatch.Restart()
+    }
     foreach ($skillFile in $skillFiles) {
       Add-Candidate $candidates (Split-Path -Parent $skillFile.FullName) $repoDir.Name $false
     }
+    if ($repoPhaseStopwatch.Elapsed.TotalSeconds -ge 2) {
+      Add-SyncTiming "scan $($repoDir.Name) candidates"
+      $repoPhaseStopwatch.Restart()
+    }
+  }
+
+  $repoScanStopwatch.Stop()
+  if ($repoScanStopwatch.Elapsed.TotalSeconds -ge 2) {
+    Add-SyncTiming "scan $($repoDir.Name)"
   }
 }
 
@@ -625,6 +1030,7 @@ Write-Host "Selected $($selected.Count) active GitHub/manual skills."
 if ($conflicts.Count -gt 0) {
   Write-Warning "$($conflicts.Count) conflicts need manual config."
 }
+Add-SyncTiming 'skill discovery'
 
 $previousManaged = @()
 if (Test-Path -LiteralPath $StatePath) {
@@ -697,7 +1103,11 @@ if (-not $ReportOnly) {
     }
 
     $actions.Add([PSCustomObject]@{ Skill = $skill.Skill; Action = $action; Target = $src }) | Out-Null
-    Write-Host "$action`: $($skill.Skill)"
+  }
+
+  $actionSummary = $actions | Group-Object Action | Sort-Object Name
+  foreach ($group in $actionSummary) {
+    Write-Host ("{0}: {1}" -f $group.Name, $group.Count)
   }
 
   $managedState = $selected | Sort-Object Skill | ForEach-Object {
@@ -711,6 +1121,7 @@ if (-not $ReportOnly) {
     }
   }
   Write-JsonUtf8 $StatePath $managedState 5
+  Add-SyncTiming 'active links'
 
   if ($Config.manageAgentLinks -and (Test-Path -LiteralPath $AgentLinkScript)) {
     Write-Host ''
@@ -720,22 +1131,37 @@ if (-not $ReportOnly) {
 }
 
 $repoRows = foreach ($repoDir in $sourceRepos) {
-  $commit = ''
-  if (Test-Path -LiteralPath (Join-Path $repoDir.FullName '.git')) {
-    try {
-      $commit = (& git -C $repoDir.FullName rev-parse --short HEAD 2>$null)
-      if ($LASTEXITCODE -ne 0) { $commit = '' }
-    } catch {
-      $commit = ''
-    }
-  }
+  $commit = Get-GitCommitShortFast $repoDir.FullName
   [PSCustomObject]@{ Name = $repoDir.Name; Commit = $commit; Path = $repoDir.FullName }
 }
+Add-SyncTiming 'repository commit scan'
 
 $report = New-Object System.Collections.Generic.List[string]
 $report.Add('# SkillHub 同步报告') | Out-Null
 $report.Add('') | Out-Null
 $report.Add("生成时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')") | Out-Null
+$report.Add('') | Out-Null
+$report.Add('## 同步阶段耗时') | Out-Null
+$report.Add('') | Out-Null
+$report.Add('| Stage | Seconds |') | Out-Null
+$report.Add('|---|---:|') | Out-Null
+foreach ($timing in $SyncTimings) {
+  $report.Add("| $($timing.Stage) | $($timing.Seconds) |") | Out-Null
+}
+$report.Add('') | Out-Null
+$report.Add('## 仓库更新状态') | Out-Null
+$report.Add('') | Out-Null
+$report.Add('| Repository | Action | Status | Message |') | Out-Null
+$report.Add('|---|---|---|---|') | Out-Null
+if ($RepoUpdateLog.Count -eq 0) {
+  $report.Add('| - | - | skipped | NoPull / ReportOnly，未执行 Git 更新。 |') | Out-Null
+} else {
+  foreach ($item in ($RepoUpdateLog | Sort-Object Repository, Action)) {
+    $message = ([string]$item.Message) -replace '\r?\n', ' '
+    if ($message.Length -gt 180) { $message = $message.Substring(0, 180) + '…' }
+    $report.Add("| $($item.Repository) | $($item.Action) | $($item.Status) | $message |") | Out-Null
+  }
+}
 $report.Add('') | Out-Null
 $report.Add('## 仓库来源') | Out-Null
 $report.Add('') | Out-Null
@@ -772,12 +1198,11 @@ foreach ($repo in ($Config.repositories | Where-Object { $_.type -eq 'prompt' })
 }
 
 Write-Utf8Bom $ReportPath ($report -join [Environment]::NewLine)
+Add-SyncTiming 'report written'
 
 Write-Host ''
 Write-Host "Report: $ReportPath"
 Write-Host "Managed state: $StatePath"
 Write-Host ''
-Write-Host 'Active managed skills:'
-$selected | Sort-Object Skill | Select-Object -ExpandProperty Skill
-
-
+Write-Host "Active managed skills: $($selected.Count)"
+Write-Host 'See the sync report for the full skill list.'

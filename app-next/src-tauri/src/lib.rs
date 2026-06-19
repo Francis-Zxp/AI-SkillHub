@@ -4,7 +4,7 @@ use serde_json::Value;
 use std::collections::{hash_map::DefaultHasher, BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -1248,29 +1248,58 @@ fn command_output_with_timeout(
     let mut child = command
         .spawn()
         .map_err(|error| format!("无法启动后台命令：{error}"))?;
+    let stdout_reader = child.stdout.take().map(|mut stream| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = stream.read_to_end(&mut buffer);
+            buffer
+        })
+    });
+    let stderr_reader = child.stderr.take().map(|mut stream| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = stream.read_to_end(&mut buffer);
+            buffer
+        })
+    });
     let started = Instant::now();
 
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_status)) => {
-                return child
-                    .wait_with_output()
-                    .map_err(|error| format!("无法读取后台命令输出：{error}"));
-            }
+            Ok(Some(status)) => break status,
             Ok(None) => {
                 if started.elapsed() >= timeout {
                     let _ = child.kill();
                     let _ = child.wait();
+                    let _ = join_output_reader(stdout_reader);
+                    let _ = join_output_reader(stderr_reader);
                     return Err(timeout_message.to_string());
                 }
                 thread::sleep(Duration::from_millis(250));
             }
             Err(error) => {
                 let _ = child.kill();
+                let _ = child.wait();
+                let _ = join_output_reader(stdout_reader);
+                let _ = join_output_reader(stderr_reader);
                 return Err(format!("无法检查后台命令状态：{error}"));
             }
         }
-    }
+    };
+
+    let stdout = join_output_reader(stdout_reader);
+    let stderr = join_output_reader(stderr_reader);
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn join_output_reader(reader: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    reader
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default()
 }
 
 #[cfg(target_os = "windows")]
