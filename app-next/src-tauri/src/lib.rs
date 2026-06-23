@@ -17,6 +17,10 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+const NANOS_PER_SECOND: u128 = 1_000_000_000;
+const SOURCE_POPULARITY_FRESH_TTL_NANOS: u128 = 6 * 60 * 60 * NANOS_PER_SECOND;
+const SOURCE_POPULARITY_DEFERRED_BACKOFF_NANOS: u128 = 15 * 60 * NANOS_PER_SECOND;
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LegacySnapshot {
@@ -1632,14 +1636,44 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
     let mut sources = read_indexed_sources(&connection)?;
     hydrate_source_urls_from_git(&root, &mut sources);
     let fetched_at = unix_timestamp_string();
+    let fetched_at_nanos = fetched_at.parse::<u128>().unwrap_or_default();
     let mut refreshed = 0usize;
     let mut deferred = 0usize;
     let mut failed = 0usize;
+    let mut skipped_recent = 0usize;
+    let mut batch_deferred_reason: Option<String> = None;
 
     for source in sources {
         let Some((owner, repo)) = parse_github_repo(&source.url) else {
             continue;
         };
+
+        if source_popularity_cache_is_recent(&connection, &source.id, fetched_at_nanos)? {
+            skipped_recent += 1;
+            continue;
+        }
+
+        if let Some(reason) = batch_deferred_reason.as_deref() {
+            let fallback = GithubPopularityFetch {
+                created_at: String::new(),
+                stars: 0,
+                forks: 0,
+                open_issues: 0,
+                last_updated_at: String::new(),
+            };
+            upsert_source_popularity_cache(
+                &connection,
+                &source,
+                &owner,
+                &repo,
+                &fallback,
+                &fetched_at,
+                "deferred",
+                reason,
+            )?;
+            deferred += 1;
+            continue;
+        }
 
         match fetch_github_popularity(&owner, &repo) {
             Ok(popularity) => {
@@ -1678,6 +1712,12 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
                     failed += 1;
                 } else {
                     deferred += 1;
+                    if source_popularity_error_should_pause_batch(&error) {
+                        batch_deferred_reason = Some(format!(
+                            "Skipped this refresh after GitHub deferred an earlier request: {}",
+                            compact_note(&error)
+                        ));
+                    }
                 }
             }
         }
@@ -1698,6 +1738,7 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
                     "refreshed": refreshed,
                     "deferred": deferred,
                     "failed": failed,
+                    "skippedRecent": skipped_recent,
                     "scope": "github-api-cache"
                 }))
                 .unwrap_or_else(|_| "{}".to_string()),
@@ -6653,6 +6694,47 @@ fn source_popularity_cache_status_for_error(error: &str) -> &'static str {
     }
 }
 
+fn source_popularity_error_should_pause_batch(error: &str) -> bool {
+    source_popularity_cache_status_for_error(error) == "deferred"
+}
+
+fn source_popularity_cache_is_recent(
+    connection: &Connection,
+    source_id: &str,
+    now_nanos: u128,
+) -> Result<bool, String> {
+    let cached = connection
+        .query_row(
+            "SELECT fetched_at, cache_status FROM source_popularity_cache WHERE source_id = ?1",
+            params![source_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read source popularity cache freshness: {}", error))?;
+
+    let Some((fetched_at, cache_status)) = cached else {
+        return Ok(false);
+    };
+    let fetched_at_nanos = fetched_at.parse::<u128>().unwrap_or_default();
+    if fetched_at_nanos == 0 || now_nanos <= fetched_at_nanos {
+        return Ok(false);
+    }
+    let age_nanos = now_nanos - fetched_at_nanos;
+    let ttl_nanos = if source_popularity_cache_status_for_error(&cache_status) == "deferred"
+        || cache_status == "deferred"
+        || cache_status == "rate-limited"
+        || cache_status == "stale"
+    {
+        SOURCE_POPULARITY_DEFERRED_BACKOFF_NANOS
+    } else if cache_status == "fresh" {
+        SOURCE_POPULARITY_FRESH_TTL_NANOS
+    } else {
+        0
+    };
+
+    Ok(ttl_nanos > 0 && age_nanos < ttl_nanos)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn upsert_source_popularity_cache(
     connection: &Connection,
@@ -10561,6 +10643,63 @@ fn build_conflict_dispatcher_skill_md(conflict: &SkillConflictCard) -> Option<St
     ))
 }
 
+fn generated_conflict_alias_name(
+    conflict_key: &str,
+    choice: &SkillConflictChoiceCard,
+    used_aliases: &mut HashSet<String>,
+) -> String {
+    let source = generated_skill_folder_name(&choice.source_name);
+    let child = generated_skill_folder_name(conflict_key);
+    let mut alias = generated_skill_folder_name(&format!("{}-{}", source, child));
+    if alias == child || alias.is_empty() || !used_aliases.insert(alias.clone()) {
+        alias = generated_skill_folder_name(&stable_id(
+            &format!("{}-{}", source, child),
+            &choice.skill_id,
+        ));
+        used_aliases.insert(alias.clone());
+    }
+    alias
+}
+
+fn build_conflict_alias_skill_md(
+    conflict: &SkillConflictCard,
+    choice: &SkillConflictChoiceCard,
+    alias_name: &str,
+) -> String {
+    let link = conflict_candidate_skill_md_link(choice);
+    let description = format!(
+        "{} {} AI SkillHub generated namespaced alias /{} for duplicate child Skill /{} from {}.",
+        ROUTER_HUB_MARKER,
+        CONFLICT_DISPATCHER_MARKER,
+        alias_name,
+        conflict.child_name,
+        choice.source_name
+    );
+    format!(
+        "---\n\
+        name: {name}\n\
+        description: \"{description}\"\n\
+        ---\n\n\
+        # {dispatcher_marker} /{name}\n\n\
+        > {router_marker} This AI SkillHub alias is generated from duplicate Skill candidates so every same-name Skill remains directly callable.\n\n\
+        Original duplicate Skill:\n\
+        - Slash name: `/{child_name}`\n\
+        - Source: `{source}`\n\
+        - Skill file: `{link}`\n\n\
+        Dispatch rules:\n\
+        - When the user invokes `/{name}`, open and follow the Skill file above.\n\
+        - This alias does not replace the author's original repository and will not be overwritten by GitHub updates.\n\
+        - If the file is missing, ask the user to sync AI SkillHub again.\n",
+        name = alias_name,
+        description = yaml_double_quoted(&description),
+        dispatcher_marker = CONFLICT_DISPATCHER_MARKER,
+        router_marker = ROUTER_HUB_MARKER,
+        child_name = choice.skill_name,
+        source = choice.source_name,
+        link = link,
+    )
+}
+
 fn sync_skill_conflict_dispatchers(
     legacy_root: &Path,
     connection: &Connection,
@@ -10579,7 +10718,40 @@ fn sync_skill_conflict_dispatchers_for_skills(
     let routers_root = sources_dir.join(ROUTER_HUB_FOLDER);
     let conflicts = derive_skill_conflicts(skills, saved_choices);
     let mut active_dispatchers = HashSet::new();
+    let mut used_aliases = HashSet::new();
     let mut changed = 0usize;
+
+    for conflict in &conflicts {
+        for choice in &conflict.choices {
+            let alias_name =
+                generated_conflict_alias_name(&conflict.conflict_key, choice, &mut used_aliases);
+            active_dispatchers.insert(alias_name.clone());
+            let alias_body = build_conflict_alias_skill_md(conflict, choice, &alias_name);
+            let alias_folder = routers_root.join(&alias_name);
+            let alias_file = alias_folder.join("SKILL.md");
+            fs::create_dir_all(&alias_folder).map_err(|error| {
+                format!(
+                    "Cannot create conflict alias folder {}: {}",
+                    alias_folder.display(),
+                    error
+                )
+            })?;
+            let needs_write = match fs::read_to_string(&alias_file) {
+                Ok(existing) => existing != alias_body,
+                Err(_) => true,
+            };
+            if needs_write {
+                fs::write(&alias_file, alias_body).map_err(|error| {
+                    format!(
+                        "Cannot write conflict alias {}: {}",
+                        alias_file.display(),
+                        error
+                    )
+                })?;
+                changed += 1;
+            }
+        }
+    }
 
     for conflict in conflicts.iter().filter(|conflict| {
         conflict.status == "default-set" && !conflict.default_skill_id.is_empty()
@@ -11817,15 +11989,27 @@ mod tests {
 
         let changed = sync_skill_conflict_dispatchers_for_skills(&root, &skills, &saved)
             .expect("conflict dispatcher should sync");
-        assert_eq!(changed, 1);
+        assert_eq!(changed, 3);
         let dispatcher = active_sources_dir(&root)
             .join(ROUTER_HUB_FOLDER)
             .join("figure-planner")
+            .join("SKILL.md");
+        let nature_alias = active_sources_dir(&root)
+            .join(ROUTER_HUB_FOLDER)
+            .join("nature-paper-skills-figure-planner")
+            .join("SKILL.md");
+        let paperspine_alias = active_sources_dir(&root)
+            .join(ROUTER_HUB_FOLDER)
+            .join("paperspine-figure-planner")
             .join("SKILL.md");
         let body = fs::read_to_string(&dispatcher).expect("dispatcher should be written");
         assert!(body.contains(CONFLICT_DISPATCHER_MARKER));
         assert!(body.contains("Source: `PaperSpine`"));
         assert!(body.contains("../../PaperSpine/dist/codex/skills/figure-planner/SKILL.md"));
+        let alias_body = fs::read_to_string(&paperspine_alias).expect("alias should be written");
+        assert!(alias_body.contains("name: paperspine-figure-planner"));
+        assert!(alias_body.contains("../../PaperSpine/dist/codex/skills/figure-planner/SKILL.md"));
+        assert!(nature_alias.exists());
 
         saved.insert(
             "figure-planner".to_string(),
@@ -11839,6 +12023,8 @@ mod tests {
             .expect("stale dispatcher should be removed");
         assert_eq!(removed, 1);
         assert!(!dispatcher.exists());
+        assert!(nature_alias.exists());
+        assert!(paperspine_alias.exists());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -13385,6 +13571,73 @@ mod tests {
             source_popularity_cache_status_for_error("GitHub API status 404 for owner/repo"),
             "error"
         );
+    }
+
+    #[test]
+    fn source_popularity_cache_freshness_uses_ttl_and_deferred_backoff() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-popularity-freshness-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let now = 1_800_000_u128 * NANOS_PER_SECOND;
+
+        connection
+            .execute(
+                "INSERT INTO source_popularity_cache (
+                    source_id, source_name, url, owner, repo, created_at, stars, forks,
+                    open_issues, last_updated_at, fetched_at, cache_status, error
+                ) VALUES (
+                    'source-fresh', 'fresh', 'https://github.com/example/fresh.git',
+                    'example', 'fresh', '', 1, 0, 0, '', ?1, 'fresh', ''
+                )",
+                params![(now - 120 * NANOS_PER_SECOND).to_string()],
+            )
+            .expect("fresh cache should insert");
+        connection
+            .execute(
+                "INSERT INTO source_popularity_cache (
+                    source_id, source_name, url, owner, repo, created_at, stars, forks,
+                    open_issues, last_updated_at, fetched_at, cache_status, error
+                ) VALUES (
+                    'source-deferred', 'deferred', 'https://github.com/example/deferred.git',
+                    'example', 'deferred', '', 0, 0, 0, '', ?1, 'deferred',
+                    'GitHub API status 403; remaining=0'
+                )",
+                params![(now - 120 * NANOS_PER_SECOND).to_string()],
+            )
+            .expect("deferred cache should insert");
+        connection
+            .execute(
+                "INSERT INTO source_popularity_cache (
+                    source_id, source_name, url, owner, repo, created_at, stars, forks,
+                    open_issues, last_updated_at, fetched_at, cache_status, error
+                ) VALUES (
+                    'source-old-deferred', 'old deferred', 'https://github.com/example/old.git',
+                    'example', 'old', '', 0, 0, 0, '', ?1, 'deferred',
+                    'GitHub API status 403; remaining=0'
+                )",
+                params![
+                    (now - SOURCE_POPULARITY_DEFERRED_BACKOFF_NANOS - 10 * NANOS_PER_SECOND)
+                        .to_string()
+                ],
+            )
+            .expect("old deferred cache should insert");
+
+        assert!(
+            source_popularity_cache_is_recent(&connection, "source-fresh", now)
+                .expect("fresh cache should read")
+        );
+        assert!(
+            source_popularity_cache_is_recent(&connection, "source-deferred", now)
+                .expect("deferred cache should read")
+        );
+        assert!(
+            !source_popularity_cache_is_recent(&connection, "source-old-deferred", now)
+                .expect("old deferred cache should read")
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

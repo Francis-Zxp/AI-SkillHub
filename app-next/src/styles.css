@@ -1392,6 +1392,15 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .source-avatar.tone-tertiary { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
 .source-avatar.tone-error { background: var(--danger-soft); color: var(--danger); }
 .source-avatar.tone-surface { background: var(--surface-strong); color: var(--text-soft); }
+.source-avatar.tone-academic { background: color-mix(in srgb, #4f7cff 18%, transparent); color: #4f7cff; }
+.source-avatar.tone-agent { background: color-mix(in srgb, var(--info) 22%, transparent); color: var(--info); }
+.source-avatar.tone-design { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+.source-avatar.tone-figure { background: color-mix(in srgb, #18a8b8 18%, transparent); color: #1396a4; }
+.source-avatar.tone-knowledge { background: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
+.source-avatar.tone-mixed { background: color-mix(in srgb, #7c5cff 18%, transparent); color: #6f55e8; }
+.source-avatar.tone-presentation { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+.source-avatar.tone-prompt { background: color-mix(in srgb, #e58a22 18%, transparent); color: #c96f11; }
+.source-avatar.tone-security { background: var(--danger-soft); color: var(--danger); }
 
 .source-group-title { min-width: 0; }
 .source-group-title strong { display: block; font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1453,6 +1462,15 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .skill-row-icon.tone-secondary { background: color-mix(in srgb, var(--info) 16%, transparent); color: var(--info); }
 .skill-row-icon.tone-tertiary { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .skill-row-icon.tone-error { background: var(--danger-soft); color: var(--danger); }
+.skill-row-icon.tone-academic { background: color-mix(in srgb, #4f7cff 14%, transparent); color: #4f7cff; }
+.skill-row-icon.tone-agent { background: color-mix(in srgb, var(--info) 16%, transparent); color: var(--info); }
+.skill-row-icon.tone-design { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.skill-row-icon.tone-figure { background: color-mix(in srgb, #18a8b8 14%, transparent); color: #1396a4; }
+.skill-row-icon.tone-knowledge { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.skill-row-icon.tone-mixed { background: color-mix(in srgb, #7c5cff 14%, transparent); color: #6f55e8; }
+.skill-row-icon.tone-presentation { background: color-mix(in srgb, var(--warning) 16%, transparent); color: var(--warning); }
+.skill-row-icon.tone-prompt { background: color-mix(in srgb, #e58a22 14%, transparent); color: #c96f11; }
+.skill-row-icon.tone-security { background: var(--danger-soft); color: var(--danger); }
 .skill-row-main { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .skill-row-main header { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
 .skill-row-main strong { font-size: 14px; font-weight: 600; }

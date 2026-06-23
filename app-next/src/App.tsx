@@ -1994,8 +1994,8 @@ function Library(props: LibraryProps) {
                   <span className={`source-group-chevron${isExpanded ? " open" : ""}`} aria-hidden="true">
                     <Icon name="chevron" />
                   </span>
-                  <span className={`source-avatar tone-${categoryToneId(source.categoryId)}`} aria-hidden="true">
-                    <Icon name={source.url ? "sources" : "library"} />
+                  <span className={`source-avatar tone-${sourceTypeTone(source.sourceType, source.categoryId)}`} aria-hidden="true">
+                    <Icon name={sourceTypeIcon(source.sourceType)} />
                   </span>
                   <div className="source-group-title">
                     <strong>{source.name}</strong>
@@ -4468,9 +4468,26 @@ function buildConstellationLegend(skills: SkillCard[], sources: SourceCard[]) {
 }
 
 function skillCategoryHue(category: string) {
-  const hash = stableSkillHash(category);
+  const id = normalizeLookup(category);
+  const fixedHue = CATEGORY_HUES[id];
+  if (typeof fixedHue === "number") return fixedHue;
+  const hash = stableSkillHash(id || category);
   return (hash * 47 + 162) % 360;
 }
+
+const CATEGORY_HUES: Record<string, number> = {
+  "academic-writing": 214,
+  "agent-tools": 236,
+  "general": 208,
+  "image-generation": 292,
+  "knowledge-retrieval": 142,
+  "literature-research": 164,
+  "presentation": 38,
+  "prompt-polishing": 24,
+  "scientific-figures": 188,
+  "security": 356,
+  "ui-design": 286
+};
 
 function stableSkillHash(value: string) {
   let hash = 0;
@@ -4503,10 +4520,14 @@ function displayCategoryName(category: string) {
 
 function categoryToneId(category: string): string {
   const value = (category || "").toLowerCase();
-  if (value.includes("design") || value.includes("ui")) return "tertiary";
-  if (value.includes("research") || value.includes("paper")) return "primary";
-  if (value.includes("security")) return "error";
-  if (value.includes("development") || value.includes("dev")) return "secondary";
+  if (value.includes("security") || value.includes("vibesec")) return "security";
+  if (value.includes("design") || value.includes("ui") || value.includes("image")) return "design";
+  if (value.includes("figure") || value.includes("chart") || value.includes("data")) return "figure";
+  if (value.includes("presentation") || value.includes("ppt") || value.includes("slide")) return "presentation";
+  if (value.includes("knowledge") || value.includes("retrieval") || value.includes("zotero") || value.includes("search")) return "knowledge";
+  if (value.includes("research") || value.includes("paper") || value.includes("academic") || value.includes("literature") || value.includes("writing")) return "academic";
+  if (value.includes("agent") || value.includes("automation") || value.includes("workflow") || value.includes("development") || value.includes("dev") || value.includes("browser")) return "agent";
+  if (value.includes("prompt")) return "prompt";
   return "surface";
 }
 
@@ -4520,9 +4541,24 @@ function skillIcon(category: string): IconName {
   if (value.includes("research") || value.includes("writing") || value.includes("paper")) return "library";
   if (value.includes("figure") || value.includes("data")) return "dashboard";
   if (value.includes("security")) return "shield";
+  if (value.includes("presentation") || value.includes("ppt") || value.includes("slide")) return "snapshots";
+  if (value.includes("knowledge") || value.includes("retrieval") || value.includes("zotero") || value.includes("search")) return "search";
+  if (value.includes("prompt")) return "list";
   if (value.includes("development") || value.includes("dev")) return "workspaces";
   if (value.includes("agent")) return "agent";
   return "sparkle";
+}
+
+function sourceTypeTone(sourceType: SourceCard["sourceType"], category: string): string {
+  if (sourceType === "prompt") return "prompt";
+  if (sourceType === "mixed") return "mixed";
+  return categoryToneId(category);
+}
+
+function sourceTypeIcon(sourceType: SourceCard["sourceType"]): IconName {
+  if (sourceType === "prompt") return "list";
+  if (sourceType === "mixed") return "sources";
+  return "library";
 }
 
 function statusDotClass(health: string) {
