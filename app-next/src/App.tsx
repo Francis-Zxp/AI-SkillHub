@@ -48,7 +48,7 @@ import type {
 
 declare const __APP_VERSION__: string;
 
-type ThemeName = "dark" | "light" | "classic-dark" | "classic-light";
+type ThemeName = "atlas-dark" | "atlas-light" | "dark" | "light" | "classic-dark" | "classic-light";
 
 type SkillDraft = { name: string; category: string; description: string; note: string; tags: string };
 type SourceDraft = {
@@ -74,6 +74,8 @@ type ToastTone = "info" | "ok" | "warn" | "error";
 const TOAST_EVENT = "ai-skillhub-toast";
 const APP_VERSION = __APP_VERSION__;
 const THEME_OPTIONS: Array<{ icon: IconName; labelKey: string; value: ThemeName }> = [
+  { value: "atlas-dark", labelKey: "theme.atlasDark", icon: "sparkle" },
+  { value: "atlas-light", labelKey: "theme.atlasLight", icon: "sparkle" },
   { value: "dark", labelKey: "theme.dark", icon: "moon" },
   { value: "light", labelKey: "theme.light", icon: "sun" },
   { value: "classic-dark", labelKey: "theme.classicDark", icon: "sparkle" },
@@ -395,6 +397,23 @@ export function App() {
     status: "default-set" | "ignored" | "unresolved"
   ) {
     if (!runtimeAvailable) {
+      setSnapshot(current => {
+        if (!current) return current;
+        return {
+          ...current,
+          skillConflicts: current.skillConflicts.map(conflict => {
+            if (conflict.conflictKey !== conflictKey) return conflict;
+            const selected = conflict.choices.find(choice => choice.skillId === defaultSkillId);
+            return {
+              ...conflict,
+              defaultSkillId: status === "default-set" ? defaultSkillId : "",
+              defaultSourceName: status === "default-set" ? selected?.sourceName ?? "" : "",
+              status,
+              updatedAt: new Date().toISOString()
+            };
+          })
+        };
+      });
       toastMessage(t("toast.previewConflictSim"), "info");
       return;
     }
@@ -706,9 +725,12 @@ export function App() {
 
   const operationProgress = operation ? Math.max(1, Math.min(100, Math.round(operation.percent))) : 0;
   const advancedActive = active === "release" || active === "snapshots";
+  const atlasMode = isAtlasTheme(theme);
 
   return (
-    <main className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme} lang-${lang}`}>
+    <main
+      className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"} lang-${lang}`}
+    >
       <aside className="sidebar">
         <div className="brand">
           <img alt="AI SkillHub" className="brand-logo" src="/ai-skillhub-logo.png" />
@@ -717,6 +739,7 @@ export function App() {
             <span>{t("app.subtitle")}</span>
           </div>
         </div>
+        <span className="atlas-rail-mark" aria-hidden="true">V3 · KINETIC ATLAS</span>
 
         <nav className="nav" aria-label="primary">
           {NAV_ITEMS.map(item => (
@@ -881,6 +904,7 @@ export function App() {
               onSetSkillConflictChoice={updateSkillConflictChoice}
               onSetSkillEnabled={updateSkillEnabled}
               onSetSkillRating={updateSkillRating}
+              atlasMode={atlasMode}
               realWritesEnabled={realWritesEnabled}
               searchQuery={globalSearch}
               snapshot={snapshot}
@@ -926,6 +950,14 @@ export function App() {
             />
           )}
         </div>
+
+        <footer className="atlas-event-tape" aria-label={t("atlas.eventTape")}>
+          <span><i /> {t("atlas.liveIndex")}</span>
+          <span>SKILLS <strong>{summary.skills.toLocaleString()}</strong></span>
+          <span>SOURCES <strong>{summary.sources.toLocaleString()}</strong></span>
+          <span>ROUTES <strong>{snapshot?.skillConflicts.length.toLocaleString() ?? "0"}</strong></span>
+          <span className="atlas-event-mode">{runtimeAvailable ? t("atlas.desktopMode") : t("atlas.previewMode")}</span>
+        </footer>
 
         {toast && (
           <div className={`toast tone-${toast.tone} is-visible`} role="status">
@@ -1178,18 +1210,43 @@ function Dashboard({
       body: t("dash.alertDailyBody")
     }
   ];
-  const accent = theme === "dark" ? "#bebaff" : "#6c6fc3";
+  const atlasMode = isAtlasTheme(theme);
+  const accent =
+    theme === "atlas-dark"
+      ? "#c7ff45"
+      : theme === "atlas-light"
+        ? "#537a00"
+        : theme === "dark"
+          ? "#bebaff"
+          : "#6c6fc3";
+  const atlasPalette = theme === "atlas-light"
+    ? ["#537a00", "#b94b00", "#2452d6", "#007c74"]
+    : ["#c7ff45", "#ff8a2a", "#4c73ff", "#32d5c7"];
 
   return (
     <div className="view dashboard-view">
       <section className="dashboard-hero glow-card">
-        <ParticleField accent={accent} />
+        <ParticleField
+          accent={accent}
+          mode={atlasMode ? "atlas" : "ambient"}
+          palette={atlasPalette}
+          sourceCount={summary.sources}
+          skillCount={summary.skills}
+        />
         <div className="dashboard-hero-inner">
           <div>
-            <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · 2.0</span>
+            <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · {atlasMode ? "3.0 / KINETIC ATLAS" : "2.0"}</span>
             <h2>{t("dash.title")}</h2>
             <p>{t("dash.subtitle")}</p>
           </div>
+          {atlasMode && (
+            <div className="atlas-hero-readout" aria-label={t("atlas.liveModel")}>
+              <span>{t("atlas.liveModel")}</span>
+              <strong>{summary.skills.toLocaleString()}</strong>
+              <small>{t("atlas.nodesAcross", { n: summary.sources })}</small>
+              <i aria-hidden="true" />
+            </div>
+          )}
           <div className="hero-actions">
             <button className="secondary-action" disabled={loading} onClick={onSync} type="button">
               <Icon name="refresh" /> {loading ? t("dash.syncing") : t("dash.sync")}
@@ -1768,6 +1825,7 @@ function MiniTrendLine({ points }: { points: number[] }) {
    ============================================================= */
 
 type LibraryProps = {
+  atlasMode: boolean;
   loading: boolean;
   onDeleteSource: (source: SourceCard) => Promise<"failed" | "preview" | "deleted">;
   onPreviewImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportPlanCard>;
@@ -1802,6 +1860,7 @@ type LibraryProps = {
 
 function Library(props: LibraryProps) {
   const {
+    atlasMode,
     loading,
     onDeleteSource,
     onPreviewImport,
@@ -1826,9 +1885,13 @@ function Library(props: LibraryProps) {
   const [editingSourceId, setEditingSourceId] = useState("");
   const [editingSkillId, setEditingSkillId] = useState("");
   const [showImport, setShowImport] = useState(false);
-  const [showMaintenance, setShowMaintenance] = useState(false);
+  const [showMaintenance, setShowMaintenance] = useState(atlasMode);
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
   const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
+
+  useEffect(() => {
+    if (atlasMode) setShowMaintenance(true);
+  }, [atlasMode]);
 
   const popularityById = useMemo(
     () => new Map((snapshot?.sourcePopularity ?? []).map(item => [item.sourceId, item])),
@@ -1911,6 +1974,10 @@ function Library(props: LibraryProps) {
 
   const githubSources = sources.filter(source => source.url).length;
   const localSources = sources.filter(source => !source.url && source.localPath).length;
+  const enabledSkillCount = skills.filter(skill => skill.enabled).length;
+  const topRatedSkill = [...skills]
+    .filter(skill => (skill.rating ?? 0) > 0 && !isRouterHubSkill(skill))
+    .sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0) || left.name.localeCompare(right.name))[0];
 
   return (
     <div className="view library-view">
@@ -1992,8 +2059,15 @@ function Library(props: LibraryProps) {
 
       {showMaintenance && (
         <div className="library-maintenance">
+          {atlasMode && skillConflicts.length > 0 && (
+            <SkillConflictPanel
+              conflicts={skillConflicts}
+              disabled={loading}
+              onResolve={onSetSkillConflictChoice}
+            />
+          )}
           <RouterHubPanel disabled={loading} realWritesEnabled={realWritesEnabled} />
-          {skillConflicts.length > 0 && (
+          {!atlasMode && skillConflicts.length > 0 && (
             <SkillConflictPanel
               conflicts={skillConflicts}
               disabled={loading}
@@ -2003,7 +2077,29 @@ function Library(props: LibraryProps) {
         </div>
       )}
 
-      <section className="library-tree">
+      <div className={atlasMode ? "library-stage atlas-library-stage" : "library-stage"}>
+        {atlasMode && (
+          <aside className="atlas-library-filter-deck" aria-label={t("atlas.filterDeck")}>
+            <header>
+              <span>INDEX / FILTER</span>
+              <b>{visibleSources.length.toString().padStart(2, "0")}</b>
+            </header>
+            <div className="atlas-filter-meter">
+              <span>{t("atlas.enabledSkills")}</span>
+              <strong>{enabledSkillCount}</strong>
+              <i style={{ "--meter": `${skills.length ? Math.round((enabledSkillCount / skills.length) * 100) : 0}%` } as CSSProperties} />
+            </div>
+            <dl>
+              <div><dt>{t("atlas.skillSources")}</dt><dd>{sources.filter(source => source.sourceType === "skill").length}</dd></div>
+              <div><dt>{t("atlas.promptSources")}</dt><dd>{sources.filter(source => source.sourceType === "prompt").length}</dd></div>
+              <div><dt>{t("atlas.otherSources")}</dt><dd>{sources.filter(source => source.sourceType !== "skill" && source.sourceType !== "prompt").length}</dd></div>
+              <div><dt>{t("atlas.routeGroups")}</dt><dd>{skillConflicts.length}</dd></div>
+            </dl>
+            <p>{t("atlas.filterDeckV0")}</p>
+          </aside>
+        )}
+
+        <section className="library-tree">
         {visibleSources.map(source => {
           const isExpanded = expanded.has(source.id) || Boolean(searchQuery.trim());
           const sourceSkills = sortSkills(
@@ -2041,8 +2137,8 @@ function Library(props: LibraryProps) {
                   <span className={`source-group-chevron${isExpanded ? " open" : ""}`} aria-hidden="true">
                     <Icon name="chevron" />
                   </span>
-                  <span className={`source-avatar tone-${sourceTypeTone(source.sourceType, source.categoryId)}`} aria-hidden="true">
-                    <Icon name={sourceTypeIcon(source.sourceType)} />
+                  <span className={`source-avatar tone-${source.url ? sourceTypeTone(source.sourceType, source.categoryId) : "local"}`} aria-hidden="true">
+                    <Icon name={source.url ? sourceTypeIcon(source.sourceType) : "sources"} />
                   </span>
                   <div className="source-group-title">
                     <strong>{source.name}</strong>
@@ -2178,7 +2274,35 @@ function Library(props: LibraryProps) {
         {visibleSources.length === 0 && localSkills.length === 0 && (
           <p className="library-empty">{searchQuery.trim() ? t("lib.emptySearch") : t("lib.empty")}</p>
         )}
-      </section>
+        </section>
+
+        {atlasMode && (
+          <aside className="atlas-library-inspector" aria-label={t("atlas.inspector")}>
+            <header>
+              <span>INSPECTOR / V0</span>
+              <i aria-hidden="true" />
+            </header>
+            {topRatedSkill ? (
+              <>
+                <div className="atlas-inspector-glyph" aria-hidden="true"><Icon name="sparkle" /></div>
+                <span>{t("atlas.topRated")}</span>
+                <h3>/{topRatedSkill.name}</h3>
+                <p>{cleanSkillDescription(topRatedSkill.description) || displayCategoryName(topRatedSkill.category)}</p>
+                <dl>
+                  <div><dt>{t("atlas.rating")}</dt><dd>{topRatedSkill.rating.toFixed(1)} / 5</dd></div>
+                  <div><dt>{t("atlas.source")}</dt><dd>{topRatedSkill.source || t("lib.localGroup")}</dd></div>
+                  <div><dt>{t("atlas.state")}</dt><dd>{topRatedSkill.enabled ? t("common.enabled") : t("common.disabled")}</dd></div>
+                </dl>
+                <button onClick={() => void copySkillPrompt(topRatedSkill, onRecordUsage)} type="button">
+                  <Icon name="copy" /> {t("search.copy")}
+                </button>
+              </>
+            ) : (
+              <p className="atlas-inspector-empty">{t("atlas.inspectorEmpty")}</p>
+            )}
+          </aside>
+        )}
+      </div>
 
       {editingSkill && (
         <SkillEditPanel
@@ -2719,67 +2843,174 @@ function SkillConflictPanel({
   ) => Promise<void>;
 }) {
   const unresolved = conflicts.filter(conflict => conflict.status === "unresolved").length;
+  const resolved = conflicts.filter(conflict => conflict.status === "default-set").length;
+  const ignored = conflicts.filter(conflict => conflict.status === "ignored").length;
+  const aliasCount = conflicts.reduce((total, conflict) => total + conflict.choices.length, 0);
   const [activeKey, setActiveKey] = useState(conflicts[0]?.conflictKey ?? "");
-  const selected = conflicts.find(conflict => conflict.conflictKey === activeKey) ?? conflicts[0];
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<"attention" | "resolved" | "all">("attention");
+  const visibleConflicts = useMemo(() => {
+    const normalizedQuery = normalizeSearch(query);
+    return conflicts.filter(conflict => {
+      const scopeMatches =
+        scope === "all" ||
+        (scope === "attention" && conflict.status === "unresolved") ||
+        (scope === "resolved" && conflict.status !== "unresolved");
+      if (!scopeMatches) return false;
+      if (!normalizedQuery) return true;
+      return normalizeSearch(
+        `${conflict.childName} ${conflict.conflictKey} ${conflict.choices.map(choice => choice.sourceName).join(" ")}`
+      ).includes(normalizedQuery);
+    });
+  }, [conflicts, query, scope]);
+  const selected =
+    visibleConflicts.find(conflict => conflict.conflictKey === activeKey) ??
+    visibleConflicts[0] ??
+    conflicts.find(conflict => conflict.conflictKey === activeKey) ??
+    conflicts[0];
+
+  useEffect(() => {
+    if (selected && selected.conflictKey !== activeKey) setActiveKey(selected.conflictKey);
+  }, [activeKey, selected]);
 
   if (!selected) return null;
 
   return (
-    <section className="conflict-panel glow-card">
-      <header className="panel-head">
-        <div>
-          <span className="eyebrow">{t("conf.eyebrow")}</span>
-          <h3>{t("conf.title")}</h3>
-          <p>{t("conf.subtitle")}</p>
+    <section className="conflict-panel routing-observatory glow-card">
+      <header className="routing-head">
+        <div className="routing-heading">
+          <span className="eyebrow"><Icon name="workspaces" /> {t("conf.observatoryEyebrow")}</span>
+          <h3>{t("conf.observatoryTitle")}</h3>
+          <p>{t("conf.observatorySubtitle")}</p>
         </div>
-        <div className="panel-head-meta">
-          <span>{t("conf.groups", { n: conflicts.length })}</span>
-          <strong>{t("conf.pending", { n: unresolved })}</strong>
+        <div className="routing-coordinate" aria-hidden="true">
+          <span>ROUTE / 03</span>
+          <strong>{conflicts.length.toString().padStart(3, "0")}</strong>
         </div>
       </header>
-      <div className="conflict-layout">
-        <ul className="conflict-tabs">
-          {conflicts.map(conflict => (
-            <li key={conflict.conflictKey}>
+
+      <div className="routing-summary" aria-label={t("conf.routeSummary")}>
+        <span className="tone-attention"><b>{unresolved}</b>{t("conf.needsReview")}</span>
+        <span className="tone-routed"><b>{resolved}</b>{t("conf.routed")}</span>
+        <span><b>{aliasCount}</b>{t("conf.aliasesAlive")}</span>
+        <span><b>{ignored}</b>{t("conf.deferred")}</span>
+      </div>
+
+      <div className="routing-toolbar">
+        <label className="routing-search">
+          <Icon name="search" />
+          <input
+            aria-label={t("conf.search")}
+            onChange={event => setQuery(event.target.value)}
+            placeholder={t("conf.searchPlaceholder")}
+            value={query}
+          />
+        </label>
+        <div className="routing-scopes" role="group" aria-label={t("conf.filter")}>
+          {(["attention", "resolved", "all"] as const).map(value => (
+            <button
+              className={scope === value ? "active" : ""}
+              key={value}
+              onClick={() => setScope(value)}
+              type="button"
+            >
+              {t(`conf.filter.${value}`)}
+            </button>
+          ))}
+        </div>
+        <button className="routing-safe-action" disabled type="button" title={t("conf.safePendingBackend")}>
+          <Icon name="sparkle" /> {t("conf.acceptSafe")}
+        </button>
+      </div>
+
+      <div className="routing-layout">
+        <nav className="routing-queue" aria-label={t("conf.groups", { n: visibleConflicts.length })}>
+          <div className="routing-queue-label">
+            <span>{t("conf.queue")}</span>
+            <b>{visibleConflicts.length.toString().padStart(2, "0")}</b>
+          </div>
+          <ul>
+            {visibleConflicts.map((conflict, index) => (
+              <li key={conflict.conflictKey}>
               <button
                 className={conflict.conflictKey === selected.conflictKey ? "active" : ""}
                 onClick={() => setActiveKey(conflict.conflictKey)}
                 type="button"
               >
-                <strong>/{conflict.childName}</strong>
-                <span>{t("conf.candidates", { n: conflict.choices.length })}</span>
-                <small>{conflict.defaultSourceName || conflictStatusLabel(conflict.status)}</small>
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <div>
+                  <strong>/{conflict.childName}</strong>
+                  <small>{conflict.defaultSourceName || conflictStatusLabel(conflict.status)}</small>
+                </div>
+                <em>{conflict.choices.length}</em>
               </button>
-            </li>
-          ))}
-        </ul>
-        <div className="conflict-detail">
-          <p>{t("conf.detailHint", { name: selected.childName })}</p>
-          <div className="conflict-choices">
+              </li>
+            ))}
+          </ul>
+          {visibleConflicts.length === 0 && <p>{t("conf.noFilterResults")}</p>}
+        </nav>
+
+        <div className="routing-stage">
+          <header className="routing-stage-head">
+            <div>
+              <span>{t("conf.canonicalRoute")}</span>
+              <h4>/{selected.childName}</h4>
+              <p>{t("conf.detailHint", { name: selected.childName })}</p>
+            </div>
+            <span className={`routing-status status-${selected.status}`}>
+              {conflictStatusLabel(selected.status)}
+            </span>
+          </header>
+
+          <div className="routing-comparison" role="table" aria-label={t("conf.compareCandidates")}>
+            <div className="routing-comparison-head" role="row">
+              <span role="columnheader">{t("conf.source")}</span>
+              <span role="columnheader">{t("conf.capability")}</span>
+              <span role="columnheader">{t("conf.callRoute")}</span>
+              <span role="columnheader">{t("conf.decision")}</span>
+            </div>
             {selected.choices.map(choice => {
               const isDefault = choice.skillId === selected.defaultSkillId;
+              const alias = conflictAliasName(choice.sourceName, selected.childName);
               return (
-                <article className={`conflict-choice${isDefault ? " selected" : ""}`} key={choice.skillId}>
-                  <div>
-                    <strong>{choice.sourceName}:{choice.skillName}</strong>
-                    <span>{displayCategoryName(choice.category) || t("conf.uncategorized")}</span>
+                <article className={`routing-candidate${isDefault ? " selected" : ""}`} key={choice.skillId} role="row">
+                  <div className="routing-source-cell" role="cell">
+                    <i aria-hidden="true" />
+                    <span>
+                      <strong>{choice.sourceName}</strong>
+                      <small>{displayCategoryName(choice.category) || t("conf.uncategorized")}</small>
+                    </span>
                   </div>
-                  <p>{choice.description || t("conf.noDescription")}</p>
+                  <p role="cell">{choice.description || t("conf.noDescription")}</p>
                   <button
-                    className={isDefault ? "ghost-action small" : "primary-action small"}
-                    disabled={disabled || isDefault}
-                    onClick={() => void onResolve(selected.conflictKey, choice.skillId, "default-set")}
+                    className="routing-alias"
+                    onClick={() => void copyTextToClipboard(`/${alias}`, t("conf.aliasCopied"))}
+                    title={choice.relativePath}
                     type="button"
+                    role="cell"
                   >
-                    {isDefault ? t("conf.isDefault") : t("conf.setDefault")}
+                    <code>/{alias}</code><Icon name="copy" />
                   </button>
+                  <div className="routing-decision-cell" role="cell">
+                    <button
+                      className={isDefault ? "routing-default is-default" : "routing-default"}
+                      disabled={disabled || isDefault}
+                      onClick={() => void onResolve(selected.conflictKey, choice.skillId, "default-set")}
+                      type="button"
+                    >
+                      {isDefault ? t("conf.isDefault") : t("conf.setDefault")}
+                    </button>
+                  </div>
                 </article>
               );
             })}
           </div>
-          <div className="conflict-actions">
+
+          <footer className="routing-stage-foot">
+            <span><Icon name="info" /> {t("conf.aliasGuarantee")}</span>
+            <div>
             <button
-              className="ghost-action small"
+                className="routing-text-action"
               disabled={disabled}
               onClick={() => void onResolve(selected.conflictKey, "", "unresolved")}
               type="button"
@@ -2787,15 +3018,16 @@ function SkillConflictPanel({
               {t("conf.reset")}
             </button>
             <button
-              className="ghost-action small"
+                className="routing-text-action"
               disabled={disabled}
               onClick={() => void onResolve(selected.conflictKey, "", "ignored")}
               type="button"
             >
               {t("conf.ignore")}
             </button>
+            </div>
+          </footer>
           </div>
-        </div>
       </div>
     </section>
   );
@@ -3957,7 +4189,18 @@ function initialTheme(): ThemeName {
 }
 
 function isThemeName(value: string | null): value is ThemeName {
-  return value === "dark" || value === "light" || value === "classic-dark" || value === "classic-light";
+  return (
+    value === "atlas-dark" ||
+    value === "atlas-light" ||
+    value === "dark" ||
+    value === "light" ||
+    value === "classic-dark" ||
+    value === "classic-light"
+  );
+}
+
+function isAtlasTheme(theme: ThemeName): boolean {
+  return theme === "atlas-dark" || theme === "atlas-light";
 }
 
 function themeLabel(theme: ThemeName): string {
@@ -4256,6 +4499,14 @@ function skillBelongsToSource(skill: SkillCard, source: SourceCard): boolean {
 
 function normalizeLookup(value: string) {
   return value.trim().toLowerCase().replace(/[_\s]+/g, "-");
+}
+
+function conflictAliasName(sourceName: string, childName: string) {
+  const normalized = normalizeLookup(`${sourceName}-${childName}`)
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return normalized || "conflict-skill";
 }
 
 function clampNumber(value: number, min: number, max: number) {
