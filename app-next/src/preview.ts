@@ -195,8 +195,8 @@ export function createPreviewSnapshot(): LegacySnapshot {
     diagnosticsFile: "../app-next/reports/latest-diagnostics.json",
     mode: "browser-preview",
     summary: {
-      skills: 48,
-      sources: 7,
+      skills: 8,
+      sources: 6,
       prompts: 2,
       agentsDetected: 3,
       warnings: 1,
@@ -316,7 +316,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         sourceType: "skill",
         health: "ok",
         url: "https://github.com/Boom5426/Nature-Paper-Skills.git",
-        skillCount: 18,
+        skillCount: 4,
         mode: "scan",
         createdAt: "2026-05-01T00:00:00Z",
         categoryId: "academic-writing",
@@ -339,21 +339,6 @@ export function createPreviewSnapshot(): LegacySnapshot {
         localPath: "../app-next/data/github_sources/impeccable",
         enabled: true,
         tags: ["GitHub", "界面设计"]
-      },
-      {
-        id: "source-local-routers",
-        name: "AI-SkillHub-local-routers",
-        sourceType: "skill",
-        health: "ok",
-        url: "",
-        skillCount: 1,
-        mode: "local-router",
-        createdAt: "2026-05-01T00:00:00Z",
-        categoryId: "agent-tools",
-        note: "AI SkillHub 生成并维护的本地母 Skill 路由。",
-        localPath: "../app-next/data/github_sources/AI-SkillHub-local-routers",
-        enabled: true,
-        tags: ["本地", "母 Skill"]
       },
       {
         id: "source-vibesec",
@@ -424,7 +409,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         detected: true,
         managed: true,
         enabled: true,
-        skillCount: 48
+        skillCount: 8
       },
       {
         id: "codex",
@@ -585,7 +570,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         path: "../skills",
         enabled: true,
         agentCount: 3,
-        skillCount: 48
+        skillCount: 8
       },
       {
         id: "claude-agent",
@@ -594,7 +579,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         path: "~\\.claude\\skills",
         enabled: true,
         agentCount: 1,
-        skillCount: 48
+        skillCount: 8
       },
       {
         id: "app-next",
@@ -655,7 +640,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
       {
         id: "preview-snapshot",
         name: "浏览器预览快照",
-        summary: "48 skills, 9 sources, 3 agents",
+        summary: "8 skills, 6 sources, 3 agents",
         createdAt: new Date().toISOString(),
         isLatest: true
       }

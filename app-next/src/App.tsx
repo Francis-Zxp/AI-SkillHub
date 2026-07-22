@@ -12,6 +12,7 @@ import {
 import { Icon, type IconName } from "./icons";
 import { CountUp, ParticleField, useCardGlow } from "./effects";
 import { LANG_OPTIONS, type Lang, categoryName, getLang, initialLang, setLang, t } from "./i18n";
+import { SkillUniverse } from "./SkillUniverse";
 import {
   createPreviewSnapshot,
   createPreviewSourceImportExecution,
@@ -735,10 +736,10 @@ export function App() {
     <main
       className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"} page-${active} lang-${lang}`}
     >
-      {atlasMode && (
+      {atlasMode && active !== "dashboard" && (
         <ParticleField
           accent={atlasAccent}
-          mode={active === "dashboard" ? "cosmos" : "backdrop"}
+          mode="backdrop"
           palette={atlasPalette}
           sourceCount={summary.sources}
           skillCount={summary.skills}
@@ -896,6 +897,14 @@ export function App() {
               onOpenAdvanced={() => setActive("release")}
               onOpenAgents={() => setActive("agents")}
               onOpenLibrary={() => setActive("library")}
+              onOpenSkill={skill => {
+                setGlobalSearch(`/${skill.name}`);
+                setActive("library");
+              }}
+              onOpenSource={source => {
+                setGlobalSearch(source.name);
+                setActive("library");
+              }}
               onRefreshPopularity={() => void refreshSourcePopularity()}
               onSync={() => void syncAndRefreshAll()}
               snapshot={snapshot}
@@ -1180,6 +1189,8 @@ function Dashboard({
   onOpenAdvanced,
   onOpenAgents,
   onOpenLibrary,
+  onOpenSkill,
+  onOpenSource,
   onRefreshPopularity,
   onSync,
   snapshot,
@@ -1191,6 +1202,8 @@ function Dashboard({
   onOpenAdvanced: () => void;
   onOpenAgents: () => void;
   onOpenLibrary: () => void;
+  onOpenSkill: (skill: SkillCard) => void;
+  onOpenSource: (source: SourceCard) => void;
   onRefreshPopularity: () => void;
   onSync: () => void;
   snapshot: LegacySnapshot | null;
@@ -1239,6 +1252,13 @@ function Dashboard({
   return (
     <div className="view dashboard-view">
       <section className="dashboard-hero glow-card">
+        {atlasMode && (
+          <SkillUniverse
+            onOpenSkill={onOpenSkill}
+            onOpenSource={onOpenSource}
+            snapshot={snapshot}
+          />
+        )}
         {!atlasMode && (
           <ParticleField
             accent={accent}
@@ -1257,14 +1277,6 @@ function Dashboard({
               <span className="atlas-interaction-hint"><i aria-hidden="true" /> {t("atlas.interact")}</span>
             )}
           </div>
-          {atlasMode && (
-            <div className="atlas-hero-readout" aria-label={t("atlas.liveModel")}>
-              <span>{t("atlas.liveModel")}</span>
-              <strong>{summary.skills.toLocaleString()}</strong>
-              <small>{t("atlas.nodesAcross", { n: summary.sources })}</small>
-              <i aria-hidden="true" />
-            </div>
-          )}
           <div className="hero-actions">
             <button className="secondary-action" disabled={loading} onClick={onSync} type="button">
               <Icon name="refresh" /> {loading ? t("dash.syncing") : t("dash.sync")}
@@ -1311,12 +1323,14 @@ function Dashboard({
         />
       </section>
 
-      <SkillShowcase
-        loading={loading}
-        onCopySkill={onCopySkill}
-        onOpenLibrary={onOpenLibrary}
-        snapshot={snapshot}
-      />
+      {!atlasMode && (
+        <SkillShowcase
+          loading={loading}
+          onCopySkill={onCopySkill}
+          onOpenLibrary={onOpenLibrary}
+          snapshot={snapshot}
+        />
+      )}
 
       <section className="dashboard-grid">
         <UsageInsightPanel loading={loading} onRefreshPopularity={onRefreshPopularity} snapshot={snapshot} />
@@ -1910,6 +1924,22 @@ function Library(props: LibraryProps) {
   useEffect(() => {
     if (atlasMode) setShowMaintenance(true);
   }, [atlasMode]);
+
+  useEffect(() => {
+    if (!searchQuery.trim()) return;
+    const matchingSourceIds = sources
+      .filter(source =>
+        sourceMatchesSearch(source, searchQuery) ||
+        skills.some(skill => skillBelongsToSource(skill, source) && skillMatchesSearch(skill, searchQuery))
+      )
+      .map(source => source.id);
+    if (!matchingSourceIds.length) return;
+    setExpanded(previous => {
+      const next = new Set(previous);
+      matchingSourceIds.forEach(sourceId => next.add(sourceId));
+      return next;
+    });
+  }, [searchQuery, skills, sources]);
 
   const popularityById = useMemo(
     () => new Map((snapshot?.sourcePopularity ?? []).map(item => [item.sourceId, item])),
