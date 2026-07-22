@@ -21,7 +21,8 @@ import {
   updatePreviewEnabled,
   updatePreviewOperationRunner,
   updatePreviewPresetDistribution,
-  updatePreviewRealWriteAuthorization
+  updatePreviewRealWriteAuthorization,
+  updatePreviewSkillRating
 } from "./preview";
 import type {
   AgentSkillStatusCard,
@@ -67,7 +68,7 @@ type QuickAddStatus = {
 };
 type ImportFeedbackOptions = { quiet?: boolean };
 type OperationStatus = { title: string; detail: string; step: number; total: number; percent: number };
-type SourceSortKey = "recent" | "usage" | "heat" | "skillCount" | "health" | "name";
+type SourceSortKey = "recent" | "rating" | "usage" | "heat" | "skillCount" | "health" | "name";
 type ToastTone = "info" | "ok" | "warn" | "error";
 
 const TOAST_EVENT = "ai-skillhub-toast";
@@ -284,6 +285,44 @@ export function App() {
       setLoadError(messageFromError(error));
       toastMessage(t("toast.skillToggleFailed"), "error");
       return true;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateSkillRating(skill: SkillCard, rating: number): Promise<boolean> {
+    const normalizedRating = Math.max(0, Math.min(5, Math.round(rating)));
+    if (!runtimeAvailable) {
+      setSnapshot(prev =>
+        updatePreviewSkillRating(prev ?? createPreviewSnapshot(), skill.folderName, normalizedRating)
+      );
+      toastMessage(
+        normalizedRating > 0
+          ? t("toast.skillRated", { n: normalizedRating })
+          : t("toast.skillRatingCleared"),
+        "ok"
+      );
+      return true;
+    }
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("set_skill_rating", {
+        folderName: skill.folderName,
+        rating: normalizedRating
+      });
+      setSnapshot(result);
+      setLoadError("");
+      toastMessage(
+        normalizedRating > 0
+          ? t("toast.skillRated", { n: normalizedRating })
+          : t("toast.skillRatingCleared"),
+        "ok"
+      );
+      return true;
+    } catch (error) {
+      setLoadError(messageFromError(error));
+      toastMessage(t("toast.skillRatingFailed"), "error");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -831,7 +870,6 @@ export function App() {
           {active === "library" && (
             <Library
               loading={loading}
-              onBulkSaveMetadata={async () => "preview"}
               onDeleteSource={deleteSource}
               onPreviewImport={previewSourceImportCandidate}
               onStageImport={stageSourceImportCandidate}
@@ -842,6 +880,7 @@ export function App() {
               onSaveSourceMetadata={updateSourceMetadata}
               onSetSkillConflictChoice={updateSkillConflictChoice}
               onSetSkillEnabled={updateSkillEnabled}
+              onSetSkillRating={updateSkillRating}
               realWritesEnabled={realWritesEnabled}
               searchQuery={globalSearch}
               snapshot={snapshot}
@@ -1730,7 +1769,6 @@ function MiniTrendLine({ points }: { points: number[] }) {
 
 type LibraryProps = {
   loading: boolean;
-  onBulkSaveMetadata: (sourceIds: string[], category: string, enabled: boolean | null) => Promise<"failed" | "preview" | "saved">;
   onDeleteSource: (source: SourceCard) => Promise<"failed" | "preview" | "deleted">;
   onPreviewImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportPlanCard>;
   onPromoteImport: (
@@ -1755,6 +1793,7 @@ type LibraryProps = {
     status: "default-set" | "ignored" | "unresolved"
   ) => Promise<void>;
   onSetSkillEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
+  onSetSkillRating: (skill: SkillCard, rating: number) => Promise<boolean>;
   onStageImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
   realWritesEnabled: boolean;
   searchQuery: string;
@@ -1773,6 +1812,7 @@ function Library(props: LibraryProps) {
     onSaveSourceMetadata,
     onSetSkillConflictChoice,
     onSetSkillEnabled,
+    onSetSkillRating,
     onStageImport,
     realWritesEnabled,
     searchQuery,
@@ -1813,11 +1853,11 @@ function Library(props: LibraryProps) {
             )
         )
       : drafted;
-    return sortSources(filtered, sortKey, popularityById);
+    return sortSources(filtered, sortKey, popularityById, skills);
   }, [popularityById, skills, sources, sourceDrafts, sortKey, searchQuery]);
 
   const localSkills = useMemo(() => {
-    return skills
+    const filtered = skills
       .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
       .filter(skill => {
         if (skill.source && sources.some(source => normalizeLookup(source.name) === normalizeLookup(skill.source))) {
@@ -1825,7 +1865,8 @@ function Library(props: LibraryProps) {
         }
         return searchQuery.trim() ? skillMatchesSearch(skill, searchQuery) : true;
       });
-  }, [skillDrafts, skills, sources, searchQuery]);
+    return sortSkills(filtered, sortKey);
+  }, [skillDrafts, skills, sources, searchQuery, sortKey]);
 
   const totalMatches =
     visibleSources.length +
@@ -1893,6 +1934,7 @@ function Library(props: LibraryProps) {
             <span>{t("lib.sort")}</span>
             <select value={sortKey} onChange={event => setSortKey(event.target.value as SourceSortKey)}>
               <option value="recent">{t("lib.sortRecent")}</option>
+              <option value="rating">{t("lib.sortRating")}</option>
               <option value="usage">{t("lib.sortUsage")}</option>
               <option value="heat">{t("lib.sortHeat")}</option>
               <option value="skillCount">{t("lib.sortSkillCount")}</option>
@@ -1964,14 +2006,19 @@ function Library(props: LibraryProps) {
       <section className="library-tree">
         {visibleSources.map(source => {
           const isExpanded = expanded.has(source.id) || Boolean(searchQuery.trim());
-          const sourceSkills = skills
-            .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
-            .filter(skill => skillBelongsToSource(skill, source));
+          const sourceSkills = sortSkills(
+            skills
+              .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
+              .filter(skill => skillBelongsToSource(skill, source)),
+            sortKey
+          );
           const totalSkillCount = Math.max(source.skillCount ?? 0, sourceSkills.length);
           const singleRootSkill = sourceSkills.length === 1;
           const parentSkills = singleRootSkill ? [] : sourceSkills.filter(isRouterHubSkill);
           const childSkills = singleRootSkill ? sourceSkills : sourceSkills.filter(skill => !isRouterHubSkill(skill));
+          const parentSkill = sourceParentSkill(source, sourceSkills);
           const popularity = popularityById.get(source.id);
+          const ratingSummary = skillRatingSummary(sourceSkills.filter(skill => skill !== parentSkill));
           const matchesQuery = searchQuery.trim()
             ? sourceSkills.some(skill => skillMatchesSearch(skill, searchQuery))
             : true;
@@ -2007,6 +2054,18 @@ function Library(props: LibraryProps) {
                 </button>
                 <div className="source-group-meta">
                   <PopularityChip popularity={popularity} source={source} />
+                  {parentSkill && (
+                    <div className="source-parent-rating">
+                      <span>{t("rating.parent")}</span>
+                      <SkillRating
+                        disabled={loading}
+                        onChange={rating => void onSetSkillRating(parentSkill, rating)}
+                        rating={parentSkill.rating ?? 0}
+                        skillName={parentSkill.name}
+                      />
+                    </div>
+                  )}
+                  {ratingSummary.count > 0 && <SourceRatingChip summary={ratingSummary} />}
                   <span className={`status-badge ${source.health}`}>
                     <span className={`status-dot ${statusDotClass(source.health)}`} />
                     {skillStatusLabel(source.health)}
@@ -2049,6 +2108,7 @@ function Library(props: LibraryProps) {
                           loading={loading}
                           onCopy={() => void copySkillPrompt(skill, onRecordUsage)}
                           onEdit={() => setEditingSkillId(skill.folderName)}
+                          onRate={rating => void onSetSkillRating(skill, rating)}
                           onToggleEnabled={() => void onSetSkillEnabled(skill, !skill.enabled)}
                           skill={skill}
                         />
@@ -2069,6 +2129,7 @@ function Library(props: LibraryProps) {
                           loading={loading}
                           onCopy={() => void copySkillPrompt(skill, onRecordUsage)}
                           onEdit={() => setEditingSkillId(skill.folderName)}
+                          onRate={rating => void onSetSkillRating(skill, rating)}
                           onToggleEnabled={() => void onSetSkillEnabled(skill, !skill.enabled)}
                           skill={skill}
                         />
@@ -2085,8 +2146,8 @@ function Library(props: LibraryProps) {
           <article className="source-group glow-card local-group expanded">
             <header className="source-group-head">
               <div className="source-group-toggle static">
-                <span className="source-avatar tone-tertiary" aria-hidden="true">
-                  <Icon name="sparkle" />
+                <span className="source-avatar tone-local" aria-hidden="true">
+                  <Icon name="workspaces" />
                 </span>
                 <div className="source-group-title">
                   <strong>{t("lib.localGroup")}</strong>
@@ -2104,6 +2165,7 @@ function Library(props: LibraryProps) {
                     loading={loading}
                     onCopy={() => void copySkillPrompt(skill, onRecordUsage)}
                     onEdit={() => setEditingSkillId(skill.folderName)}
+                    onRate={rating => void onSetSkillRating(skill, rating)}
                     onToggleEnabled={() => void onSetSkillEnabled(skill, !skill.enabled)}
                     skill={skill}
                   />
@@ -2148,6 +2210,7 @@ function SkillRow({
   loading,
   onCopy,
   onEdit,
+  onRate,
   onToggleEnabled,
   skill
 }: {
@@ -2156,6 +2219,7 @@ function SkillRow({
   loading: boolean;
   onCopy: () => void;
   onEdit: () => void;
+  onRate: (rating: number) => void;
   onToggleEnabled: () => void;
   skill: SkillCard;
 }) {
@@ -2198,6 +2262,7 @@ function SkillRow({
         {skill.note && <small className="skill-row-note">{t("lib.note")}：{skill.note}</small>}
       </div>
       <div className="skill-row-actions">
+        <SkillRating disabled={loading} onChange={onRate} rating={skill.rating ?? 0} skillName={skill.name} />
         <ToggleSwitch
           disabled={loading}
           enabled={skill.enabled}
@@ -2212,6 +2277,55 @@ function SkillRow({
         </button>
       </div>
     </article>
+  );
+}
+
+function SkillRating({
+  disabled,
+  onChange,
+  rating,
+  skillName
+}: {
+  disabled: boolean;
+  onChange: (rating: number) => void;
+  rating: number;
+  skillName: string;
+}) {
+  const normalizedRating = Math.max(0, Math.min(5, Math.round(rating)));
+  return (
+    <div
+      aria-label={t("rating.group", { name: skillName })}
+      className="skill-rating"
+      role="group"
+      title={normalizedRating > 0 ? t("rating.current", { n: normalizedRating }) : t("rating.unrated")}
+    >
+      {[1, 2, 3, 4, 5].map(value => (
+        <button
+          aria-label={t("rating.set", { n: value, name: skillName })}
+          aria-pressed={value <= normalizedRating}
+          className={value <= normalizedRating ? "filled" : ""}
+          disabled={disabled}
+          key={value}
+          onClick={() => onChange(value === normalizedRating ? 0 : value)}
+          title={value === normalizedRating ? t("rating.clear") : t("rating.setShort", { n: value })}
+          type="button"
+        >
+          <span aria-hidden="true">★</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SourceRatingChip({ summary }: { summary: SkillRatingSummary }) {
+  return (
+    <span
+      className="source-rating-summary"
+      title={t("rating.sourceTip", { average: summary.average.toFixed(1), n: summary.count })}
+    >
+      ★ {summary.average.toFixed(1)}
+      <small>{summary.count}</small>
+    </span>
   );
 }
 
@@ -3622,11 +3736,11 @@ function Settings({
           </div>
           <div className="path-row">
             <span>{t("set.sourcesDir")}</span>
-            <code>{snapshot?.sourcesDir ?? "../app/github_sources"}</code>
+            <code>{snapshot?.sourcesDir ?? "../app-next/data/github_sources"}</code>
           </div>
           <div className="path-row">
             <span>{t("set.diagnostics")}</span>
-            <code>{snapshot?.diagnosticsFile ?? "../app/reports/latest-diagnostics.json"}</code>
+            <code>{snapshot?.diagnosticsFile ?? "../app-next/reports/latest-diagnostics.json"}</code>
           </div>
         </div>
       </section>
@@ -4001,13 +4115,29 @@ function sourceSearchScore(source: SourceCard, query: string) {
 function sortSources(
   sources: SourceCard[],
   sortKey: SourceSortKey,
-  popularityById: Map<string, SourcePopularityCard>
+  popularityById: Map<string, SourcePopularityCard>,
+  skills: SkillCard[]
 ): SourceCard[] {
   return [...sources].sort((left, right) => {
     const leftPop = popularityById.get(left.id);
     const rightPop = popularityById.get(right.id);
     const nameCompare = left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
     switch (sortKey) {
+      case "rating": {
+        const leftSkills = skills.filter(skill => skillBelongsToSource(skill, left));
+        const rightSkills = skills.filter(skill => skillBelongsToSource(skill, right));
+        const leftParent = sourceParentSkill(left, leftSkills);
+        const rightParent = sourceParentSkill(right, rightSkills);
+        const leftRating = skillRatingSummary(leftSkills.filter(skill => skill !== leftParent));
+        const rightRating = skillRatingSummary(rightSkills.filter(skill => skill !== rightParent));
+        return (
+          normalizedOptionalSkillRating(rightParent) - normalizedOptionalSkillRating(leftParent) ||
+          rightRating.max - leftRating.max ||
+          rightRating.average - leftRating.average ||
+          rightRating.count - leftRating.count ||
+          nameCompare
+        );
+      }
       case "usage":
         return (rightPop?.localTotalCount ?? 0) - (leftPop?.localTotalCount ?? 0) || nameCompare;
       case "heat":
@@ -4021,6 +4151,50 @@ function sortSources(
       default:
         return dateValue(right.createdAt) - dateValue(left.createdAt) || nameCompare;
     }
+  });
+}
+
+type SkillRatingSummary = { average: number; count: number; max: number };
+
+function normalizedSkillRating(skill: SkillCard) {
+  return Math.max(0, Math.min(5, Math.round(skill.rating ?? 0)));
+}
+
+function normalizedOptionalSkillRating(skill?: SkillCard) {
+  return skill ? normalizedSkillRating(skill) : 0;
+}
+
+function sourceParentSkill(source: SourceCard, skills: SkillCard[]): SkillCard | undefined {
+  const sourceKey = normalizeLookup(source.name);
+  return (
+    skills.find(
+      skill =>
+        isRouterHubSkill(skill) &&
+        [skill.folderName, skill.name].some(candidate => normalizeLookup(candidate) === sourceKey)
+    ) ??
+    skills.find(isRouterHubSkill) ??
+    (skills.length === 1 ? skills[0] : undefined)
+  );
+}
+
+function skillRatingSummary(skills: SkillCard[]): SkillRatingSummary {
+  const ratings = skills.map(normalizedSkillRating).filter(rating => rating > 0);
+  if (ratings.length === 0) return { average: 0, count: 0, max: 0 };
+  return {
+    average: ratings.reduce((total, rating) => total + rating, 0) / ratings.length,
+    count: ratings.length,
+    max: Math.max(...ratings)
+  };
+}
+
+function sortSkills(skills: SkillCard[], sortKey: SourceSortKey): SkillCard[] {
+  if (sortKey !== "rating") return skills;
+  return [...skills].sort((left, right) => {
+    const ratingCompare = normalizedSkillRating(right) - normalizedSkillRating(left);
+    return (
+      ratingCompare ||
+      left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" })
+    );
   });
 }
 
@@ -4549,10 +4723,10 @@ function skillIcon(category: string): IconName {
   return "sparkle";
 }
 
-function sourceTypeTone(sourceType: SourceCard["sourceType"], category: string): string {
+function sourceTypeTone(sourceType: SourceCard["sourceType"], _category: string): string {
   if (sourceType === "prompt") return "prompt";
-  if (sourceType === "mixed") return "mixed";
-  return categoryToneId(category);
+  if (sourceType === "mixed") return "other";
+  return "skill";
 }
 
 function sourceTypeIcon(sourceType: SourceCard["sourceType"]): IconName {

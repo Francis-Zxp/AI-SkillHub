@@ -44,8 +44,39 @@ material and are not installed as Skills.
 - Claude Code, Codex, and Antigravity shared-skill links.
 - Source categories, tags, notes, search, sorting, usage counters, and GitHub
   popularity metadata.
+- Private 1–5 star Skill ratings, stored in local SQLite, with rating-first
+  sorting at both source and Skill level.
 - Diagnostics, share checks, backup/restore dry runs, and release package
   preflight checks.
+
+## Portable Source Index
+
+Source repositories and the active shared `skills/` view are deliberately
+separate. A newly downloaded copy may have source repositories before any
+Claude/Codex/Antigravity links have been built. AI SkillHub therefore scans
+`app-next/data/github_sources/` directly, repairs stale absolute paths left by
+another computer, and rebuilds an old `0 Skill` SQLite index automatically.
+
+The internal `AI-SkillHub-local-routers` storage folder is not shown as a user
+source. Generated aliases and same-name conflict dispatchers are routing
+infrastructure, so they are not counted as standalone local Skills. A source
+still shows zero Skills when it genuinely contains no
+`SKILL.md`; it remains Prompt/reference material instead of being installed as
+a Skill.
+
+## Personal Skill Ratings
+
+Each Skill can be rated from 1 to 5 stars in `Skill Library`. Clicking the
+current score again clears it. Choose `My rating (high to low)` to surface the
+best-rated sources and Skills first. Parent Skills can be rated directly on the
+source-card header; the source order uses the parent score first and child
+ratings second. Ratings are private local metadata in SQLite: they are not
+GitHub stars, do not edit author repositories, and are not published with the
+project.
+
+Physical folders found directly under `skills/` without a managed source are
+shown separately as `Unassigned standalone Skills`. AI SkillHub never deletes
+them automatically because they may contain user data.
 
 ## Folder Layout
 

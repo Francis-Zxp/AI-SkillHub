@@ -44,7 +44,7 @@ export function createPreviewSourceImportPlan(
   const isPackage = importKind === "zip";
   const safeToContinue = Boolean(value && isGithubValid && !duplicate && !isPackage);
   const status = duplicate || !isGithubValid ? "blocked" : isPackage ? "locked" : safeToContinue ? "ready" : "warn";
-  const targetRoot = "浏览器预览/app/github_sources";
+  const targetRoot = "浏览器预览/app-next/data/github_sources";
   const targetPath = `${targetRoot}/${displayName}`;
   const backupPath = `浏览器预览/app-next/.skillhub-next/backups/source-imports/${displayName}`;
   const blockingChecks = [
@@ -150,7 +150,7 @@ export function createPreviewSourceImportExecution(importKind: string, input: st
     copiedBytes: isLockedPackage ? 0 : 48 * 1024,
     skillCount: isLockedPackage ? 0 : 1,
     promptCount: 0,
-    blockingChecks: ["浏览器预览不执行本机文件写入。", "正式 app/github_sources 安装仍锁定。"],
+    blockingChecks: ["浏览器预览不执行本机文件写入。", "正式 app-next/data/github_sources 安装仍锁定。"],
     rollbackSteps: ["删除 staging 目录即可撤销。", "正式来源目录和 AI 工具目录保持不变。"],
     realWriteScope: "preview-only"
   };
@@ -172,9 +172,9 @@ export function createPreviewSourceImportPromotion(
     sourceName: safeName,
     status: "promoted",
     riskLevel: importKind === "github" ? "medium" : "low",
-    summary: "浏览器预览：已模拟提升为受管理来源；桌面版才会写入 app/github_sources。",
+    summary: "浏览器预览：已模拟提升为受管理来源；桌面版才会写入 app-next/data/github_sources。",
     stagedPath,
-    targetPath: `浏览器预览/app/github_sources/${safeName}`,
+    targetPath: `浏览器预览/app-next/data/github_sources/${safeName}`,
     reportPath: `浏览器预览/app-next/.skillhub-next/reports/source-import-promotion/${safeName}.md`,
     manifestPath: `浏览器预览/app-next/.skillhub-next/reports/source-import-promotion/${safeName}-manifest.json`,
     copiedFiles: 12,
@@ -191,8 +191,8 @@ export function createPreviewSnapshot(): LegacySnapshot {
   return {
     root: "浏览器预览模式",
     skillsDir: "../skills",
-    sourcesDir: "../app/github_sources",
-    diagnosticsFile: "../app/reports/latest-diagnostics.json",
+    sourcesDir: "../app-next/data/github_sources",
+    diagnosticsFile: "../app-next/reports/latest-diagnostics.json",
     mode: "browser-preview",
     summary: {
       skills: 48,
@@ -212,6 +212,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         source: "Nature-Paper-Skills",
         health: "ok",
         enabled: true,
+        rating: 5,
         relativePath: "skills/core/paper-workflow",
         tags: ["论文科研", "写作", "常用"]
       },
@@ -224,6 +225,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         source: "Nature-Paper-Skills",
         health: "ok",
         enabled: true,
+        rating: 5,
         relativePath: "skills/core/figure-planner",
         tags: ["科研图表", "论文科研"]
       },
@@ -236,6 +238,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         source: "Nature-Paper-Skills",
         health: "ok",
         enabled: true,
+        rating: 4,
         relativePath: "skills/core/nature-writing",
         tags: ["论文科研"]
       },
@@ -248,6 +251,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         source: "AI-SkillHub-local-routers",
         health: "ok",
         enabled: true,
+        rating: 0,
         relativePath: "AI-SkillHub-local-routers/Nature-Paper-Skills",
         tags: [],
         isRouterHub: true
@@ -261,6 +265,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         source: "impeccable",
         health: "info",
         enabled: true,
+        rating: 4,
         relativePath: ".claude/skills/impeccable",
         tags: ["界面设计", "UI"]
       },
@@ -273,6 +278,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         source: "VibeSec-Skill",
         health: "warn",
         enabled: true,
+        rating: 3,
         relativePath: "SKILL.md",
         tags: ["安全"]
       },
@@ -285,6 +291,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         source: "gstack",
         health: "ok",
         enabled: true,
+        rating: 0,
         relativePath: "SKILL.md",
         tags: ["产品规划"]
       },
@@ -297,6 +304,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         source: "andrej-karpathy-skills",
         health: "ok",
         enabled: true,
+        rating: 4,
         relativePath: "skills/karpathy-guidelines",
         tags: ["工程质量"]
       }
@@ -313,7 +321,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         createdAt: "2026-05-01T00:00:00Z",
         categoryId: "academic-writing",
         note: "论文科研工作流。",
-        localPath: "../app/github_sources/Nature-Paper-Skills",
+        localPath: "../app-next/data/github_sources/Nature-Paper-Skills",
         enabled: true,
         tags: ["GitHub", "论文科研", "常用"]
       },
@@ -328,7 +336,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         createdAt: "2026-05-01T00:00:00Z",
         categoryId: "ui-design",
         note: "UI 审美检查来源。",
-        localPath: "../app/github_sources/impeccable",
+        localPath: "../app-next/data/github_sources/impeccable",
         enabled: true,
         tags: ["GitHub", "界面设计"]
       },
@@ -343,7 +351,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         createdAt: "2026-05-01T00:00:00Z",
         categoryId: "prompt-polishing",
         note: "这是润色 Prompt 资料，不作为 Skill 安装。",
-        localPath: "../app/github_sources/awesome-ai-research-writing",
+        localPath: "../app-next/data/github_sources/awesome-ai-research-writing",
         enabled: true,
         tags: ["Prompt", "润色资料"]
       }
@@ -1056,6 +1064,20 @@ export function updatePreviewEnabled(
     };
   }
   return snapshot;
+}
+
+export function updatePreviewSkillRating(
+  snapshot: LegacySnapshot,
+  folderName: string,
+  rating: number
+): LegacySnapshot {
+  const normalizedRating = Math.max(0, Math.min(5, Math.round(rating)));
+  return {
+    ...snapshot,
+    skills: snapshot.skills.map(skill =>
+      skill.folderName === folderName ? { ...skill, rating: normalizedRating } : skill
+    )
+  };
 }
 
 export function updatePreviewPresetDistribution(

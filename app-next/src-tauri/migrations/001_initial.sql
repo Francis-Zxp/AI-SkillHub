@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS skill_overrides (
   description TEXT NOT NULL DEFAULT '',
   note TEXT NOT NULL DEFAULT '',
   enabled INTEGER,
+  rating INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
 

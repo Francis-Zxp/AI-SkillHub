@@ -2,6 +2,43 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 2.0.4 - Portable source index and personal ratings
+
+### Added
+
+- Added private 1–5 star ratings for each Skill, stored in local SQLite with
+  audit events and a click-again-to-clear interaction.
+- Added `My rating (high to low)` sorting for source groups and their Skills,
+  plus per-source average rating summaries.
+- Added parent Skill rating controls directly to source-card headers. Rating
+  sort now prioritizes the parent score, then rated child Skills.
+- Added stable semantic source icon colors: violet for Skill, amber for Prompt,
+  cyan for mixed/other material, and green for unassigned local folders.
+
+### Fixed
+
+- Fixed a migrated or previously empty SQLite index showing real source
+  repositories as `0 Skill` on another computer. AI SkillHub now relocates
+  stale source paths to the current project and rescans the source tree when
+  `SKILL.md` exists.
+- Stopped exposing the internal `AI-SkillHub-local-routers` storage folder as a
+  normal source card.
+- Stopped 269 generated router aliases and conflict dispatchers from being
+  miscounted as local Skills. Existing SQLite indexes hide those legacy rows
+  immediately; the next scan removes them from the persisted index.
+- Updated remaining current-app fallback text from obsolete `app/` paths to
+  `app-next/` paths.
+
+### Changed
+
+- Removed an unused Skill Library bulk metadata callback from the React surface.
+- Documented the public/private boundary for ratings and portable first-run
+  indexing.
+- Renamed the remaining local group to `Unassigned standalone Skills` so real
+  physical folders are not confused with GitHub-managed sources or internal
+  router infrastructure. AI SkillHub preserves these folders until the user
+  explicitly decides to remove them.
+
 ## 2.0.3 - Desktop polish and safety hardening
 
 ### Fixed

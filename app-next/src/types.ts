@@ -65,12 +65,14 @@ export type SkillCard = {
   source: string;
   health: "ok" | "warn" | "error" | "info";
   enabled: boolean;
+  /** Personal 0–5 star score stored only in the local AI SkillHub SQLite database. */
+  rating: number;
   relativePath: string;
   tags: string[];
   /**
    * Backend-computed marker for parent / router-hub Skills.
    * True when SKILL.md description contains the [ROUTER-HUB] marker,
-   * the file lives under app/github_sources/AI-SkillHub-local-routers,
+   * the file lives under app-next/data/github_sources/AI-SkillHub-local-routers,
    * or the skill name matches its source collection name.
    * Optional during the rollout window; older SQLite snapshots may omit it.
    */
