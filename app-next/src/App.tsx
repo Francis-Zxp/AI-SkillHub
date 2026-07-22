@@ -1183,6 +1183,8 @@ function GlobalSearchResults({
    Dashboard view
    ============================================================= */
 
+const ATLAS_INTRO_VISIBILITY_KEY = "ai-skillhub-atlas-intro-visible";
+
 function Dashboard({
   loading,
   onCopySkill,
@@ -1214,6 +1216,13 @@ function Dashboard({
   const restoreBlocked = countByStatus(snapshot?.restoreDryRun ?? [], "blocked");
   const rollbackBlocked = countByStatus(snapshot?.rollbackPlan ?? [], "blocked");
   const healthIssues = summary.warnings + backupBlocked + restoreBlocked + rollbackBlocked;
+  const [atlasIntroVisible, setAtlasIntroVisible] = useState(() => {
+    try {
+      return window.localStorage.getItem(ATLAS_INTRO_VISIBILITY_KEY) !== "false";
+    } catch {
+      return true;
+    }
+  });
   const alerts = [
     {
       icon: "alert" as const,
@@ -1248,12 +1257,23 @@ function Dashboard({
   const atlasPalette = theme === "atlas-light"
     ? ["#16796f", "#295a80", "#b7882f", "#67746f"]
     : ["#7ce9df", "#dcefed", "#79aee8", "#d6b76c"];
+  const toggleAtlasIntro = () => {
+    const next = !atlasIntroVisible;
+    setAtlasIntroVisible(next);
+    try {
+      window.localStorage.setItem(ATLAS_INTRO_VISIBILITY_KEY, String(next));
+    } catch {
+      // The visual preference can remain session-only when storage is unavailable.
+    }
+  };
 
   return (
     <div className="view dashboard-view">
-      <section className="dashboard-hero glow-card">
+      <section className={`dashboard-hero glow-card${atlasMode && !atlasIntroVisible ? " intro-collapsed" : ""}`}>
         {atlasMode && (
           <SkillUniverse
+            centered={!atlasIntroVisible}
+            lightTheme={theme === "atlas-light"}
             onOpenSkill={onOpenSkill}
             onOpenSource={onOpenSource}
             snapshot={snapshot}
@@ -1268,7 +1288,19 @@ function Dashboard({
             skillCount={summary.skills}
           />
         )}
-        <div className="dashboard-hero-inner">
+        {atlasMode && (
+          <button
+            aria-pressed={!atlasIntroVisible}
+            className="atlas-intro-toggle"
+            onClick={toggleAtlasIntro}
+            title={atlasIntroVisible ? t("atlas.hideIntro") : t("atlas.showIntro")}
+            type="button"
+          >
+            <Icon name="info" />
+            <span>{atlasIntroVisible ? t("atlas.hideIntro") : t("atlas.showIntro")}</span>
+          </button>
+        )}
+        <div aria-hidden={atlasMode && !atlasIntroVisible} className="dashboard-hero-inner">
           <div className="atlas-hero-copy">
             <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · {atlasMode ? "3.0 / LIVING ATLAS" : "2.0"}</span>
             <h2>{atlasMode ? t("atlas.heroTitle") : t("dash.title")}</h2>
@@ -1277,18 +1309,20 @@ function Dashboard({
               <span className="atlas-interaction-hint"><i aria-hidden="true" /> {t("atlas.interact")}</span>
             )}
           </div>
-          <div className="hero-actions">
-            <button className="secondary-action" disabled={loading} onClick={onSync} type="button">
-              <Icon name="refresh" /> {loading ? t("dash.syncing") : t("dash.sync")}
-            </button>
-            <button className="primary-action" onClick={onOpenLibrary} type="button">
-              <Icon name="add" /> {t("dash.addSource")}
-            </button>
-          </div>
+          {!atlasMode && (
+            <div className="hero-actions">
+              <button className="secondary-action" disabled={loading} onClick={onSync} type="button">
+                <Icon name="refresh" /> {loading ? t("dash.syncing") : t("dash.sync")}
+              </button>
+              <button className="primary-action" onClick={onOpenLibrary} type="button">
+                <Icon name="add" /> {t("dash.addSource")}
+              </button>
+            </div>
+          )}
         </div>
       </section>
 
-      <section className="metric-grid">
+      <section className={`metric-grid${atlasMode ? " atlas-touchbar" : ""}`}>
         <Metric
           accent="violet"
           icon="sparkle"
@@ -1321,6 +1355,18 @@ function Dashboard({
           trend={healthIssues > 0 ? t("dash.trendAttention") : t("dash.trendClear")}
           value={healthIssues}
         />
+        {atlasMode && (
+          <div className="atlas-touchbar-actions">
+            <button disabled={loading} onClick={onSync} title={t("dash.sync")} type="button">
+              <Icon name="refresh" />
+              <span>{loading ? t("dash.syncing") : t("dash.sync")}</span>
+            </button>
+            <button onClick={onOpenLibrary} title={t("dash.addSource")} type="button">
+              <Icon name="add" />
+              <span>{t("dash.addSource")}</span>
+            </button>
+          </div>
+        )}
       </section>
 
       {!atlasMode && (
