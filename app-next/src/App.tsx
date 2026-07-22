@@ -726,11 +726,24 @@ export function App() {
   const operationProgress = operation ? Math.max(1, Math.min(100, Math.round(operation.percent))) : 0;
   const advancedActive = active === "release" || active === "snapshots";
   const atlasMode = isAtlasTheme(theme);
+  const atlasAccent = theme === "atlas-light" ? "#16796f" : "#7ce9df";
+  const atlasPalette = theme === "atlas-light"
+    ? ["#16796f", "#295a80", "#b7882f", "#67746f"]
+    : ["#7ce9df", "#dcefed", "#79aee8", "#d6b76c"];
 
   return (
     <main
-      className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"} lang-${lang}`}
+      className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"} page-${active} lang-${lang}`}
     >
+      {atlasMode && (
+        <ParticleField
+          accent={atlasAccent}
+          mode={active === "dashboard" ? "cosmos" : "backdrop"}
+          palette={atlasPalette}
+          sourceCount={summary.sources}
+          skillCount={summary.skills}
+        />
+      )}
       <aside className="sidebar">
         <div className="brand">
           <img alt="AI SkillHub" className="brand-logo" src="/ai-skillhub-logo.png" />
@@ -1213,31 +1226,36 @@ function Dashboard({
   const atlasMode = isAtlasTheme(theme);
   const accent =
     theme === "atlas-dark"
-      ? "#c7ff45"
+      ? "#7ce9df"
       : theme === "atlas-light"
-        ? "#537a00"
+        ? "#16796f"
         : theme === "dark"
           ? "#bebaff"
           : "#6c6fc3";
   const atlasPalette = theme === "atlas-light"
-    ? ["#537a00", "#b94b00", "#2452d6", "#007c74"]
-    : ["#c7ff45", "#ff8a2a", "#4c73ff", "#32d5c7"];
+    ? ["#16796f", "#295a80", "#b7882f", "#67746f"]
+    : ["#7ce9df", "#dcefed", "#79aee8", "#d6b76c"];
 
   return (
     <div className="view dashboard-view">
       <section className="dashboard-hero glow-card">
-        <ParticleField
-          accent={accent}
-          mode={atlasMode ? "atlas" : "ambient"}
-          palette={atlasPalette}
-          sourceCount={summary.sources}
-          skillCount={summary.skills}
-        />
+        {!atlasMode && (
+          <ParticleField
+            accent={accent}
+            mode="ambient"
+            palette={atlasPalette}
+            sourceCount={summary.sources}
+            skillCount={summary.skills}
+          />
+        )}
         <div className="dashboard-hero-inner">
-          <div>
-            <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · {atlasMode ? "3.0 / KINETIC ATLAS" : "2.0"}</span>
-            <h2>{t("dash.title")}</h2>
-            <p>{t("dash.subtitle")}</p>
+          <div className="atlas-hero-copy">
+            <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · {atlasMode ? "3.0 / LIVING ATLAS" : "2.0"}</span>
+            <h2>{atlasMode ? t("atlas.heroTitle") : t("dash.title")}</h2>
+            <p>{atlasMode ? t("atlas.heroSubtitle", { skills: summary.skills, sources: summary.sources }) : t("dash.subtitle")}</p>
+            {atlasMode && (
+              <span className="atlas-interaction-hint"><i aria-hidden="true" /> {t("atlas.interact")}</span>
+            )}
           </div>
           {atlasMode && (
             <div className="atlas-hero-readout" aria-label={t("atlas.liveModel")}>
