@@ -464,7 +464,7 @@ function buildUniverseModel(snapshot: LegacySnapshot | null): UniverseModel {
       description: source.note || source.url || t("universe.sourceDescription"),
       enabled: source.enabled,
       health: source.health,
-      hue: categoryHue(dominantCategory),
+      hue: clusterHue(dominantCategory, source.id),
       id: `source:${source.id}`,
       kind: "source",
       label: source.name,
@@ -553,7 +553,7 @@ function createSkillNode(
     description: cleanDescription(skill.description),
     enabled: skill.enabled,
     health: skill.health,
-    hue: categoryHue(category),
+    hue: clusterHue(category, source.id),
     id: `${router ? "router" : "skill"}:${source.id}:${skill.folderName}:${skill.relativePath}`,
     kind: router ? "router" : "skill",
     label: skill.name,
@@ -810,7 +810,7 @@ function drawUniverseNode(
   context.beginPath();
   context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
   context.fillStyle = node.kind === "source"
-    ? lightTheme ? `hsla(${hue}, 76%, 34%, ${baseAlpha})` : `rgba(236, 255, 251, ${baseAlpha})`
+    ? `hsla(${hue}, ${lightTheme ? 78 : 88}%, ${lightTheme ? 34 : 64}%, ${baseAlpha})`
     : `hsla(${hue}, 84%, ${lightness}%, ${highlighted ? 1 : baseAlpha})`;
   context.fill();
 
@@ -936,10 +936,11 @@ function dominantSkillCategory(skills: SkillCard[], fallback: string) {
 }
 
 function skillCategory(skill: SkillCard) {
-  const explicit = normalize(skill.category);
-  if (explicit && !["auto", "local", "other"].includes(explicit)) return explicit;
   const haystack = normalize([skill.name, skill.source, skill.description, ...skill.tags].join(" "));
   const match = CATEGORY_RULES.find(rule => rule.keywords.some(keyword => haystack.includes(keyword)));
+  if (match && SPECIALIZED_CATEGORIES.has(match.category)) return match.category;
+  const explicit = normalize(skill.category);
+  if (explicit && !["auto", "local", "other"].includes(explicit)) return explicit;
   return match?.category ?? "general";
 }
 
@@ -964,6 +965,14 @@ function displayCategory(category: string) {
 
 function categoryHue(category: string) {
   return CATEGORY_HUES[normalize(category)] ?? (stableHash(category) * 47 + 162) % 360;
+}
+
+function clusterHue(category: string, sourceId: string) {
+  const normalizedCategory = normalize(category);
+  const hash = stableHash(`${normalizedCategory}:${sourceId}`);
+  if (normalizedCategory === "general") return GENERAL_CLUSTER_HUES[hash % GENERAL_CLUSTER_HUES.length];
+  const offset = CLUSTER_HUE_OFFSETS[hash % CLUSTER_HUE_OFFSETS.length];
+  return (categoryHue(normalizedCategory) + offset + 360) % 360;
 }
 
 function fibonacciPoint(index: number, count: number, radius: number): Point3 {
@@ -1027,6 +1036,12 @@ function clamp(value: number, minimum: number, maximum: number) {
 }
 
 const CATEGORY_RULES = [
+  { category: "life-sciences", keywords: ["bioinformatics", "genomics", "protein", "molecular", "alphafold", "生物", "基因", "蛋白"] },
+  { category: "clinical-medical", keywords: ["clinical", "medical", "drug", "fda", "clinvar", "医学", "临床", "药物"] },
+  { category: "finance-economics", keywords: ["finance", "financial", "economic", "stock", "edgar", "金融", "经济"] },
+  { category: "document-tools", keywords: ["document", "pdf", "docx", "spreadsheet", "文档", "表格"] },
+  { category: "browser-automation", keywords: ["browser", "playwright", "chrome", "automation", "浏览器", "自动化"] },
+  { category: "image-generation", keywords: ["image", "diffusion", "imagegen", "图像生成"] },
   { category: "academic-writing", keywords: ["paper", "academic", "writing", "论文", "学术"] },
   { category: "literature-research", keywords: ["literature", "citation", "pubmed", "文献"] },
   { category: "scientific-figures", keywords: ["figure", "plot", "chart", "绘图", "图表"] },
@@ -1040,18 +1055,35 @@ const CATEGORY_RULES = [
   { category: "agent-tools", keywords: ["agent", "claude", "codex", "tool", "智能体"] }
 ];
 
+const SPECIALIZED_CATEGORIES = new Set([
+  "life-sciences",
+  "clinical-medical",
+  "finance-economics",
+  "document-tools",
+  "browser-automation",
+  "image-generation"
+]);
+
 const CATEGORY_HUES: Record<string, number> = {
-  "academic-writing": 184,
-  "literature-research": 160,
-  "scientific-figures": 202,
-  "ui-design": 282,
+  "academic-writing": 214,
+  "literature-research": 174,
+  "scientific-figures": 46,
+  "ui-design": 292,
   "security-audit": 8,
-  "agent-tools": 226,
-  "image-generation": 310,
-  "knowledge-retrieval": 142,
-  presentations: 42,
-  "prompt-polishing": 24,
-  "data-analysis": 172,
-  development: 236,
-  general: 196
+  "agent-tools": 248,
+  "image-generation": 326,
+  "knowledge-retrieval": 136,
+  presentations: 28,
+  "prompt-polishing": 346,
+  "life-sciences": 108,
+  "clinical-medical": 358,
+  "finance-economics": 58,
+  "document-tools": 18,
+  "browser-automation": 268,
+  "data-analysis": 190,
+  development: 226,
+  general: 72
 };
+
+const GENERAL_CLUSTER_HUES = [18, 48, 82, 118, 154, 186, 208, 232, 258, 286, 316, 344];
+const CLUSTER_HUE_OFFSETS = [-22, -11, 0, 11, 22];

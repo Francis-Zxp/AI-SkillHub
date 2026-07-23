@@ -50,6 +50,7 @@ import type {
 declare const __APP_VERSION__: string;
 
 type ThemeName = "atlas-dark" | "atlas-light" | "dark" | "light" | "classic-dark" | "classic-light";
+type UiScalePreset = "compact" | "standard" | "comfortable" | "large";
 
 type SkillDraft = { name: string; category: string; description: string; note: string; tags: string };
 type SourceDraft = {
@@ -74,6 +75,21 @@ type ToastTone = "info" | "ok" | "warn" | "error";
 
 const TOAST_EVENT = "ai-skillhub-toast";
 const APP_VERSION = __APP_VERSION__;
+const UI_TEXT_SCALE_STORAGE_KEY = "ai-skillhub-ui-text-scale";
+const UI_ICON_SCALE_STORAGE_KEY = "ai-skillhub-ui-icon-scale";
+const UI_TEXT_SCALES: Record<UiScalePreset, number> = {
+  compact: 0.92,
+  standard: 1,
+  comfortable: 1.08,
+  large: 1.16
+};
+const UI_ICON_SCALES: Record<UiScalePreset, number> = {
+  compact: 0.92,
+  standard: 1,
+  comfortable: 1.2,
+  large: 1.36
+};
+const UI_SCALE_OPTIONS: UiScalePreset[] = ["compact", "standard", "comfortable", "large"];
 const THEME_OPTIONS: Array<{ icon: IconName; labelKey: string; value: ThemeName }> = [
   { value: "atlas-dark", labelKey: "theme.atlasDark", icon: "sparkle" },
   { value: "atlas-light", labelKey: "theme.atlasLight", icon: "sparkle" },
@@ -101,6 +117,11 @@ const CATEGORY_IDS = [
   "knowledge-retrieval",
   "presentations",
   "prompt-polishing",
+  "life-sciences",
+  "clinical-medical",
+  "finance-economics",
+  "document-tools",
+  "browser-automation",
   "data-analysis",
   "development",
   "general"
@@ -116,6 +137,11 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
   "knowledge-retrieval": ["retrieval", "search", "kb", "lookup", "exa", "检索"],
   "presentations": ["presentation", "slides", "ppt", "poster", "汇报"],
   "prompt-polishing": ["prompt", "polish", "awesome-ai", "润色", "提示词"],
+  "life-sciences": ["bioinformatics", "genomics", "protein", "molecular", "生物", "基因", "蛋白"],
+  "clinical-medical": ["clinical", "medical", "drug", "fda", "医学", "临床", "药物"],
+  "finance-economics": ["finance", "financial", "economic", "stock", "金融", "经济"],
+  "document-tools": ["document", "pdf", "docx", "spreadsheet", "文档", "表格"],
+  "browser-automation": ["browser", "playwright", "chrome", "automation", "浏览器", "自动化"],
   "data-analysis": ["data", "analysis", "single-cell", "rnaseq", "pandas", "数据"],
   "development": ["code", "dev", "engineering", "react", "rust", "tauri", "工程"],
   "general": ["general", "misc", "other", "通用"]
@@ -133,6 +159,8 @@ export function App() {
   });
   const [active, setActive] = useState<NavKey>(() => initialNavKey());
   const [theme, setTheme] = useState<ThemeName>(() => initialTheme());
+  const [textScale, setTextScale] = useState<UiScalePreset>(() => initialUiScale(UI_TEXT_SCALE_STORAGE_KEY, "standard"));
+  const [iconScale, setIconScale] = useState<UiScalePreset>(() => initialUiScale(UI_ICON_SCALE_STORAGE_KEY, "comfortable"));
   const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -166,6 +194,16 @@ export function App() {
   function changeTheme(nextTheme: ThemeName) {
     setTheme(nextTheme);
     toastMessage(t("theme.toast", { theme: themeLabel(nextTheme) }), "info");
+  }
+
+  function changeTextScale(nextScale: UiScalePreset) {
+    setTextScale(nextScale);
+    toastMessage(t("set.displaySaved"), "ok");
+  }
+
+  function changeIconScale(nextScale: UiScalePreset) {
+    setIconScale(nextScale);
+    toastMessage(t("set.displaySaved"), "ok");
   }
 
   function toastMessage(message: string, tone: ToastTone = "info") {
@@ -689,6 +727,16 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
+    document.documentElement.style.setProperty("--ui-text-scale", String(UI_TEXT_SCALES[textScale]));
+    window.localStorage.setItem(UI_TEXT_SCALE_STORAGE_KEY, textScale);
+  }, [textScale]);
+
+  useEffect(() => {
+    document.documentElement.style.setProperty("--ui-icon-scale", String(UI_ICON_SCALES[iconScale]));
+    window.localStorage.setItem(UI_ICON_SCALE_STORAGE_KEY, iconScale);
+  }, [iconScale]);
+
+  useEffect(() => {
     document.documentElement.lang = lang === "zh" ? "zh-CN" : lang === "ko" ? "ko" : "en";
   }, [lang]);
 
@@ -735,6 +783,10 @@ export function App() {
   return (
     <main
       className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"} page-${active} lang-${lang}`}
+      style={{
+        "--ui-icon-scale": UI_ICON_SCALES[iconScale],
+        "--ui-text-scale": UI_TEXT_SCALES[textScale]
+      } as CSSProperties}
     >
       {atlasMode && active !== "dashboard" && (
         <ParticleField
@@ -961,10 +1013,14 @@ export function App() {
           )}
           {active === "settings" && (
             <Settings
+              currentIconScale={iconScale}
               currentLang={lang}
+              currentTextScale={textScale}
               currentTheme={theme}
               disabled={loading}
+              onChangeIconScale={changeIconScale}
               onChangeLang={changeLang}
+              onChangeTextScale={changeTextScale}
               onChangeTheme={changeTheme}
               onOpenAdvanced={() => setActive("release")}
               onQaStatus={updateDesktopQaStatus}
@@ -3987,19 +4043,27 @@ function Advanced({
    ============================================================= */
 
 function Settings({
+  currentIconScale,
   currentLang,
+  currentTextScale,
   currentTheme,
   disabled,
+  onChangeIconScale,
   onChangeLang,
+  onChangeTextScale,
   onChangeTheme,
   onOpenAdvanced,
   onQaStatus,
   snapshot
 }: {
+  currentIconScale: UiScalePreset;
   currentLang: Lang;
+  currentTextScale: UiScalePreset;
   currentTheme: ThemeName;
   disabled: boolean;
+  onChangeIconScale: (scale: UiScalePreset) => void;
   onChangeLang: (lang: Lang) => void;
+  onChangeTextScale: (scale: UiScalePreset) => void;
   onChangeTheme: (theme: ThemeName) => void;
   onOpenAdvanced: () => void;
   onQaStatus: (id: string, status: "pending" | "passed" | "failed") => void;
@@ -4042,6 +4106,28 @@ function Settings({
               value={currentLang}
               options={LANG_OPTIONS.map(option => ({ value: option.value, label: option.label }))}
               onChange={value => onChangeLang(value as Lang)}
+            />
+          </div>
+          <div className="settings-row settings-scale-row">
+            <span className="settings-scale-label">
+              <strong>{t("set.textSize")}</strong>
+              <small>{t("set.textSizeHint")}</small>
+            </span>
+            <SegmentedToggle
+              value={currentTextScale}
+              options={UI_SCALE_OPTIONS.map(value => ({ value, label: t(`set.scale.${value}`) }))}
+              onChange={onChangeTextScale}
+            />
+          </div>
+          <div className="settings-row settings-scale-row">
+            <span className="settings-scale-label">
+              <strong>{t("set.iconSize")}</strong>
+              <small>{t("set.iconSizeHint")}</small>
+            </span>
+            <SegmentedToggle
+              value={currentIconScale}
+              options={UI_SCALE_OPTIONS.map(value => ({ value, label: t(`set.scale.${value}`) }))}
+              onChange={onChangeIconScale}
             />
           </div>
         </div>
@@ -4280,6 +4366,16 @@ function initialTheme(): ThemeName {
   if (isThemeName(searchTheme)) return searchTheme;
   const savedTheme = window.localStorage.getItem("ai-skillhub-theme");
   return isThemeName(savedTheme) ? savedTheme : "dark";
+}
+
+function initialUiScale(storageKey: string, fallback: UiScalePreset): UiScalePreset {
+  if (typeof window === "undefined") return fallback;
+  const value = window.localStorage.getItem(storageKey);
+  return isUiScalePreset(value) ? value : fallback;
+}
+
+function isUiScalePreset(value: string | null): value is UiScalePreset {
+  return value === "compact" || value === "standard" || value === "comfortable" || value === "large";
 }
 
 function isThemeName(value: string | null): value is ThemeName {
@@ -4996,16 +5092,25 @@ function skillCategoryHue(category: string) {
 
 const CATEGORY_HUES: Record<string, number> = {
   "academic-writing": 214,
-  "agent-tools": 236,
-  "general": 208,
-  "image-generation": 292,
-  "knowledge-retrieval": 142,
-  "literature-research": 164,
-  "presentation": 38,
-  "prompt-polishing": 24,
-  "scientific-figures": 188,
-  "security": 356,
-  "ui-design": 286
+  "agent-tools": 248,
+  "browser-automation": 268,
+  "clinical-medical": 358,
+  "data-analysis": 190,
+  "development": 226,
+  "document-tools": 18,
+  "finance-economics": 58,
+  "general": 72,
+  "image-generation": 326,
+  "knowledge-retrieval": 136,
+  "life-sciences": 108,
+  "literature-research": 174,
+  "presentation": 28,
+  "presentations": 28,
+  "prompt-polishing": 346,
+  "scientific-figures": 46,
+  "security": 8,
+  "security-audit": 8,
+  "ui-design": 292
 };
 
 function stableSkillHash(value: string) {
