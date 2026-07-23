@@ -14,6 +14,7 @@ $V2Root = Split-Path -Parent $RuntimeRoot
 $ProjectRoot = Split-Path -Parent $V2Root
 $ReleaseRoot = Join-Path $ProjectRoot 'release'
 $ReportsRoot = Join-Path $V2Root 'reports\release-preflight'
+$BuiltAppPath = Join-Path $V2Root 'src-tauri\target\release\ai-skillhub-next.exe'
 $Checks = New-Object System.Collections.Generic.List[object]
 
 function Get-ProjectVersion {
@@ -105,7 +106,7 @@ if (Test-Path -LiteralPath $ShaPath) { Remove-Item -LiteralPath $ShaPath -Force 
 New-Item -ItemType Directory -Force -Path $StagingRoot | Out-Null
 
 try {
-  Copy-FileRequired (Join-Path $ProjectRoot 'AI SkillHub.exe') (Join-Path $StagingRoot 'AI SkillHub.exe')
+  Copy-FileRequired $BuiltAppPath (Join-Path $StagingRoot 'AI SkillHub.exe')
   foreach ($file in @('README.md', 'CHANGELOG.md', '使用说明.md')) {
     $source = Join-Path $ProjectRoot $file
     if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-FileRequired $source (Join-Path $StagingRoot $file) }
@@ -116,7 +117,7 @@ try {
   Copy-DirContentsRequired $RuntimeRoot (Join-Path $StagingRoot 'app-next\runtime') @('skillhub.config.json')
   New-Item -ItemType Directory -Force -Path (Join-Path $StagingRoot 'skills') | Out-Null
   New-Item -ItemType Directory -Force -Path (Join-Path $StagingRoot 'app-next\data') | Out-Null
-  Add-Check 'copy.allowlist' 'ok' 'AI SkillHub 发布包已按白名单复制。'
+  Add-Check 'copy.allowlist' 'ok' 'AI SkillHub 发布包已从本次 Tauri release 构建按白名单复制。'
 } catch {
   Add-Check 'copy.allowlist' 'error' $_.Exception.Message
 }

@@ -33,6 +33,7 @@ dependencies = [
 name = "ai-skillhub-next"
 version = "3.0.0"
 dependencies = [
+ "base64 0.22.1",
  "rusqlite",
  "serde",
  "serde_json",

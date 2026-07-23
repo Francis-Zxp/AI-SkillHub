@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::Value;
@@ -20,6 +21,10 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
 const SOURCE_POPULARITY_FRESH_TTL_NANOS: u128 = 6 * 60 * 60 * NANOS_PER_SECOND;
 const SOURCE_POPULARITY_DEFERRED_BACKOFF_NANOS: u128 = 15 * 60 * NANOS_PER_SECOND;
+const GITHUB_FALLBACK_MAX_FILES: usize = 1_500;
+const GITHUB_FALLBACK_MAX_BYTES: u64 = 80 * 1024 * 1024;
+const GITHUB_FALLBACK_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const MANAGED_SOURCE_METADATA_FILE: &str = ".skillhub-source.json";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -765,6 +770,7 @@ struct SourceImportExecutionCard {
     blocking_checks: Vec<String>,
     rollback_steps: Vec<String>,
     real_write_scope: String,
+    download_method: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -2344,7 +2350,8 @@ fn read_operator_consent(connection: &Connection) -> Result<OperatorConsentCard,
     let (value, updated_at) = enabled_row.unwrap_or_else(|| ("0".to_string(), String::new()));
     let real_writes_enabled = matches!(value.as_str(), "1" | "true" | "yes");
     let summary = if real_writes_enabled {
-        "用户已手动授权真实写入；仍必须通过备份、恢复、桌面 QA 和 Release Gate。".to_string()
+        "已允许 AI SkillHub 更新受管理的 AI 工具目录；每次写入仍会执行路径校验并保留诊断记录。"
+            .to_string()
     } else {
         "真实写入授权未开启；当前只允许 dry-run、报告和 SQLite 元数据。".to_string()
     };
@@ -3058,19 +3065,60 @@ fn run_release_gate_runner_in_connection(
     let (status, summary, report_body) = match runner_id.as_str() {
         "diagnostics-export" => {
             let snapshot = read_snapshot_from_database(root, connection)?;
+            let git = git_runtime_diagnostic();
+            let foreign_keys = foreign_key_diagnostic(connection)?;
+            let latest_import = latest_source_import_diagnostic(root);
+            let proxy_detected = [
+                "HTTPS_PROXY",
+                "HTTP_PROXY",
+                "ALL_PROXY",
+                "https_proxy",
+                "http_proxy",
+                "all_proxy",
+            ]
+            .iter()
+            .any(|key| {
+                std::env::var(key)
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false)
+            });
             let summary = format!(
-                "v2 diagnostics exported: {} skills, {} sources, {} release reports.",
+                "排错报告已生成：{} 个 Skills、{} 个来源；Git={}；数据库外键异常={}。",
                 snapshot.skills.len(),
                 snapshot.sources.len(),
-                snapshot.release_reports.len()
+                git.get("available")
+                    .and_then(Value::as_bool)
+                    .map(|available| if available { "可用" } else { "未检测到" })
+                    .unwrap_or("未知"),
+                foreign_keys
+                    .get("violationCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
             );
             let body = serde_json::json!({
-                "kind": "v2-diagnostics-export",
+                "kind": "ai-skillhub-support-report",
+                "appVersion": env!("CARGO_PKG_VERSION"),
                 "generatedAt": timestamp,
+                "platform": {
+                    "os": std::env::consts::OS,
+                    "arch": std::env::consts::ARCH
+                },
                 "summary": snapshot.summary,
                 "diagnostics": snapshot.diagnostics,
-                "releaseReports": snapshot.release_reports,
-                "gate": "read-only",
+                "git": git,
+                "network": {
+                    "proxyConfigured": proxy_detected,
+                    "proxyValuesIncluded": false
+                },
+                "database": foreign_keys,
+                "latestSourceImport": latest_import,
+                "privacy": {
+                    "tokensIncluded": false,
+                    "skillContentsIncluded": false,
+                    "databaseFileIncluded": false,
+                    "absolutePathsIncluded": false
+                },
+                "scope": "read-only-support",
                 "root": "<AI_SKILLHUB_ROOT>"
             });
             ("ok".to_string(), summary, body)
@@ -3234,6 +3282,107 @@ fn run_release_gate_runner_in_connection(
             "scope": "v2-report-only"
         }),
     )
+}
+
+fn git_runtime_diagnostic() -> Value {
+    let mut command = Command::new("git");
+    command.arg("--version");
+    match command_output_with_timeout(&mut command, Duration::from_secs(5), "Git 版本检测超时。")
+    {
+        Ok(output) if output.status.success() => serde_json::json!({
+            "available": true,
+            "version": compact_note(&String::from_utf8_lossy(&output.stdout)),
+            "error": ""
+        }),
+        Ok(output) => serde_json::json!({
+            "available": false,
+            "version": "",
+            "error": compact_note(&String::from_utf8_lossy(&output.stderr))
+                .chars()
+                .take(240)
+                .collect::<String>()
+        }),
+        Err(error) => serde_json::json!({
+            "available": false,
+            "version": "",
+            "error": compact_note(&error).chars().take(240).collect::<String>()
+        }),
+    }
+}
+
+fn foreign_key_diagnostic(connection: &Connection) -> Result<Value, String> {
+    let mut statement = connection
+        .prepare("PRAGMA foreign_key_check")
+        .map_err(|error| format!("Cannot prepare foreign key diagnostic: {}", error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(serde_json::json!({
+                "table": row.get::<_, String>(0)?,
+                "rowId": row.get::<_, Option<i64>>(1)?,
+                "parent": row.get::<_, String>(2)?,
+                "foreignKeyId": row.get::<_, i64>(3)?
+            }))
+        })
+        .map_err(|error| format!("Cannot run foreign key diagnostic: {}", error))?;
+    let mut violations = Vec::new();
+    for row in rows {
+        if violations.len() >= 25 {
+            break;
+        }
+        violations
+            .push(row.map_err(|error| format!("Cannot decode foreign key diagnostic: {}", error))?);
+    }
+    Ok(serde_json::json!({
+        "foreignKeysEnabled": true,
+        "violationCount": violations.len(),
+        "violations": violations
+    }))
+}
+
+fn latest_source_import_diagnostic(root: &Path) -> Value {
+    let report_dir = source_import_report_root(root);
+    let Ok(entries) = fs::read_dir(&report_dir) else {
+        return serde_json::json!({ "available": false });
+    };
+    let mut reports = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            if path.extension().and_then(|value| value.to_str()) != Some("json")
+                || file_name.ends_with("-manifest.json")
+            {
+                return None;
+            }
+            let modified = entry
+                .metadata()
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .unwrap_or(UNIX_EPOCH);
+            Some((modified, path))
+        })
+        .collect::<Vec<_>>();
+    reports.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    let Some((_, latest_path)) = reports.first() else {
+        return serde_json::json!({ "available": false });
+    };
+    let Ok(text) = fs::read_to_string(latest_path) else {
+        return serde_json::json!({ "available": false, "readable": false });
+    };
+    let Ok(payload) = serde_json::from_str::<Value>(&text) else {
+        return serde_json::json!({ "available": true, "readable": false });
+    };
+    serde_json::json!({
+        "available": true,
+        "readable": true,
+        "generatedAt": payload.get("generatedAt").cloned().unwrap_or(Value::Null),
+        "status": payload.get("status").cloned().unwrap_or(Value::Null),
+        "summary": payload.get("summary").cloned().unwrap_or(Value::Null),
+        "downloadMethod": payload.get("downloadMethod").cloned().unwrap_or(Value::Null),
+        "skillCount": payload.get("skillCount").cloned().unwrap_or(Value::Null),
+        "promptCount": payload.get("promptCount").cloned().unwrap_or(Value::Null),
+        "blockingChecks": payload.get("blockingChecks").cloned().unwrap_or_else(|| Value::Array(Vec::new()))
+    })
 }
 
 fn build_report_bundle_report(
@@ -4322,6 +4471,7 @@ fn persist_agent_detection_refresh(
     diagnostics_json: Option<&Value>,
 ) -> Result<(), String> {
     let enabled_state = load_enabled_state(connection);
+    let preset_workspace_policies = read_preset_workspace_policies(connection)?;
     let mut snapshot = read_snapshot_from_database(root, connection)?;
     snapshot.agents = parse_agents(diagnostics_json);
     snapshot.agent_adapters = derive_agent_adapters(&snapshot.agents);
@@ -4351,6 +4501,9 @@ fn persist_agent_detection_refresh(
     transaction
         .execute("DELETE FROM workspace_agents", [])
         .map_err(|error| format!("Cannot clear workspace agent index: {}", error))?;
+    transaction
+        .execute("DELETE FROM preset_workspaces", [])
+        .map_err(|error| format!("Cannot clear preset workspace policies: {}", error))?;
     transaction
         .execute("DELETE FROM adapter_safety_checks", [])
         .map_err(|error| format!("Cannot clear adapter safety checks: {}", error))?;
@@ -4423,6 +4576,7 @@ fn persist_agent_detection_refresh(
         &enabled_state,
         &indexed_at,
     )?;
+    restore_preset_workspace_policies(&transaction, &preset_workspace_policies, &indexed_at)?;
     seed_project_scans(&transaction, &snapshot.project_scans)?;
     seed_backup_targets(&transaction, &snapshot.backup_targets, &indexed_at)?;
     seed_backup_dry_run(&transaction, &snapshot.backup_dry_run, &indexed_at)?;
@@ -5238,6 +5392,7 @@ fn stage_source_import_candidate_in_connection(
                 .to_string(),
         ],
         real_write_scope: "staging-only".to_string(),
+        download_method: String::new(),
     };
 
     if !plan.safe_to_continue {
@@ -5269,7 +5424,16 @@ fn stage_github_source_import(
     staged_path: &Path,
     execution: &mut SourceImportExecutionCard,
 ) -> Result<(), String> {
-    let mut command = Command::new("git");
+    stage_github_source_import_with_git_program(plan, staged_path, execution, "git")
+}
+
+fn stage_github_source_import_with_git_program(
+    plan: &SourceImportPlanCard,
+    staged_path: &Path,
+    execution: &mut SourceImportExecutionCard,
+    git_program: &str,
+) -> Result<(), String> {
+    let mut command = Command::new(git_program);
     command
         .args([
             "clone",
@@ -5279,49 +5443,678 @@ fn stage_github_source_import(
             &plan.normalized_target,
         ])
         .arg(staged_path);
-    let output = match command_output_with_timeout(
+    let git_result = command_output_with_timeout(
         &mut command,
         Duration::from_secs(120),
         "GitHub 仓库下载超过 120 秒，已自动停止。请检查网络、仓库地址，或稍后重试。",
-    ) {
-        Ok(output) => output,
-        Err(message) => {
-            execution.status = "blocked".to_string();
-            execution.summary =
-                "GitHub staging clone failed or timed out; no formal source import was executed."
-                    .to_string();
-            execution.blocking_checks.push(message);
-            return Ok(());
+    );
+
+    let git_failure = match git_result {
+        Ok(output) if output.status.success() => None,
+        Ok(output) => {
+            let stderr = compact_note(&String::from_utf8_lossy(&output.stderr));
+            Some(if stderr.is_empty() {
+                "系统 Git 返回失败，但没有提供错误详情。".to_string()
+            } else {
+                stderr.chars().take(320).collect()
+            })
         }
+        Err(message) => Some(message),
     };
 
-    if !output.status.success() {
-        execution.status = "blocked".to_string();
-        execution.summary =
-            "GitHub staging clone failed; no formal source import was executed.".to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        execution
-            .blocking_checks
-            .push(compact_note(&stderr).chars().take(240).collect());
-        return Ok(());
+    if let Some(git_failure) = git_failure {
+        if staged_path.exists() {
+            fs::remove_dir_all(staged_path).map_err(|error| {
+                format!(
+                    "Cannot clear incomplete Git staging folder {}: {}",
+                    staged_path.display(),
+                    error
+                )
+            })?;
+        }
+        let (download_method, downloaded_ref, fallback_error) =
+            match stage_github_source_import_via_codeload(plan, staged_path) {
+                Ok(downloaded_ref) => ("github-codeload", downloaded_ref, None),
+                Err(codeload_error) => {
+                    if staged_path.exists() {
+                        fs::remove_dir_all(staged_path).map_err(|error| {
+                            format!(
+                                "Cannot clear incomplete GitHub archive staging folder {}: {}",
+                                staged_path.display(),
+                                error
+                            )
+                        })?;
+                    }
+                    match stage_github_source_import_via_api(plan, staged_path) {
+                        Ok(default_branch) => ("github-api", default_branch, None),
+                        Err(api_error) => (
+                            "failed",
+                            String::new(),
+                            Some(format!(
+                                "归档下载：{}；API 下载：{}",
+                                codeload_error, api_error
+                            )),
+                        ),
+                    }
+                }
+            };
+        if let Some(fallback_error) = fallback_error {
+            execution.status = "blocked".to_string();
+            execution.summary = "GitHub 来源下载失败；没有写入正式技能库。".to_string();
+            execution.blocking_checks = vec![
+                format!("系统 Git：{}", git_failure),
+                format!("内置 GitHub 下载器：{}", fallback_error),
+                "请检查网络/代理；私有仓库仍需要本机 Git 和相应凭据。".to_string(),
+            ];
+            execution.download_method = "failed".to_string();
+            return Ok(());
+        }
+        execution.download_method = download_method.to_string();
+        execution.blocking_checks = vec![
+            format!(
+                "系统 Git 不可用或克隆失败，已自动切换到内置 GitHub 下载器（引用：{}）。",
+                downloaded_ref
+            ),
+            "内置下载器只保留可安装的 Skill 目录；若仓库没有 SKILL.md，则只保留根目录 Prompt/说明文档。"
+                .to_string(),
+        ];
+    } else {
+        execution.download_method = "git".to_string();
+        write_managed_source_metadata(staged_path, &plan.normalized_target, "git", "")?;
     }
 
     let (skill_count, prompt_count) = count_skill_dirs_in_path(staged_path)?;
     execution.status = if skill_count > 0 { "staged" } else { "warn" }.to_string();
-    execution.summary = format!(
-        "GitHub source staged into isolated folder: {} Skill folder(s), {} Prompt-like Markdown file(s).",
-        skill_count, prompt_count
-    );
+    execution.summary = if skill_count > 0 {
+        format!(
+            "已下载 GitHub 来源：识别到 {} 个 Skill、{} 份 Prompt/说明文档。",
+            skill_count, prompt_count
+        )
+    } else if prompt_count > 0 {
+        format!(
+            "该仓库没有可安装的 SKILL.md；已识别为 Prompt/资料来源（{} 份文档），不会伪装成 Skill。",
+            prompt_count
+        )
+    } else {
+        "该仓库没有发现可安装的 SKILL.md 或可用的 Prompt 文档。".to_string()
+    };
     execution.skill_count = skill_count;
     execution.prompt_count = prompt_count;
     execution.copied_files = count_files_in_path(staged_path).unwrap_or(0);
     execution.copied_bytes = directory_size_bytes(staged_path).unwrap_or(0);
-    execution.blocking_checks = vec![
-        "This step only stages the GitHub repository before formal promotion.".to_string(),
-        "After promotion, enable real-write authorization and use sync to link AI tools."
-            .to_string(),
-    ];
+    if execution.blocking_checks.is_empty() {
+        execution.blocking_checks = vec![
+            "下载已在隔离目录完成，尚未覆盖任何现有来源。".to_string(),
+            "确认内容后才会提升到受管理来源并刷新 AI 工具链接。".to_string(),
+        ];
+    }
     Ok(())
+}
+
+fn stage_github_source_import_via_api(
+    plan: &SourceImportPlanCard,
+    staged_path: &Path,
+) -> Result<String, String> {
+    let (owner, repo) = parse_github_repo(&plan.normalized_target)
+        .ok_or_else(|| "GitHub 地址无法解析。".to_string())?;
+    let agent = github_http_agent();
+    let repo_url = format!("https://api.github.com/repos/{}/{}", owner, repo);
+    let repo_payload = github_json_request(&agent, &repo_url, &owner, &repo)?;
+    let default_branch = repo_payload
+        .get("default_branch")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("main")
+        .to_string();
+    let tree_url = format!(
+        "https://api.github.com/repos/{}/{}/git/trees/{}?recursive=1",
+        owner,
+        repo,
+        percent_encode_url_component(&default_branch)
+    );
+    let tree_payload = github_json_request(&agent, &tree_url, &owner, &repo)?;
+    if tree_payload
+        .get("truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err("仓库文件树过大，GitHub API 返回了截断结果；请安装 Git 后重试。".to_string());
+    }
+    let selected_files = select_github_repository_files(&tree_payload)?;
+    if selected_files.is_empty() {
+        return Err("仓库没有 SKILL.md，也没有根目录 Markdown 资料。".to_string());
+    }
+    let planned_bytes = selected_files
+        .iter()
+        .fold(0u64, |total, file| total.saturating_add(file.size));
+    if selected_files.len() > GITHUB_FALLBACK_MAX_FILES {
+        return Err(format!(
+            "需要下载的文件超过安全上限（{} > {}）。",
+            selected_files.len(),
+            GITHUB_FALLBACK_MAX_FILES
+        ));
+    }
+    if planned_bytes > GITHUB_FALLBACK_MAX_BYTES {
+        return Err(format!(
+            "需要下载的文件超过 80 MB 安全上限（{} bytes）。",
+            planned_bytes
+        ));
+    }
+
+    fs::create_dir_all(staged_path).map_err(|error| {
+        format!(
+            "Cannot create GitHub API staging folder {}: {}",
+            staged_path.display(),
+            error
+        )
+    })?;
+    let mut downloaded_bytes = 0u64;
+    for file in selected_files {
+        let relative_path = safe_relative_github_path(&file.path)
+            .ok_or_else(|| format!("GitHub 返回了不安全路径：{}", compact_note(&file.path)))?;
+        let output_path = staged_path.join(&relative_path);
+        if !output_path.starts_with(staged_path) {
+            return Err(format!("下载路径越过隔离目录：{}", relative_path.display()));
+        }
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "Cannot create GitHub staging directory {}: {}",
+                    parent.display(),
+                    error
+                )
+            })?;
+        }
+        if file.api_url.trim().is_empty() {
+            return Err(format!(
+                "GitHub 文件缺少 Blob 地址：{}",
+                compact_note(&file.path)
+            ));
+        }
+        let expected_blob_prefix =
+            format!("https://api.github.com/repos/{}/{}/git/blobs/", owner, repo);
+        if !file
+            .api_url
+            .to_ascii_lowercase()
+            .starts_with(&expected_blob_prefix.to_ascii_lowercase())
+        {
+            return Err(format!(
+                "GitHub 返回了非预期的 Blob 地址：{}",
+                compact_note(&file.path)
+            ));
+        }
+        let blob = github_json_request(&agent, &file.api_url, &owner, &repo)
+            .map_err(|error| format!("下载 {} 失败：{}", compact_note(&file.path), error))?;
+        if blob.get("encoding").and_then(Value::as_str) != Some("base64") {
+            return Err(format!(
+                "GitHub 文件编码不受支持：{}",
+                compact_note(&file.path)
+            ));
+        }
+        let encoded = blob
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("GitHub 文件内容为空：{}", compact_note(&file.path)))?
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
+        let bytes = BASE64_STANDARD.decode(encoded).map_err(|error| {
+            format!(
+                "GitHub 文件解码失败 {}：{}",
+                compact_note(&file.path),
+                error
+            )
+        })?;
+        if bytes.len() as u64 > GITHUB_FALLBACK_MAX_FILE_BYTES {
+            return Err(format!(
+                "单个文件超过 16 MB 安全上限：{}",
+                compact_note(&file.path)
+            ));
+        }
+        downloaded_bytes = downloaded_bytes.saturating_add(bytes.len() as u64);
+        if downloaded_bytes > GITHUB_FALLBACK_MAX_BYTES {
+            return Err("下载内容超过 80 MB 安全上限。".to_string());
+        }
+        fs::write(&output_path, bytes).map_err(|error| {
+            format!(
+                "Cannot write GitHub staging file {}: {}",
+                output_path.display(),
+                error
+            )
+        })?;
+    }
+    write_managed_source_metadata(
+        staged_path,
+        &plan.normalized_target,
+        "github-api",
+        &default_branch,
+    )?;
+    Ok(default_branch)
+}
+
+fn stage_github_source_import_via_codeload(
+    plan: &SourceImportPlanCard,
+    staged_path: &Path,
+) -> Result<String, String> {
+    let (owner, repo) = parse_github_repo(&plan.normalized_target)
+        .ok_or_else(|| "GitHub 地址无法解析。".to_string())?;
+    let url = format!("https://codeload.github.com/{}/{}/zip/HEAD", owner, repo);
+    let agent = github_http_agent();
+    let response = agent
+        .get(&url)
+        .set("User-Agent", "AI-SkillHub")
+        .set("Accept", "application/zip")
+        .call()
+        .map_err(|error| {
+            format!(
+                "GitHub 归档请求失败 {}：{}",
+                compact_note(&format!("{owner}/{repo}")),
+                github_download_error_message(error)
+            )
+        })?;
+    if let Some(content_length) = response
+        .header("Content-Length")
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        if content_length > GITHUB_FALLBACK_MAX_BYTES {
+            return Err(format!(
+                "仓库归档超过 80 MB 安全上限（{} bytes）。",
+                content_length
+            ));
+        }
+    }
+
+    let mut archive_bytes = Vec::new();
+    response
+        .into_reader()
+        .take(GITHUB_FALLBACK_MAX_BYTES + 1)
+        .read_to_end(&mut archive_bytes)
+        .map_err(|error| format!("GitHub 归档下载失败：{}", error))?;
+    if archive_bytes.len() as u64 > GITHUB_FALLBACK_MAX_BYTES {
+        return Err("仓库归档超过 80 MB 安全上限。".to_string());
+    }
+
+    let cursor = std::io::Cursor::new(archive_bytes);
+    let mut archive =
+        ZipArchive::new(cursor).map_err(|error| format!("GitHub 归档无法读取：{}", error))?;
+    if archive.is_empty() {
+        return Err("GitHub 仓库归档为空。".to_string());
+    }
+    if archive.len() > 10_000 {
+        return Err(format!(
+            "仓库归档条目超过安全上限（{} > 10000）。",
+            archive.len()
+        ));
+    }
+
+    #[derive(Clone)]
+    struct CodeloadFile {
+        index: usize,
+        path: PathBuf,
+        size: u64,
+    }
+
+    let mut files = Vec::new();
+    let mut skill_roots = HashSet::new();
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|error| format!("Cannot inspect GitHub archive entry {}: {}", index, error))?;
+        if !entry.is_file() {
+            continue;
+        }
+        if archive_entry_is_symlink(&entry) {
+            return Err(format!(
+                "GitHub 归档含符号链接，已拒绝：{}",
+                compact_note(entry.name())
+            ));
+        }
+        let archive_path = safe_archive_entry_path(&entry)
+            .ok_or_else(|| format!("GitHub 归档含不安全路径：{}", compact_note(entry.name())))?;
+        let relative_path = strip_codeload_root(&archive_path)
+            .ok_or_else(|| format!("GitHub 归档缺少标准根目录：{}", compact_note(entry.name())))?;
+        if archive_entry_should_skip(&relative_path) {
+            continue;
+        }
+        if entry.size() > GITHUB_FALLBACK_MAX_FILE_BYTES {
+            return Err(format!(
+                "单个文件超过 16 MB 安全上限：{}",
+                relative_path.display()
+            ));
+        }
+        if relative_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.eq_ignore_ascii_case("SKILL.md"))
+            .unwrap_or(false)
+        {
+            skill_roots.insert(
+                relative_path
+                    .parent()
+                    .unwrap_or_else(|| Path::new(""))
+                    .to_path_buf(),
+            );
+        }
+        files.push(CodeloadFile {
+            index,
+            path: relative_path,
+            size: entry.size(),
+        });
+    }
+
+    let mut selected = if skill_roots.is_empty() {
+        files
+            .into_iter()
+            .filter(|file| {
+                file.path.components().count() == 1
+                    && file
+                        .path
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .map(|extension| extension.eq_ignore_ascii_case("md"))
+                        .unwrap_or(false)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        files
+            .into_iter()
+            .filter(|file| {
+                skill_roots
+                    .iter()
+                    .any(|root| root.as_os_str().is_empty() || file.path.starts_with(root))
+            })
+            .collect::<Vec<_>>()
+    };
+    selected.sort_by(|left, right| left.path.cmp(&right.path));
+    selected.dedup_by(|left, right| left.path == right.path);
+    if selected.is_empty() {
+        return Err("仓库没有 SKILL.md，也没有根目录 Markdown 资料。".to_string());
+    }
+    if selected.len() > GITHUB_FALLBACK_MAX_FILES {
+        return Err(format!(
+            "需要下载的文件超过安全上限（{} > {}）。",
+            selected.len(),
+            GITHUB_FALLBACK_MAX_FILES
+        ));
+    }
+    let planned_bytes = selected
+        .iter()
+        .fold(0u64, |total, file| total.saturating_add(file.size));
+    if planned_bytes > GITHUB_FALLBACK_MAX_BYTES {
+        return Err(format!(
+            "需要解压的文件超过 80 MB 安全上限（{} bytes）。",
+            planned_bytes
+        ));
+    }
+
+    fs::create_dir_all(staged_path).map_err(|error| {
+        format!(
+            "Cannot create GitHub archive staging folder {}: {}",
+            staged_path.display(),
+            error
+        )
+    })?;
+    let mut extracted_bytes = 0u64;
+    for selected_file in selected {
+        let mut entry = archive.by_index(selected_file.index).map_err(|error| {
+            format!(
+                "Cannot read GitHub archive entry {}: {}",
+                selected_file.index, error
+            )
+        })?;
+        let output_path = staged_path.join(&selected_file.path);
+        if !output_path.starts_with(staged_path) {
+            return Err(format!(
+                "归档路径越过隔离目录：{}",
+                selected_file.path.display()
+            ));
+        }
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "Cannot create GitHub archive staging directory {}: {}",
+                    parent.display(),
+                    error
+                )
+            })?;
+        }
+        let mut contents = Vec::new();
+        entry
+            .by_ref()
+            .take(GITHUB_FALLBACK_MAX_FILE_BYTES + 1)
+            .read_to_end(&mut contents)
+            .map_err(|error| {
+                format!(
+                    "Cannot extract GitHub archive file {}: {}",
+                    selected_file.path.display(),
+                    error
+                )
+            })?;
+        if contents.len() as u64 > GITHUB_FALLBACK_MAX_FILE_BYTES {
+            return Err(format!(
+                "解压后单个文件超过 16 MB 安全上限：{}",
+                selected_file.path.display()
+            ));
+        }
+        extracted_bytes = extracted_bytes.saturating_add(contents.len() as u64);
+        if extracted_bytes > GITHUB_FALLBACK_MAX_BYTES {
+            return Err("解压内容超过 80 MB 安全上限。".to_string());
+        }
+        fs::write(&output_path, contents).map_err(|error| {
+            format!(
+                "Cannot write GitHub archive staging file {}: {}",
+                output_path.display(),
+                error
+            )
+        })?;
+    }
+    write_managed_source_metadata(
+        staged_path,
+        &plan.normalized_target,
+        "github-codeload",
+        "HEAD",
+    )?;
+    Ok("HEAD".to_string())
+}
+
+fn strip_codeload_root(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components();
+    match components.next()? {
+        Component::Normal(_) => {}
+        _ => return None,
+    }
+    let relative = components.collect::<PathBuf>();
+    if relative.as_os_str().is_empty() {
+        return None;
+    }
+    Some(relative)
+}
+
+fn github_download_error_message(error: ureq::Error) -> String {
+    match error {
+        ureq::Error::Status(status, response) => {
+            let message = response
+                .into_string()
+                .unwrap_or_default()
+                .chars()
+                .take(280)
+                .collect::<String>();
+            if message.trim().is_empty() {
+                format!("HTTP {}", status)
+            } else {
+                format!("HTTP {}: {}", status, compact_note(&message))
+            }
+        }
+        ureq::Error::Transport(error) => compact_note(&error.to_string()),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GithubRepositoryFile {
+    path: String,
+    size: u64,
+    api_url: String,
+}
+
+fn select_github_repository_files(
+    tree_payload: &Value,
+) -> Result<Vec<GithubRepositoryFile>, String> {
+    let entries = tree_payload
+        .get("tree")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "GitHub 文件树响应缺少 tree 数组。".to_string())?;
+    let mut blobs = Vec::new();
+    let mut skill_roots = HashSet::new();
+    for entry in entries {
+        if entry.get("type").and_then(Value::as_str) != Some("blob") {
+            continue;
+        }
+        let Some(path) = entry.get("path").and_then(Value::as_str) else {
+            continue;
+        };
+        if entry.get("mode").and_then(Value::as_str) == Some("120000") {
+            continue;
+        }
+        let Some(relative_path) = safe_relative_github_path(path) else {
+            continue;
+        };
+        if archive_entry_should_skip(&relative_path) {
+            continue;
+        }
+        let size = entry.get("size").and_then(Value::as_u64).unwrap_or(0);
+        let api_url = entry
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if relative_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.eq_ignore_ascii_case("SKILL.md"))
+            .unwrap_or(false)
+        {
+            skill_roots.insert(
+                relative_path
+                    .parent()
+                    .unwrap_or_else(|| Path::new(""))
+                    .to_path_buf(),
+            );
+        }
+        blobs.push(GithubRepositoryFile {
+            path: path.to_string(),
+            size,
+            api_url,
+        });
+    }
+
+    let mut selected = if skill_roots.is_empty() {
+        blobs
+            .into_iter()
+            .filter(|file| {
+                let path = Path::new(&file.path);
+                path.components().count() == 1
+                    && path
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .map(|extension| extension.eq_ignore_ascii_case("md"))
+                        .unwrap_or(false)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        blobs
+            .into_iter()
+            .filter(|file| {
+                let path = Path::new(&file.path);
+                skill_roots
+                    .iter()
+                    .any(|root| root.as_os_str().is_empty() || path.starts_with(root))
+            })
+            .collect::<Vec<_>>()
+    };
+    selected.sort_by(|left, right| left.path.cmp(&right.path));
+    selected.dedup_by(|left, right| left.path == right.path);
+    Ok(selected)
+}
+
+fn github_http_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .try_proxy_from_env(true)
+        .https_only(true)
+        .timeout_connect(Duration::from_secs(15))
+        .timeout_read(Duration::from_secs(60))
+        .timeout_write(Duration::from_secs(30))
+        .build()
+}
+
+fn github_json_request(
+    agent: &ureq::Agent,
+    url: &str,
+    owner: &str,
+    repo: &str,
+) -> Result<Value, String> {
+    let mut request = agent
+        .get(url)
+        .set("User-Agent", "AI-SkillHub")
+        .set("Accept", "application/vnd.github+json");
+    let token = github_api_token();
+    if let Some(token) = token.as_deref() {
+        request = request.set("Authorization", &format!("Bearer {token}"));
+    }
+    request
+        .call()
+        .map_err(|error| github_api_error_message(owner, repo, error))?
+        .into_json()
+        .map_err(|error| format!("GitHub API 响应无法解析：{}", error))
+}
+
+fn safe_relative_github_path(path: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(path.replace('\\', "/"));
+    if path.as_os_str().is_empty()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return None;
+    }
+    Some(path)
+}
+
+fn percent_encode_url_component(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'_' | b'.' | b'~') {
+                (*byte as char).to_string()
+            } else {
+                format!("%{:02X}", byte)
+            }
+        })
+        .collect()
+}
+
+fn write_managed_source_metadata(
+    source_path: &Path,
+    url: &str,
+    download_method: &str,
+    default_branch: &str,
+) -> Result<(), String> {
+    let payload = serde_json::json!({
+        "schemaVersion": 1,
+        "url": url,
+        "downloadMethod": download_method,
+        "defaultBranch": default_branch,
+        "downloadedAt": unix_timestamp_string()
+    });
+    fs::write(
+        source_path.join(MANAGED_SOURCE_METADATA_FILE),
+        serde_json::to_string_pretty(&payload)
+            .map_err(|error| format!("Cannot serialize managed source metadata: {}", error))?,
+    )
+    .map_err(|error| format!("Cannot write managed source metadata: {}", error))
 }
 
 fn stage_local_source_import(
@@ -5455,6 +6248,7 @@ fn write_source_import_execution_report(
         "blockingChecks": &execution.blocking_checks,
         "rollbackSteps": &execution.rollback_steps,
         "realWriteScope": &execution.real_write_scope,
+        "downloadMethod": &execution.download_method,
         "formalInstall": false,
         "aiToolSync": false
     });
@@ -5463,12 +6257,18 @@ fn write_source_import_execution_report(
     fs::write(&json_path, &report_json)
         .map_err(|error| format!("Cannot write staging JSON report: {}", error))?;
     let markdown = format!(
-        "# Source Import Staging\n\nStatus: `{}`\n\n{}\n\nStaged path: `{}`\n\nSkills: `{}`\n\nFiles: `{}`\n\nFormal install: `false`\n\nAI tool sync: `false`\n",
+        "# Source Import Staging\n\nStatus: `{}`\n\n{}\n\nDownload method: `{}`\n\nStaged path: `[REDACTED]`\n\nSkills: `{}`\n\nFiles: `{}`\n\nChecks:\n{}\n\nFormal install: `false`\n\nAI tool sync: `false`\n",
         execution.status,
         execution.summary,
-        execution.staged_path,
+        execution.download_method,
         execution.skill_count,
-        execution.copied_files
+        execution.copied_files,
+        execution
+            .blocking_checks
+            .iter()
+            .map(|check| format!("- {}", check))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     fs::write(&md_path, markdown)
         .map_err(|error| format!("Cannot write staging Markdown report: {}", error))?;
@@ -6702,6 +7502,16 @@ fn hydrate_source_urls_from_git(root: &Path, sources: &mut [SourceCard]) {
 
 fn infer_source_github_url(root: &Path, source: &SourceCard) -> Option<String> {
     for path in source_candidate_paths(root, source) {
+        let metadata_path = path.join(MANAGED_SOURCE_METADATA_FILE);
+        if let Ok(metadata) = fs::read_to_string(&metadata_path) {
+            if let Ok(payload) = serde_json::from_str::<Value>(&metadata) {
+                if let Some(url) = payload.get("url").and_then(Value::as_str) {
+                    if let Some((owner, repo)) = parse_github_repo(url) {
+                        return Some(normalized_github_repo_url(&owner, &repo));
+                    }
+                }
+            }
+        }
         let config_path = path.join(".git").join("config");
         let Ok(config) = fs::read_to_string(config_path) else {
             continue;
@@ -11929,6 +12739,29 @@ mod tests {
 
         persist_snapshot(&root, &snapshot).expect("test snapshot should persist");
         let mut connection = open_index_database(&root).expect("test database should open");
+        let workspace_id = connection
+            .query_row(
+                "SELECT id FROM workspaces WHERE scope = 'global' LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("derived workspace should exist");
+        let timestamp = unix_timestamp_string();
+        connection
+            .execute(
+                "INSERT INTO presets (
+                    id, name, description, color, enabled, created_at, updated_at
+                ) VALUES ('preset-refresh-test', 'Refresh test', '', 'mint', 1, ?1, ?1)",
+                params![&timestamp],
+            )
+            .expect("test preset should insert");
+        set_preset_workspace_enabled_in_connection(
+            &connection,
+            "preset-refresh-test",
+            &workspace_id,
+            true,
+        )
+        .expect("preset workspace policy should save");
         connection
             .execute(
                 "INSERT OR REPLACE INTO source_overrides (
@@ -11968,6 +12801,15 @@ mod tests {
         assert_eq!(refreshed.sources.len(), 1);
         assert_eq!(refreshed.skills.len(), 1);
         assert_eq!(refreshed.sources[0].note, "keep this source note");
+        let preserved_policy = connection
+            .query_row(
+                "SELECT enabled FROM preset_workspaces
+                WHERE preset_id = 'preset-refresh-test' AND workspace_id = ?1",
+                params![&workspace_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("preset workspace policy should survive agent refresh");
+        assert_eq!(preserved_policy, 1);
         assert!(refreshed
             .agent_adapters
             .iter()
@@ -13590,6 +14432,168 @@ mod tests {
         assert_eq!(plan.status, "ready");
         assert_eq!(plan.skill_count, 2);
         assert!(plan.safe_to_continue);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn github_api_selection_keeps_skill_folders_or_root_prompt_docs() {
+        let skill_tree = serde_json::json!({
+            "tree": [
+                { "path": "assets/large.png", "type": "blob", "mode": "100644", "size": 9000 },
+                { "path": "scientific-figure-making/SKILL.md", "type": "blob", "mode": "100644", "size": 400 },
+                { "path": "scientific-figure-making/references/api.md", "type": "blob", "mode": "100644", "size": 800 },
+                { "path": "README.md", "type": "blob", "mode": "100644", "size": 1000 }
+            ]
+        });
+        let selected =
+            select_github_repository_files(&skill_tree).expect("skill tree should select");
+        assert_eq!(selected.len(), 2);
+        assert!(selected
+            .iter()
+            .all(|file| file.path.starts_with("scientific-figure-making/")));
+
+        let prompt_tree = serde_json::json!({
+            "tree": [
+                { "path": "images/demo.png", "type": "blob", "mode": "100644", "size": 9000 },
+                { "path": "README.md", "type": "blob", "mode": "100644", "size": 1000 },
+                { "path": "guide.md", "type": "blob", "mode": "100644", "size": 600 }
+            ]
+        });
+        let selected =
+            select_github_repository_files(&prompt_tree).expect("prompt tree should select");
+        assert_eq!(selected.len(), 2);
+        assert!(selected.iter().all(|file| file.path.ends_with(".md")));
+    }
+
+    #[test]
+    fn managed_source_metadata_recovers_github_url_without_git_folder() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-source-metadata-test-{}",
+            unix_timestamp_string()
+        ));
+        let source_dir = active_sources_dir(&root).join("api-downloaded-source");
+        fs::create_dir_all(&source_dir).expect("source dir should create");
+        write_managed_source_metadata(
+            &source_dir,
+            "https://github.com/ChenLiu-1996/figures4papers.git",
+            "github-api",
+            "main",
+        )
+        .expect("metadata should write");
+        let source = test_source_card("source-api", "api-downloaded-source", &source_dir, "");
+        assert_eq!(
+            infer_source_github_url(&root, &source).as_deref(),
+            Some("https://github.com/ChenLiu-1996/figures4papers.git")
+        );
+        assert!(!source_dir.join(".git").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "network-dependent recipient gate"]
+    fn github_fallback_imports_real_skill_and_prompt_repositories_without_git() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-github-recipient-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test database should open");
+
+        let figure_plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/ChenLiu-1996/figures4papers.git",
+        )
+        .expect("figure plan should build");
+        let figure_stage = source_import_staging_root(&root).join("figures4papers-fallback");
+        let mut figure_execution = SourceImportExecutionCard {
+            id: "figure-no-git".to_string(),
+            import_kind: "github".to_string(),
+            input: figure_plan.input.clone(),
+            status: "blocked".to_string(),
+            risk_level: "low".to_string(),
+            summary: String::new(),
+            staged_path: figure_stage.display().to_string(),
+            report_path: String::new(),
+            manifest_path: String::new(),
+            copied_files: 0,
+            copied_bytes: 0,
+            skill_count: 0,
+            prompt_count: 0,
+            blocking_checks: Vec::new(),
+            rollback_steps: Vec::new(),
+            real_write_scope: "staging-only".to_string(),
+            download_method: String::new(),
+        };
+        stage_github_source_import_with_git_program(
+            &figure_plan,
+            &figure_stage,
+            &mut figure_execution,
+            "ai-skillhub-test-missing-git.exe",
+        )
+        .expect("figure skill should download without Git");
+        assert_eq!(
+            figure_execution.status, "staged",
+            "{:?}",
+            figure_execution.blocking_checks
+        );
+        assert_eq!(figure_execution.download_method, "github-codeload");
+        let (figure_skills, _) =
+            count_skill_dirs_in_path(&figure_stage).expect("figure stage should scan");
+        assert_eq!(figure_skills, 1);
+        assert!(figure_stage
+            .join("scientific-figure-making")
+            .join("SKILL.md")
+            .exists());
+        assert!(!figure_stage.join(".git").exists());
+
+        let prompt_plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/Leey21/awesome-ai-research-writing.git",
+        )
+        .expect("prompt plan should build");
+        let prompt_stage = source_import_staging_root(&root).join("research-writing-fallback");
+        let mut prompt_execution = SourceImportExecutionCard {
+            id: "prompt-no-git".to_string(),
+            import_kind: "github".to_string(),
+            input: prompt_plan.input.clone(),
+            status: "blocked".to_string(),
+            risk_level: "low".to_string(),
+            summary: String::new(),
+            staged_path: prompt_stage.display().to_string(),
+            report_path: String::new(),
+            manifest_path: String::new(),
+            copied_files: 0,
+            copied_bytes: 0,
+            skill_count: 0,
+            prompt_count: 0,
+            blocking_checks: Vec::new(),
+            rollback_steps: Vec::new(),
+            real_write_scope: "staging-only".to_string(),
+            download_method: String::new(),
+        };
+        stage_github_source_import_with_git_program(
+            &prompt_plan,
+            &prompt_stage,
+            &mut prompt_execution,
+            "ai-skillhub-test-missing-git.exe",
+        )
+        .expect("prompt repository should download without Git");
+        assert_eq!(
+            prompt_execution.status, "warn",
+            "{:?}",
+            prompt_execution.blocking_checks
+        );
+        assert_eq!(prompt_execution.download_method, "github-codeload");
+        let (prompt_skills, prompt_docs) =
+            count_skill_dirs_in_path(&prompt_stage).expect("prompt stage should scan");
+        assert_eq!(prompt_skills, 0);
+        assert!(prompt_docs >= 1);
+        assert!(prompt_stage.join("README.md").exists());
+        assert!(!prompt_stage.join(".git").exists());
 
         let _ = fs::remove_dir_all(root);
     }

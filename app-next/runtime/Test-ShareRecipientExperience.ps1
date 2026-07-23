@@ -12,6 +12,7 @@ $RuntimeRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $V2Root = Split-Path -Parent $RuntimeRoot
 $ProjectRoot = Split-Path -Parent $V2Root
 $ReportsRoot = Join-Path $V2Root 'reports\share-recipient-test'
+$BuiltAppPath = Join-Path $V2Root 'src-tauri\target\release\ai-skillhub-next.exe'
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
 $RunRoot = Join-Path $ReportsRoot $Stamp
 $SandboxRoot = Join-Path $RunRoot 'AI SkillHub 分享验收 用户 路径'
@@ -74,7 +75,7 @@ function Assert-PathInsideRoot([string]$Path, [string]$Root, [string]$Label) {
 Assert-PathInsideRoot $RunRoot $ReportsRoot '分享验收临时目录'
 New-Item -ItemType Directory -Force -Path $SandboxRoot, $SandboxV2, $SandboxRuntime | Out-Null
 try {
-  Copy-FileRequired (Join-Path $ProjectRoot 'AI SkillHub.exe') (Join-Path $SandboxRoot 'AI SkillHub.exe')
+  Copy-FileRequired $BuiltAppPath (Join-Path $SandboxRoot 'AI SkillHub.exe')
   foreach ($file in @('README.md', 'CHANGELOG.md', '使用说明.md')) {
     $source = Join-Path $ProjectRoot $file
     if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-FileRequired $source (Join-Path $SandboxRoot $file) }

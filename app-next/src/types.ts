@@ -426,6 +426,7 @@ export type SourceImportExecutionCard = {
   blockingChecks: string[];
   rollbackSteps: string[];
   realWriteScope: string;
+  downloadMethod: string;
 };
 
 export type SourceImportPromotionCard = {

@@ -1027,7 +1027,6 @@ export function App() {
               onChangeTextScale={changeTextScale}
               onChangeTheme={changeTheme}
               onOpenAdvanced={() => setActive("release")}
-              onQaStatus={updateDesktopQaStatus}
               snapshot={snapshot}
             />
           )}
@@ -3249,7 +3248,15 @@ function ImportWizard({
       setStatus({ tone: "info", title: t("qa.statusJoining"), body: t("qa.statusJoiningBody") });
       const execution = await onStage(plan.importKind, plan.input, { quiet: true });
       if (execution.status !== "staged" && execution.status !== "warn") {
-        setStatus({ tone: "warn", title: t("qa.statusNotWritten"), body: execution.summary });
+        const detail = execution.blockingChecks
+          .filter(check => check.trim())
+          .slice(0, 2)
+          .join("；");
+        setStatus({
+          tone: "warn",
+          title: t("qa.statusNotWritten"),
+          body: `${execution.summary}${detail && detail !== execution.summary ? `\n${detail}` : ""}`
+        });
         showUiToast(t("qa.toastStagingStop"), "warn");
         return;
       }
@@ -3268,21 +3275,35 @@ function ImportWizard({
         item => normalizeSourcePath(item.localPath) === normalizeSourcePath(promotion.targetPath)
       );
       if (promotedSource) {
+        const detectedSourceType: SourceCard["sourceType"] =
+          execution.skillCount === 0 && execution.promptCount > 0
+            ? "prompt"
+            : execution.skillCount > 0
+              ? "skill"
+              : sourceType;
         const customCategoryLabel = customCategory.trim();
         const primaryCategory =
-          customCategoryLabel || displayCategoryName(effectiveCategoryIds[0] ?? categoryIdForSourceType(sourceType));
+          customCategoryLabel ||
+          displayCategoryName(effectiveCategoryIds[0] ?? categoryIdForSourceType(detectedSourceType));
         const extraTags = effectiveCategoryIds.slice(customCategoryLabel ? 0 : 1).map(displayCategoryName).join(", ");
         const draft: SourceDraft = {
           category: primaryCategory,
           enabled,
           name: promotedSource.name,
           note,
-          sourceType,
+          sourceType: detectedSourceType,
           tags: mergeTagInputs(tags, extraTags)
         };
         await onSaveSourceMetadata(promotedSource, draft);
       }
-      setStatus({ tone: "ok", title: t("qa.statusAddedTitle"), body: t("qa.statusAddedSynced") });
+      setStatus({
+        tone: "ok",
+        title: t("qa.statusAddedTitle"),
+        body:
+          execution.skillCount === 0 && execution.promptCount > 0
+            ? t("qa.statusAddedPrompt")
+            : t("qa.statusAddedSynced")
+      });
       showUiToast(t("qa.toastSynced"), "ok");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -3772,112 +3793,13 @@ function Advanced({
   onRunRunner: (runnerId: string) => Promise<void>;
   snapshot: LegacySnapshot | null;
 }) {
-  const diagnostics = snapshot?.diagnostics;
-  const releaseReports = snapshot?.releaseReports ?? [];
-  const operationRunners = snapshot?.operationRunners ?? [];
-  const desktopQaChecks = snapshot?.desktopQaChecks ?? [];
-  const backupDryRun = snapshot?.backupDryRun ?? [];
-  const restoreDryRun = snapshot?.restoreDryRun ?? [];
-  const rollbackPlan = snapshot?.rollbackPlan ?? [];
-  const snapshots = snapshot?.snapshots ?? [];
-  const latestSnapshot = snapshots.find(item => item.isLatest) ?? snapshots[0];
+  const supportRunner = snapshot?.operationRunners.find(runner => runner.id === "diagnostics-export");
   const operatorConsent = snapshot?.operatorConsent ?? {
     realWritesEnabled: false,
     enabledAt: "",
     updatedAt: "",
     summary: ""
   };
-  const diagnosticsReport = releaseReports.find(report => report.id === "diagnostics");
-  const preflightReport = releaseReports.find(report => report.id === "release-preflight");
-  const shareReport = releaseReports.find(report => report.id === "share-recipient");
-  const zipReport = releaseReports.find(report => report.id === "zip-preview");
-  const blockedBackups = countByStatus(backupDryRun, "blocked");
-  const plannedBackups = countByStatus(backupDryRun, "planned");
-  const blockedRestores = countByStatus(restoreDryRun, "blocked");
-  const plannedRestores = countByStatus(restoreDryRun, "planned");
-  const blockedRollbackSteps = countByStatus(rollbackPlan, "blocked");
-  const lockedRollbackSteps = countByStatus(rollbackPlan, "locked");
-  const diagnosticsReady = Boolean(diagnosticsReport?.ok ?? (diagnostics?.available && diagnostics.error === 0));
-
-  const gateItems = [
-    {
-      status: diagnosticsReady ? "done" : "blocked",
-      title: t("gate.diagnostics"),
-      label: diagnosticsReady ? t("adv.labelDone") : t("adv.labelPlanned"),
-      summary: diagnosticsReady
-        ? diagnosticsReport?.summary ??
-          t("gate.diagnosticsOkFallback", {
-            ok: diagnostics?.ok ?? 0,
-            warn: diagnostics?.warn ?? 0,
-            error: diagnostics?.error ?? 0
-          })
-        : t("gate.diagnosticsBad")
-    },
-    {
-      status: backupDryRun.length === 0 ? "planned" : blockedBackups > 0 ? "blocked" : "done",
-      title: t("gate.backup"),
-      label: backupDryRun.length > 0 ? t("gate.dryRunOnly") : t("gate.toGenerate"),
-      summary:
-        backupDryRun.length > 0
-          ? t("gate.backupReady", { total: backupDryRun.length, planned: plannedBackups, blocked: blockedBackups })
-          : t("gate.backupWaiting")
-    },
-    {
-      status: restoreDryRun.length === 0 ? "planned" : blockedRestores > 0 ? "blocked" : "done",
-      title: t("gate.restore"),
-      label: restoreDryRun.length > 0 ? t("gate.dryRunOnly") : t("gate.toGenerate"),
-      summary:
-        restoreDryRun.length > 0
-          ? t("gate.backupReady", { total: restoreDryRun.length, planned: plannedRestores, blocked: blockedRestores })
-          : t("gate.restoreWaiting")
-    },
-    {
-      status: rollbackPlan.length === 0 ? "planned" : blockedRollbackSteps > 0 ? "blocked" : "done",
-      title: t("gate.rollback"),
-      label:
-        blockedRollbackSteps > 0
-          ? t("adv.labelBlocked")
-          : lockedRollbackSteps > 0
-            ? t("gate.rollbackSafeLock")
-            : t("gate.rollbackUnlocked"),
-      summary:
-        rollbackPlan.length > 0
-          ? t("gate.rollbackSummary", {
-              total: rollbackPlan.length,
-              locked: lockedRollbackSteps,
-              blocked: blockedRollbackSteps
-            })
-          : t("gate.rollbackWaiting")
-    },
-    {
-      status: desktopQaGateStatus(desktopQaChecks),
-      title: t("gate.desktopQa"),
-      label: desktopQaGateLabel(desktopQaChecks),
-      summary: desktopQaGateSummary(desktopQaChecks)
-    },
-    {
-      status: releaseReportGateStatus(preflightReport),
-      title: t("gate.preflight"),
-      label: releaseReportGateLabel(preflightReport),
-      summary: preflightReport?.summary ?? t("gate.preflightMissing")
-    },
-    {
-      status: releaseReportGateStatus(shareReport),
-      title: t("gate.share"),
-      label: releaseReportGateLabel(shareReport),
-      summary: shareReport?.summary ?? t("gate.shareMissing")
-    },
-    {
-      status: releaseReportGateStatus(zipReport),
-      title: t("gate.zip"),
-      label: releaseReportGateLabel(zipReport),
-      summary: zipReport?.summary ?? t("gate.zipMissing")
-    }
-  ];
-  const doneCount = gateItems.filter(item => item.status === "done").length;
-  const blockedCount = gateItems.filter(item => item.status === "blocked").length;
-  const plannedCount = gateItems.filter(item => item.status === "planned").length;
-  const readinessStatus = blockedCount > 0 ? "blocked" : plannedCount > 0 ? "planned" : "done";
 
   return (
     <div className="view advanced-view">
@@ -3910,131 +3832,51 @@ function Advanced({
         </header>
       </section>
 
-      <section className={`panel glow-card readiness-${readinessStatus}`}>
+      <section className="panel glow-card support-panel">
         <header className="panel-head">
           <div>
-            <span className="eyebrow">{t("adv.gatesEyebrow")}</span>
-            <h3>
-              {readinessStatus === "done"
-                ? t("adv.readinessDone")
-                : readinessStatus === "blocked"
-                  ? t("adv.readinessBlocked")
-                  : t("adv.readinessPlanned")}
-            </h3>
-            <p>{t("adv.gatesProgress", { done: doneCount, total: gateItems.length, planned: plannedCount, blocked: blockedCount })}</p>
+            <span className="eyebrow">{t("adv.supportEyebrow")}</span>
+            <h3>{t("adv.supportTitle")}</h3>
+            <p>{t("adv.supportBody")}</p>
           </div>
+          <span className={`qa-status ${supportRunner?.status === "ok" ? "done" : "planned"}`}>
+            {supportRunner?.lastRunAt ? t("adv.supportReady") : t("adv.supportNotGenerated")}
+          </span>
         </header>
-        <div className="gate-grid">
-          {gateItems.map(item => (
-            <article className={`gate-card ${item.status}`} key={item.title}>
-              <span className={`qa-status ${item.status}`}>{item.label}</span>
-              <strong>{item.title}</strong>
-              <small>{item.summary}</small>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="panel glow-card">
-        <header className="panel-head">
+        <div className="support-report-card">
           <div>
-            <span className="eyebrow">{t("adv.runnersEyebrow")}</span>
-            <h3>{t("adv.runnersTitle")}</h3>
-            <p>{t("adv.runnersBody")}</p>
+            <strong>{t("adv.supportReportTitle")}</strong>
+            <p>{supportRunner?.summary || t("adv.supportReportHint")}</p>
+            <small>{t("adv.supportPrivacy")}</small>
           </div>
-          <span className="badge-soft warn">{t("adv.runnersLocked")}</span>
-        </header>
-        <div className="runner-grid">
-          {operationRunners.map(runner => (
-            <article className={`runner-card ${runner.status}`} key={runner.id}>
-              <header>
-                <strong>{runner.title}</strong>
-                <span className={`qa-status ${operationRunnerStatusClass(runner.status, runner.locked)}`}>
-                  {operationRunnerStatusLabel(runner.status, runner.locked)}
-                </span>
-              </header>
-              <p>{runner.summary}</p>
-              <div className="runner-meta">
-                <span>{runner.lastRunAt ? formatScanTime(runner.lastRunAt) : t("adv.notRun")}</span>
-                <span>{runner.fileCount ? t("adv.exports", { n: runner.fileCount }) : t("adv.waitingExport")}</span>
-              </div>
-              <div className="runner-actions">
-                <button
-                  className="ghost-action small"
-                  disabled={disabled || runner.fileCount === 0 || !runner.exportDir}
-                  onClick={() => void openReleaseGateExportPath(runner.exportDir)}
-                  type="button"
-                >
-                  {t("adv.openDir")}
-                </button>
-                <button
-                  className="ghost-action small"
-                  disabled={disabled || !(runner.latestMarkdownPath || runner.reportPath)}
-                  onClick={() =>
-                    void copyTextToClipboard(runner.latestMarkdownPath || runner.reportPath, t("toast.pathCopied"))
-                  }
-                  type="button"
-                >
-                  {t("adv.copyPath")}
-                </button>
-                <button
-                  className="secondary-action small"
-                  disabled={disabled}
-                  onClick={() => void onRunRunner(runner.id)}
-                  type="button"
-                >
-                  {runner.locked ? t("adv.runLocked") : t("adv.run")}
-                </button>
-              </div>
-            </article>
-          ))}
-          {operationRunners.length === 0 && <p className="empty-state">{t("adv.runnersEmpty")}</p>}
-        </div>
-      </section>
-
-      <section className="panel glow-card">
-        <header className="panel-head">
-          <div>
-            <span className="eyebrow">{t("adv.snapEyebrow")}</span>
-            <h3>{t("adv.snapTitle")}</h3>
-          </div>
-        </header>
-        <div className="snapshot-summary">
-          <article>
-            <span>{t("adv.snapLatest")}</span>
-            <strong>{latestSnapshot?.name ?? t("adv.snapWaiting")}</strong>
-            <p>{latestSnapshot?.summary ?? t("adv.snapWaitingBody")}</p>
-            <small>
-              {latestSnapshot ? formatScanTime(latestSnapshot.createdAt) : t("adv.snapNoId")}
-            </small>
-          </article>
-          <article>
-            <span>{t("adv.rollbackTitle")}</span>
-            <ul className="rollback-mini">
-              {rollbackPlan.map(step => (
-                <li className={`rollback-step ${step.status}`} key={step.id}>
-                  <span className={`step-dot ${step.status}`} />
-                  <div>
-                    <strong>{step.title}</strong>
-                    <small>{step.summary}</small>
-                  </div>
-                </li>
-              ))}
-              {rollbackPlan.length === 0 && <li className="empty-state">{t("adv.rollbackEmpty")}</li>}
-            </ul>
-          </article>
-        </div>
-        <div className="snapshot-history">
-          <strong>{t("adv.historyTitle")}</strong>
-          <div>
-            {snapshots.map(item => (
-              <article className={item.isLatest ? "snapshot-history-row latest" : "snapshot-history-row"} key={item.id}>
-                <strong>{item.name}</strong>
-                <span>{item.summary}</span>
-                <small>{formatScanTime(item.createdAt)}</small>
-              </article>
-            ))}
-            {snapshots.length === 0 && <p className="empty-state">{t("adv.historyEmpty")}</p>}
+          <div className="runner-actions">
+            <button
+              className="ghost-action small"
+              disabled={disabled || !supportRunner?.exportDir}
+              onClick={() => supportRunner?.exportDir && void openReleaseGateExportPath(supportRunner.exportDir)}
+              type="button"
+            >
+              {t("adv.openDir")}
+            </button>
+            <button
+              className="ghost-action small"
+              disabled={disabled || !supportRunner?.latestJsonPath}
+              onClick={() =>
+                supportRunner?.latestJsonPath &&
+                void copyTextToClipboard(supportRunner.latestJsonPath, t("toast.pathCopied"))
+              }
+              type="button"
+            >
+              {t("adv.copyPath")}
+            </button>
+            <button
+              className="primary-action small"
+              disabled={disabled}
+              onClick={() => void onRunRunner("diagnostics-export")}
+              type="button"
+            >
+              <Icon name="refresh" /> {t("adv.supportGenerate")}
+            </button>
           </div>
         </div>
       </section>
@@ -4057,7 +3899,6 @@ function Settings({
   onChangeTextScale,
   onChangeTheme,
   onOpenAdvanced,
-  onQaStatus,
   snapshot
 }: {
   currentIconScale: UiScalePreset;
@@ -4070,10 +3911,8 @@ function Settings({
   onChangeTextScale: (scale: UiScalePreset) => void;
   onChangeTheme: (theme: ThemeName) => void;
   onOpenAdvanced: () => void;
-  onQaStatus: (id: string, status: "pending" | "passed" | "failed") => void;
   snapshot: LegacySnapshot | null;
 }) {
-  const desktopQaChecks = snapshot?.desktopQaChecks ?? [];
   return (
     <div className="view settings-view">
       <section className="page-header glow-card">
@@ -4172,84 +4011,6 @@ function Settings({
             <Icon name="shield" /> {t("set.openAdvanced")}
           </button>
         </header>
-      </section>
-
-      <section className="panel glow-card">
-        <header className="panel-head">
-          <div>
-            <span className="eyebrow">{t("set.guideEyebrow")}</span>
-            <h3>{t("set.guideTitle")}</h3>
-          </div>
-        </header>
-        <div className="guide-grid">
-          <article>
-            <strong>{t("set.guideNow")}</strong>
-            <span>{t("set.guideNowSub")}</span>
-            <code>pnpm dev:desktop</code>
-            <small>{t("set.guideNowHint")}</small>
-          </article>
-          <article>
-            <strong>{t("set.guideDebug")}</strong>
-            <span>{t("set.guideDebugSub")}</span>
-            <code>src-tauri\target\debug\ai-skillhub-next.exe</code>
-            <small>{t("set.guideDebugHint")}</small>
-          </article>
-          <article>
-            <strong>{t("set.guideRelease")}</strong>
-            <span>{t("set.guideReleaseSub")}</span>
-            <code>pnpm tauri build</code>
-            <small>{t("set.guideReleaseHint")}</small>
-          </article>
-        </div>
-      </section>
-
-      <section className="panel glow-card">
-        <header className="panel-head">
-          <div>
-            <span className="eyebrow">{t("set.qaEyebrow")}</span>
-            <h3>{t("set.qaTitle")}</h3>
-            <p>{t("set.qaBody")}</p>
-          </div>
-        </header>
-        <div className="qa-grid">
-          {desktopQaChecks.map(check => (
-            <article className={`qa-card ${qaStatusClass(check.status)}`} key={check.id}>
-              <header>
-                <span className={`qa-status ${qaStatusClass(check.status)}`}>{qaStatusLabel(check.status)}</span>
-                <strong>{check.title}</strong>
-              </header>
-              <small>{check.description}</small>
-              <div className="qa-actions">
-                <button
-                  className={check.status === "passed" ? "qa-action active" : "qa-action"}
-                  disabled={disabled}
-                  onClick={() => onQaStatus(check.id, "passed")}
-                  type="button"
-                >
-                  {t("qaCheck.pass")}
-                </button>
-                <button
-                  className={check.status === "failed" ? "qa-action danger active" : "qa-action danger"}
-                  disabled={disabled}
-                  onClick={() => onQaStatus(check.id, "failed")}
-                  type="button"
-                >
-                  {t("qaCheck.fail")}
-                </button>
-                <button
-                  className={check.status === "pending" ? "qa-action muted active" : "qa-action muted"}
-                  disabled={disabled}
-                  onClick={() => onQaStatus(check.id, "pending")}
-                  type="button"
-                >
-                  {t("qaCheck.pending")}
-                </button>
-              </div>
-              <small className="qa-updated">{t("qaCheck.updated", { time: formatScanTime(check.updatedAt) })}</small>
-            </article>
-          ))}
-          {desktopQaChecks.length === 0 && <p className="empty-state">{t("set.qaEmpty")}</p>}
-        </div>
       </section>
     </div>
   );

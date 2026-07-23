@@ -1980,6 +1980,29 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .runner-card p { margin: 0; font-size: calc(12px * var(--ui-text-scale, 1)); color: var(--text-soft); }
 .runner-meta { display: flex; gap: var(--space-3); font-size: calc(11px * var(--ui-text-scale, 1)); color: var(--text-muted); }
 .runner-actions { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.support-report-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-4);
+  background: color-mix(in srgb, var(--surface-soft) 88%, var(--brand) 12%);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, var(--brand) 28%);
+  border-radius: var(--radius-lg);
+}
+.support-report-card > div:first-child { min-width: 0; }
+.support-report-card strong { display: block; font-size: calc(15px * var(--ui-text-scale, 1)); }
+.support-report-card p {
+  margin: 6px 0;
+  color: var(--text-soft);
+  font-size: calc(12.5px * var(--ui-text-scale, 1));
+  line-height: 1.55;
+}
+.support-report-card small {
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-text-scale, 1));
+}
+.support-report-card .runner-actions { justify-content: flex-end; }
 
 .snapshot-summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-3); }
 .snapshot-summary article {
@@ -2010,6 +2033,11 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .readiness-done { border-color: color-mix(in srgb, var(--success) 35%, transparent); }
 .readiness-blocked { border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 .readiness-planned { border-color: color-mix(in srgb, var(--warning) 35%, transparent); }
+
+@media (max-width: 900px) {
+  .support-report-card { grid-template-columns: 1fr; }
+  .support-report-card .runner-actions { justify-content: flex-start; }
+}
 
 /* =============================================================
    Settings

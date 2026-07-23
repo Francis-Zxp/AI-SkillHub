@@ -152,7 +152,8 @@ export function createPreviewSourceImportExecution(importKind: string, input: st
     promptCount: 0,
     blockingChecks: ["浏览器预览不执行本机文件写入。", "正式 app-next/data/github_sources 安装仍锁定。"],
     rollbackSteps: ["删除 staging 目录即可撤销。", "正式来源目录和 AI 工具目录保持不变。"],
-    realWriteScope: "preview-only"
+    realWriteScope: "preview-only",
+    downloadMethod: importKind === "github" ? "preview-github" : "preview-local"
   };
 }
 
