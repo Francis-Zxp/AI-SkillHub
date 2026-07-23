@@ -15,20 +15,17 @@ Older prototype app directories are no longer part of the product.
 ## Runtime Boundary
 
 ```text
-app-next/
-  runtime/                    # helper scripts and config template
-  data/github_sources/        # local source repositories, private
-  reports/                    # generated reports, private
-  .skillhub-next/             # generated state, private
+%LOCALAPPDATA%\AI SkillHub\UserData\
+  sources\                    # cloned and local sources
+  skills\                     # active shared Skill view
+  state\                      # SQLite and private runtime state
+  reports\                    # generated reports
+  skillhub.config.json        # local configuration
 ```
 
-The shared active Skill view remains at the repository root:
-
-```text
-../skills/
-```
-
-That directory is private and ignored by Git.
+The release package is replaceable program code. v3.0.2 migrates the old
+portable folders into the stable user-data directory with a copy-only first-run
+operation, leaving the legacy copy untouched.
 
 ## Development Commands
 
@@ -68,7 +65,7 @@ workflow instead of copying the development folder directly.
 Parent router Skills are generated under:
 
 ```text
-app-next/data/github_sources/AI-SkillHub-local-routers/
+%LOCALAPPDATA%\AI SkillHub\UserData\sources\AI-SkillHub-local-routers\
 ```
 
 Generated routers use `[ROUTER-HUB]`; child entries use `[CHILD-SKILL]`.
@@ -76,10 +73,10 @@ Author-owned source repositories are not modified.
 
 ## Same-Name Child Skill Conflicts
 
-AI SkillHub detects duplicate non-router child Skill names across sources and
-shows them in the Sources page conflict selector. Users can set a default source, reset the
-choice, or ignore the reminder. The local SQLite table
-`skill_conflict_choices` stores the decision, so GitHub updates do not modify
-or erase it.
+AI SkillHub detects exact duplicate non-router child Skill names across sources.
+It assigns a safe default automatically, preserves a source-qualified alias for
+every candidate, and exposes an optional manual override in Routing
+Observatory. The local SQLite table `skill_conflict_choices` stores manual
+decisions, so GitHub updates do not modify or erase them.
 
 See `SKILL_CONFLICT_SELECTOR.md` for the detailed rule.

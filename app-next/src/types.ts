@@ -157,6 +157,8 @@ export type SourceCard = {
   note: string;
   localPath: string;
   enabled: boolean;
+  /** Personal 0–5 score for the whole parent/source collection. */
+  rating?: number;
   tags: string[];
   createdAt: string;
 };

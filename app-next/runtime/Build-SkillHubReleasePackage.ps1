@@ -114,10 +114,17 @@ try {
   if (Test-Path -LiteralPath (Join-Path $ProjectRoot 'docs') -PathType Container) {
     Copy-DirContentsRequired (Join-Path $ProjectRoot 'docs') (Join-Path $StagingRoot 'docs')
   }
-  Copy-DirContentsRequired $RuntimeRoot (Join-Path $StagingRoot 'app-next\runtime') @('skillhub.config.json')
+  foreach ($runtimeFile in @(
+    'SkillHub.ps1',
+    'Manage-AgentSkillLinks.ps1',
+    'Export-SkillHubDiagnostics.ps1',
+    'skillhub.config.example.json'
+  )) {
+    Copy-FileRequired (Join-Path $RuntimeRoot $runtimeFile) (Join-Path $StagingRoot "app-next\runtime\$runtimeFile")
+  }
   New-Item -ItemType Directory -Force -Path (Join-Path $StagingRoot 'skills') | Out-Null
   New-Item -ItemType Directory -Force -Path (Join-Path $StagingRoot 'app-next\data') | Out-Null
-  Add-Check 'copy.allowlist' 'ok' 'AI SkillHub 发布包已从本次 Tauri release 构建按白名单复制。'
+  Add-Check 'copy.allowlist' 'ok' 'AI SkillHub 发布包已从本次 Tauri release 构建按白名单复制；开发测试与打包脚本未进入用户包。'
 } catch {
   Add-Check 'copy.allowlist' 'error' $_.Exception.Message
 }

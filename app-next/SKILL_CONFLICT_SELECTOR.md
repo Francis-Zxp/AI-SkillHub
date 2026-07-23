@@ -10,7 +10,8 @@ For example:
 - `Nature-Paper-Skills / figure-planner`
 - `PaperSpine / figure-planner`
 
-AI SkillHub must not delete, rename, overwrite, or silently choose one of them.
+This is an exact callable-name collision, not a semantic-similarity judgment.
+AI SkillHub must not delete, rename, or overwrite any candidate.
 
 ## Identity Rules
 
@@ -24,7 +25,7 @@ AI SkillHub must not delete, rename, overwrite, or silently choose one of them.
 
 Parent/router Skills are generated only under:
 
-`app-next/data/github_sources/AI-SkillHub-local-routers`
+`%LOCALAPPDATA%\AI SkillHub\UserData\sources\AI-SkillHub-local-routers`
 
 Generated router Skills use:
 
@@ -33,34 +34,43 @@ Generated router Skills use:
 
 GitHub pull/update operations may update original sources, but must not overwrite user conflict choices because those choices are stored in AI SkillHub SQLite metadata.
 
-## User Choice Rules
+## Automatic Assignment Rules
 
-When two or more non-router child Skills share the same normalized name, AI SkillHub shows a conflict selector.
+When two or more non-router child Skills share the same normalized name, AI
+SkillHub automatically assigns the canonical slash route. Candidates are sorted
+by:
 
-The user can:
+1. enabled state
+2. health status
+3. personal rating
+4. shortest/directest source path
+5. stable source/path ordering as the final tie breaker
 
-- set one candidate as the default
-- reset the conflict to unresolved
-- ignore the reminder while keeping all candidates
+Every candidate also receives a source-qualified alias, so automatic assignment
+never makes another source uncallable.
 
-If a previously selected default disappears after an update, the conflict returns to unresolved.
+The user can set a manual override or restore automatic assignment. If a manual
+default disappears after an update, the conflict returns to automatic
+assignment instead of becoming unusable.
 
 ## Product Behavior
 
-The conflict selector belongs in the Skill Library management path, not in hidden logs.
-It must be visible, reversible, and persistent.
+Routing Observatory belongs in the Skill Library management path, not in hidden
+logs. Automatic results must be visible, reversible, and persistent.
 
 Slash-command dispatch reads this table indirectly through generated local
 dispatchers:
 
 `skill_conflict_choices`
 
-When the user sets a default, AI SkillHub generates a local dispatcher Skill under
-`app-next/data/github_sources/AI-SkillHub-local-routers/<conflict-name>/SKILL.md`.
-That generated Skill uses `[CONFLICT-DISPATCHER]`, points to the selected source's
-real `SKILL.md`, and is then synced to the managed Agent skills directory.
+AI SkillHub always generates a local dispatcher Skill for an automatic or manual
+default under
+`%LOCALAPPDATA%\AI SkillHub\UserData\sources\AI-SkillHub-local-routers\<conflict-name>\SKILL.md`.
+That generated Skill uses `[CONFLICT-DISPATCHER]`, points to the selected
+source's real `SKILL.md`, and is then synced to the managed Agent skills
+directory.
 
 Therefore `/figure-planner` can route to the user's default, while fully qualified
-identities such as `Nature-Paper-Skills:figure-planner` and
-`PaperSpine:figure-planner` remain distinguishable. Resetting or ignoring a
-conflict removes the generated dispatcher if it was previously created.
+source-qualified aliases such as `/nature-paper-skills-figure-planner` and
+`/paperspine-figure-planner` remain callable. Restoring automatic assignment
+regenerates the dispatcher from the current health/rating priority.

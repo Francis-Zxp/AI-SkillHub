@@ -47,8 +47,10 @@ material and are not installed as Skills.
 - Zip or `.skill` package previews.
 - Prompt/reference repositories.
 - Parent router Skills and child Skills.
-- Same-name child Skill conflict review and default-source choices.
-- Claude Code, Codex, and Antigravity shared-skill links.
+- Automatic same-name child Skill routing, source-qualified aliases, and
+  optional manual overrides.
+- Claude Code, OpenAI Codex, and Antigravity shared-skill links, with separate
+  desktop-app and code-capability detection.
 - Source categories, tags, notes, search, sorting, usage counters, and GitHub
   popularity metadata.
 - Private 1–5 star Skill ratings, stored in local SQLite, with rating-first
@@ -56,13 +58,25 @@ material and are not installed as Skills.
 - Diagnostics, share checks, backup/restore dry runs, and release package
   preflight checks.
 
-## Portable Source Index
+## Persistent User Data and Upgrades
 
-Source repositories and the active shared `skills/` view are deliberately
-separate. A newly downloaded copy may have source repositories before any
-Claude/Codex/Antigravity links have been built. AI SkillHub therefore scans
-`app-next/data/github_sources/` directly, repairs stale absolute paths left by
-another computer, and rebuilds an old `0 Skill` SQLite index automatically.
+Starting with v3.0.2, sources, active Skills, ratings, configuration, reports,
+and the SQLite index live outside the replaceable program folder:
+
+```text
+%LOCALAPPDATA%\AI SkillHub\UserData\
+  sources\
+  skills\
+  state\skillhub-next.sqlite3
+  reports\
+  skillhub.config.json
+```
+
+You can extract a newer release into another folder or replace the old program
+files. The new executable reuses the same user-data directory. On first launch,
+v3.0.2 performs a copy-only migration from the old portable
+`app-next/data/github_sources`, `skills`, and `.skillhub-next` locations; it
+does not delete the old copy.
 
 The internal `AI-SkillHub-local-routers` storage folder is not shown as a user
 source. Generated aliases and same-name conflict dispatchers are routing
@@ -77,9 +91,9 @@ Each Skill can be rated from 1 to 5 stars in `Skill Library`. Clicking the
 current score again clears it. Choose `My rating (high to low)` to surface the
 best-rated sources and Skills first. Parent Skills can be rated directly on the
 source-card header; the source order uses the parent score first and child
-ratings second. Ratings are private local metadata in SQLite: they are not
-GitHub stars, do not edit author repositories, and are not published with the
-project.
+  ratings second. Ratings are private metadata in the persistent SQLite
+  database: they are not GitHub stars, do not edit author repositories, are not
+  published with the project, and survive application updates.
 
 Physical folders found directly under `skills/` without a managed source are
 shown separately as `Unassigned standalone Skills`. AI SkillHub never deletes
@@ -89,20 +103,14 @@ them automatically because they may contain user data.
 
 ```text
 AI_global_skills/
-  app-next/                         # Tauri / React / Rust app
-    runtime/                        # helper scripts
-    data/github_sources/            # local cloned sources, private
-    reports/                        # generated reports, private
-    .skillhub-next/                 # generated sync state, private
-  skills/                           # active shared Skills view, private
+  AI SkillHub.exe                   # program
+  app-next/runtime/                 # packaged helper scripts
   docs/                             # product docs
 ```
 
-Older prototype paths are no longer part of the product:
-
-```text
-app/
-```
+Personal runtime data is stored in `%LOCALAPPDATA%\AI SkillHub\UserData`.
+Developer checkouts may still contain ignored legacy folders for migration
+tests, but public release packages do not contain personal sources or ratings.
 
 ## Privacy Boundary
 
@@ -157,7 +165,7 @@ Do not restore or depend on the old `app/SkillHub.ps1` path.
 AI SkillHub generates parent router Skills under:
 
 ```text
-app-next/data/github_sources/AI-SkillHub-local-routers/
+%LOCALAPPDATA%\AI SkillHub\UserData\sources\AI-SkillHub-local-routers\
 ```
 
 Generated parent routers use `[ROUTER-HUB]`. Child entries use
@@ -166,21 +174,21 @@ updates do not overwrite AI SkillHub's routing standard.
 
 See `docs/skill-router-standard.md` for the rule.
 
-## Same-Name Skill Conflicts
+## Same-Name Skill Routing
 
 Different sources can contain child Skills with the same callable name, such as
 `Nature-Paper-Skills / figure-planner` and `PaperSpine / figure-planner`.
 
-AI SkillHub does not delete, rename, overwrite, or silently choose between them. The
-Skill Library maintenance area shows a conflict selector where the user can set a default source,
-reset the conflict to unresolved, or ignore the reminder. The choice is stored
-in the local SQLite table `skill_conflict_choices`, outside author repositories,
-so GitHub updates do not overwrite it.
+This means the exact slash-call name is duplicated; it does not mean the two
+Skills were merely judged to have similar functions. AI SkillHub automatically
+chooses the canonical route using enabled state, health, personal rating, and
+path specificity. It never deletes or overwrites a candidate, and it generates
+a source-qualified alias for every choice.
 
-When a default is selected, AI SkillHub also generates a local conflict dispatcher
-under `AI-SkillHub-local-routers` and syncs it to managed Agents, so direct calls
-such as `/figure-planner` can follow the user's default without modifying any
-author-owned repository.
+A user can still set a manual override in Routing Observatory. The override is
+stored in the local SQLite table `skill_conflict_choices`, so GitHub updates do
+not erase it. For broad tasks, invoke the parent Skill; its generated routing
+instructions select the smallest child Skill that fits the request.
 
 ## Author
 

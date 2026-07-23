@@ -49,7 +49,15 @@ import type {
 
 declare const __APP_VERSION__: string;
 
-type ThemeName = "atlas-dark" | "atlas-light" | "dark" | "light" | "classic-dark" | "classic-light";
+type ThemeName =
+  | "nocturne"
+  | "parchment"
+  | "atlas-dark"
+  | "atlas-light"
+  | "dark"
+  | "light"
+  | "classic-dark"
+  | "classic-light";
 type UiScalePreset = "compact" | "standard" | "comfortable" | "large";
 
 type SkillDraft = { name: string; category: string; description: string; note: string; tags: string };
@@ -91,6 +99,8 @@ const UI_ICON_SCALES: Record<UiScalePreset, number> = {
 };
 const UI_SCALE_OPTIONS: UiScalePreset[] = ["compact", "standard", "comfortable", "large"];
 const THEME_OPTIONS: Array<{ icon: IconName; labelKey: string; value: ThemeName }> = [
+  { value: "nocturne", labelKey: "theme.nocturne", icon: "moon" },
+  { value: "parchment", labelKey: "theme.parchment", icon: "sun" },
   { value: "atlas-dark", labelKey: "theme.atlasDark", icon: "sparkle" },
   { value: "atlas-light", labelKey: "theme.atlasLight", icon: "sparkle" },
   { value: "dark", labelKey: "theme.dark", icon: "moon" },
@@ -369,6 +379,50 @@ export function App() {
     }
   }
 
+  async function updateSourceRating(source: SourceCard, rating: number): Promise<boolean> {
+    const normalizedRating = Math.max(0, Math.min(5, Math.round(rating)));
+    if (!runtimeAvailable) {
+      setSnapshot(previous => {
+        const current = previous ?? createPreviewSnapshot();
+        return {
+          ...current,
+          sources: current.sources.map(item =>
+            item.id === source.id ? { ...item, rating: normalizedRating } : item
+          )
+        };
+      });
+      toastMessage(
+        normalizedRating > 0
+          ? t("toast.skillRated", { n: normalizedRating })
+          : t("toast.skillRatingCleared"),
+        "ok"
+      );
+      return true;
+    }
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("set_source_rating", {
+        sourceId: source.id,
+        rating: normalizedRating
+      });
+      setSnapshot(result);
+      setLoadError("");
+      toastMessage(
+        normalizedRating > 0
+          ? t("toast.skillRated", { n: normalizedRating })
+          : t("toast.skillRatingCleared"),
+        "ok"
+      );
+      return true;
+    } catch (error) {
+      setLoadError(messageFromError(error));
+      toastMessage(t("toast.skillRatingFailed"), "error");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function updateSourceMetadata(
     source: SourceCard,
     draft: SourceDraft
@@ -442,12 +496,17 @@ export function App() {
           ...current,
           skillConflicts: current.skillConflicts.map(conflict => {
             if (conflict.conflictKey !== conflictKey) return conflict;
-            const selected = conflict.choices.find(choice => choice.skillId === defaultSkillId);
+            const automatic = conflict.choices[0];
+            const selected =
+              status === "unresolved"
+                ? automatic
+                : conflict.choices.find(choice => choice.skillId === defaultSkillId);
+            const nextStatus = status === "unresolved" ? "auto-set" : status;
             return {
               ...conflict,
-              defaultSkillId: status === "default-set" ? defaultSkillId : "",
-              defaultSourceName: status === "default-set" ? selected?.sourceName ?? "" : "",
-              status,
+              defaultSkillId: nextStatus === "ignored" ? "" : selected?.skillId ?? "",
+              defaultSourceName: nextStatus === "ignored" ? "" : selected?.sourceName ?? "",
+              status: nextStatus,
               updatedAt: new Date().toISOString()
             };
           })
@@ -779,10 +838,7 @@ export function App() {
   const operationProgress = operation ? Math.max(1, Math.min(100, Math.round(operation.percent))) : 0;
   const advancedActive = active === "release" || active === "snapshots";
   const atlasMode = isAtlasTheme(theme);
-  const atlasAccent = theme === "atlas-light" ? "#16796f" : "#7ce9df";
-  const atlasPalette = theme === "atlas-light"
-    ? ["#16796f", "#295a80", "#b7882f", "#67746f"]
-    : ["#7ce9df", "#dcefed", "#79aee8", "#d6b76c"];
+  const atlasVisual = atlasThemeVisual(theme);
 
   return (
     <main
@@ -794,9 +850,9 @@ export function App() {
     >
       {atlasMode && active !== "dashboard" && (
         <ParticleField
-          accent={atlasAccent}
+          accent={atlasVisual.accent}
           mode="backdrop"
-          palette={atlasPalette}
+          palette={atlasVisual.palette}
           sourceCount={summary.sources}
           skillCount={summary.skills}
         />
@@ -982,6 +1038,7 @@ export function App() {
               onSetSkillConflictChoice={updateSkillConflictChoice}
               onSetSkillEnabled={updateSkillEnabled}
               onSetSkillRating={updateSkillRating}
+              onSetSourceRating={updateSourceRating}
               atlasMode={atlasMode}
               realWritesEnabled={realWritesEnabled}
               searchQuery={globalSearch}
@@ -1305,17 +1362,7 @@ function Dashboard({
     }
   ];
   const atlasMode = isAtlasTheme(theme);
-  const accent =
-    theme === "atlas-dark"
-      ? "#7ce9df"
-      : theme === "atlas-light"
-        ? "#16796f"
-        : theme === "dark"
-          ? "#bebaff"
-          : "#6c6fc3";
-  const atlasPalette = theme === "atlas-light"
-    ? ["#16796f", "#295a80", "#b7882f", "#67746f"]
-    : ["#7ce9df", "#dcefed", "#79aee8", "#d6b76c"];
+  const atlasVisual = atlasThemeVisual(theme);
   const toggleAtlasIntro = () => {
     const next = !atlasIntroVisible;
     setAtlasIntroVisible(next);
@@ -1332,7 +1379,7 @@ function Dashboard({
         {atlasMode && (
           <SkillUniverse
             centered={!atlasIntroVisible}
-            lightTheme={theme === "atlas-light"}
+            lightTheme={isLightTheme(theme)}
             onOpenSkill={onOpenSkill}
             onOpenSource={onOpenSource}
             snapshot={snapshot}
@@ -1340,9 +1387,9 @@ function Dashboard({
         )}
         {!atlasMode && (
           <ParticleField
-            accent={accent}
+            accent={atlasVisual.accent}
             mode="ambient"
-            palette={atlasPalette}
+            palette={atlasVisual.palette}
             sourceCount={summary.sources}
             skillCount={summary.skills}
           />
@@ -1795,11 +1842,13 @@ function UsageInsightPanel({
           score: stat ? statScore(stat) : 0
         };
       })
+      .filter(row => row.score > 0)
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
   }, [range, skills, usageStats]);
 
   const rankedSources = sourcePopularity
     .map(source => ({ name: sourcePopularityDisplayName(source), stars: source.stars, score: sourceScore(source) }))
+    .filter(row => row.stars > 0 || row.score > 0)
     .sort((a, b) => b.stars - a.stars || b.score - a.score);
   const maxSkillScore = Math.max(...rankedSkills.map(row => row.score), 1);
   const maxSourceHeat = Math.max(...rankedSources.map(row => Math.max(row.stars, row.score)), 1);
@@ -1989,6 +2038,7 @@ type LibraryProps = {
   ) => Promise<void>;
   onSetSkillEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
   onSetSkillRating: (skill: SkillCard, rating: number) => Promise<boolean>;
+  onSetSourceRating: (source: SourceCard, rating: number) => Promise<boolean>;
   onStageImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
   realWritesEnabled: boolean;
   searchQuery: string;
@@ -2009,6 +2059,7 @@ function Library(props: LibraryProps) {
     onSetSkillConflictChoice,
     onSetSkillEnabled,
     onSetSkillRating,
+    onSetSourceRating,
     onStageImport,
     realWritesEnabled,
     searchQuery,
@@ -2076,7 +2127,7 @@ function Library(props: LibraryProps) {
     const filtered = skills
       .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
       .filter(skill => {
-        if (skill.source && sources.some(source => normalizeLookup(source.name) === normalizeLookup(skill.source))) {
+        if (sources.some(source => skillBelongsToSource(skill, source))) {
           return false;
         }
         return searchQuery.trim() ? skillMatchesSearch(skill, searchQuery) : true;
@@ -2303,14 +2354,14 @@ function Library(props: LibraryProps) {
                 </button>
                 <div className="source-group-meta">
                   <PopularityChip popularity={popularity} source={source} />
-                  {parentSkill && (
+                  {source.sourceType !== "prompt" && totalSkillCount > 0 && (
                     <div className="source-parent-rating">
                       <span>{t("rating.parent")}</span>
                       <SkillRating
                         disabled={loading}
-                        onChange={rating => void onSetSkillRating(parentSkill, rating)}
-                        rating={parentSkill.rating ?? 0}
-                        skillName={parentSkill.name}
+                        onChange={rating => void onSetSourceRating(source, rating)}
+                        rating={source.rating ?? parentSkill?.rating ?? 0}
+                        skillName={parentSkill?.name ?? source.name}
                       />
                     </div>
                   )}
@@ -2995,7 +3046,7 @@ function SkillConflictPanel({
     status: "default-set" | "ignored" | "unresolved"
   ) => Promise<void>;
 }) {
-  const unresolved = conflicts.filter(conflict => conflict.status === "unresolved").length;
+  const automatic = conflicts.filter(conflict => conflict.status === "auto-set" || conflict.status === "unresolved").length;
   const resolved = conflicts.filter(conflict => conflict.status === "default-set").length;
   const ignored = conflicts.filter(conflict => conflict.status === "ignored").length;
   const aliasCount = conflicts.reduce((total, conflict) => total + conflict.choices.length, 0);
@@ -3007,8 +3058,8 @@ function SkillConflictPanel({
     return conflicts.filter(conflict => {
       const scopeMatches =
         scope === "all" ||
-        (scope === "attention" && conflict.status === "unresolved") ||
-        (scope === "resolved" && conflict.status !== "unresolved");
+        (scope === "attention" && (conflict.status === "auto-set" || conflict.status === "unresolved")) ||
+        (scope === "resolved" && conflict.status === "default-set");
       if (!scopeMatches) return false;
       if (!normalizedQuery) return true;
       return normalizeSearch(
@@ -3043,7 +3094,7 @@ function SkillConflictPanel({
       </header>
 
       <div className="routing-summary" aria-label={t("conf.routeSummary")}>
-        <span className="tone-attention"><b>{unresolved}</b>{t("conf.needsReview")}</span>
+        <span className="tone-auto"><b>{automatic}</b>{t("conf.needsReview")}</span>
         <span className="tone-routed"><b>{resolved}</b>{t("conf.routed")}</span>
         <span><b>{aliasCount}</b>{t("conf.aliasesAlive")}</span>
         <span><b>{ignored}</b>{t("conf.deferred")}</span>
@@ -3936,7 +3987,7 @@ function Settings({
             <strong>{t("set.version")}</strong>
             <span className="version-badge">AI SkillHub v{APP_VERSION}</span>
           </div>
-          <div className="settings-row">
+          <div className="settings-row settings-theme-row">
             <strong>{t("set.theme")}</strong>
             <SegmentedToggle
               value={currentTheme}
@@ -3986,6 +4037,13 @@ function Settings({
           </div>
         </header>
         <div className="settings-paths">
+          <div className="settings-data-note">
+            <Icon name="shield" />
+            <div>
+              <strong>{t("set.updateSafeTitle")}</strong>
+              <span>{t("set.updateSafeBody")}</span>
+            </div>
+          </div>
           <div className="path-row">
             <span>{t("set.centralDir")}</span>
             <code>{snapshot?.skillsDir ?? "../skills"}</code>
@@ -4036,6 +4094,7 @@ function SegmentedToggle<T extends string>({
         <button
           aria-selected={option.value === value}
           className={option.value === value ? "active" : ""}
+          data-segment-value={option.value}
           key={option.value}
           onClick={() => onChange(option.value)}
           role="tab"
@@ -4127,11 +4186,11 @@ function initialNavKey(): NavKey {
 }
 
 function initialTheme(): ThemeName {
-  if (typeof window === "undefined") return "dark";
+  if (typeof window === "undefined") return "nocturne";
   const searchTheme = new URLSearchParams(window.location.search).get("theme");
   if (isThemeName(searchTheme)) return searchTheme;
   const savedTheme = window.localStorage.getItem("ai-skillhub-theme");
-  return isThemeName(savedTheme) ? savedTheme : "dark";
+  return isThemeName(savedTheme) ? savedTheme : "nocturne";
 }
 
 function initialUiScale(storageKey: string, fallback: UiScalePreset): UiScalePreset {
@@ -4146,6 +4205,8 @@ function isUiScalePreset(value: string | null): value is UiScalePreset {
 
 function isThemeName(value: string | null): value is ThemeName {
   return (
+    value === "nocturne" ||
+    value === "parchment" ||
     value === "atlas-dark" ||
     value === "atlas-light" ||
     value === "dark" ||
@@ -4156,7 +4217,36 @@ function isThemeName(value: string | null): value is ThemeName {
 }
 
 function isAtlasTheme(theme: ThemeName): boolean {
-  return theme === "atlas-dark" || theme === "atlas-light";
+  return theme === "nocturne" || theme === "parchment" || theme === "atlas-dark" || theme === "atlas-light";
+}
+
+function isLightTheme(theme: ThemeName): boolean {
+  return theme === "parchment" || theme === "atlas-light" || theme === "light" || theme === "classic-light";
+}
+
+function atlasThemeVisual(theme: ThemeName) {
+  if (theme === "parchment") {
+    return {
+      accent: "#b7603f",
+      palette: ["#b7603f", "#6e7a6c", "#c79b48", "#425b72"]
+    };
+  }
+  if (theme === "nocturne") {
+    return {
+      accent: "#8aaeff",
+      palette: ["#8aaeff", "#d9e3ff", "#d8b56c", "#6dd5c1"]
+    };
+  }
+  if (theme === "atlas-light") {
+    return {
+      accent: "#16796f",
+      palette: ["#16796f", "#295a80", "#b7882f", "#67746f"]
+    };
+  }
+  return {
+    accent: "#7ce9df",
+    palette: ["#7ce9df", "#dcefed", "#79aee8", "#d6b76c"]
+  };
 }
 
 function themeLabel(theme: ThemeName): string {
@@ -4330,7 +4420,7 @@ function sortSources(
         const leftRating = skillRatingSummary(leftSkills.filter(skill => skill !== leftParent));
         const rightRating = skillRatingSummary(rightSkills.filter(skill => skill !== rightParent));
         return (
-          normalizedOptionalSkillRating(rightParent) - normalizedOptionalSkillRating(leftParent) ||
+          normalizedSourceRating(right, rightParent) - normalizedSourceRating(left, leftParent) ||
           rightRating.max - leftRating.max ||
           rightRating.average - leftRating.average ||
           rightRating.count - leftRating.count ||
@@ -4361,6 +4451,11 @@ function normalizedSkillRating(skill: SkillCard) {
 
 function normalizedOptionalSkillRating(skill?: SkillCard) {
   return skill ? normalizedSkillRating(skill) : 0;
+}
+
+function normalizedSourceRating(source: SourceCard, parentSkill?: SkillCard) {
+  const rating = Math.max(0, Math.min(5, Math.round(source.rating ?? 0)));
+  return rating || normalizedOptionalSkillRating(parentSkill);
 }
 
 function sourceParentSkill(source: SourceCard, skills: SkillCard[]): SkillCard | undefined {
@@ -4447,10 +4542,11 @@ function skillBelongsToSource(skill: SkillCard, source: SourceCard): boolean {
   if (sourceKey && skillSource === sourceKey) return true;
   const sourcePath = normalizeSourcePath(source.localPath);
   const skillPath = normalizeSourcePath(skill.relativePath);
+  const skillPathSegments = skillPath.split("/").filter(Boolean);
   const sourceFolder = sourcePath.split("/").filter(Boolean).pop() ?? "";
-  if (sourceFolder && skillPath.includes(`/${sourceFolder}/`)) return true;
+  if (sourceFolder && skillPathSegments.includes(sourceFolder)) return true;
   const sourceUrlName = normalizeLookup((source.url.split("/").pop() ?? "").replace(/\.git$/i, ""));
-  return Boolean(sourceUrlName && (skillSource === sourceUrlName || skillPath.includes(`/${sourceUrlName}/`)));
+  return Boolean(sourceUrlName && (skillSource === sourceUrlName || skillPathSegments.includes(sourceUrlName)));
 }
 
 function normalizeLookup(value: string) {
@@ -4624,12 +4720,6 @@ function drawSkillGraph(
   runtime.hitNodes = [];
 
   context.save();
-  const glow = context.createRadialGradient(width * 0.5, height * 0.46, 8, width * 0.5, height * 0.48, Math.max(width, height) * 0.58);
-  glow.addColorStop(0, "rgba(100, 92, 255, .10)");
-  glow.addColorStop(0.54, "rgba(80, 210, 180, .045)");
-  glow.addColorStop(1, "rgba(0, 0, 0, 0)");
-  context.fillStyle = glow;
-  context.fillRect(0, 0, width, height);
 
   const columns = skillGraphColumns(clusterNodes.length, width);
   const rows = Math.max(1, Math.ceil(clusterNodes.length / columns));
@@ -5199,6 +5289,7 @@ function operationRunnerStatusLabel(status: string, locked: boolean) {
 
 function conflictStatusLabel(status: string) {
   if (status === "default-set") return t("conf.statusDefault");
+  if (status === "auto-set") return t("conf.statusAuto");
   if (status === "ignored") return t("conf.statusIgnored");
   return t("conf.statusPending");
 }

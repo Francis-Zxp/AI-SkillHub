@@ -8,7 +8,11 @@ $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = $Utf8NoBom
 
 $AppRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ConfigPath = Join-Path $AppRoot 'skillhub.config.json'
+$ConfigPath = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_CONFIG_PATH)) {
+  [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_CONFIG_PATH)
+} else {
+  Join-Path $AppRoot 'skillhub.config.json'
+}
 
 function Write-Utf8Bom([string]$Path, [string]$Text) {
   $parent = Split-Path -Parent $Path
@@ -21,10 +25,20 @@ function Write-JsonUtf8([string]$Path, $Object, [int]$Depth = 8) {
 }
 
 function New-DefaultSkillHubConfig {
+  $defaultSources = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_SOURCES)) {
+    $env:AI_SKILLHUB_SOURCES
+  } else {
+    '..\data\github_sources'
+  }
+  $defaultSkills = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_ACTIVE_SKILLS)) {
+    $env:AI_SKILLHUB_ACTIVE_SKILLS
+  } else {
+    '..\..\skills'
+  }
   [PSCustomObject]@{
-    version = 2
-    githubSourcesFolder = '..\data\github_sources'
-    activeSkillsFolder = '..\..\skills'
+    version = 3
+    githubSourcesFolder = $defaultSources
+    activeSkillsFolder = $defaultSkills
     manageAgentLinks = $false
     autoDiscoverManualRepos = $true
     preferredPathFragments = @('\.claude\skills\', '\skills\', '\.agents\skills\')
@@ -100,9 +114,13 @@ function Set-JunctionPath([string]$Path, [string]$Target) {
   return 'Linked'
 }
 
-function Test-CodexPresent {
+function Test-CodexCodePresent {
   $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
   if ($null -ne $codexCommand) { return $true }
+
+  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  $bundledBinary = Join-Path $localAppData 'OpenAI\Codex\bin\codex.exe'
+  if (Test-Path -LiteralPath $bundledBinary -PathType Leaf) { return $true }
 
   $codexHome = Join-Path $HOME '.codex'
   foreach ($marker in @('auth.json', 'config.toml', 'installation_id', 'sessions', 'state_5.sqlite')) {
@@ -119,7 +137,7 @@ function Get-ClaudeConfigRoot {
   return Join-Path $HOME '.claude'
 }
 
-function Test-ClaudePresent {
+function Test-ClaudeCodePresent {
   $claudeCommand = Get-Command claude -ErrorAction SilentlyContinue
   if ($null -ne $claudeCommand) { return $true }
 
@@ -131,35 +149,6 @@ function Test-ClaudePresent {
     if (Test-Path -LiteralPath (Join-Path $claudeHome $marker)) { return $true }
   }
 
-  if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-    try {
-      if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
-        $package = Get-AppxPackage -Name 'Claude' -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($null -ne $package) { return $true }
-      }
-    } catch {
-    }
-
-    try {
-      if (Get-Command Get-StartApps -ErrorAction SilentlyContinue) {
-        $startApp = Get-StartApps -ErrorAction SilentlyContinue |
-          Where-Object { $_.Name -eq 'Claude' -or $_.AppID -match '(^|[.!])Claude([_!]|$)' } |
-          Select-Object -First 1
-        if ($null -ne $startApp) { return $true }
-      }
-    } catch {
-    }
-
-    $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-    $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
-    foreach ($candidate in @(
-      (Join-Path $localAppData 'Programs\Claude\Claude.exe'),
-      (Join-Path $localAppData 'Claude\Claude.exe'),
-      (Join-Path $programFiles 'Claude\Claude.exe')
-    )) {
-      if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
-    }
-  }
   return $false
 }
 
@@ -185,7 +174,7 @@ foreach ($skill in $activeSkillDirs) {
 $rows = New-Object System.Collections.Generic.List[object]
 
 $claudePath = Join-Path (Get-ClaudeConfigRoot) 'skills'
-if (Test-ClaudePresent) {
+if (Test-ClaudeCodePresent) {
   $claudeStatus = Set-JunctionPath $claudePath $Shared
 } else {
   $claudeStatus = 'Skipped (Claude Code not installed)'
@@ -201,7 +190,7 @@ if (Test-AntigravityPresent) {
 $rows.Add([PSCustomObject]@{ App = 'Antigravity'; Entry = $antigravityPath; Status = $antigravityStatus; Target = $Shared }) | Out-Null
 
 $codexRoot = Join-Path $HOME '.codex\skills'
-if (Test-CodexPresent) {
+if (Test-CodexCodePresent) {
   New-Item -ItemType Directory -Force -Path $codexRoot | Out-Null
 
   foreach ($oldName in @('AI_global_skills')) {
@@ -248,7 +237,7 @@ if (Test-CodexPresent) {
   $rows.Add([PSCustomObject]@{ App = 'Codex'; Entry = $codexRoot; Status = 'Skipped (Codex not installed)'; Target = $Shared }) | Out-Null
 }
 
-if (-not (Test-ClaudePresent) -and -not (Test-CodexPresent) -and -not (Test-AntigravityPresent)) {
+if (-not (Test-ClaudeCodePresent) -and -not (Test-CodexCodePresent) -and -not (Test-AntigravityPresent)) {
   Write-Step '未识别到可接管的 AI Coding 工具。安装 Claude Code、Codex 或 Antigravity 后，再重新打开接管开关。'
 }
 

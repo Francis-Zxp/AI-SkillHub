@@ -5,7 +5,8 @@ param(
   [switch]$SimulateMissingGit,
   [switch]$SimulateMissingWebView2,
   [switch]$SimulateNoAgents,
-  [switch]$SimulateClaudeDesktopOnly
+  [switch]$SimulateClaudeDesktopOnly,
+  [switch]$SimulateOpenAIDesktopOnly
 )
 
 $ErrorActionPreference = 'Continue'
@@ -14,12 +15,13 @@ $ErrorActionPreference = 'Continue'
 $AppRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $V2Root = Split-Path -Parent $AppRoot
 $ProjectRoot = Split-Path -Parent $V2Root
-$SkillsRoot = Join-Path $ProjectRoot 'skills'
-$SourcesRoot = Join-Path $V2Root 'data\github_sources'
-$ConfigPath = Join-Path $AppRoot 'skillhub.config.json'
-$ReportsRoot = Join-Path $V2Root 'reports'
+$SkillsRoot = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_ACTIVE_SKILLS)) { [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_ACTIVE_SKILLS) } else { Join-Path $ProjectRoot 'skills' }
+$SourcesRoot = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_SOURCES)) { [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_SOURCES) } else { Join-Path $V2Root 'data\github_sources' }
+$ConfigPath = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_CONFIG_PATH)) { [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_CONFIG_PATH) } else { Join-Path $AppRoot 'skillhub.config.json' }
+$ReportsRoot = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_REPORTS)) { [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_REPORTS) } else { Join-Path $V2Root 'reports' }
 $DiagnosticsRoot = Join-Path $ReportsRoot 'diagnostics'
-$StatePath = Join-Path $V2Root '.skillhub-next\sync-state\managed-links.json'
+$StateRoot = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_STATE)) { [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_STATE) } else { Join-Path $V2Root '.skillhub-next' }
+$StatePath = Join-Path $StateRoot 'sync-state\managed-links.json'
 $LastSyncPath = Join-Path $ReportsRoot 'last-sync.md'
 $HomePath = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
@@ -225,6 +227,65 @@ function Test-ClaudeCodePresent([string]$ConfigRoot) {
   return $false
 }
 
+function Test-OpenAIDesktopPresent {
+  if ($script:SimulateNoAgents) { return $false }
+  if ($script:SimulateOpenAIDesktopOnly) { return $true }
+  if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return $false }
+
+  try {
+    if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
+      $package = Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+      if ($null -ne $package) { return $true }
+    }
+  } catch {
+  }
+
+  try {
+    if (Get-Command Get-StartApps -ErrorAction SilentlyContinue) {
+      $startApp = Get-StartApps -ErrorAction SilentlyContinue |
+        Where-Object {
+          $_.Name -match '(?i)\b(ChatGPT|OpenAI Codex|Codex)\b' -or
+          $_.AppID -match '(?i)^OpenAI\.(Codex|ChatGPT)_.*!App$'
+        } |
+        Select-Object -First 1
+      if ($null -ne $startApp) { return $true }
+    }
+  } catch {
+  }
+
+  try {
+    $runningApp = Get-Process -Name 'ChatGPT', 'Codex' -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+    if ($null -ne $runningApp) { return $true }
+  } catch {
+  }
+
+  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  foreach ($candidate in @(
+    (Join-Path $localAppData 'Programs\ChatGPT\ChatGPT.exe'),
+    (Join-Path $localAppData 'OpenAI\ChatGPT\ChatGPT.exe'),
+    (Join-Path $env:ProgramFiles 'ChatGPT\ChatGPT.exe')
+  )) {
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
+  }
+  return $false
+}
+
+function Test-CodexCodePresent([string]$ConfigRoot) {
+  if ($script:SimulateNoAgents -or $script:SimulateOpenAIDesktopOnly) { return $false }
+  if ($null -ne (Get-Command codex -ErrorAction SilentlyContinue)) { return $true }
+
+  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  $bundledBinary = Join-Path $localAppData 'OpenAI\Codex\bin\codex.exe'
+  if (Test-Path -LiteralPath $bundledBinary -PathType Leaf) { return $true }
+
+  foreach ($marker in @('auth.json', 'config.toml', 'installation_id', 'sessions', 'state_5.sqlite')) {
+    if (Test-Path -LiteralPath (Join-Path $ConfigRoot $marker)) { return $true }
+  }
+  return $false
+}
+
 function Add-AgentStatus(
   [string]$Id,
   [string]$Name,
@@ -237,7 +298,9 @@ function Add-AgentStatus(
   [string[]]$DetectionKinds = @()
 ) {
   $simulateMissing = $script:SimulateNoAgents -or ($Id -eq 'codex' -and $script:SimulateMissingCodex)
-  $simulateDesktopOnly = $Id -eq 'claude' -and $script:SimulateClaudeDesktopOnly
+  $simulateDesktopOnly =
+    ($Id -eq 'claude' -and $script:SimulateClaudeDesktopOnly) -or
+    ($Id -eq 'codex' -and $script:SimulateOpenAIDesktopOnly)
   $command = if ($CommandName -and -not $simulateMissing -and -not $simulateDesktopOnly) { Get-Command $CommandName -ErrorAction SilentlyContinue } else { $null }
   $baseExists = if ($simulateMissing -or $simulateDesktopOnly) { $false } else { (Test-Path -LiteralPath $BaseDir -PathType Container) }
   $skillsInfo = @()
@@ -258,6 +321,12 @@ function Add-AgentStatus(
     'Claude Desktop 已检测到；本地 Skills 供 Code 模式使用，Chat/Cowork 使用 Claude 内的 Skills 设置。'
   } elseif ($Id -eq 'claude' -and $CodeDetected) {
     'Claude Code 已检测到。'
+  } elseif ($Id -eq 'codex' -and $DesktopDetected -and $CodeDetected) {
+    'ChatGPT 桌面版与 OpenAI Codex 代码能力已检测到。'
+  } elseif ($Id -eq 'codex' -and $DesktopDetected) {
+    'ChatGPT 桌面版已检测到；本地 Skills 接管仍需 Codex 代码能力。'
+  } elseif ($Id -eq 'codex' -and $CodeDetected) {
+    'OpenAI Codex 代码能力已检测到。'
   } elseif ($detected) {
     "$Name 已检测到。"
   } else {
@@ -265,6 +334,8 @@ function Add-AgentStatus(
   }
   $fix = if ($Id -eq 'claude' -and $DesktopDetected -and -not $CodeDetected) {
     '点击同步后可为 Claude Code/Code 模式准备本地 Skills；Chat/Cowork 的自定义 Skill 请在 Claude 设置中上传 ZIP。'
+  } elseif ($Id -eq 'codex' -and $DesktopDetected -and -not $CodeDetected) {
+    '桌面应用已识别，但不会据此创建假的 .codex 目录；安装或启用 Codex 代码能力后再同步本地 Skills。'
   } elseif ($detected) {
     '如需接管，请确认对应 skills 目录存在且可写。'
   } else {
@@ -346,7 +417,13 @@ $claudeDetectionKinds = @()
 if ($claudeDesktopDetected) { $claudeDetectionKinds += 'desktop-app' }
 if ($claudeCodeDetected) { $claudeDetectionKinds += 'claude-code' }
 Add-AgentStatus 'claude' 'Claude Desktop / Claude Code' $claudeConfigRoot @((Join-Path $claudeConfigRoot 'skills')) 'claude' ($claudeDesktopDetected -or $claudeCodeDetected) $claudeCodeDetected $claudeDesktopDetected $claudeDetectionKinds
-Add-AgentStatus 'codex' 'OpenAI Codex' (Join-Path $HomePath '.codex') @((Join-Path $HomePath '.codex\skills'), (Join-Path $HomePath '.agents\skills')) 'codex'
+$codexConfigRoot = Join-Path $HomePath '.codex'
+$openAIDesktopDetected = Test-OpenAIDesktopPresent
+$codexCodeDetected = Test-CodexCodePresent $codexConfigRoot
+$codexDetectionKinds = @()
+if ($openAIDesktopDetected) { $codexDetectionKinds += 'desktop-app' }
+if ($codexCodeDetected) { $codexDetectionKinds += 'codex-code' }
+Add-AgentStatus 'codex' 'ChatGPT Desktop / OpenAI Codex' $codexConfigRoot @((Join-Path $codexConfigRoot 'skills'), (Join-Path $HomePath '.agents\skills')) 'codex' ($openAIDesktopDetected -or $codexCodeDetected) $codexCodeDetected $openAIDesktopDetected $codexDetectionKinds
 Add-AgentStatus 'antigravity' 'Antigravity' (Join-Path $HomePath '.gemini\antigravity') @((Join-Path $HomePath '.gemini\antigravity\skills'), (Join-Path $HomePath '.antigravity\skills')) 'antigravity'
 
 if ((@($Agents | Where-Object { $_.detected }).Count) -eq 0) {

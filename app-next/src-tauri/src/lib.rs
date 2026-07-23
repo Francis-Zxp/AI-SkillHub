@@ -299,6 +299,27 @@ fn skill_conflict_identity(skill: &SkillCard) -> String {
     )
 }
 
+fn auto_route_priority(skill: &SkillCard) -> (u8, u8, u8, usize) {
+    let health = match skill.health.as_str() {
+        "ok" => 3,
+        "info" => 2,
+        "warn" => 1,
+        _ => 0,
+    };
+    let depth = skill
+        .relative_path
+        .replace('\\', "/")
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .count();
+    (
+        u8::from(skill.enabled),
+        health,
+        skill.rating.min(5),
+        usize::MAX.saturating_sub(depth),
+    )
+}
+
 fn derive_skill_conflicts(
     skills: &[SkillCard],
     saved_choices: &HashMap<String, SkillConflictChoiceState>,
@@ -325,9 +346,9 @@ fn derive_skill_conflicts(
         }
 
         group.sort_by(|left, right| {
-            left.source
-                .to_lowercase()
-                .cmp(&right.source.to_lowercase())
+            auto_route_priority(right)
+                .cmp(&auto_route_priority(left))
+                .then_with(|| left.source.to_lowercase().cmp(&right.source.to_lowercase()))
                 .then_with(|| {
                     left.relative_path
                         .to_lowercase()
@@ -352,11 +373,7 @@ fn derive_skill_conflicts(
             .get(&conflict_key)
             .cloned()
             .unwrap_or_default();
-        let mut status = if saved.status.trim().is_empty() {
-            "unresolved".to_string()
-        } else {
-            saved.status.clone()
-        };
+        let mut status = saved.status.clone();
         let default_choice = choices
             .iter()
             .find(|choice| choice.skill_id == saved.default_skill_id);
@@ -364,11 +381,20 @@ fn derive_skill_conflicts(
             if let Some(choice) = default_choice {
                 (choice.skill_id.clone(), choice.source_name.clone())
             } else {
-                status = "unresolved".to_string();
-                (String::new(), String::new())
+                status = "auto-set".to_string();
+                choices
+                    .first()
+                    .map(|choice| (choice.skill_id.clone(), choice.source_name.clone()))
+                    .unwrap_or_default()
             }
-        } else {
+        } else if status == "ignored" {
             (String::new(), String::new())
+        } else {
+            status = "auto-set".to_string();
+            choices
+                .first()
+                .map(|choice| (choice.skill_id.clone(), choice.source_name.clone()))
+                .unwrap_or_default()
         };
 
         conflicts.push(SkillConflictCard {
@@ -409,6 +435,7 @@ struct SourceCard {
     note: String,
     local_path: String,
     enabled: bool,
+    rating: u8,
     tags: Vec<String>,
     created_at: String,
 }
@@ -936,7 +963,7 @@ where
 fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
     let root = resolve_legacy_root()?;
 
-    let skills_dir = root.join("skills");
+    let skills_dir = active_skills_dir(&root);
     let sources_dir = active_sources_dir(&root);
     let diagnostics_file = diagnostics_file(&root);
     let config_file = skillhub_config_file(&root);
@@ -1230,6 +1257,7 @@ fn run_skillhub_script_with_options(root: &Path, no_pull: bool) -> Result<(), St
     command
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script);
+    configure_user_data_command(&mut command, root);
     if no_pull {
         command.arg("-NoPull");
     }
@@ -1269,6 +1297,7 @@ fn run_agent_link_script(root: &Path) -> Result<(), String> {
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script)
         .arg("-Quiet");
+    configure_user_data_command(&mut command, root);
     let output = command_output_with_timeout(
         &mut command,
         Duration::from_secs(180),
@@ -1305,6 +1334,7 @@ fn run_diagnostics_export_script(root: &Path) -> Result<(), String> {
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script)
         .arg("-Quiet");
+    configure_user_data_command(&mut command, root);
     let output = command_output_with_timeout(
         &mut command,
         Duration::from_secs(90),
@@ -1328,6 +1358,16 @@ fn run_diagnostics_export_script(root: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn configure_user_data_command(command: &mut Command, root: &Path) {
+    command
+        .env("AI_SKILLHUB_DATA_ROOT", user_data_root(root))
+        .env("AI_SKILLHUB_CONFIG_PATH", skillhub_config_file(root))
+        .env("AI_SKILLHUB_ACTIVE_SKILLS", active_skills_dir(root))
+        .env("AI_SKILLHUB_SOURCES", managed_sources_dir(root))
+        .env("AI_SKILLHUB_REPORTS", reports_dir(root))
+        .env("AI_SKILLHUB_STATE", private_state_dir(root));
 }
 
 fn command_output_with_timeout(
@@ -1447,6 +1487,12 @@ fn set_skill_enabled(folder_name: String, enabled: bool) -> Result<LegacySnapsho
 #[tauri::command]
 fn set_skill_rating(folder_name: String, rating: u8) -> Result<LegacySnapshot, String> {
     set_skill_rating_override(&folder_name, rating)?;
+    load_indexed_snapshot_blocking()
+}
+
+#[tauri::command]
+fn set_source_rating(source_id: String, rating: u8) -> Result<LegacySnapshot, String> {
+    set_source_rating_override(&source_id, rating)?;
     load_indexed_snapshot_blocking()
 }
 
@@ -1577,7 +1623,7 @@ fn validate_release_gate_export_path(root: &Path, path: &str) -> Result<PathBuf,
         return Err("没有可打开的导出路径。".to_string());
     }
 
-    let reports_root = app_next_root(root).join(".skillhub-next").join("reports");
+    let reports_root = private_state_dir(root).join("reports");
     if !reports_root.exists() {
         return Err("还没有生成 AI SkillHub 报告，请先运行 Release Gate 执行器。".to_string());
     }
@@ -1848,6 +1894,7 @@ fn resolve_legacy_root() -> Result<PathBuf, String> {
     if let Ok(value) = std::env::var("AI_SKILLHUB_ROOT") {
         let root = PathBuf::from(value);
         if is_skillhub_root(&root) {
+            prepare_user_data(&root)?;
             return Ok(root);
         }
 
@@ -1860,6 +1907,7 @@ fn resolve_legacy_root() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             if let Some(root) = find_skillhub_root_from(parent) {
+                prepare_user_data(&root)?;
                 return Ok(root);
             }
         }
@@ -1867,6 +1915,7 @@ fn resolve_legacy_root() -> Result<PathBuf, String> {
 
     if let Ok(current_dir) = std::env::current_dir() {
         if let Some(root) = find_skillhub_root_from(&current_dir) {
+            prepare_user_data(&root)?;
             return Ok(root);
         }
     }
@@ -1901,8 +1950,51 @@ fn app_next_runtime_root(root: &Path) -> PathBuf {
     app_next_root(root).join("runtime")
 }
 
+fn user_data_root(root: &Path) -> PathBuf {
+    if cfg!(test) {
+        return app_next_root(root).join(".skillhub-next");
+    }
+    if let Ok(value) = std::env::var("AI_SKILLHUB_DATA_ROOT") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return PathBuf::from(value);
+        }
+    }
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        let local_app_data = local_app_data.trim();
+        if !local_app_data.is_empty() {
+            return PathBuf::from(local_app_data)
+                .join("AI SkillHub")
+                .join("UserData");
+        }
+    }
+    app_next_root(root)
+        .join(".skillhub-next")
+        .join("user-data-v3")
+}
+
+fn private_state_dir(root: &Path) -> PathBuf {
+    if cfg!(test) {
+        app_next_root(root).join(".skillhub-next")
+    } else {
+        user_data_root(root).join("state")
+    }
+}
+
+fn active_skills_dir(root: &Path) -> PathBuf {
+    if cfg!(test) {
+        root.join("skills")
+    } else {
+        user_data_root(root).join("skills")
+    }
+}
+
 fn managed_sources_dir(root: &Path) -> PathBuf {
-    app_next_root(root).join("data").join("github_sources")
+    if cfg!(test) {
+        app_next_root(root).join("data").join("github_sources")
+    } else {
+        user_data_root(root).join("sources")
+    }
 }
 
 fn active_sources_dir(root: &Path) -> PathBuf {
@@ -1910,7 +2002,11 @@ fn active_sources_dir(root: &Path) -> PathBuf {
 }
 
 fn reports_dir(root: &Path) -> PathBuf {
-    app_next_root(root).join("reports")
+    if cfg!(test) {
+        app_next_root(root).join("reports")
+    } else {
+        user_data_root(root).join("reports")
+    }
 }
 
 fn diagnostics_file(root: &Path) -> PathBuf {
@@ -1918,7 +2014,11 @@ fn diagnostics_file(root: &Path) -> PathBuf {
 }
 
 fn skillhub_config_file(root: &Path) -> PathBuf {
-    app_next_runtime_root(root).join("skillhub.config.json")
+    if cfg!(test) {
+        app_next_runtime_root(root).join("skillhub.config.json")
+    } else {
+        user_data_root(root).join("skillhub.config.json")
+    }
 }
 
 fn skillhub_script_file(root: &Path) -> PathBuf {
@@ -1933,10 +2033,218 @@ fn diagnostics_export_script_file(root: &Path) -> PathBuf {
     app_next_runtime_root(root).join("Export-SkillHubDiagnostics.ps1")
 }
 
-fn database_file(root: &Path) -> PathBuf {
-    app_next_root(root)
+fn prepare_user_data(root: &Path) -> Result<(), String> {
+    if cfg!(test) {
+        return Ok(());
+    }
+
+    let data_root = user_data_root(root);
+    let sources = managed_sources_dir(root);
+    let skills = active_skills_dir(root);
+    let state = private_state_dir(root);
+    let reports = reports_dir(root);
+    for path in [&data_root, &sources, &skills, &state, &reports] {
+        fs::create_dir_all(path).map_err(|error| {
+            format!(
+                "Cannot create AI SkillHub user data folder {}: {}",
+                path.display(),
+                error
+            )
+        })?;
+    }
+
+    let legacy_sources = app_next_root(root).join("data").join("github_sources");
+    if directory_is_empty(&sources) && legacy_sources.exists() && legacy_sources != sources {
+        copy_directory_tree(&legacy_sources, &sources)?;
+    }
+
+    let legacy_skills = root.join("skills");
+    if legacy_skills.exists() && legacy_skills != skills {
+        copy_standalone_skill_folders(&legacy_skills, &skills)?;
+    }
+
+    let legacy_database = app_next_root(root)
         .join(".skillhub-next")
-        .join("skillhub-next.sqlite3")
+        .join("skillhub-next.sqlite3");
+    let next_database = database_file(root);
+    if !next_database.exists() && legacy_database.exists() && legacy_database != next_database {
+        fs::copy(&legacy_database, &next_database).map_err(|error| {
+            format!(
+                "Cannot migrate AI SkillHub index {} to {}: {}",
+                legacy_database.display(),
+                next_database.display(),
+                error
+            )
+        })?;
+    }
+
+    ensure_persistent_runtime_config(root)?;
+
+    let manifest = data_root.join("migration-v3.json");
+    if !manifest.exists() {
+        let body = serde_json::to_string_pretty(&serde_json::json!({
+            "schemaVersion": 3,
+            "migratedAt": unix_timestamp_string(),
+            "legacyRoot": root.display().to_string(),
+            "sources": sources.display().to_string(),
+            "skills": skills.display().to_string(),
+            "database": next_database.display().to_string(),
+            "strategy": "copy-only; legacy data retained"
+        }))
+        .map_err(|error| format!("Cannot serialize user data migration manifest: {}", error))?;
+        fs::write(&manifest, format!("{body}\n")).map_err(|error| {
+            format!(
+                "Cannot write user data migration manifest {}: {}",
+                manifest.display(),
+                error
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn directory_is_empty(path: &Path) -> bool {
+    fs::read_dir(path)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(true)
+}
+
+fn copy_directory_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    let source_root = source.canonicalize().map_err(|error| {
+        format!(
+            "Cannot resolve migration source {}: {}",
+            source.display(),
+            error
+        )
+    })?;
+    fs::create_dir_all(destination).map_err(|error| {
+        format!(
+            "Cannot create migration destination {}: {}",
+            destination.display(),
+            error
+        )
+    })?;
+
+    for entry in fs::read_dir(source).map_err(|error| {
+        format!(
+            "Cannot read migration source {}: {}",
+            source.display(),
+            error
+        )
+    })? {
+        let entry = entry.map_err(|error| format!("Cannot read migration entry: {}", error))?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Cannot inspect {}: {}", source_path.display(), error))?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            let expected = source_root.join(entry.file_name());
+            let resolved = source_path
+                .canonicalize()
+                .map_err(|error| format!("Cannot resolve {}: {}", source_path.display(), error))?;
+            if resolved != expected {
+                continue;
+            }
+            copy_directory_tree(&source_path, &destination_path)?;
+        } else if file_type.is_file() && !destination_path.exists() {
+            fs::copy(&source_path, &destination_path).map_err(|error| {
+                format!(
+                    "Cannot copy {} to {}: {}",
+                    source_path.display(),
+                    destination_path.display(),
+                    error
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_standalone_skill_folders(source: &Path, destination: &Path) -> Result<(), String> {
+    let source_root = source.canonicalize().map_err(|error| {
+        format!(
+            "Cannot resolve legacy Skills folder {}: {}",
+            source.display(),
+            error
+        )
+    })?;
+    for entry in fs::read_dir(source).map_err(|error| {
+        format!(
+            "Cannot read legacy Skills folder {}: {}",
+            source.display(),
+            error
+        )
+    })? {
+        let entry = entry.map_err(|error| format!("Cannot read legacy Skill entry: {}", error))?;
+        let path = entry.path();
+        if !entry
+            .file_type()
+            .map(|file_type| file_type.is_dir() && !file_type.is_symlink())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let expected = source_root.join(entry.file_name());
+        let resolved = match path.canonicalize() {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if resolved != expected || !path.join("SKILL.md").is_file() {
+            continue;
+        }
+        let target = destination.join(entry.file_name());
+        if !target.exists() {
+            copy_directory_tree(&path, &target)?;
+        }
+    }
+    Ok(())
+}
+
+fn ensure_persistent_runtime_config(root: &Path) -> Result<(), String> {
+    let config_path = skillhub_config_file(root);
+    let legacy_path = app_next_runtime_root(root).join("skillhub.config.json");
+    let mut config = read_json(&config_path)
+        .or_else(|| read_json(&legacy_path))
+        .unwrap_or_else(|| serde_json::json!({ "version": 3, "repositories": [] }));
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| "AI SkillHub runtime config must be a JSON object.".to_string())?;
+    object.insert("version".to_string(), Value::from(3));
+    object.insert(
+        "githubSourcesFolder".to_string(),
+        Value::from(managed_sources_dir(root).display().to_string()),
+    );
+    object.insert(
+        "activeSkillsFolder".to_string(),
+        Value::from(active_skills_dir(root).display().to_string()),
+    );
+    object
+        .entry("manageAgentLinks".to_string())
+        .or_insert(Value::Bool(false));
+    object
+        .entry("autoDiscoverManualRepos".to_string())
+        .or_insert(Value::Bool(true));
+    object
+        .entry("repositories".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let text = serde_json::to_string_pretty(&config)
+        .map_err(|error| format!("Cannot serialize persistent runtime config: {}", error))?;
+    fs::write(&config_path, format!("{text}\n")).map_err(|error| {
+        format!(
+            "Cannot write persistent runtime config {}: {}",
+            config_path.display(),
+            error
+        )
+    })
+}
+
+fn database_file(root: &Path) -> PathBuf {
+    private_state_dir(root).join("skillhub-next.sqlite3")
 }
 
 fn open_index_database(root: &Path) -> Result<Connection, String> {
@@ -1992,6 +2300,7 @@ fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
                 category_id TEXT NOT NULL DEFAULT '',
                 note TEXT NOT NULL DEFAULT '',
                 enabled INTEGER,
+                rating INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS usage_events (
@@ -2089,6 +2398,12 @@ fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
     ensure_column(
         connection,
         "skill_overrides",
+        "rating",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        connection,
+        "source_overrides",
         "rating",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
@@ -2221,7 +2536,7 @@ fn read_snapshot_from_database(
         .count();
     let warnings = skills.iter().filter(|skill| skill.health != "ok").count();
     let agents_detected = agents.iter().filter(|agent| agent.detected).count();
-    let skills_dir = root.join("skills");
+    let skills_dir = active_skills_dir(root);
     let sources_dir = active_sources_dir(root);
     let diagnostics_file = diagnostics_file(root);
     let release_reports = derive_release_reports(root);
@@ -2495,6 +2810,12 @@ fn set_skill_rating_override(folder_name: &str, rating: u8) -> Result<(), String
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_skill_rating_override_in_connection(&connection, folder_name, rating)
+}
+
+fn set_source_rating_override(source_id: &str, rating: u8) -> Result<(), String> {
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    set_source_rating_override_in_connection(&connection, source_id, rating)
 }
 
 fn set_source_metadata_override(
@@ -3191,10 +3512,7 @@ fn run_release_gate_runner_in_connection(
         _ => return Err("Unsupported release gate runner.".to_string()),
     };
 
-    let report_dir = app_next_root(root)
-        .join(".skillhub-next")
-        .join("reports")
-        .join(report_folder);
+    let report_dir = private_state_dir(root).join("reports").join(report_folder);
     fs::create_dir_all(&report_dir)
         .map_err(|error| format!("Cannot create v2 report folder: {}", error))?;
     let json_path = report_dir.join(format!("{}-{}.json", runner_id, timestamp));
@@ -3239,7 +3557,7 @@ fn run_release_gate_runner_in_connection(
         "status": status,
         "generatedAt": timestamp,
         "summary": summary,
-        "exportFolder": "<AI_SKILLHUB_ROOT>/app-next/.skillhub-next/reports",
+        "exportFolder": report_dir.display().to_string(),
         "generatedFiles": generated_files,
         "fileCount": generated_file_count,
         "gate": "v2-report-only",
@@ -3625,15 +3943,14 @@ fn build_real_write_execution_report(
             })
         })
         .collect::<Vec<_>>();
-    let package_preview = app_next_root(root)
-        .join(".skillhub-next")
+    let package_preview = private_state_dir(root)
         .join("release-candidates")
         .join(format!("ai-skillhub-v2-{}", timestamp));
     let executor_preview = match gate_id {
         "agent-sync" => serde_json::json!({
             "executor": "agent-sync",
             "managedAdapters": managed_adapters,
-            "sourceOfTruth": "<AI_SKILLHUB_ROOT>/skills",
+            "sourceOfTruth": active_skills_dir(root).display().to_string(),
             "wouldBackupBeforeWrite": true,
             "wouldVerifyAfterWrite": true
         }),
@@ -4168,6 +4485,72 @@ fn set_skill_rating_override_in_connection(
     Ok(())
 }
 
+fn set_source_rating_override_in_connection(
+    connection: &Connection,
+    source_id: &str,
+    rating: u8,
+) -> Result<(), String> {
+    let source_id = compact_note(source_id);
+    if source_id.is_empty() {
+        return Err("Source id is required.".to_string());
+    }
+    if rating > 5 {
+        return Err("Source rating must be between 0 and 5.".to_string());
+    }
+
+    let exists: Option<String> = connection
+        .query_row(
+            "SELECT id FROM sources WHERE id = ?1 LIMIT 1",
+            params![&source_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot locate source {}: {}", source_id, error))?;
+    exists.ok_or_else(|| format!("Cannot find indexed source {}.", source_id))?;
+    let timestamp = unix_timestamp_string();
+
+    connection
+        .execute(
+            "INSERT INTO source_overrides (
+                source_id, display_name, source_type, category_id, note, enabled, rating, updated_at
+            ) VALUES (?1, '', '', '', '', NULL, ?2, ?3)
+            ON CONFLICT(source_id) DO UPDATE SET
+                rating = excluded.rating,
+                updated_at = excluded.updated_at",
+            params![&source_id, i64::from(rating), &timestamp],
+        )
+        .map_err(|error| format!("Cannot save source rating override: {}", error))?;
+
+    connection
+        .execute(
+            "INSERT INTO audit_events (
+                id, event_type, summary, detail_json, created_at
+            ) VALUES (?1, 'source_rating_updated', ?2, ?3, ?4)",
+            params![
+                format!(
+                    "audit-source-rating-{}-{}",
+                    timestamp,
+                    stable_id("source", &source_id)
+                ),
+                if rating == 0 {
+                    "Cleared local parent Skill rating"
+                } else {
+                    "Updated local parent Skill rating"
+                },
+                serde_json::to_string(&serde_json::json!({
+                    "sourceId": source_id,
+                    "rating": rating,
+                    "scope": "v2-sqlite-only"
+                }))
+                .unwrap_or_else(|_| "{}".to_string()),
+                timestamp
+            ],
+        )
+        .map_err(|error| format!("Cannot write source rating audit event: {}", error))?;
+
+    Ok(())
+}
+
 fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexReport, String> {
     let db_file = database_file(root);
     let mut connection = open_index_database(root)?;
@@ -4650,6 +5033,7 @@ fn read_indexed_sources(connection: &Connection) -> Result<Vec<SourceCard>, Stri
                 COALESCE(NULLIF(source_overrides.category_id, ''), sources.category_id) AS category_id,
                 COALESCE(source_overrides.note, sources.note) AS note,
                 COALESCE(source_overrides.enabled, sources.enabled) AS enabled,
+                COALESCE(source_overrides.rating, 0) AS rating,
                 sources.created_at,
                 CASE
                     WHEN COALESCE(NULLIF(source_overrides.source_type, ''), sources.source_type) = 'prompt' THEN 'info'
@@ -4677,9 +5061,10 @@ fn read_indexed_sources(connection: &Connection) -> Result<Vec<SourceCard>, Stri
                 category_id: row.get(6)?,
                 note: row.get(7)?,
                 enabled: row.get::<_, i64>(8)? != 0,
-                created_at: row.get(9)?,
-                health: row.get(10)?,
-                skill_count: row.get::<_, i64>(11)? as usize,
+                rating: row.get::<_, i64>(9)?.clamp(0, 5) as u8,
+                created_at: row.get(10)?,
+                health: row.get(11)?,
+                skill_count: row.get::<_, i64>(12)? as usize,
                 tags: Vec::new(),
             })
         })
@@ -5231,8 +5616,7 @@ fn cleanup_deleted_source_sqlite_state(
 }
 
 fn source_import_backup_path(root: &Path, display_name: &str) -> String {
-    root.join("app-next")
-        .join(".skillhub-next")
+    private_state_dir(root)
         .join("backups")
         .join("source-imports")
         .join(sanitize_source_folder_name(display_name))
@@ -5241,22 +5625,19 @@ fn source_import_backup_path(root: &Path, display_name: &str) -> String {
 }
 
 fn source_import_staging_root(root: &Path) -> PathBuf {
-    app_next_root(root)
-        .join(".skillhub-next")
+    private_state_dir(root)
         .join("staging")
         .join("source-imports")
 }
 
 fn source_import_report_root(root: &Path) -> PathBuf {
-    app_next_root(root)
-        .join(".skillhub-next")
+    private_state_dir(root)
         .join("reports")
         .join("source-import-staging")
 }
 
 fn source_import_promotion_report_root(root: &Path) -> PathBuf {
-    app_next_root(root)
-        .join(".skillhub-next")
+    private_state_dir(root)
         .join("reports")
         .join("source-import-promotion")
 }
@@ -6124,15 +6505,15 @@ fn stage_local_source_import(
     execution: &mut SourceImportExecutionCard,
 ) -> Result<(), String> {
     let source_path = PathBuf::from(&plan.normalized_target);
-    let app_next_private = app_next_root(root).join(".skillhub-next");
-    if source_path.starts_with(&app_next_private) {
+    let app_private = user_data_root(root);
+    if source_path.starts_with(&app_private) {
         execution.status = "blocked".to_string();
         execution.summary =
             "Local staging refused because the source is inside SkillHub's private runtime folder."
                 .to_string();
         execution
             .blocking_checks
-            .push("Do not import from app-next/.skillhub-next.".to_string());
+            .push("Do not import from AI SkillHub's private user-data folder.".to_string());
         return Ok(());
     }
 
@@ -8339,8 +8720,7 @@ fn read_indexed_operation_runners(
             (
                 if locked { "locked" } else { "ready" }.to_string(),
                 default_summary.to_string(),
-                app_next_root(root)
-                    .join(".skillhub-next")
+                private_state_dir(root)
                     .join("reports")
                     .join(runner_report_folder(runner_id))
                     .join(format!("latest-{}.md", runner_id))
@@ -8353,8 +8733,7 @@ fn read_indexed_operation_runners(
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| {
-                app_next_root(root)
-                    .join(".skillhub-next")
+                private_state_dir(root)
                     .join("reports")
                     .join(runner_report_folder(runner_id))
             });
@@ -9396,7 +9775,9 @@ fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSaf
             "detection",
             if adapter.detected { "ok" } else { "info" },
             if adapter.id == "claude" && adapter.detected {
-                "已检测到 Claude Desktop 或 Claude Code；本地 Skills 目录只供 Code 模式读取。"
+                "已检测到 Claude Desktop 或 Claude Code；只有 Code 能力会接管本地 Skills。"
+            } else if adapter.id == "codex" && adapter.detected {
+                "已检测到 ChatGPT Desktop 或 OpenAI Codex；只有 Codex 代码能力会接管本地 Skills。"
             } else if adapter.detected {
                 "本机已检测到该 AI 工具。"
             } else {
@@ -9415,6 +9796,8 @@ fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSaf
                 "该适配器暂未声明默认 Skills 目录；后续必须由用户手动指定。"
             } else if adapter.id == "claude" {
                 "本地目录供 Claude Code/桌面 Code 模式使用；Chat/Cowork 需在 Claude 设置中导入 ZIP。"
+            } else if adapter.id == "codex" {
+                "本地目录供 Codex 代码能力使用；仅安装 ChatGPT 桌面版时不会创建假目录。"
             } else {
                 "已声明默认 Skills 目录，仅作为路径提示，不会自动写入。"
             },
@@ -9524,9 +9907,7 @@ fn derive_backup_targets(root: &Path, adapters: &[AgentAdapterCard]) -> Vec<Back
         .iter()
         .map(|adapter| {
             let has_target = !adapter.skills_path_hint.trim().is_empty();
-            let backup_path = root
-                .join("app-next")
-                .join(".skillhub-next")
+            let backup_path = private_state_dir(root)
                 .join("backups")
                 .join(&adapter.id)
                 .join("skills")
@@ -9722,7 +10103,7 @@ fn agent_adapter_catalog() -> Vec<AgentAdapterCard> {
         ),
         agent_adapter(
             "codex",
-            "OpenAI Codex",
+            "ChatGPT Desktop / OpenAI Codex",
             "OpenAI",
             "~\\.codex\\skills",
             "global",
@@ -10864,8 +11245,7 @@ fn parse_diagnostic_skills(diagnostics: Option<&Value>) -> HashMap<String, Skill
 }
 
 fn merge_managed_link_skills(root: &Path, diagnostics: &mut HashMap<String, SkillDiagnostic>) {
-    let managed_links_file = app_next_root(root)
-        .join(".skillhub-next")
+    let managed_links_file = private_state_dir(root)
         .join("sync-state")
         .join("managed-links.json");
     let Some(managed_links_json) = read_json(&managed_links_file) else {
@@ -10975,6 +11355,7 @@ fn scan_sources(
                 note: config.map(|item| item.note.clone()).unwrap_or_default(),
                 local_path: entry.path().display().to_string(),
                 enabled: true,
+                rating: 0,
                 tags: Vec::new(),
                 created_at: source_created_at(&entry.path()),
             });
@@ -11294,21 +11675,26 @@ fn parse_agents(diagnostics: Option<&Value>) -> Vec<AgentCard> {
                 .cloned()
                 .unwrap_or_default();
             let raw_detected = json_bool(agent, "detected");
-            let explicit_claude_detection = id == "claude"
+            let supports_split_detection = matches!(id.as_str(), "claude" | "codex");
+            let explicit_product_detection = supports_split_detection
                 && (json_bool(agent, "desktopDetected") || json_bool(agent, "codeDetected"));
             let directory_only_detection = raw_detected
                 && command.trim().is_empty()
-                && !explicit_claude_detection
+                && !explicit_product_detection
                 && skills_dirs.iter().any(|dir| {
                     json_bool(dir, "exists")
                         || json_bool(dir, "isLink")
                         || json_bool(dir, "writable")
                 });
             let detected = raw_detected && !directory_only_detection;
+            let code_capable = !supports_split_detection
+                || !explicit_product_detection
+                || json_bool(agent, "codeDetected");
             let managed = skills_dirs
                 .iter()
                 .any(|dir| json_bool(dir, "isLink") || json_bool(dir, "writable"))
-                && detected;
+                && detected
+                && code_capable;
             AgentCard {
                 id,
                 name: json_string(agent, "name"),
@@ -11760,7 +12146,8 @@ fn sync_skill_conflict_dispatchers_for_skills(
     }
 
     for conflict in conflicts.iter().filter(|conflict| {
-        conflict.status == "default-set" && !conflict.default_skill_id.is_empty()
+        matches!(conflict.status.as_str(), "default-set" | "auto-set")
+            && !conflict.default_skill_id.is_empty()
     }) {
         let dispatcher_name = generated_skill_folder_name(&conflict.conflict_key);
         let Some(body) = build_conflict_dispatcher_skill_md(conflict) else {
@@ -12465,6 +12852,7 @@ pub fn run() {
             set_skill_metadata,
             set_skill_enabled,
             set_skill_rating,
+            set_source_rating,
             set_source_metadata,
             set_sources_bulk_metadata,
             set_skill_tags,
@@ -12631,6 +13019,7 @@ mod tests {
             note: String::new(),
             local_path: local_path.display().to_string(),
             enabled: true,
+            rating: 0,
             tags: Vec::new(),
             created_at: "0".to_string(),
         }
@@ -12955,7 +13344,7 @@ mod tests {
     }
 
     #[test]
-    fn skill_conflict_selector_preserves_default_and_resets_missing_choice() {
+    fn skill_conflict_selector_preserves_manual_default_and_auto_recovers_missing_choice() {
         let skills = vec![
             test_skill_card(
                 "figure-planner",
@@ -12993,12 +13382,13 @@ mod tests {
             },
         );
         let conflicts = derive_skill_conflicts(&skills, &saved);
-        assert_eq!(conflicts[0].status, "unresolved");
-        assert!(conflicts[0].default_skill_id.is_empty());
+        assert_eq!(conflicts[0].status, "auto-set");
+        assert!(!conflicts[0].default_skill_id.is_empty());
+        assert_eq!(conflicts[0].default_source_name, "Nature-Paper-Skills");
     }
 
     #[test]
-    fn conflict_default_writes_and_removes_generated_dispatcher() {
+    fn conflict_default_writes_and_restores_automatic_dispatcher() {
         let root = std::env::temp_dir().join(format!(
             "skillhub-conflict-dispatcher-test-{}",
             unix_timestamp_string()
@@ -13059,10 +13449,13 @@ mod tests {
                 updated_at: "1780000001".to_string(),
             },
         );
-        let removed = sync_skill_conflict_dispatchers_for_skills(&root, &skills, &saved)
-            .expect("stale dispatcher should be removed");
-        assert_eq!(removed, 1);
-        assert!(!dispatcher.exists());
+        let automatic = sync_skill_conflict_dispatchers_for_skills(&root, &skills, &saved)
+            .expect("automatic dispatcher should replace the manual default");
+        assert_eq!(automatic, 1);
+        assert!(dispatcher.exists());
+        let automatic_body =
+            fs::read_to_string(&dispatcher).expect("automatic dispatcher should remain callable");
+        assert!(automatic_body.contains("Source: `Nature-Paper-Skills`"));
         assert!(nature_alias.exists());
         assert!(paperspine_alias.exists());
         let _ = fs::remove_dir_all(&root);
@@ -13145,6 +13538,36 @@ mod tests {
         assert!(claude.detected);
         assert!(!claude.managed);
         assert!(!claude.enabled);
+    }
+
+    #[test]
+    fn parse_agents_keeps_chatgpt_desktop_visible_without_fake_codex_management() {
+        let diagnostics = serde_json::json!({
+            "agents": [
+                {
+                    "id": "codex",
+                    "name": "ChatGPT Desktop / OpenAI Codex",
+                    "detected": true,
+                    "desktopDetected": true,
+                    "codeDetected": false,
+                    "command": "",
+                    "skillsDirs": [
+                        {
+                            "path": "C:/Users/Test/.codex/skills",
+                            "exists": true,
+                            "writable": true,
+                            "isLink": false
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let agents = parse_agents(Some(&diagnostics));
+        let codex = agents.first().expect("ChatGPT Desktop should parse");
+        assert!(codex.detected);
+        assert!(!codex.managed);
+        assert!(!codex.enabled);
     }
 
     #[test]
@@ -13242,6 +13665,7 @@ mod tests {
             note: String::new(),
             local_path: source_dir.display().to_string(),
             enabled: true,
+            rating: 0,
             tags: Vec::new(),
             created_at: "1".to_string(),
         };
@@ -13684,6 +14108,7 @@ mod tests {
                 note: String::new(),
                 local_path: "app-next/data/github_sources/github-skill-pack".to_string(),
                 enabled: true,
+                rating: 0,
                 tags: vec!["agent-tools".to_string()],
                 created_at: "2026-05-29T00:00:00Z".to_string(),
             },
@@ -13699,6 +14124,7 @@ mod tests {
                 note: String::new(),
                 local_path: "app-next/data/github_sources/prompt-library".to_string(),
                 enabled: true,
+                rating: 0,
                 tags: vec!["prompt".to_string()],
                 created_at: "2026-05-28T00:00:00Z".to_string(),
             },
@@ -13714,6 +14140,7 @@ mod tests {
                 note: String::new(),
                 local_path: "D:\\Skills\\local-skill-pack".to_string(),
                 enabled: true,
+                rating: 0,
                 tags: vec!["ui-design".to_string()],
                 created_at: "2026-05-27T00:00:00Z".to_string(),
             },
@@ -14148,6 +14575,8 @@ mod tests {
             false,
         )
         .expect("source override should save");
+        set_source_rating_override_in_connection(&connection, "source-impeccable", 5)
+            .expect("parent/source rating should save");
 
         let sources = read_indexed_sources(&connection).expect("sources should read");
         let source = sources
@@ -14160,6 +14589,10 @@ mod tests {
         assert_eq!(source.category_id, "界面设计");
         assert_eq!(source.note, "UI design reference");
         assert!(!source.enabled);
+        assert_eq!(source.rating, 5);
+        assert!(
+            set_source_rating_override_in_connection(&connection, "source-impeccable", 6).is_err()
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -14357,6 +14790,7 @@ mod tests {
             local_path: "app-next/data/github_sources/paper-framework-figure-studio-pro"
                 .to_string(),
             enabled: true,
+            rating: 0,
             tags: Vec::new(),
             created_at: unix_timestamp_string(),
         }];
@@ -14891,6 +15325,7 @@ mod tests {
             note: String::new(),
             local_path: "app-next/data/github_sources/impeccable".to_string(),
             enabled: true,
+            rating: 0,
             tags: vec!["ui-design".to_string()],
             created_at: "2026-05-01T00:00:00Z".to_string(),
         };

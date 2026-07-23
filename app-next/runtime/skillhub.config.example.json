@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "githubSourcesFolder": "..\\data\\github_sources",
   "activeSkillsFolder": "..\\..\\skills",
   "manageAgentLinks": false,

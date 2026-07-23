@@ -9,7 +9,7 @@ This document is the stable rule for parent/child Skill routing in AI SkillHub.
 
 ## Rules
 
-1. AI SkillHub must generate parent router Skills outside the author's source repository, under `app-next/data/github_sources/AI-SkillHub-local-routers`.
+1. AI SkillHub must generate parent router Skills outside the author's source repository, under `%LOCALAPPDATA%\AI SkillHub\UserData\sources\AI-SkillHub-local-routers`.
 2. AI SkillHub must not edit author-owned `SKILL.md` files to add parent/child markers.
 3. Parent router names must stay callable by the original collection name, such as `/nature-skills`.
 4. Child Skill names must stay callable by their original names, such as `/nature-figure`.
@@ -34,13 +34,14 @@ UI surfaces may translate these markers into Chinese labels, badges, or icons, b
 ## Same-Name Child Skill Conflicts
 
 Router hubs are excluded from child-name conflict statistics. If two or more
-non-router child Skills share the same normalized name, AI SkillHub must surface that in
-the Skill Library conflict selector instead of renaming, deleting, overwriting,
-or silently choosing one candidate.
+non-router child Skills share the same normalized name, AI SkillHub must surface
+that in Routing Observatory instead of renaming, deleting, or overwriting a
+candidate. It automatically assigns the canonical route while keeping a
+source-qualified alias for every candidate.
 
-The user's default/reset/ignore choice is stored in local SQLite table
-`skill_conflict_choices`. See `app-next/SKILL_CONFLICT_SELECTOR.md` for the
-full product rule. When a default is selected, AI SkillHub writes a generated
-`[CONFLICT-DISPATCHER]` Skill under `AI-SkillHub-local-routers` so direct calls
-to the duplicated child name can follow the user's saved default without editing
-author repositories.
+Manual override/restore choices are stored in local SQLite table
+`skill_conflict_choices`. See `app-next/SKILL_CONFLICT_SELECTOR.md` for the full
+product rule. AI SkillHub writes a generated `[CONFLICT-DISPATCHER]` Skill under
+`AI-SkillHub-local-routers` for the current automatic or manual default, so
+direct calls to the duplicated child name remain usable without editing author
+repositories.

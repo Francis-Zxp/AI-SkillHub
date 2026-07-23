@@ -12,7 +12,11 @@ $OutputEncoding = $Utf8NoBom
 
 $AppRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $AppRoot
-$ConfigPath = Join-Path $AppRoot 'skillhub.config.json'
+$ConfigPath = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_CONFIG_PATH)) {
+  [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_CONFIG_PATH)
+} else {
+  Join-Path $AppRoot 'skillhub.config.json'
+}
 $PowerShellExe = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 if (-not (Test-Path -LiteralPath $PowerShellExe)) {
   throw "Missing Windows PowerShell: $PowerShellExe"
@@ -179,10 +183,20 @@ function Invoke-GitCommandWithTimeout([string[]]$Arguments, [string]$Label, [int
 }
 
 function New-DefaultSkillHubConfig {
+  $defaultSources = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_SOURCES)) {
+    $env:AI_SKILLHUB_SOURCES
+  } else {
+    '..\data\github_sources'
+  }
+  $defaultSkills = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_ACTIVE_SKILLS)) {
+    $env:AI_SKILLHUB_ACTIVE_SKILLS
+  } else {
+    '..\..\skills'
+  }
   [PSCustomObject]@{
-    version = 2
-    githubSourcesFolder = '..\data\github_sources'
-    activeSkillsFolder = '..\..\skills'
+    version = 3
+    githubSourcesFolder = $defaultSources
+    activeSkillsFolder = $defaultSkills
     manageAgentLinks = $false
     autoDiscoverManualRepos = $true
     preferredPathFragments = @('\.claude\skills\', '\skills\', '\dist\codex\skills\', '\dist\claude\skills\', '\dist\openclaw\skills\', '\.agents\skills\')
@@ -778,9 +792,18 @@ function Expand-SkillZipPackages([string]$RepoPath) {
 $Config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $SourceRoot = Resolve-AppPath $Config.githubSourcesFolder
 $SkillsRoot = Resolve-AppPath $Config.activeSkillsFolder
-$StateRoot = Join-Path (Split-Path -Parent $AppRoot) '.skillhub-next\sync-state'
-$ReportsRoot = Join-Path (Split-Path -Parent $AppRoot) 'reports'
-$ArchivesRoot = Join-Path (Split-Path -Parent $AppRoot) '.skillhub-next\archives'
+$StateBase = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_STATE)) {
+  [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_STATE)
+} else {
+  Join-Path (Split-Path -Parent $AppRoot) '.skillhub-next'
+}
+$StateRoot = Join-Path $StateBase 'sync-state'
+$ReportsRoot = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_REPORTS)) {
+  [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_REPORTS)
+} else {
+  Join-Path (Split-Path -Parent $AppRoot) 'reports'
+}
+$ArchivesRoot = Join-Path $StateBase 'archives'
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $ArchiveRoot = Join-Path $ArchivesRoot "replaced_active_skill_copies_$Stamp"
 $StatePath = Join-Path $StateRoot 'managed-links.json'

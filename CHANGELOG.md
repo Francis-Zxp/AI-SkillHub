@@ -2,6 +2,56 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.0.2 - Persistent data, automatic routing, and premium themes
+
+### Added
+
+- Added a source-level 1–5 star rating for every parent Skill. It persists even
+  when the generated parent-router file has not been indexed on another
+  computer.
+- Added independent ChatGPT Desktop and Codex code-capability detection through
+  Windows packages, Start apps, running processes, common install paths, CLI
+  commands, bundled binaries, and real Codex state.
+- Added the stable user-data directory
+  `%LOCALAPPDATA%\AI SkillHub\UserData` and a copy-only v3.0.1 migration.
+- Added automatic exact-name route ownership with source-qualified aliases and
+  optional manual override.
+- Added the Nocturne Graphite default theme and a Claude-inspired Parchment
+  reading theme.
+
+### Changed
+
+- Routing Observatory copy now explains that collisions mean an exact callable
+  name is shared by multiple sources, not merely that two Skills have similar
+  functions.
+- Parent collection routes are the recommended entry point for broad tasks;
+  generated parent Skills select the smallest matching child Skill.
+- Routing typography follows the global text scale, and the theme selector is a
+  compact visual grid.
+- AI-tool registry copy is shorter, and the sync icon uses a smaller optical
+  size.
+- Classic star maps use a clean grouped field instead of a center-out radial
+  wash.
+
+### Fixed
+
+- Generated parent routers no longer appear as unassigned standalone Skills.
+- Zero-only bar-chart entries are omitted; an empty state is shown when no
+  real comparison exists.
+- Updating or extracting AI SkillHub into a different folder no longer replaces
+  imported sources, ratings, settings, or the SQLite index.
+- ChatGPT Desktop-only installations are visible without creating a fake
+  `.codex` directory or claiming that local Skill links are writable.
+
+### Validation
+
+- Verified real and simulated desktop-only OpenAI detection.
+- Verified old portable data migration and parent-rating persistence after
+  launching the same release from a second program folder.
+- The final release must pass frontend build, Rust tests, Clippy, PowerShell
+  parsing, packaged desktop QA, recipient import, public download, and checksum
+  verification.
+
 ## 3.0.1 - Recipient compatibility and Claude detection
 
 ### Fixed

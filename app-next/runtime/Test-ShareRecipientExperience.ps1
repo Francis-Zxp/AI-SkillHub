@@ -18,6 +18,7 @@ $RunRoot = Join-Path $ReportsRoot $Stamp
 $SandboxRoot = Join-Path $RunRoot 'AI SkillHub 分享验收 用户 路径'
 $SandboxV2 = Join-Path $SandboxRoot 'app-next'
 $SandboxRuntime = Join-Path $SandboxV2 'runtime'
+$SandboxData = Join-Path $RunRoot 'recipient-user-data'
 $Cases = New-Object System.Collections.Generic.List[object]
 
 function Write-Utf8Bom([string]$Path, [string]$Text) {
@@ -46,7 +47,12 @@ function Copy-DirContentsRequired([string]$Source, [string]$Destination, [string
     Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Destination $_.Name) -Recurse -Force
   }
 }
-function Invoke-Captured([string]$FileName, [string]$Arguments, [string]$WorkingDirectory) {
+function Invoke-Captured(
+  [string]$FileName,
+  [string]$Arguments,
+  [string]$WorkingDirectory,
+  [hashtable]$Environment = @{}
+) {
   $psi = [System.Diagnostics.ProcessStartInfo]::new()
   $psi.FileName = $FileName
   $psi.Arguments = $Arguments
@@ -57,6 +63,9 @@ function Invoke-Captured([string]$FileName, [string]$Arguments, [string]$Working
   $psi.CreateNoWindow = $true
   $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
   $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+  foreach ($key in $Environment.Keys) {
+    $psi.EnvironmentVariables[[string]$key] = [string]$Environment[$key]
+  }
   $p = [System.Diagnostics.Process]::Start($psi)
   $stdout = $p.StandardOutput.ReadToEnd()
   $stderr = $p.StandardError.ReadToEnd()
@@ -73,7 +82,8 @@ function Assert-PathInsideRoot([string]$Path, [string]$Root, [string]$Label) {
 }
 
 Assert-PathInsideRoot $RunRoot $ReportsRoot '分享验收临时目录'
-New-Item -ItemType Directory -Force -Path $SandboxRoot, $SandboxV2, $SandboxRuntime | Out-Null
+Assert-PathInsideRoot $SandboxData $ReportsRoot '分享验收用户数据目录'
+New-Item -ItemType Directory -Force -Path $SandboxRoot, $SandboxV2, $SandboxRuntime, $SandboxData | Out-Null
 try {
   Copy-FileRequired $BuiltAppPath (Join-Path $SandboxRoot 'AI SkillHub.exe')
   foreach ($file in @('README.md', 'CHANGELOG.md', '使用说明.md')) {
@@ -97,9 +107,17 @@ Add-Case 'portable-path' (($SandboxRoot -match '\s') -and ($SandboxRoot -match '
 try {
   $ps = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
   $script = Join-Path $SandboxRuntime 'SkillHub.ps1'
-  $run = Invoke-Captured $ps ('-NoProfile -ExecutionPolicy Bypass -File "' + $script + '" -NoPull -ReportOnly') $SandboxRuntime
-  $configOk = Test-Path -LiteralPath (Join-Path $SandboxRuntime 'skillhub.config.json') -PathType Leaf
-  $reportOk = Test-Path -LiteralPath (Join-Path $SandboxV2 'reports\last-sync.md') -PathType Leaf
+  $sandboxEnvironment = @{
+    AI_SKILLHUB_DATA_ROOT = $SandboxData
+    AI_SKILLHUB_CONFIG_PATH = (Join-Path $SandboxData 'skillhub.config.json')
+    AI_SKILLHUB_ACTIVE_SKILLS = (Join-Path $SandboxData 'skills')
+    AI_SKILLHUB_SOURCES = (Join-Path $SandboxData 'sources')
+    AI_SKILLHUB_REPORTS = (Join-Path $SandboxData 'reports')
+    AI_SKILLHUB_STATE = (Join-Path $SandboxData 'state')
+  }
+  $run = Invoke-Captured $ps ('-NoProfile -ExecutionPolicy Bypass -File "' + $script + '" -NoPull -ReportOnly') $SandboxRuntime $sandboxEnvironment
+  $configOk = Test-Path -LiteralPath (Join-Path $SandboxData 'skillhub.config.json') -PathType Leaf
+  $reportOk = Test-Path -LiteralPath (Join-Path $SandboxData 'reports\last-sync.md') -PathType Leaf
   Add-Case 'first-run-report-only' ($run.ok -and $configOk -and $reportOk) ("exit=$($run.exitCode); config=$configOk; report=$reportOk")
 } catch {
   Add-Case 'first-run-report-only' $false $_.Exception.Message
