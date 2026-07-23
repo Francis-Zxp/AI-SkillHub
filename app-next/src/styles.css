@@ -1918,6 +1918,11 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .adapter-card header { display: flex; justify-content: space-between; align-items: center; }
 .adapter-card strong { font-size: calc(14px * var(--ui-text-scale, 1)); font-weight: 600; }
 .adapter-card p { margin: 0; font-family: var(--ui-mono); font-size: calc(11.5px * var(--ui-text-scale, 1)); color: var(--text-muted); }
+.adapter-card .adapter-note {
+  font-family: var(--ui-sans);
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
 .adapter-status {
   display: inline-flex; align-items: center; padding: 4px 10px; border-radius: var(--radius-pill); font-size: calc(11px * var(--ui-text-scale, 1));
   background: var(--surface-soft); color: var(--text-soft); border: 1px solid var(--border);

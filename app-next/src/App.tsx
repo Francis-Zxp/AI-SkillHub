@@ -3743,6 +3743,7 @@ function Agents({
               <span className={`adapter-status ${adapter.status}`}>{adapterStatusLabel(adapter.status)}</span>
             </header>
             <p>{adapter.skillsPathHint || t("agents.noPath")}</p>
+            {adapter.id === "claude" && <p className="adapter-note">{t("agents.claudeSkillsNote")}</p>}
             <ul className="capabilities">
               {capabilities
                 .filter(capability => capability.adapterId === adapter.id)

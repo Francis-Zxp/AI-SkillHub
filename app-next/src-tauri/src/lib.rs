@@ -9395,7 +9395,9 @@ fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSaf
             adapter,
             "detection",
             if adapter.detected { "ok" } else { "info" },
-            if adapter.detected {
+            if adapter.id == "claude" && adapter.detected {
+                "已检测到 Claude Desktop 或 Claude Code；本地 Skills 目录只供 Code 模式读取。"
+            } else if adapter.detected {
                 "本机已检测到该 AI 工具。"
             } else {
                 "本机未检测到该 AI 工具；保持未启用，不创建假目录。"
@@ -9411,6 +9413,8 @@ fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSaf
             },
             if adapter.skills_path_hint.is_empty() {
                 "该适配器暂未声明默认 Skills 目录；后续必须由用户手动指定。"
+            } else if adapter.id == "claude" {
+                "本地目录供 Claude Code/桌面 Code 模式使用；Chat/Cowork 需在 Claude 设置中导入 ZIP。"
             } else {
                 "已声明默认 Skills 目录，仅作为路径提示，不会自动写入。"
             },
@@ -9711,7 +9715,7 @@ fn agent_adapter_catalog() -> Vec<AgentAdapterCard> {
     vec![
         agent_adapter(
             "claude",
-            "Claude / Claude Code",
+            "Claude Desktop / Claude Code",
             "Anthropic",
             "~\\.claude\\skills",
             "global",
@@ -11290,8 +11294,11 @@ fn parse_agents(diagnostics: Option<&Value>) -> Vec<AgentCard> {
                 .cloned()
                 .unwrap_or_default();
             let raw_detected = json_bool(agent, "detected");
+            let explicit_claude_detection = id == "claude"
+                && (json_bool(agent, "desktopDetected") || json_bool(agent, "codeDetected"));
             let directory_only_detection = raw_detected
                 && command.trim().is_empty()
+                && !explicit_claude_detection
                 && skills_dirs.iter().any(|dir| {
                     json_bool(dir, "exists")
                         || json_bool(dir, "isLink")
@@ -12728,7 +12735,7 @@ mod tests {
         let skill = test_skill_card("alpha-skill", "alpha-pack", "alpha-pack/alpha-skill", false);
         let initial_agent = AgentCard {
             id: "claude".to_string(),
-            name: "Claude / Claude Code".to_string(),
+            name: "Claude Desktop / Claude Code".to_string(),
             path: root.join("claude-skills").display().to_string(),
             detected: true,
             managed: true,
@@ -13108,6 +13115,36 @@ mod tests {
         let antigravity = agents.first().expect("agent should parse");
         assert!(!antigravity.detected);
         assert!(!antigravity.managed);
+    }
+
+    #[test]
+    fn parse_agents_keeps_explicit_claude_desktop_detection() {
+        let diagnostics = serde_json::json!({
+            "agents": [
+                {
+                    "id": "claude",
+                    "name": "Claude Desktop / Claude Code",
+                    "detected": true,
+                    "desktopDetected": true,
+                    "codeDetected": false,
+                    "command": "",
+                    "skillsDirs": [
+                        {
+                            "path": "C:/Users/Test/.claude/skills",
+                            "exists": false,
+                            "writable": false,
+                            "isLink": false
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let agents = parse_agents(Some(&diagnostics));
+        let claude = agents.first().expect("Claude Desktop should parse");
+        assert!(claude.detected);
+        assert!(!claude.managed);
+        assert!(!claude.enabled);
     }
 
     #[test]

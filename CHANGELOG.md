@@ -2,6 +2,45 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.0.1 - Recipient compatibility and Claude detection
+
+### Fixed
+
+- GitHub source import no longer requires Git to be installed. AI SkillHub now
+  prefers system Git, falls back to a bounded GitHub codeload archive, and uses
+  a selective GitHub API download only as a final fallback.
+- Repositories without `SKILL.md` are saved as Prompt/reference sources instead
+  of failing or pretending to be installable Skills.
+- Reordered AI-tool workspace refresh writes so existing preset/workspace
+  policies no longer trigger a SQLite foreign-key constraint failure.
+- Detects Claude Desktop installed as a Windows MSIX/Start app, Claude Code
+  native binaries outside PATH, legacy Code state, and `CLAUDE_CONFIG_DIR`.
+- Distinguishes Claude Desktop detection from Claude Code local-Skills
+  readiness. The UI now explains that the local folder is for Claude Code and
+  the Desktop Code tab, while Chat/Cowork Skills are imported in Claude.
+- Release and recipient-test scripts now package the executable produced by the
+  current Tauri release build instead of a potentially stale root executable.
+
+### Changed
+
+- Removed developer-only build guidance, desktop QA controls, dry-run/release
+  executors, and snapshot/rollback history from ordinary Settings.
+- Replaced those internal panels with a compact Safety & Support report that
+  omits tokens, proxy values, Skill contents, database files, and absolute
+  local paths.
+- Non-Git GitHub imports preserve repository identity in local metadata so
+  source URLs and popularity information remain available without `.git`.
+
+### Validation
+
+- Tested both an installable Skill repository and a Prompt-only repository in a
+  fresh packaged UI with Git removed from PATH and a Chinese path containing
+  spaces.
+- Verified Claude Desktop-only diagnostics independently from Claude Code
+  command/config detection.
+- Rust tests, strict Clippy, frontend production build, MSI/NSIS build, portable
+  package validation, and isolated fresh-recipient import are release gates.
+
 ## 3.0.0 - Living Atlas
 
 ### Added

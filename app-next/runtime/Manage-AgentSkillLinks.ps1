@@ -111,12 +111,55 @@ function Test-CodexPresent {
   return $false
 }
 
+function Get-ClaudeConfigRoot {
+  $configuredRoot = [Environment]::GetEnvironmentVariable('CLAUDE_CONFIG_DIR')
+  if (-not [string]::IsNullOrWhiteSpace($configuredRoot)) {
+    return [Environment]::ExpandEnvironmentVariables($configuredRoot.Trim())
+  }
+  return Join-Path $HOME '.claude'
+}
+
 function Test-ClaudePresent {
   $claudeCommand = Get-Command claude -ErrorAction SilentlyContinue
   if ($null -ne $claudeCommand) { return $true }
 
-  $claudeHome = Join-Path $HOME '.claude'
-  if (Test-Path -LiteralPath $claudeHome -PathType Container) { return $true }
+  $nativeBinary = Join-Path $HOME '.local\bin\claude.exe'
+  if (Test-Path -LiteralPath $nativeBinary -PathType Leaf) { return $true }
+
+  $claudeHome = Get-ClaudeConfigRoot
+  foreach ($marker in @('settings.json', 'history.jsonl', 'projects', 'sessions', 'plugins', 'local')) {
+    if (Test-Path -LiteralPath (Join-Path $claudeHome $marker)) { return $true }
+  }
+
+  if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    try {
+      if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
+        $package = Get-AppxPackage -Name 'Claude' -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -ne $package) { return $true }
+      }
+    } catch {
+    }
+
+    try {
+      if (Get-Command Get-StartApps -ErrorAction SilentlyContinue) {
+        $startApp = Get-StartApps -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -eq 'Claude' -or $_.AppID -match '(^|[.!])Claude([_!]|$)' } |
+          Select-Object -First 1
+        if ($null -ne $startApp) { return $true }
+      }
+    } catch {
+    }
+
+    $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+    $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+    foreach ($candidate in @(
+      (Join-Path $localAppData 'Programs\Claude\Claude.exe'),
+      (Join-Path $localAppData 'Claude\Claude.exe'),
+      (Join-Path $programFiles 'Claude\Claude.exe')
+    )) {
+      if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
+    }
+  }
   return $false
 }
 
@@ -141,7 +184,7 @@ foreach ($skill in $activeSkillDirs) {
 
 $rows = New-Object System.Collections.Generic.List[object]
 
-$claudePath = Join-Path $HOME '.claude\skills'
+$claudePath = Join-Path (Get-ClaudeConfigRoot) 'skills'
 if (Test-ClaudePresent) {
   $claudeStatus = Set-JunctionPath $claudePath $Shared
 } else {

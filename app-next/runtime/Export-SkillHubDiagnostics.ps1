@@ -4,7 +4,8 @@ param(
   [switch]$SimulateMissingCodex,
   [switch]$SimulateMissingGit,
   [switch]$SimulateMissingWebView2,
-  [switch]$SimulateNoAgents
+  [switch]$SimulateNoAgents,
+  [switch]$SimulateClaudeDesktopOnly
 )
 
 $ErrorActionPreference = 'Continue'
@@ -168,13 +169,80 @@ function Get-LinkTargetText($Item) {
   }
 }
 
-function Add-AgentStatus([string]$Id, [string]$Name, [string]$BaseDir, [string[]]$SkillsDirs, [string]$CommandName) {
+function Get-ClaudeConfigRoot {
+  $configuredRoot = [Environment]::GetEnvironmentVariable('CLAUDE_CONFIG_DIR')
+  if (-not [string]::IsNullOrWhiteSpace($configuredRoot)) {
+    return [Environment]::ExpandEnvironmentVariables($configuredRoot.Trim())
+  }
+  return Join-Path $script:HomePath '.claude'
+}
+
+function Test-ClaudeDesktopPresent {
+  if ($script:SimulateNoAgents) { return $false }
+  if ($script:SimulateClaudeDesktopOnly) { return $true }
+  if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return $false }
+
+  try {
+    if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
+      $package = Get-AppxPackage -Name 'Claude' -ErrorAction SilentlyContinue | Select-Object -First 1
+      if ($null -ne $package) { return $true }
+    }
+  } catch {
+  }
+
+  try {
+    if (Get-Command Get-StartApps -ErrorAction SilentlyContinue) {
+      $startApp = Get-StartApps -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq 'Claude' -or $_.AppID -match '(^|[.!])Claude([_!]|$)' } |
+        Select-Object -First 1
+      if ($null -ne $startApp) { return $true }
+    }
+  } catch {
+  }
+
+  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
+  foreach ($candidate in @(
+    (Join-Path $localAppData 'Programs\Claude\Claude.exe'),
+    (Join-Path $localAppData 'Claude\Claude.exe'),
+    (Join-Path $programFiles 'Claude\Claude.exe')
+  )) {
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
+  }
+  return $false
+}
+
+function Test-ClaudeCodePresent([string]$ConfigRoot) {
+  if ($script:SimulateNoAgents -or $script:SimulateClaudeDesktopOnly) { return $false }
+  if ($null -ne (Get-Command claude -ErrorAction SilentlyContinue)) { return $true }
+
+  $nativeBinary = Join-Path $script:HomePath '.local\bin\claude.exe'
+  if (Test-Path -LiteralPath $nativeBinary -PathType Leaf) { return $true }
+
+  foreach ($marker in @('settings.json', 'history.jsonl', 'projects', 'sessions', 'plugins', 'local')) {
+    if (Test-Path -LiteralPath (Join-Path $ConfigRoot $marker)) { return $true }
+  }
+  return $false
+}
+
+function Add-AgentStatus(
+  [string]$Id,
+  [string]$Name,
+  [string]$BaseDir,
+  [string[]]$SkillsDirs,
+  [string]$CommandName,
+  [bool]$AdditionalDetected = $false,
+  [bool]$CodeDetected = $false,
+  [bool]$DesktopDetected = $false,
+  [string[]]$DetectionKinds = @()
+) {
   $simulateMissing = $script:SimulateNoAgents -or ($Id -eq 'codex' -and $script:SimulateMissingCodex)
-  $command = if ($CommandName -and -not $simulateMissing) { Get-Command $CommandName -ErrorAction SilentlyContinue } else { $null }
-  $baseExists = if ($simulateMissing) { $false } else { (Test-Path -LiteralPath $BaseDir -PathType Container) }
+  $simulateDesktopOnly = $Id -eq 'claude' -and $script:SimulateClaudeDesktopOnly
+  $command = if ($CommandName -and -not $simulateMissing -and -not $simulateDesktopOnly) { Get-Command $CommandName -ErrorAction SilentlyContinue } else { $null }
+  $baseExists = if ($simulateMissing -or $simulateDesktopOnly) { $false } else { (Test-Path -LiteralPath $BaseDir -PathType Container) }
   $skillsInfo = @()
   foreach ($dir in $SkillsDirs) {
-    $exists = if ($simulateMissing) { $false } else { Test-Path -LiteralPath $dir -PathType Container }
+    $exists = if ($simulateMissing -or $simulateDesktopOnly) { $false } else { Test-Path -LiteralPath $dir -PathType Container }
     $skillsInfo += [PSCustomObject]@{
       path = Protect-Text $dir
       exists = $exists
@@ -182,17 +250,36 @@ function Add-AgentStatus([string]$Id, [string]$Name, [string]$BaseDir, [string[]
       isLink = if ($exists) { ((Get-Item -LiteralPath $dir -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 } else { $false }
     }
   }
-  $detected = $baseExists -or ($null -ne $command)
+  $detected = $baseExists -or ($null -ne $command) -or $AdditionalDetected
   $status = if ($detected) { 'ok' } else { 'info' }
-  $summary = if ($detected) { "$Name 已检测到。" } else { "$Name 未检测到；如果这台电脑不用它，可以忽略。" }
-  $fix = if ($detected) { '如需接管，请确认对应 skills 目录存在且可写。' } else { '安装对应 AI 软件后，再点击“接管 AI 软件链接”。不要手动创建假目录。' }
+  $summary = if ($Id -eq 'claude' -and $DesktopDetected -and $CodeDetected) {
+    'Claude Desktop 与 Claude Code 已检测到。'
+  } elseif ($Id -eq 'claude' -and $DesktopDetected) {
+    'Claude Desktop 已检测到；本地 Skills 供 Code 模式使用，Chat/Cowork 使用 Claude 内的 Skills 设置。'
+  } elseif ($Id -eq 'claude' -and $CodeDetected) {
+    'Claude Code 已检测到。'
+  } elseif ($detected) {
+    "$Name 已检测到。"
+  } else {
+    "$Name 未检测到；如果这台电脑不用它，可以忽略。"
+  }
+  $fix = if ($Id -eq 'claude' -and $DesktopDetected -and -not $CodeDetected) {
+    '点击同步后可为 Claude Code/Code 模式准备本地 Skills；Chat/Cowork 的自定义 Skill 请在 Claude 设置中上传 ZIP。'
+  } elseif ($detected) {
+    '如需接管，请确认对应 skills 目录存在且可写。'
+  } else {
+    '安装对应 AI 软件后，再点击“接管 AI 软件链接”。不要手动创建假目录。'
+  }
   $commandSource = if ($command) { $command.Source } else { '' }
-  $detail = "base=$BaseDir; command=" + $commandSource
+  $detail = "base=$BaseDir; command=$commandSource; detection=" + ($DetectionKinds -join ',')
   Add-Check "agent.$Id" $Name $status $summary $detail $fix
   $script:Agents.Add([PSCustomObject]@{
     id = $Id
     name = $Name
     detected = $detected
+    codeDetected = $CodeDetected
+    desktopDetected = $DesktopDetected
+    detectionKinds = @($DetectionKinds)
     baseDir = Protect-Text $BaseDir
     command = if ($command) { Protect-Text $command.Source } else { '' }
     skillsDirs = $skillsInfo
@@ -252,7 +339,13 @@ $webviewStatus = if ($runtimeDirs.Count -gt 0) { 'ok' } elseif ($webviewDllExist
 $webviewSummary = if ($SimulateMissingWebView2) { '分享验收：已模拟缺少 WebView2；界面可能无法打开。' } elseif ($webviewStatus -eq 'ok') { 'WebView2 Runtime 已检测到。' } elseif ($webviewStatus -eq 'warn') { 'AI SkillHub 找到旧版 WebView2 DLL，但未确认系统 Runtime。' } else { '缺少 WebView2 Runtime。' }
 Add-Check 'tool.webview2' 'Microsoft Edge WebView2' $webviewStatus $webviewSummary (($runtimeDirs -join '; ') + '; packaged=' + $runtimeDll) '若界面无法打开，请安装 Microsoft Edge WebView2 Runtime。'
 
-Add-AgentStatus 'claude' 'Claude / Claude Code' (Join-Path $HomePath '.claude') @((Join-Path $HomePath '.claude\skills')) 'claude'
+$claudeConfigRoot = Get-ClaudeConfigRoot
+$claudeDesktopDetected = Test-ClaudeDesktopPresent
+$claudeCodeDetected = Test-ClaudeCodePresent $claudeConfigRoot
+$claudeDetectionKinds = @()
+if ($claudeDesktopDetected) { $claudeDetectionKinds += 'desktop-app' }
+if ($claudeCodeDetected) { $claudeDetectionKinds += 'claude-code' }
+Add-AgentStatus 'claude' 'Claude Desktop / Claude Code' $claudeConfigRoot @((Join-Path $claudeConfigRoot 'skills')) 'claude' ($claudeDesktopDetected -or $claudeCodeDetected) $claudeCodeDetected $claudeDesktopDetected $claudeDetectionKinds
 Add-AgentStatus 'codex' 'OpenAI Codex' (Join-Path $HomePath '.codex') @((Join-Path $HomePath '.codex\skills'), (Join-Path $HomePath '.agents\skills')) 'codex'
 Add-AgentStatus 'antigravity' 'Antigravity' (Join-Path $HomePath '.gemini\antigravity') @((Join-Path $HomePath '.gemini\antigravity\skills'), (Join-Path $HomePath '.antigravity\skills')) 'antigravity'
 
