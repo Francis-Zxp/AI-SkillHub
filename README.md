@@ -2,6 +2,7 @@
 
 AI SkillHub is a Windows desktop hub for managing AI agent Skills, Prompt
 materials, GitHub sources, and local AI-tool links from one place.
+
 V3.X
 <img width="2560" height="1526" alt="image" src="https://github.com/user-attachments/assets/408eab67-1912-47ca-af5d-3dad1c383e01" />
 
