@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">AI SkillHub compact taskbar mark</title>
+  <defs>
+    <linearGradient id="folder" x1="156" y1="226" x2="842" y2="876" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0878F9"/>
+      <stop offset="1" stop-color="#0647D4"/>
+    </linearGradient>
+  </defs>
+  <rect x="154" y="170" width="212" height="244" rx="76" fill="#32B9FF"/>
+  <rect x="406" y="132" width="212" height="282" rx="76" fill="#98DE20"/>
+  <rect x="658" y="170" width="212" height="244" rx="76" fill="#FF5A86"/>
+  <circle cx="756" cy="276" r="48" fill="#FFD34D"/>
+  <path d="M132 326c0-55 45-100 100-100h172l70 78h318c55 0 100 45 100 100v322c0 103-83 186-186 186H318c-103 0-186-83-186-186V326Z" fill="url(#folder)"/>
+  <path d="M132 404c0-55 45-100 100-100h560c55 0 100 45 100 100v322c0 103-83 186-186 186H318c-103 0-186-83-186-186V404Z" fill="url(#folder)"/>
+  <path d="M210 424c42-39 98-60 156-60h292c76 0 148 34 196 92" fill="none" stroke="#48A4FF" stroke-width="28" stroke-linecap="round" opacity=".72"/>
+  <circle cx="424" cy="620" r="112" fill="#fff"/>
+  <circle cx="620" cy="620" r="112" fill="#fff"/>
+  <circle cx="454" cy="630" r="52" fill="#09172F"/>
+  <circle cx="590" cy="630" r="52" fill="#09172F"/>
+  <circle cx="434" cy="606" r="17" fill="#fff"/>
+  <circle cx="570" cy="606" r="17" fill="#fff"/>
+  <path d="M452 784c45 25 91 25 136 0" fill="none" stroke="#8ED1FF" stroke-width="28" stroke-linecap="round"/>
+</svg>

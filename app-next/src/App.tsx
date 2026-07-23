@@ -741,6 +741,10 @@ export function App() {
   }, [lang]);
 
   useEffect(() => {
+    document.scrollingElement?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [active]);
+
+  useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ message: string; tone?: ToastTone }>).detail;
       if (detail?.message) setToast({ message: detail.message, tone: detail.tone ?? "info" });
@@ -873,7 +877,7 @@ export function App() {
               onClick={() => void syncAndRefreshAll()}
               type="button"
             >
-              <Icon name="refresh" />
+              <Icon className={loading || Boolean(operation) ? "icon-spin" : ""} name="refresh" />
               <span>
                 {runtimeAvailable
                   ? operation
@@ -1358,7 +1362,7 @@ function Dashboard({
         )}
         <div aria-hidden={atlasMode && !atlasIntroVisible} className="dashboard-hero-inner">
           <div className="atlas-hero-copy">
-            <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · {atlasMode ? "3.0 / LIVING ATLAS" : "2.0"}</span>
+            <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · {atlasMode ? "3.0 / LIVING ATLAS" : "3.0 / CLASSIC"}</span>
             <h2>{atlasMode ? t("atlas.heroTitle") : t("dash.title")}</h2>
             <p>{atlasMode ? t("atlas.heroSubtitle", { skills: summary.skills, sources: summary.sources }) : t("dash.subtitle")}</p>
             {atlasMode && (
@@ -1368,7 +1372,7 @@ function Dashboard({
           {!atlasMode && (
             <div className="hero-actions">
               <button className="secondary-action" disabled={loading} onClick={onSync} type="button">
-                <Icon name="refresh" /> {loading ? t("dash.syncing") : t("dash.sync")}
+                <Icon className={loading ? "icon-spin" : ""} name="refresh" /> {loading ? t("dash.syncing") : t("dash.sync")}
               </button>
               <button className="primary-action" onClick={onOpenLibrary} type="button">
                 <Icon name="add" /> {t("dash.addSource")}
@@ -1414,7 +1418,7 @@ function Dashboard({
         {atlasMode && (
           <div className="atlas-touchbar-actions">
             <button disabled={loading} onClick={onSync} title={t("dash.sync")} type="button">
-              <Icon name="refresh" />
+              <Icon className={loading ? "icon-spin" : ""} name="refresh" />
               <span>{loading ? t("dash.syncing") : t("dash.sync")}</span>
             </button>
             <button onClick={onOpenLibrary} title={t("dash.addSource")} type="button">
@@ -1833,7 +1837,7 @@ function UsageInsightPanel({
             onChange={value => setViewMode(value as UsageViewMode)}
           />
           <button className="ghost-action" disabled={loading} onClick={onRefreshPopularity} type="button">
-            <Icon name="refresh" /> {loading ? t("usage.refreshing") : t("usage.refresh")}
+            <Icon className={loading ? "icon-spin" : ""} name="refresh" /> {loading ? t("usage.refreshing") : t("usage.refresh")}
           </button>
         </div>
       </header>
@@ -3695,7 +3699,7 @@ function Agents({
             <span>{t("agents.enabled", { n: adapters.filter(adapter => adapter.enabled).length })}</span>
           </div>
           <button className="secondary-action" disabled={disabled} onClick={onRefreshAgents} type="button">
-            <Icon name="refresh" /> {disabled ? t("agents.detecting") : t("agents.detectNow")}
+            <Icon className={disabled ? "icon-spin" : ""} name="refresh" /> {disabled ? t("agents.detecting") : t("agents.detectNow")}
           </button>
         </div>
       </section>

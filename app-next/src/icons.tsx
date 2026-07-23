@@ -63,7 +63,7 @@ export function Icon({ className = "", name }: { className?: string; name: IconN
     case "more":
       return <svg {...props}><circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="19" r="1" /></svg>;
     case "refresh":
-      return <svg {...props}><path d="M20 6v5h-5" /><path d="M4 18v-5h5" /><path d="M18 11a6 6 0 0 0-10-4.5L4 10" /><path d="M6 13a6 6 0 0 0 10 4.5L20 14" /></svg>;
+      return <svg {...props}><path d="M21 12a9 9 0 0 1-15 6.7L3 16" /><path d="M3 21v-5h5" /><path d="M3 12A9 9 0 0 1 18 5.3L21 8" /><path d="M21 3v5h-5" /></svg>;
     case "search":
       return <svg {...props}><circle cx="11" cy="11" r="7" /><path d="m16.5 16.5 3.5 3.5" /></svg>;
     case "settings":

@@ -2,6 +2,55 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.0.0 - Living Atlas
+
+### Added
+
+- Added the Living Atlas homepage: a real-data Skill relationship globe with
+  source, parent Skill, and child Skill nodes; drag, wheel zoom, hover details,
+  double-click navigation, and relation/parent/type clustering.
+- Mapped node size and density to real child-Skill counts, local ratings,
+  GitHub popularity, source relationships, and semantic Skill categories.
+- Added two Atlas themes, while preserving the original Classic dark and light
+  interfaces as switchable fallbacks.
+- Added a compact fixed liquid-glass Touch Bar and an animated introduction
+  toggle. Hiding the introduction recenters the data globe.
+- Added independent four-level text and functional-icon scaling in Settings.
+- Added multi-resolution Windows icons so the title bar and taskbar remain
+  sharp across common display scales.
+
+### Changed
+
+- Standardized product terminology on parent/child Skills.
+- Reworked operational pages around a consistent content axis, radius grammar,
+  higher-contrast dark/light tokens, larger navigation icons, and clearer
+  hierarchy.
+- Replaced the sync/refresh symbol with a continuous symmetric circular icon
+  and a reduced-motion-aware loading rotation.
+- Restricted high-motion particles and spatial effects to the showcase
+  homepage; library, routing, settings, and safety pages favor readability.
+
+### Fixed
+
+- Kept the dashboard and Touch Bar fully visible at the default and minimum
+  supported window sizes. Mouse-wheel input over either the globe or Touch Bar
+  zooms the visualization instead of scrolling the page.
+- Improved graph frame pacing, wheel smoothing, stable category/source colors,
+  and visual depth in both Atlas dark and Atlas light modes.
+- Restored rounded cards on Workspaces, Presets, and AI Tools after an earlier
+  Atlas rule forced them to square corners.
+- Reset document scroll position when changing pages so a newly opened page
+  always starts at its header.
+
+### Validation
+
+- React/TypeScript production build passed.
+- Rust formatting, 59 backend tests, and Clippy with warnings denied passed.
+- Production Tauri executable passed real desktop QA in Atlas dark/light and
+  Classic fallback themes, at default and minimum window sizes.
+- The final release package is required to pass an isolated fresh-recipient
+  import, sync, launch, SQLite ownership, and zero-orphan-router simulation.
+
 ## 2.0.4 - Portable source index and personal ratings
 
 ### Added

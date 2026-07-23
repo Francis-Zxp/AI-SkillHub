@@ -1664,7 +1664,7 @@ fn promote_staged_source_import(
         match sync_local_sources_to_agents(&root, &connection) {
             Ok(()) => {
                 promotion.summary = format!(
-                    "{} 已刷新共享 Skills、母/子 Skill 路由和 Agent 托管链接。",
+                    "{} 已刷新共享 Skills、父/子 Skill 路由和 Agent 托管链接。",
                     promotion.summary
                 );
                 promotion.real_write_scope =
@@ -1675,7 +1675,7 @@ fn promote_staged_source_import(
                         && !check.contains("AI 工具链接")
                 });
                 promotion.blocking_checks.push(
-                    "已执行本地扫描同步：共享 Skills、母子路由、Claude/Codex/Antigravity 链接已刷新。"
+                    "已执行本地扫描同步：共享 Skills、父子路由、Claude/Codex/Antigravity 链接已刷新。"
                         .to_string(),
                 );
             }
@@ -4933,7 +4933,7 @@ fn validate_managed_source_delete_path(
     source: &SourceCard,
 ) -> Result<PathBuf, String> {
     if source.name.eq_ignore_ascii_case(ROUTER_HUB_FOLDER) {
-        return Err("不能删除 AI SkillHub 本地母 Skill 路由仓库；它会由同步自动维护。".to_string());
+        return Err("不能删除 AI SkillHub 本地父 Skill 路由仓库；它会由同步自动维护。".to_string());
     }
     if source.local_path.trim().is_empty() {
         return Err("该来源没有本地路径，无法执行删除。".to_string());
@@ -5608,7 +5608,7 @@ fn promote_staged_source_import_in_connection(
         promotion.blocking_checks = vec![
             "目标来源目录已存在；本次按“已添加过”处理。".to_string(),
             "没有覆盖、合并或删除任何正式来源文件。".to_string(),
-            "安装动作会刷新共享 Skills、母子路由和 Agent 链接。".to_string(),
+            "安装动作会刷新共享 Skills、父子路由和 Agent 链接。".to_string(),
         ];
         promotion.rollback_steps = vec![
             "本次没有执行新写入；通常无需回滚。".to_string(),
@@ -5632,7 +5632,7 @@ fn promote_staged_source_import_in_connection(
     promotion.status = "promoted".to_string();
     promotion.risk_level = if preserve_git { "medium" } else { "low" }.to_string();
     promotion.summary = format!(
-        "已提升为受管理来源：{} file(s), {} Skill folder(s), {} Prompt-like Markdown file(s)。正在刷新共享 Skills、母子路由和 Agent 链接。",
+        "已提升为受管理来源：{} file(s), {} Skill folder(s), {} Prompt-like Markdown file(s)。正在刷新共享 Skills、父子路由和 Agent 链接。",
         copied_files, skill_count, prompt_count
     );
     promotion.copied_files = copied_files;

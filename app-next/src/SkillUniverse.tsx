@@ -1,7 +1,6 @@
 import {
   type CSSProperties,
   type PointerEvent,
-  type WheelEvent,
   useEffect,
   useMemo,
   useRef,
@@ -215,6 +214,25 @@ export function SkillUniverse({
     };
   }, [lightTheme, model]);
 
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const wheelSurface = canvas?.closest<HTMLElement>(".dashboard-view");
+    if (!wheelSurface) return;
+
+    const onWheel = (event: globalThis.WheelEvent) => {
+      const runtime = runtimeRef.current;
+      if (!runtime) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const deltaScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
+      runtime.targetZoom = clamp(runtime.targetZoom * Math.exp(-event.deltaY * deltaScale * 0.001), 0.72, 1.5);
+      runtime.interactionUntil = performance.now() + 240;
+    };
+
+    wheelSurface.addEventListener("wheel", onWheel, { passive: false });
+    return () => wheelSurface.removeEventListener("wheel", onWheel);
+  }, []);
+
   const updateHover = (node: ProjectedNode | null) => {
     const nextId = node?.id ?? "";
     if (nextId === hoverRef.current) return;
@@ -294,15 +312,6 @@ export function SkillUniverse({
     }
   };
 
-  const zoomGraph = (event: WheelEvent<HTMLCanvasElement>) => {
-    const runtime = runtimeRef.current;
-    if (!runtime) return;
-    event.preventDefault();
-    const deltaScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
-    runtime.targetZoom = clamp(runtime.targetZoom * Math.exp(-event.deltaY * deltaScale * 0.001), 0.72, 1.5);
-    runtime.interactionUntil = performance.now() + 240;
-  };
-
   const openNode = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     const runtime = runtimeRef.current;
@@ -324,7 +333,6 @@ export function SkillUniverse({
         onPointerLeave={leaveGraph}
         onPointerMove={movePointer}
         onPointerUp={endDrag}
-        onWheel={zoomGraph}
         ref={canvasRef}
         role="img"
       />
