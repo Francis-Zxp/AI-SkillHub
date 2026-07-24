@@ -31,6 +31,50 @@ function Assert-PathInside([string]$Path, [string]$Root, [string]$Label) {
   }
 }
 
+function Get-ReleaseRustFlags {
+  $flags = New-Object System.Collections.Generic.List[string]
+  $existing = [Environment]::GetEnvironmentVariable('CARGO_ENCODED_RUSTFLAGS', 'Process')
+  if (-not [string]::IsNullOrWhiteSpace($existing)) {
+    foreach ($flag in ($existing -split [char]0x1f)) {
+      if (-not [string]::IsNullOrWhiteSpace($flag)) { $flags.Add($flag) }
+    }
+  }
+
+  $remaps = [ordered]@{}
+  foreach ($entry in @(
+    [PSCustomObject]@{ Path = $ProjectRoot; Target = '/workspace' },
+    [PSCustomObject]@{ Path = $env:USERPROFILE; Target = '/user' },
+    [PSCustomObject]@{ Path = $env:CARGO_HOME; Target = '/cargo-home' },
+    [PSCustomObject]@{ Path = $env:RUSTUP_HOME; Target = '/rustup-home' }
+  )) {
+    if ([string]::IsNullOrWhiteSpace([string]$entry.Path)) { continue }
+    $full = [System.IO.Path]::GetFullPath([string]$entry.Path).TrimEnd('\', '/')
+    foreach ($source in @($full, $full.Replace('\', '/'))) {
+      if (-not $remaps.Contains($source)) { $remaps[$source] = [string]$entry.Target }
+    }
+  }
+  foreach ($source in $remaps.Keys) {
+    $flags.Add("--remap-path-prefix=$source=$($remaps[$source])")
+  }
+  return $flags.ToArray()
+}
+
+function Assert-BinaryOmitsLocalPaths([string]$BinaryPath, [string[]]$Paths) {
+  $bytes = [System.IO.File]::ReadAllBytes($BinaryPath)
+  $latin1 = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)
+  $utf16 = [System.Text.Encoding]::Unicode.GetString($bytes)
+  foreach ($path in $Paths) {
+    if ([string]::IsNullOrWhiteSpace($path)) { continue }
+    $full = [System.IO.Path]::GetFullPath($path).TrimEnd('\', '/')
+    foreach ($candidate in @($full, $full.Replace('\', '/'))) {
+      if ($latin1.IndexOf($candidate, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+          $utf16.IndexOf($candidate, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        throw "The release executable contains a local build path that must be remapped: $candidate"
+      }
+    }
+  }
+}
+
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = Get-ConfiguredVersion }
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Release version must use x.y.z: $Version" }
 
@@ -63,12 +107,26 @@ try {
   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = $plainPassword
 
   if (-not $SkipBuild) {
-    Push-Location $AppRoot
+    $previousEncodedRustFlags = [Environment]::GetEnvironmentVariable('CARGO_ENCODED_RUSTFLAGS', 'Process')
+    $previousRustFlags = [Environment]::GetEnvironmentVariable('RUSTFLAGS', 'Process')
+    if (-not [string]::IsNullOrWhiteSpace($previousRustFlags)) {
+      throw 'Formal release builds require RUSTFLAGS to be unset; use CARGO_ENCODED_RUSTFLAGS for deterministic flags.'
+    }
     try {
-      & pnpm tauri build --bundles nsis
-      if ($LASTEXITCODE -ne 0) { throw 'The Tauri NSIS release build failed.' }
+      $env:CARGO_ENCODED_RUSTFLAGS = (Get-ReleaseRustFlags) -join [char]0x1f
+      Push-Location $AppRoot
+      try {
+        & pnpm tauri build --bundles nsis
+        if ($LASTEXITCODE -ne 0) { throw 'The Tauri NSIS release build failed.' }
+      } finally {
+        Pop-Location
+      }
     } finally {
-      Pop-Location
+      if ([string]::IsNullOrEmpty($previousEncodedRustFlags)) {
+        Remove-Item Env:\CARGO_ENCODED_RUSTFLAGS -ErrorAction SilentlyContinue
+      } else {
+        $env:CARGO_ENCODED_RUSTFLAGS = $previousEncodedRustFlags
+      }
     }
   }
 } finally {
@@ -85,6 +143,7 @@ try {
 $BuiltExe = Join-Path $TauriRoot 'target\release\ai-skillhub-next.exe'
 $builtVersion = ([string](Get-Item -LiteralPath $BuiltExe).VersionInfo.ProductVersion -split '[+-]')[0]
 if ($builtVersion -ne $Version) { throw "The built executable is $builtVersion; expected $Version." }
+Assert-BinaryOmitsLocalPaths $BuiltExe @($ProjectRoot, $env:USERPROFILE)
 
 $NsisRoot = Join-Path $TauriRoot 'target\release\bundle\nsis'
 $Installer = Get-ChildItem -LiteralPath $NsisRoot -Filter '*-setup.exe' -File |
@@ -109,7 +168,7 @@ $SignatureText = (Get-Content -LiteralPath $ReleaseSignature -Raw -Encoding UTF8
 $LatestJsonPath = Join-Path $ReleaseRoot 'latest.json'
 $LatestPayload = [ordered]@{
   version = $Version
-  notes = "AI SkillHub v${Version}: signed updates, preserved user data, Midnight Prism, and a refined live Skill map."
+  notes = "AI SkillHub v${Version}: Spectral Gravity atlas, automatic Skill metadata, verified source recovery, version governance, and preserved user data."
   pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
   platforms = [ordered]@{
     'windows-x86_64' = [ordered]@{

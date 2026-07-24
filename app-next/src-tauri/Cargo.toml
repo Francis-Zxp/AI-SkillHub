@@ -1,6 +1,6 @@
 [package]
 name = "ai-skillhub-next"
-version = "3.0.3"
+version = "3.0.4"
 description = "AI SkillHub desktop app"
 authors = ["FrancisZhu"]
 edition = "2021"
@@ -26,3 +26,8 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 minisign-verify = "0.2"
+
+[profile.release]
+debug = 0
+incremental = false
+strip = "symbols"

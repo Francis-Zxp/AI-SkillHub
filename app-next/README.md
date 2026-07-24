@@ -23,15 +23,32 @@ Older prototype app directories are no longer part of the product.
   skillhub.config.json        # local configuration
 ```
 
-The release package is replaceable program code. v3.0.3 adds a signed official
-updater and migrates the old
-portable folders into the stable user-data directory with a copy-only first-run
-operation, leaving the legacy copy untouched.
+The release package is replaceable program code. v3.0.3 established the signed
+official updater. v3.0.4 keeps that stable data boundary and adds a resumable,
+copy-first migration that validates each recovered source, backs up SQLite
+before selective metadata merge, and leaves the legacy copy untouched.
+
+v3.0.4 also adds:
+
+- offline metadata inference from bounded `README` / `SKILL.md` evidence;
+- per-file staging security reports;
+- Git source commit pinning, upstream diff summaries, and rollback from a
+  verified backup after preserving the current source tree;
+- an explainable four-evidence local quality score that keeps GitHub stars
+  separate;
+- a v4/SQLite-gated, allowlist-only legacy cleanup assistant that moves
+  confirmed data to recoverable backup and excludes `release`;
+- explainable Adapter Doctor cards;
+- the Spectral Gravity canvas visualization with adaptive LOD and static
+  fallbacks.
+
+Generated suggestions never replace manual metadata overrides, and imported
+source scripts are not executed during recognition.
 
 ## Development Commands
 
 ```powershell
-cd "D:\My Files\AI_global_skills\app-next"
+cd app-next
 pnpm install
 pnpm build
 cargo test --manifest-path src-tauri/Cargo.toml
@@ -55,7 +72,7 @@ pnpm dev:desktop
 The local root launcher is:
 
 ```text
-D:\My Files\AI_global_skills\AI SkillHub.exe
+AI SkillHub.exe
 ```
 
 The shareable release package should be produced through the release package

@@ -30,6 +30,8 @@ import {
 import type {
   AgentSkillStatusCard,
   DesktopQaCheckCard,
+  LegacyCleanupCandidateCard,
+  LegacyCleanupOperationCard,
   LegacySnapshot,
   LegacySummary,
   NavKey,
@@ -41,7 +43,9 @@ import type {
   SourceImportExecutionCard,
   SourceImportPlanCard,
   SourceImportPromotionCard,
+  SourceGovernanceCard,
   SourcePopularityCard,
+  SourceQualitySignalCard,
   WorkspaceCard
 } from "./types";
 
@@ -78,7 +82,7 @@ type QuickAddStatus = {
   title: string;
   tone: "info" | "ok" | "warn" | "error";
 };
-type ImportFeedbackOptions = { quiet?: boolean };
+type ImportFeedbackOptions = { quiet?: boolean; securityReviewConfirmed?: boolean };
 type OperationStatus = { title: string; detail: string; step: number; total: number; percent: number };
 type SourceSortKey = "recent" | "rating" | "usage" | "heat" | "skillCount" | "health" | "name";
 type ToastTone = "info" | "ok" | "warn" | "error";
@@ -498,6 +502,124 @@ export function App() {
     }
   }
 
+  async function setSourceVersionPin(source: SourceCard, pinned: boolean): Promise<boolean> {
+    if (!runtimeAvailable) {
+      setSnapshot(previous => {
+        const current = previous ?? createPreviewSnapshot();
+        return {
+          ...current,
+          sourceGovernance: current.sourceGovernance.map(item =>
+            item.sourceId === source.id
+              ? {
+                  ...item,
+                  pinned,
+                  pinnedRevision: pinned ? item.currentRevision : "",
+                  status: pinned ? "pinned" : "ready",
+                  message: pinned
+                    ? "Sync will keep this exact revision."
+                    : "Automatic source updates are enabled."
+                }
+              : item
+          )
+        };
+      });
+      toastMessage(pinned ? t("governance.toastPinned") : t("governance.toastUnpinned"), "ok");
+      return true;
+    }
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("set_source_version_pin", {
+        sourceId: source.id,
+        pinned
+      });
+      setSnapshot(result);
+      setLoadError("");
+      toastMessage(pinned ? t("governance.toastPinned") : t("governance.toastUnpinned"), "ok");
+      return true;
+    } catch (error) {
+      setLoadError(messageFromError(error));
+      toastMessage(t("governance.toastFailed"), "error");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshSourceVersionStatus(source: SourceCard): Promise<boolean> {
+    if (!runtimeAvailable) {
+      setSnapshot(previous => {
+        const current = previous ?? createPreviewSnapshot();
+        return {
+          ...current,
+          sourceGovernance: current.sourceGovernance.map(item =>
+            item.sourceId === source.id
+              ? { ...item, lastCheckedAt: new Date().toISOString(), diffSource: "live" }
+              : item
+          )
+        };
+      });
+      toastMessage(t("governance.toastRefreshed"), "ok");
+      return true;
+    }
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("refresh_source_version_status", {
+        sourceId: source.id
+      });
+      setSnapshot(result);
+      setLoadError("");
+      toastMessage(t("governance.toastRefreshed"), "ok");
+      return true;
+    } catch (error) {
+      setLoadError(messageFromError(error));
+      toastMessage(t("governance.toastFailed"), "error");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function rollbackSourceVersion(source: SourceCard): Promise<boolean> {
+    if (!runtimeAvailable) {
+      setSnapshot(previous => {
+        const current = previous ?? createPreviewSnapshot();
+        return {
+          ...current,
+          sourceGovernance: current.sourceGovernance.map(item =>
+            item.sourceId === source.id
+              ? {
+                  ...item,
+                  currentRevision: item.latestBackupRevision || item.currentRevision,
+                  pinnedRevision: item.latestBackupRevision || item.currentRevision,
+                  pinned: true,
+                  relation: "rolled-back",
+                  status: "pinned"
+                }
+              : item
+          )
+        };
+      });
+      toastMessage(t("governance.toastRolledBack"), "ok");
+      return true;
+    }
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("rollback_source_to_latest_backup", {
+        sourceId: source.id
+      });
+      setSnapshot(result);
+      setLoadError("");
+      toastMessage(t("governance.toastRolledBack"), "ok");
+      return true;
+    } catch (error) {
+      setLoadError(messageFromError(error));
+      toastMessage(t("governance.toastFailed"), "error");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function updateSourceMetadata(
     source: SourceCard,
     draft: SourceDraft
@@ -730,6 +852,33 @@ export function App() {
     }
   }
 
+  async function reanalyzeLibraryMetadata(): Promise<LegacySnapshot | null> {
+    if (!runtimeAvailable) {
+      toastMessage(t("metadata.previewToast"), "info");
+      return snapshot ?? createPreviewSnapshot();
+    }
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("reanalyze_library_metadata");
+      setSnapshot(result);
+      setLoadError("");
+      toastMessage(
+        t("metadata.doneToast", {
+          skills: result.skills.length,
+          sources: result.sources.length
+        }),
+        "ok"
+      );
+      return result;
+    } catch (error) {
+      setLoadError(messageFromError(error));
+      toastMessage(t("metadata.failedToast"), "error");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function syncAndRefreshAll(): Promise<LegacySnapshot | null> {
     if (operation) {
       toastMessage(t("toast.syncBusy"), "warn");
@@ -841,7 +990,8 @@ export function App() {
     const result = await invoke<SourceImportPromotionCard>("promote_staged_source_import", {
       importKind,
       stagedPath,
-      sourceName
+      sourceName,
+      securityReviewConfirmed: options.securityReviewConfirmed === true
     });
     if (!options.quiet) {
       toastMessage(result.status === "promoted" ? t("toast.promoted") : t("toast.promoteBlockedToast"), "info");
@@ -1118,6 +1268,7 @@ export function App() {
               onPreviewImport={previewSourceImportCandidate}
               onStageImport={stageSourceImportCandidate}
               onPromoteImport={promoteStagedSourceImport}
+              onReanalyzeMetadata={reanalyzeLibraryMetadata}
               onRefreshIndex={() => syncAndRefreshAll()}
               onRecordUsage={recordUsage}
               onSaveSkillMetadata={updateSkillMetadata}
@@ -1126,6 +1277,9 @@ export function App() {
               onSetSkillEnabled={updateSkillEnabled}
               onSetSkillRating={updateSkillRating}
               onSetSourceRating={updateSourceRating}
+              onSetSourceVersionPin={setSourceVersionPin}
+              onRefreshSourceVersion={refreshSourceVersionStatus}
+              onRollbackSourceVersion={rollbackSourceVersion}
               atlasMode={atlasMode}
               realWritesEnabled={realWritesEnabled}
               searchQuery={globalSearch}
@@ -2127,6 +2281,7 @@ type LibraryProps = {
     sourceName: string,
     eventType: string
   ) => Promise<void>;
+  onReanalyzeMetadata: () => Promise<LegacySnapshot | null>;
   onRefreshIndex: () => Promise<LegacySnapshot | null>;
   onSaveSkillMetadata: (skill: SkillCard, draft: SkillDraft) => Promise<"failed" | "preview" | "saved">;
   onSaveSourceMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
@@ -2138,6 +2293,9 @@ type LibraryProps = {
   onSetSkillEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
   onSetSkillRating: (skill: SkillCard, rating: number) => Promise<boolean>;
   onSetSourceRating: (source: SourceCard, rating: number) => Promise<boolean>;
+  onSetSourceVersionPin: (source: SourceCard, pinned: boolean) => Promise<boolean>;
+  onRefreshSourceVersion: (source: SourceCard) => Promise<boolean>;
+  onRollbackSourceVersion: (source: SourceCard) => Promise<boolean>;
   onStageImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
   realWritesEnabled: boolean;
   searchQuery: string;
@@ -2152,6 +2310,7 @@ function Library(props: LibraryProps) {
     onPreviewImport,
     onPromoteImport,
     onRecordUsage,
+    onReanalyzeMetadata,
     onRefreshIndex,
     onSaveSkillMetadata,
     onSaveSourceMetadata,
@@ -2159,6 +2318,9 @@ function Library(props: LibraryProps) {
     onSetSkillEnabled,
     onSetSkillRating,
     onSetSourceRating,
+    onSetSourceVersionPin,
+    onRefreshSourceVersion,
+    onRollbackSourceVersion,
     onStageImport,
     realWritesEnabled,
     searchQuery,
@@ -2199,6 +2361,14 @@ function Library(props: LibraryProps) {
   const popularityById = useMemo(
     () => new Map((snapshot?.sourcePopularity ?? []).map(item => [item.sourceId, item])),
     [snapshot?.sourcePopularity]
+  );
+  const governanceById = useMemo(
+    () => new Map((snapshot?.sourceGovernance ?? []).map(item => [item.sourceId, item])),
+    [snapshot?.sourceGovernance]
+  );
+  const qualityById = useMemo(
+    () => new Map((snapshot?.sourceQualitySignals ?? []).map(item => [item.sourceId, item])),
+    [snapshot?.sourceQualitySignals]
   );
   const agentStatusesBySkill = useMemo(() => {
     const groups = new Map<string, AgentSkillStatusCard[]>();
@@ -2325,6 +2495,16 @@ function Library(props: LibraryProps) {
         </div>
         <div className="library-toolbar-right">
           <button
+            className="ghost-action metadata-reanalyze-action"
+            disabled={loading}
+            onClick={() => void onReanalyzeMetadata()}
+            title={t("metadata.reanalyzeTip")}
+            type="button"
+          >
+            <Icon className={loading ? "icon-spin" : ""} name="sparkle" />
+            {t("metadata.reanalyze")}
+          </button>
+          <button
             className={showMaintenance ? "ghost-action active" : "ghost-action"}
             onClick={() => setShowMaintenance(value => !value)}
             type="button"
@@ -2417,6 +2597,8 @@ function Library(props: LibraryProps) {
           const childSkills = singleRootSkill ? sourceSkills : sourceSkills.filter(skill => !isRouterHubSkill(skill));
           const parentSkill = sourceParentSkill(source, sourceSkills);
           const popularity = popularityById.get(source.id);
+          const governance = governanceById.get(source.id);
+          const quality = qualityById.get(source.id);
           const ratingSummary = skillRatingSummary(sourceSkills.filter(skill => skill !== parentSkill));
           const matchesQuery = searchQuery.trim()
             ? sourceSkills.some(skill => skillMatchesSearch(skill, searchQuery))
@@ -2453,6 +2635,8 @@ function Library(props: LibraryProps) {
                 </button>
                 <div className="source-group-meta">
                   <PopularityChip popularity={popularity} source={source} />
+                  <SourceQualityChip quality={quality} />
+                  <SourceVersionChip governance={governance} />
                   {source.sourceType !== "prompt" && totalSkillCount > 0 && (
                     <div className="source-parent-rating">
                       <span>{t("rating.parent")}</span>
@@ -2495,6 +2679,23 @@ function Library(props: LibraryProps) {
                 </div>
               </header>
               {source.note && <p className="source-note">{t("lib.note")}：{source.note}</p>}
+              {source.usageGuide && !source.note.includes(source.usageGuide) && (
+                <p className="source-usage-guide">
+                  <strong>{t("metadata.usage")}：</strong>
+                  {source.usageGuide}
+                  {typeof source.metadataConfidence === "number" && source.metadataConfidence > 0 && (
+                    <span
+                      className="metadata-evidence"
+                      title={t("metadata.evidenceTip", {
+                        origin: source.metadataOrigin || "offline",
+                        value: Math.round(source.metadataConfidence * 100)
+                      })}
+                    >
+                      {t("metadata.auto")} {Math.round(source.metadataConfidence * 100)}%
+                    </span>
+                  )}
+                </p>
+              )}
               {isExpanded && (
                 <div className="source-children">
                   {parentSkills.length > 0 && (
@@ -2621,8 +2822,26 @@ function Library(props: LibraryProps) {
           onClose={() => setEditingSourceId("")}
           onDelete={() => void deleteSourceFromPanel(editingSource)}
           onOpenChildren={() => expandSource(editingSource.id)}
+          onRefreshVersion={() => void onRefreshSourceVersion(editingSource)}
+          onRollbackVersion={() => {
+            const governance = governanceById.get(editingSource.id);
+            const revision = shortRevision(governance?.latestBackupRevision);
+            if (
+              window.confirm(
+                t("governance.confirmRollback", {
+                  name: editingSource.name,
+                  revision: revision || t("governance.unknownRevision")
+                })
+              )
+            ) {
+              void onRollbackSourceVersion(editingSource);
+            }
+          }}
           onSave={draft => void saveSourceDraft(editingSource, draft)}
+          onSetPinned={pinned => void onSetSourceVersionPin(editingSource, pinned)}
+          governance={governanceById.get(editingSource.id)}
           popularity={popularityById.get(editingSource.id)}
+          quality={qualityById.get(editingSource.id)}
           source={editingSource}
           sourceSkills={skills.filter(skill => skillBelongsToSource(skill, editingSource))}
         />
@@ -2687,6 +2906,11 @@ function SkillRow({
           ))}
         </div>
         {skill.note && <small className="skill-row-note">{t("lib.note")}：{skill.note}</small>}
+        {skill.usageGuide && !skill.note.includes(skill.usageGuide) && (
+          <small className="skill-row-usage">
+            <strong>{t("metadata.usage")}：</strong>{skill.usageGuide}
+          </small>
+        )}
       </div>
       <div className="skill-row-actions">
         <SkillRating disabled={loading} onChange={onRate} rating={skill.rating ?? 0} skillName={skill.name} />
@@ -2771,6 +2995,43 @@ function PopularityChip({
   );
 }
 
+function SourceQualityChip({ quality }: { quality?: SourceQualitySignalCard }) {
+  if (!quality) return null;
+  const score = quality.score;
+  return (
+    <span
+      className={`source-quality-chip tone-${quality.status}`}
+      title={t("quality.chipTip", {
+        evidence: quality.evidenceCount,
+        total: quality.evidenceTotal
+      })}
+    >
+      <Icon name="shield" />
+      {score == null ? t("quality.pending") : t("quality.scoreShort", { n: score })}
+    </span>
+  );
+}
+
+function SourceVersionChip({ governance }: { governance?: SourceGovernanceCard }) {
+  if (!governance || governance.supportStatus !== "git") return null;
+  const label = governance.pinned
+    ? t("governance.pinnedShort")
+    : governance.relation === "update-available"
+      ? t("governance.behindShort", { n: governance.behindCount })
+      : governance.relation === "up-to-date"
+        ? t("governance.currentShort")
+        : t("governance.versionShort");
+  return (
+    <span
+      className={`source-version-chip relation-${governance.pinned ? "pinned" : governance.relation}`}
+      title={governance.message || t("governance.versionTip")}
+    >
+      <Icon name={governance.pinned ? "shield" : "refresh"} />
+      {label}
+    </span>
+  );
+}
+
 function SkillEditPanel({
   draft,
   onClose,
@@ -2843,20 +3104,30 @@ function SkillEditPanel({
 
 function SourceEditPanel({
   draft,
+  governance,
   onClose,
   onDelete,
   onOpenChildren,
+  onRefreshVersion,
+  onRollbackVersion,
   onSave,
+  onSetPinned,
   popularity,
+  quality,
   source,
   sourceSkills
 }: {
   draft?: SourceDraft;
+  governance?: SourceGovernanceCard;
   onClose: () => void;
   onDelete: () => void;
   onOpenChildren: () => void;
+  onRefreshVersion: () => void;
+  onRollbackVersion: () => void;
   onSave: (draft: SourceDraft) => void;
+  onSetPinned: (pinned: boolean) => void;
   popularity?: SourcePopularityCard;
+  quality?: SourceQualitySignalCard;
   source: SourceCard;
   sourceSkills: SkillCard[];
 }) {
@@ -2902,6 +3173,115 @@ function SourceEditPanel({
           <small>{t("srcEditor.calls")}</small>
         </span>
       </div>
+      <section className="source-quality-panel" aria-label={t("quality.title")}>
+        <header>
+          <div>
+            <span>{t("quality.eyebrow")}</span>
+            <strong>
+              {quality?.score == null
+                ? t("quality.noScore")
+                : t("quality.score", { n: quality.score })}
+            </strong>
+          </div>
+          <em>
+            {t("quality.evidence", {
+              n: quality?.evidenceCount ?? 0,
+              total: quality?.evidenceTotal ?? 4
+            })}
+          </em>
+        </header>
+        <p>{t("quality.explainer")}</p>
+        <div className="source-quality-factors">
+          {(quality?.factors ?? []).map(factor => (
+            <span
+              className={factor.status === "available" ? "available" : "missing"}
+              key={factor.key}
+              title={factor.detail}
+            >
+              <b>{qualityFactorLabel(factor.key, factor.label)}</b>
+              <small>
+                {factor.score == null
+                  ? t("quality.excluded")
+                  : t("quality.factorScore", { n: factor.score, weight: factor.weight })}
+              </small>
+            </span>
+          ))}
+        </div>
+      </section>
+      <section className="source-governance-panel" aria-label={t("governance.title")}>
+        <header>
+          <div>
+            <span>{t("governance.eyebrow")}</span>
+            <strong>
+              {governance?.supportStatus === "git"
+                ? governance.pinned
+                  ? t("governance.pinned")
+                  : t("governance.autoUpdate")
+                : t("governance.localOnly")}
+            </strong>
+          </div>
+          {governance?.diffSource === "cached" && <em>{t("governance.cached")}</em>}
+        </header>
+        {governance?.supportStatus === "git" ? (
+          <>
+            <dl className="source-governance-revisions">
+              <div>
+                <dt>{t("governance.current")}</dt>
+                <dd>{shortRevision(governance.currentRevision) || "—"}</dd>
+              </div>
+              <div>
+                <dt>{t("governance.upstream")}</dt>
+                <dd>{shortRevision(governance.remoteRevision) || "—"}</dd>
+              </div>
+              <div>
+                <dt>{t("governance.diff")}</dt>
+                <dd>
+                  {t("governance.diffValue", {
+                    files: governance.changedFiles,
+                    additions: governance.additions,
+                    deletions: governance.deletions
+                  })}
+                </dd>
+              </div>
+              <div>
+                <dt>{t("governance.backups")}</dt>
+                <dd>{governance.backupCount}</dd>
+              </div>
+            </dl>
+            {governance.remoteSummary && <p>{governance.remoteSummary}</p>}
+            <div className="source-governance-actions">
+              <button className="ghost-action small" onClick={onRefreshVersion} type="button">
+                <Icon name="refresh" /> {t("governance.refresh")}
+              </button>
+              <button
+                className={governance.pinned ? "ghost-action small active" : "ghost-action small"}
+                onClick={() => onSetPinned(!governance.pinned)}
+                type="button"
+              >
+                <Icon name="shield" />
+                {governance.pinned ? t("governance.unpin") : t("governance.pin")}
+              </button>
+              <button
+                className="ghost-action small"
+                disabled={!governance.canRollback}
+                onClick={onRollbackVersion}
+                title={
+                  governance.canRollback
+                    ? t("governance.rollbackTip", {
+                        revision: shortRevision(governance.latestBackupRevision)
+                      })
+                    : t("governance.noRollback")
+                }
+                type="button"
+              >
+                <Icon name="snapshots" /> {t("governance.rollback")}
+              </button>
+            </div>
+          </>
+        ) : (
+          <p>{t("governance.localExplanation")}</p>
+        )}
+      </section>
       <div className="source-detail-skill-map">
         <div className="source-detail-section-title">
           <strong>{t("srcEditor.map")}</strong>
@@ -3372,53 +3752,63 @@ function ImportWizard({
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState<QuickAddStatus | null>(null);
+  const [securityReview, setSecurityReview] = useState<{
+    execution: SourceImportExecutionCard;
+    plan: SourceImportPlanCard;
+  } | null>(null);
 
   const inferredIds = inferCategoryIds(`${input} ${note} ${sourceType} ${importKind}`);
   const effectiveCategoryIds = selectedCategoryIds.length > 0 ? selectedCategoryIds : inferredIds;
 
-  async function quickAdd() {
-    const value = input.trim();
-    if (!value) {
-      showUiToast(t("qa.needInput"), "warn");
-      return;
-    }
-    setPending(true);
-    setStatus({ tone: "info", title: t("qa.statusChecking"), body: t("qa.statusCheckingBody") });
-    try {
-      const plan = await onPreview(importKind, value, { quiet: true });
-      if (!plan.safeToContinue) {
-        setStatus({
-          tone: "warn",
-          title: t("qa.statusBlockedTitle"),
-          body: plan.duplicateReason || plan.blockingChecks[0] || ""
-        });
-        showUiToast(t("qa.toastBlocked"), "warn");
-        return;
-      }
-      setStatus({ tone: "info", title: t("qa.statusJoining"), body: t("qa.statusJoiningBody") });
-      const execution = await onStage(plan.importKind, plan.input, { quiet: true });
-      if (execution.status !== "staged" && execution.status !== "warn") {
-        const detail = execution.blockingChecks
-          .filter(check => check.trim())
-          .slice(0, 2)
-          .join("；");
-        setStatus({
-          tone: "warn",
-          title: t("qa.statusNotWritten"),
-          body: `${execution.summary}${detail && detail !== execution.summary ? `\n${detail}` : ""}`
-        });
-        showUiToast(t("qa.toastStagingStop"), "warn");
-        return;
-      }
+  function requiresSecurityReview(status: string) {
+    return status === "review" || status === "warn";
+  }
+
+  async function promoteAndFinalize(
+    plan: SourceImportPlanCard,
+    execution: SourceImportExecutionCard,
+    securityReviewConfirmed: boolean
+  ): Promise<boolean> {
       setStatus({ tone: "info", title: t("qa.statusWriting"), body: t("qa.statusWritingBody") });
-      const promotion = await onPromote(execution.importKind, execution.stagedPath, plan.displayName, {
-        quiet: true
-      });
+      const promotion = await onPromote(
+        execution.importKind,
+        execution.stagedPath,
+        plan.displayName,
+        { quiet: true, securityReviewConfirmed }
+      );
+      if (
+        promotion.status === "blocked" &&
+        requiresSecurityReview(promotion.securityStatus) &&
+        !securityReviewConfirmed
+      ) {
+        setSecurityReview({
+          plan,
+          execution: {
+            ...execution,
+            securityStatus: promotion.securityStatus,
+            securityScannedFiles: promotion.securityScannedFiles,
+            securityFindings: promotion.securityFindings,
+            summary: promotion.summary
+          }
+        });
+        setStatus({
+          tone: "warn",
+          title: t("qa.securityReviewTitle"),
+          body: t("qa.securityReviewBody", {
+            files: promotion.securityScannedFiles,
+            findings: promotion.securityFindings.length
+          })
+        });
+        showUiToast(t("qa.securityReviewToast"), "warn");
+        return false;
+      }
       if (promotion.status !== "promoted" && promotion.status !== "already-managed") {
+        setSecurityReview(null);
         setStatus({ tone: "warn", title: t("qa.statusNotWritten"), body: promotion.summary });
         showUiToast(t("qa.toastPromoteStop"), "warn");
-        return;
+        return false;
       }
+      setSecurityReview(null);
       setStatus({ tone: "info", title: t("qa.statusRefreshing"), body: t("qa.statusRefreshingBody") });
       const refreshed = await onRefreshIndex();
       const promotedSource = refreshed?.sources.find(
@@ -3455,6 +3845,72 @@ function ImportWizard({
             : t("qa.statusAddedSynced")
       });
       showUiToast(t("qa.toastSynced"), "ok");
+      return true;
+  }
+
+  async function quickAdd() {
+    const value = input.trim();
+    if (!value) {
+      showUiToast(t("qa.needInput"), "warn");
+      return;
+    }
+    setPending(true);
+    setSecurityReview(null);
+    setStatus({ tone: "info", title: t("qa.statusChecking"), body: t("qa.statusCheckingBody") });
+    try {
+      const plan = await onPreview(importKind, value, { quiet: true });
+      if (!plan.safeToContinue) {
+        setStatus({
+          tone: "warn",
+          title: t("qa.statusBlockedTitle"),
+          body: plan.duplicateReason || plan.blockingChecks[0] || ""
+        });
+        showUiToast(t("qa.toastBlocked"), "warn");
+        return;
+      }
+      setStatus({ tone: "info", title: t("qa.statusJoining"), body: t("qa.statusJoiningBody") });
+      const execution = await onStage(plan.importKind, plan.input, { quiet: true });
+      if (execution.status !== "staged" && execution.status !== "warn") {
+        const detail = execution.blockingChecks
+          .filter(check => check.trim())
+          .slice(0, 2)
+          .join("；");
+        setStatus({
+          tone: "warn",
+          title: t("qa.statusNotWritten"),
+          body: `${execution.summary}${detail && detail !== execution.summary ? `\n${detail}` : ""}`
+        });
+        showUiToast(t("qa.toastStagingStop"), "warn");
+        return;
+      }
+      if (requiresSecurityReview(execution.securityStatus)) {
+        setSecurityReview({ execution, plan });
+        setStatus({
+          tone: "warn",
+          title: t("qa.securityReviewTitle"),
+          body: t("qa.securityReviewBody", {
+            files: execution.securityScannedFiles,
+            findings: execution.securityFindings.length
+          })
+        });
+        showUiToast(t("qa.securityReviewToast"), "warn");
+        return;
+      }
+      await promoteAndFinalize(plan, execution, false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatus({ tone: "error", title: t("qa.statusFailed"), body: message });
+      showUiToast(t("qa.toastFailed"), "error");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function confirmSecurityReview() {
+    if (!securityReview) return;
+    setPending(true);
+    try {
+      await promoteAndFinalize(securityReview.plan, securityReview.execution, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       setStatus({ tone: "error", title: t("qa.statusFailed"), body: message });
@@ -3494,12 +3950,23 @@ function ImportWizard({
               { value: "local", label: t("qa.kindLocal") },
               { value: "zip", label: t("qa.kindZip") }
             ]}
-            onChange={setImportKind}
+            onChange={value => {
+              setImportKind(value);
+              setSecurityReview(null);
+            }}
           />
         </div>
         <label className="import-field grow">
           <span className="field-label">{t("qa.input")}</span>
-          <input disabled={isBusy} onChange={event => setInput(event.target.value)} placeholder={placeholder} value={input} />
+          <input
+            disabled={isBusy}
+            onChange={event => {
+              setInput(event.target.value);
+              setSecurityReview(null);
+            }}
+            placeholder={placeholder}
+            value={input}
+          />
         </label>
         <label className="import-field">
           <span className="field-label">{t("qa.type")}</span>
@@ -3579,6 +4046,81 @@ function ImportWizard({
           onClick={() => setEnabled(value => !value)}
         />
       </div>
+
+      {securityReview && (
+        <section className="import-security-review" role="alert" aria-live="assertive">
+          <header>
+            <span className="import-security-review-icon"><Icon name="shield" /></span>
+            <div>
+              <strong>{t("qa.securityReviewTitle")}</strong>
+              <p>
+                {t("qa.securityReviewBody", {
+                  files: securityReview.execution.securityScannedFiles,
+                  findings: securityReview.execution.securityFindings.length
+                })}
+              </p>
+            </div>
+            <span className="qa-status planned">{t("qa.securityReviewIsolated")}</span>
+          </header>
+          <ul className="import-security-findings">
+            {securityReview.execution.securityFindings.slice(0, 8).map(finding => (
+              <li key={finding.id}>
+                <span className={`security-severity severity-${finding.severity}`}>
+                  {finding.severity}
+                </span>
+                <div>
+                  <strong>
+                    {finding.relativePath}
+                    {finding.line > 0 ? `:${finding.line}` : ""}
+                  </strong>
+                  <span>{finding.summary}</span>
+                  {finding.evidence && <code>{finding.evidence}</code>}
+                </div>
+              </li>
+            ))}
+            {securityReview.execution.securityFindings.length === 0 && (
+              <li>
+                <div>
+                  <strong>{t("qa.securityReviewEvidenceFallback")}</strong>
+                  <span>{securityReview.execution.summary}</span>
+                </div>
+              </li>
+            )}
+          </ul>
+          {securityReview.execution.securityFindings.length > 8 && (
+            <small>
+              {t("qa.securityReviewMore", {
+                n: securityReview.execution.securityFindings.length - 8
+              })}
+            </small>
+          )}
+          <div className="import-security-actions">
+            <button
+              className="ghost-action"
+              disabled={isBusy}
+              onClick={() => {
+                setSecurityReview(null);
+                setStatus({
+                  tone: "info",
+                  title: t("qa.securityReviewDeferredTitle"),
+                  body: t("qa.securityReviewDeferredBody")
+                });
+              }}
+              type="button"
+            >
+              {t("qa.securityReviewCancel")}
+            </button>
+            <button
+              className="primary-action"
+              disabled={isBusy}
+              onClick={() => void confirmSecurityReview()}
+              type="button"
+            >
+              <Icon name="shield" /> {t("qa.securityReviewConfirm")}
+            </button>
+          </div>
+        </section>
+      )}
 
       <div className="import-actions">
         <button className="primary-action large" disabled={isBusy} onClick={() => void quickAdd()} type="button">
@@ -3853,6 +4395,7 @@ function Agents({
   snapshot: LegacySnapshot | null;
 }) {
   const adapters = snapshot?.agentAdapters ?? [];
+  const doctors = snapshot?.agentDoctors ?? [];
   const capabilities = snapshot?.adapterCapabilities ?? [];
   const safetyChecks = snapshot?.adapterSafetyChecks ?? [];
   return (
@@ -3886,7 +4429,9 @@ function Agents({
       </section>
 
       <div className="adapter-grid">
-        {adapters.map(adapter => (
+        {adapters.map(adapter => {
+          const doctor = doctors.find(item => item.adapterId === adapter.id);
+          return (
           <article className="adapter-card glow-card" key={adapter.id}>
             <header>
               <strong>{adapter.name}</strong>
@@ -3894,6 +4439,36 @@ function Agents({
             </header>
             <p>{adapter.skillsPathHint || t("agents.noPath")}</p>
             {adapter.id === "claude" && <p className="adapter-note">{t("agents.claudeSkillsNote")}</p>}
+            {doctor && (
+              <div className={`adapter-doctor verdict-${doctor.verdict}`}>
+                <header>
+                  <strong>{t("doctor.title")}</strong>
+                  <span className="doctor-verdict">{doctorVerdictLabel(doctor.verdict)}</span>
+                </header>
+                <p>{doctor.summary}</p>
+                <dl>
+                  <div><dt>{t("doctor.desktop")}</dt><dd className={`doctor-state state-${doctor.desktopStatus}`}>{doctorStatusLabel(doctor.desktopStatus)}</dd></div>
+                  <div><dt>{t("doctor.cli")}</dt><dd className={`doctor-state state-${doctor.cliStatus}`}>{doctorStatusLabel(doctor.cliStatus)}</dd></div>
+                  <div><dt>{t("doctor.skills")}</dt><dd className={`doctor-state state-${doctor.skillsStatus}`}>{doctorStatusLabel(doctor.skillsStatus)}</dd></div>
+                </dl>
+                {(doctor.evidence.length > 0 || doctor.nextSteps.length > 0) && (
+                  <details>
+                    <summary>{t("doctor.evidence")}</summary>
+                    <ul>
+                      {doctor.evidence.slice(0, 6).map((item, index) => (
+                        <li className={`doctor-evidence status-${item.status}`} key={`${item.probeKind}-${item.label}-${index}`}>
+                          <strong>{item.label}</strong>
+                          <span>{item.detail}{item.path ? ` · ${item.path}` : ""}</span>
+                        </li>
+                      ))}
+                      {doctor.nextSteps.map((step, index) => (
+                        <li className="doctor-next-step" key={`next-${index}`}>{step}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            )}
             <ul className="capabilities">
               {capabilities
                 .filter(capability => capability.adapterId === adapter.id)
@@ -3923,7 +4498,8 @@ function Agents({
               />
             </footer>
           </article>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -4072,10 +4648,54 @@ function Settings({
 }) {
   const updateBusy = appUpdate.phase === "checking" || appUpdate.phase === "downloading" || appUpdate.phase === "installing";
   const updateAvailable = appUpdate.phase === "available";
+  const [cleanupCandidates, setCleanupCandidates] = useState<LegacyCleanupCandidateCard[]>([]);
+  const [cleanupBusyId, setCleanupBusyId] = useState("");
   const updateStatus = t(`update.status.${appUpdate.phase}`, {
     progress: appUpdate.progress,
     version: appUpdate.version || APP_VERSION
   });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!hasTauriRuntime()) return () => { cancelled = true; };
+    void invoke<LegacyCleanupCandidateCard[]>("preview_legacy_cleanup_candidates")
+      .then(candidates => {
+        if (!cancelled) setCleanupCandidates(candidates);
+      })
+      .catch(() => {
+        if (!cancelled) setCleanupCandidates([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function cleanupLegacyCandidate(candidate: LegacyCleanupCandidateCard) {
+    const confirmed = window.confirm(
+      t("set.cleanupConfirm", {
+        name: legacyCleanupName(candidate),
+        path: candidate.path,
+        size: formatFileSize(candidate.totalBytes)
+      })
+    );
+    if (!confirmed) return;
+    setCleanupBusyId(candidate.id);
+    try {
+      const operation = await invoke<LegacyCleanupOperationCard>("cleanup_legacy_candidate", {
+        candidateId: candidate.id
+      });
+      setCleanupCandidates(current => current.filter(item => item.id !== candidate.id));
+      showUiToast(
+        t("set.cleanupDone", { path: operation.backupPath }),
+        "ok"
+      );
+    } catch (error) {
+      showUiToast(
+        t("set.cleanupFailed", { message: friendlyErrorMessage(messageFromError(error)) }),
+        "error"
+      );
+    } finally {
+      setCleanupBusyId("");
+    }
+  }
 
   return (
     <div className="view settings-view">
@@ -4129,6 +4749,49 @@ function Settings({
           </div>
         </div>
       </section>
+
+      {cleanupCandidates.length > 0 && (
+        <section className="panel glow-card legacy-cleanup-panel">
+          <header className="panel-head">
+            <div>
+              <span className="eyebrow">{t("set.cleanupEyebrow")}</span>
+              <h3>{t("set.cleanupTitle")}</h3>
+              <p>{t("set.cleanupBody")}</p>
+            </div>
+            <span className="legacy-cleanup-count">{cleanupCandidates.length}</span>
+          </header>
+          <div className="legacy-cleanup-list">
+            {cleanupCandidates.map(candidate => (
+              <article className="legacy-cleanup-card" key={candidate.id}>
+                <div className="legacy-cleanup-icon" aria-hidden="true">
+                  <Icon name="snapshots" />
+                </div>
+                <div className="legacy-cleanup-copy">
+                  <strong>{legacyCleanupName(candidate)}</strong>
+                  <p>{legacyCleanupReason(candidate)}</p>
+                  <code title={candidate.path}>{candidate.path}</code>
+                  <small>
+                    {t("set.cleanupInventory", {
+                      size: formatFileSize(candidate.totalBytes),
+                      files: candidate.fileCount,
+                      links: candidate.linkCount
+                    })}
+                  </small>
+                </div>
+                <button
+                  className="secondary-action legacy-cleanup-action"
+                  disabled={disabled || cleanupBusyId.length > 0}
+                  onClick={() => void cleanupLegacyCandidate(candidate)}
+                  type="button"
+                >
+                  <Icon className={cleanupBusyId === candidate.id ? "icon-spin" : ""} name={cleanupBusyId === candidate.id ? "refresh" : "snapshots"} />
+                  {cleanupBusyId === candidate.id ? t("set.cleanupMoving") : t("set.cleanupAction")}
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="panel glow-card">
         <header className="panel-head">
@@ -5253,6 +5916,21 @@ function adapterStatusLabel(status: string) {
   return t("agents.statusMissing");
 }
 
+function doctorVerdictLabel(verdict: string) {
+  if (verdict === "ready") return t("doctor.ready");
+  if (verdict === "code-detected") return t("doctor.codeDetected");
+  if (verdict === "desktop-only") return t("doctor.desktopOnly");
+  if (verdict === "path-refresh-needed") return t("doctor.pathRefresh");
+  if (verdict === "directory-residue") return t("doctor.directoryResidue");
+  return t("doctor.notDetected");
+}
+
+function doctorStatusLabel(status: string) {
+  const key = `doctor.status.${status}`;
+  const translated = t(key);
+  return translated === key ? status : translated;
+}
+
 function capabilityLabel(key: string) {
   if (key === "global-scope") return t("agents.capGlobal");
   if (key === "project-scope") return t("agents.capProject");
@@ -5370,6 +6048,41 @@ function formatCompactNumber(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}K`;
   return String(Math.max(0, Math.round(value)));
+}
+
+function shortRevision(value?: string) {
+  return (value ?? "").trim().slice(0, 8);
+}
+
+function qualityFactorLabel(key: string, fallback: string) {
+  const translationKey = `quality.factor.${key}`;
+  const translated = t(translationKey);
+  return translated === translationKey ? fallback : translated;
+}
+
+function formatFileSize(value: number) {
+  const bytes = Math.max(0, Number.isFinite(value) ? value : 0);
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let scaled = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && scaled >= 1024; index += 1) {
+    scaled /= 1024;
+    unit = units[index];
+  }
+  return `${scaled >= 100 ? scaled.toFixed(0) : scaled >= 10 ? scaled.toFixed(1) : scaled.toFixed(2)} ${unit}`;
+}
+
+function legacyCleanupName(candidate: LegacyCleanupCandidateCard) {
+  const key = `set.cleanupCandidate.${candidate.id}.name`;
+  const translated = t(key);
+  return translated === key ? candidate.name : translated;
+}
+
+function legacyCleanupReason(candidate: LegacyCleanupCandidateCard) {
+  const key = `set.cleanupCandidate.${candidate.id}.reason`;
+  const translated = t(key);
+  return translated === key ? candidate.reason : translated;
 }
 
 function countByStatus(items: Array<{ status: string }>, status: string) {

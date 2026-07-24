@@ -153,7 +153,10 @@ export function createPreviewSourceImportExecution(importKind: string, input: st
     blockingChecks: ["浏览器预览不执行本机文件写入。", "正式 app-next/data/github_sources 安装仍锁定。"],
     rollbackSteps: ["删除 staging 目录即可撤销。", "正式来源目录和 AI 工具目录保持不变。"],
     realWriteScope: "preview-only",
-    downloadMethod: importKind === "github" ? "preview-github" : "preview-local"
+    downloadMethod: importKind === "github" ? "preview-github" : "preview-local",
+    securityStatus: "passed",
+    securityScannedFiles: isLockedPackage ? 0 : 12,
+    securityFindings: []
   };
 }
 
@@ -184,7 +187,11 @@ export function createPreviewSourceImportPromotion(
     promptCount: 0,
     blockingChecks: ["浏览器预览不执行本机文件写入。", "AI 工具同步/接管仍锁定。"],
     rollbackSteps: ["删除受管理来源目录即可回滚。", "重新扫描本地 SQLite 索引。"],
-    realWriteScope: "preview-only"
+    realWriteScope: "preview-only",
+    securityStatus: "passed",
+    securityScannedFiles: 12,
+    securityFindings: [],
+    securityReviewConfirmed: false
   };
 }
 
@@ -510,6 +517,83 @@ export function createPreviewSnapshot(): LegacySnapshot {
         enabled: false
       }
     ],
+    agentDoctors: [
+      {
+        adapterId: "claude",
+        adapterName: "Claude Desktop / Claude Code",
+        detectionKind: "directory",
+        pathHint: "~\\.claude\\skills",
+        verdict: "ready",
+        summary: "Claude Code 与 Skills 目录均已确认，可进入接管前检查。",
+        desktopStatus: "installed",
+        cliStatus: "on-path",
+        skillsStatus: "ready",
+        evidence: [
+          {
+            probeKind: "command",
+            label: "claude",
+            status: "ok",
+            detail: "命令已在当前进程 PATH 中解析。",
+            path: "~\\AppData\\Roaming\\npm\\claude.cmd"
+          },
+          {
+            probeKind: "path",
+            label: "skills-directory",
+            status: "ok",
+            detail: "Skills 目录存在、可写，且包含 SKILL.md。",
+            path: "~\\.claude\\skills"
+          }
+        ],
+        checkedPaths: ["~\\.claude\\skills"],
+        nextSteps: ["检测结果完整；启用接管前仍应先创建快照并预览将写入的链接。"],
+        safeFixAvailable: false
+      },
+      {
+        adapterId: "codex",
+        adapterName: "ChatGPT Desktop / OpenAI Codex",
+        detectionKind: "directory",
+        pathHint: "~\\.codex\\skills",
+        verdict: "desktop-only",
+        summary: "ChatGPT Desktop 已安装，但未发现 Codex CLI/代码能力；两者不能视为同一个安装。",
+        desktopStatus: "installed",
+        cliStatus: "not-detected",
+        skillsStatus: "missing",
+        evidence: [
+          {
+            probeKind: "app",
+            label: "ChatGPT Desktop",
+            status: "installed",
+            detail: "通过应用注册信息确认桌面应用。",
+            path: ""
+          },
+          {
+            probeKind: "command",
+            label: "codex",
+            status: "missing",
+            detail: "当前进程 PATH 中未找到该命令。",
+            path: ""
+          }
+        ],
+        checkedPaths: ["~\\.codex\\skills"],
+        nextSteps: ["本地 Skills 接管必须另外确认 Codex CLI/代码能力。"],
+        safeFixAvailable: false
+      },
+      {
+        adapterId: "antigravity",
+        adapterName: "Antigravity",
+        detectionKind: "directory",
+        pathHint: "~\\.gemini\\antigravity\\skills",
+        verdict: "not-detected",
+        summary: "未检测到 Antigravity 的可靠安装证据；保持未接管，也不创建任何目录。",
+        desktopStatus: "not-detected",
+        cliStatus: "not-detected",
+        skillsStatus: "missing",
+        evidence: [],
+        checkedPaths: ["~\\.gemini\\antigravity\\skills"],
+        nextSteps: ["确认工具是否安装在当前 Windows 用户下，然后重新检测。"],
+        safeFixAvailable: false
+      }
+    ],
     adapterSafetyChecks: [
       {
         id: "claude-path",
@@ -723,7 +807,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         reportType: "diagnostics",
         status: "ok",
         generatedAt: new Date().toISOString(),
-        version: "v3.0.3",
+        version: "v3.0.4",
         ok: true,
         total: 9,
         passed: 6,
@@ -737,7 +821,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         reportType: "release-preflight",
         status: "ok",
         generatedAt: new Date().toISOString(),
-        version: "v3.0.3",
+        version: "v3.0.4",
         ok: true,
         total: 12,
         passed: 12,
@@ -751,7 +835,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         reportType: "share-recipient-test",
         status: "ok",
         generatedAt: new Date().toISOString(),
-        version: "v3.0.3",
+        version: "v3.0.4",
         ok: true,
         total: 8,
         passed: 8,
@@ -861,6 +945,79 @@ export function createPreviewSnapshot(): LegacySnapshot {
             openIssues: 1,
             lastUpdatedAt: new Date().toISOString(),
             cacheStatus: "fresh"
+          }
+        ]
+      }
+    ],
+    sourceGovernance: [
+      {
+        sourceId: "source-nature-paper-skills",
+        sourceName: "Nature-Paper-Skills",
+        sourceFolder: "Nature-Paper-Skills",
+        supportStatus: "git",
+        pinned: false,
+        pinnedRevision: "",
+        currentRevision: "49d4e13b0b73e4ca26fb9a02e01f17e70d1d0fa4",
+        remoteRevision: "73a1f203df9fe195dd2f0cc879c4cf8d02f80ad1",
+        relation: "update-available",
+        aheadCount: 0,
+        behindCount: 2,
+        changedFiles: 4,
+        additions: 83,
+        deletions: 17,
+        remoteSummary: "Improve citation verification and figure workflow",
+        lastCheckedAt: new Date().toISOString(),
+        diffSource: "live",
+        backupCount: 2,
+        latestBackupId: "preview-backup-nature",
+        latestBackupRevision: "49d4e13b0b73e4ca26fb9a02e01f17e70d1d0fa4",
+        latestBackupAt: new Date().toISOString(),
+        canRollback: false,
+        status: "ready",
+        message: "Compared with the fetched upstream revision."
+      }
+    ],
+    sourceQualitySignals: [
+      {
+        sourceId: "source-nature-paper-skills",
+        sourceName: "Nature-Paper-Skills",
+        score: 96,
+        status: "excellent",
+        evidenceCount: 4,
+        evidenceTotal: 4,
+        summary: "96/100 from 4/4 local evidence types; missing evidence is excluded.",
+        factors: [
+          {
+            key: "personal-rating",
+            label: "Personal rating",
+            status: "available",
+            score: 100,
+            weight: 40,
+            detail: "Your parent source rating: 5/5."
+          },
+          {
+            key: "health",
+            label: "Index health",
+            status: "available",
+            score: 100,
+            weight: 25,
+            detail: "Source and child Skills are healthy."
+          },
+          {
+            key: "actual-usage",
+            label: "Actual local use",
+            status: "available",
+            score: 72,
+            weight: 15,
+            detail: "8 recorded local opens or launches."
+          },
+          {
+            key: "security",
+            label: "Security scan",
+            status: "available",
+            score: 100,
+            weight: 20,
+            detail: "Latest staged scan passed without findings."
           }
         ]
       }
@@ -1065,7 +1222,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
     ],
     diagnostics: {
       available: false,
-      appVersion: "3.0.3 preview",
+      appVersion: "3.0.4 preview",
       generatedAt: new Date().toISOString(),
       overallStatus: "preview",
       ok: 6,

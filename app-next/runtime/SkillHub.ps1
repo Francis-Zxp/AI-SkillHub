@@ -809,6 +809,32 @@ $ArchiveRoot = Join-Path $ArchivesRoot "replaced_active_skill_copies_$Stamp"
 $StatePath = Join-Path $StateRoot 'managed-links.json'
 $ReportPath = Join-Path $ReportsRoot 'last-sync.md'
 $AgentLinkScript = Join-Path $AppRoot 'Manage-AgentSkillLinks.ps1'
+$GovernancePath = Join-Path $StateBase 'source-governance.json'
+$PinnedSourceRevisions = @{}
+$GovernanceManifestReadable = $true
+if (Test-Path -LiteralPath $GovernancePath -PathType Leaf) {
+  try {
+    $governanceManifest = Get-Content -LiteralPath $GovernancePath -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($pin in @($governanceManifest.pins)) {
+      $folder = ([string]$pin.sourceFolder).Trim()
+      $revision = ([string]$pin.pinnedRevision).Trim()
+      if (-not [string]::IsNullOrWhiteSpace($folder) -and
+          $revision -match '^[0-9a-fA-F]{40}$') {
+        $PinnedSourceRevisions[$folder] = $revision.ToLowerInvariant()
+      }
+    }
+  } catch {
+    $GovernanceManifestReadable = $false
+    Write-Warning "Source pin manifest could not be read. Repository updates are blocked so a pinned source cannot drift: $($_.Exception.Message)"
+  }
+}
+
+function Get-PinnedSourceRevision([string]$RepositoryName) {
+  if ($PinnedSourceRevisions.ContainsKey($RepositoryName)) {
+    return [string]$PinnedSourceRevisions[$RepositoryName]
+  }
+  return ''
+}
 
 New-Item -ItemType Directory -Force -Path $SourceRoot, $SkillsRoot, $StateRoot, $ReportsRoot, $ArchivesRoot | Out-Null
 $RepoUpdateLog = New-Object System.Collections.Generic.List[object]
@@ -861,6 +887,24 @@ foreach ($repo in $Config.repositories) {
   }
 
   if ($ReportOnly) { continue }
+
+  if (-not $GovernanceManifestReadable) {
+    Add-RepoUpdateLog ([string]$repo.name) 'pull' 'governance-blocked' 'Source pin manifest is unreadable; network update skipped.'
+    continue
+  }
+
+  $pinnedRevision = Get-PinnedSourceRevision ([string]$repo.name)
+  if (-not [string]::IsNullOrWhiteSpace($pinnedRevision)) {
+    $shortPin = $pinnedRevision.Substring(0, 8)
+    if (Test-Path -LiteralPath (Join-Path $target '.git')) {
+      Write-Host "Keeping pinned source $($repo.name) at $shortPin."
+      Add-RepoUpdateLog ([string]$repo.name) 'pull' 'pinned' "Pinned revision $pinnedRevision; network update skipped."
+    } else {
+      Write-Warning "Pinned source $($repo.name) is missing locally; automatic clone is skipped so another revision is not substituted."
+      Add-RepoUpdateLog ([string]$repo.name) 'clone' 'pinned-missing' "Pinned revision $pinnedRevision is not available locally."
+    }
+    continue
+  }
 
   if (Test-Path -LiteralPath (Join-Path $target '.git')) {
     if (-not $NoPull) {
@@ -915,6 +959,16 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
   $manualRepos = Get-ChildItem -LiteralPath $SourceRoot -Force -Directory -ErrorAction SilentlyContinue |
     Where-Object { -not (Get-ConfiguredRepo $_.Name) -and (Test-Path -LiteralPath (Join-Path $_.FullName '.git')) }
   foreach ($manualRepo in $manualRepos) {
+    if (-not $GovernanceManifestReadable) {
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'governance-blocked' 'Source pin manifest is unreadable; network update skipped.'
+      continue
+    }
+    $pinnedRevision = Get-PinnedSourceRevision $manualRepo.Name
+    if (-not [string]::IsNullOrWhiteSpace($pinnedRevision)) {
+      Write-Host "Keeping pinned manual source $($manualRepo.Name) at $($pinnedRevision.Substring(0, 8))."
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'pinned' "Pinned revision $pinnedRevision; network update skipped."
+      continue
+    }
     if (-not (Test-GitUpdateBudget)) {
       Write-Warning "Git update budget exhausted. Skipping manual repository $($manualRepo.Name)."
       Add-RepoUpdateLog $manualRepo.Name 'pull' 'skipped' 'Git update budget exhausted.'

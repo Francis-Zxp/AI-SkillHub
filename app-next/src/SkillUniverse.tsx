@@ -38,15 +38,24 @@ type UniverseNode = {
 
 type UniverseEdge = { from: string; kind: UniverseEdgeKind; to: string };
 type UniverseTone = "biolume" | "mist" | "parchment" | "prism";
+type UniverseLod = 0 | 1 | 2;
+type UniverseNodeFocus = "active" | "neighbor" | "muted" | "normal";
 type UniverseModel = {
   categories: Array<{ category: string; count: number; hue: number }>;
   edges: UniverseEdge[];
+  neighbors: Map<string, Set<string>>;
   nodes: UniverseNode[];
   parentEdges: number;
   relationEdges: number;
   sourceCount: number;
 };
-type ProjectedNode = UniverseNode & { depth: number; radius: number; screenX: number; screenY: number };
+type ProjectedNode = UniverseNode & {
+  depth: number;
+  radius: number;
+  rendered: boolean;
+  screenX: number;
+  screenY: number;
+};
 type UniverseRuntime = {
   centerX: number;
   centerY: number;
@@ -54,6 +63,8 @@ type UniverseRuntime = {
   dragging: boolean;
   dragStartX: number;
   dragStartY: number;
+  drawnEdges: number;
+  drawMs: number;
   hoverId: string;
   pointerX: number;
   pointerY: number;
@@ -63,10 +74,14 @@ type UniverseRuntime = {
   projected: ProjectedNode[];
   frameIndex: number;
   frameMs: number;
+  frameSamples: number[];
   interactionUntil: number;
   lastFrame: number;
   lastPointerTime: number;
+  lod: UniverseLod;
   quality: number;
+  renderedNodes: number;
+  requestDraw: () => void;
   rotationX: number;
   rotationY: number;
   velocityX: number;
@@ -104,6 +119,7 @@ const DUST_PARTICLES = Array.from({ length: 112 }, (_, index) => {
     stretch: 0.78 + ((seed >>> 8) % 28) / 100
   };
 });
+const AURA_SPRITES = new Map<string, HTMLCanvasElement>();
 
 export function SkillUniverse({
   centered,
@@ -130,17 +146,30 @@ export function SkillUniverse({
   const selectMode = (next: SkillUniverseMode) => {
     if (controlledMode === undefined) setInternalMode(next);
     onModeChange?.(next);
+    runtimeRef.current?.requestDraw();
   };
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const host = canvas?.parentElement;
     if (!canvas || !host) return;
-    const context = canvas.getContext("2d");
-    if (!context) return;
+    const context = canvas.getContext("2d", { alpha: true });
+    if (!context) {
+      canvas.dataset.renderer = "canvas2d-unavailable";
+      canvas.dataset.contextState = "unavailable";
+      return;
+    }
 
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const projected = model.nodes.map(node => ({ ...node, depth: 0, radius: 0, screenX: 0, screenY: 0 }));
+    const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let reducedMotion = motionQuery.matches;
+    const projected = model.nodes.map(node => ({
+      ...node,
+      depth: 0,
+      radius: 0,
+      rendered: false,
+      screenX: 0,
+      screenY: 0
+    }));
     const runtime: UniverseRuntime = {
       centerX: 0,
       centerY: 0,
@@ -148,12 +177,16 @@ export function SkillUniverse({
       dragging: false,
       dragStartX: 0,
       dragStartY: 0,
+      drawnEdges: 0,
+      drawMs: 0,
       hoverId: "",
       frameIndex: 0,
       frameMs: 16.7,
+      frameSamples: [],
       interactionUntil: 0,
       lastFrame: 0,
       lastPointerTime: 0,
+      lod: 0,
       pointerX: 0,
       pointerY: 0,
       pointerInside: false,
@@ -161,6 +194,8 @@ export function SkillUniverse({
       projected,
       projectedById: new Map(projected.map(node => [node.id, node])),
       quality: 1,
+      renderedNodes: 0,
+      requestDraw: () => undefined,
       rotationX: -0.12,
       rotationY: 0.42,
       targetZoom: 1,
@@ -172,9 +207,20 @@ export function SkillUniverse({
 
     let frame = 0;
     let visible = !document.hidden;
+    let contextReady = true;
     let width = 1;
     let height = 1;
     let dpr = 1;
+
+    canvas.dataset.renderer = "canvas2d";
+    canvas.dataset.contextState = "ready";
+    canvas.dataset.nodeCount = String(model.nodes.length);
+    canvas.dataset.nodeShape = "screen-space-circles";
+
+    const scheduleDraw = () => {
+      if (!visible || !contextReady || frame) return;
+      frame = window.requestAnimationFrame(draw);
+    };
 
     const resize = () => {
       const rect = host.getBoundingClientRect();
@@ -187,10 +233,13 @@ export function SkillUniverse({
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      scheduleDraw();
     };
 
     const draw = (time: number) => {
+      frame = 0;
       if (!visible) return;
+      const drawStarted = performance.now();
       context.clearRect(0, 0, width, height);
       drawUniverse(
         context,
@@ -204,29 +253,71 @@ export function SkillUniverse({
         lightTheme,
         tone
       );
-      if (!reducedMotion) frame = window.requestAnimationFrame(draw);
+      const drawDuration = performance.now() - drawStarted;
+      runtime.drawMs = runtime.drawMs ? runtime.drawMs * 0.86 + drawDuration * 0.14 : drawDuration;
+      if (time > 0) {
+        runtime.frameSamples.push(runtime.frameMs);
+        if (runtime.frameSamples.length > 90) runtime.frameSamples.shift();
+      }
+      if (reducedMotion || runtime.frameIndex % 30 === 0) updateUniverseDiagnostics(canvas, runtime);
+      if (!reducedMotion) scheduleDraw();
     };
+    runtime.requestDraw = scheduleDraw;
 
     const onVisibility = () => {
       visible = !document.hidden;
       window.cancelAnimationFrame(frame);
-      if (visible && !reducedMotion) frame = window.requestAnimationFrame(draw);
+      frame = 0;
+      if (visible) scheduleDraw();
+    };
+
+    const onMotionPreference = (event: MediaQueryListEvent) => {
+      reducedMotion = event.matches;
+      runtime.lastFrame = 0;
+      window.cancelAnimationFrame(frame);
+      frame = 0;
+      scheduleDraw();
+    };
+
+    const onContextLost = (event: Event) => {
+      event.preventDefault();
+      canvas.dataset.contextState = "lost";
+      contextReady = false;
+      window.cancelAnimationFrame(frame);
+      frame = 0;
+    };
+
+    const onContextRestored = () => {
+      canvas.dataset.contextState = "ready";
+      contextReady = true;
+      visible = !document.hidden;
+      resize();
+      scheduleDraw();
     };
 
     const observer = new ResizeObserver(resize);
     observer.observe(host);
     document.addEventListener("visibilitychange", onVisibility);
+    motionQuery.addEventListener("change", onMotionPreference);
+    canvas.addEventListener("contextlost", onContextLost);
+    canvas.addEventListener("contextrestored", onContextRestored);
     resize();
-    draw(reducedMotion ? 0 : performance.now());
-    if (!reducedMotion) frame = window.requestAnimationFrame(draw);
+    scheduleDraw();
 
     return () => {
       observer.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
+      motionQuery.removeEventListener("change", onMotionPreference);
+      canvas.removeEventListener("contextlost", onContextLost);
+      canvas.removeEventListener("contextrestored", onContextRestored);
       window.cancelAnimationFrame(frame);
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
   }, [lightTheme, model, tone]);
+
+  useEffect(() => {
+    runtimeRef.current?.requestDraw();
+  }, [centered, mode]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -241,6 +332,7 @@ export function SkillUniverse({
       const deltaScale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? window.innerHeight : 1;
       runtime.targetZoom = clamp(runtime.targetZoom * Math.exp(-event.deltaY * deltaScale * 0.001), 0.72, 1.5);
       runtime.interactionUntil = performance.now() + 240;
+      runtime.requestDraw();
     };
 
     wheelSurface.addEventListener("wheel", onWheel, { passive: false });
@@ -275,8 +367,10 @@ export function SkillUniverse({
       runtime.lastPointerTime = now;
       runtime.interactionUntil = now + 180;
       runtime.dragged ||= Math.abs(runtime.pointerX - runtime.dragStartX) + Math.abs(runtime.pointerY - runtime.dragStartY) > 5;
+      runtime.hoverId = "";
       canvas.style.cursor = "grabbing";
       updateHover(null);
+      runtime.requestDraw();
       return;
     }
 
@@ -284,6 +378,7 @@ export function SkillUniverse({
     runtime.hoverId = hit?.id ?? "";
     canvas.style.cursor = hit ? "pointer" : "grab";
     updateHover(hit);
+    runtime.requestDraw();
   };
 
   const startDrag = (event: PointerEvent<HTMLCanvasElement>) => {
@@ -298,9 +393,11 @@ export function SkillUniverse({
     runtime.dragStartY = runtime.pointerY;
     runtime.dragged = false;
     runtime.dragging = true;
+    runtime.hoverId = "";
     runtime.lastPointerTime = performance.now();
     runtime.interactionUntil = runtime.lastPointerTime + 180;
     canvas.style.cursor = "grabbing";
+    runtime.requestDraw();
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
@@ -315,6 +412,7 @@ export function SkillUniverse({
     canvas.style.cursor = hit ? "pointer" : "grab";
     runtime.hoverId = hit?.id ?? "";
     updateHover(hit);
+    runtime.requestDraw();
   };
 
   const leaveGraph = () => {
@@ -323,6 +421,7 @@ export function SkillUniverse({
     if (!runtime?.dragging) {
       if (runtime) runtime.hoverId = "";
       updateHover(null);
+      runtime?.requestDraw();
     }
   };
 
@@ -541,11 +640,21 @@ function buildUniverseModel(snapshot: LegacySnapshot | null): UniverseModel {
   }
 
   const parentEdges = edges.filter(edge => edge.kind === "parent").length;
+  const neighbors = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    const fromNeighbors = neighbors.get(edge.from) ?? new Set<string>();
+    const toNeighbors = neighbors.get(edge.to) ?? new Set<string>();
+    fromNeighbors.add(edge.to);
+    toNeighbors.add(edge.from);
+    neighbors.set(edge.from, fromNeighbors);
+    neighbors.set(edge.to, toNeighbors);
+  }
   return {
     categories: [...categoryCounts.entries()]
       .sort((a, b) => b[1] - a[1])
       .map(([category, count]) => ({ category, count, hue: categoryHue(category) })),
     edges,
+    neighbors,
     nodes,
     parentEdges,
     relationEdges: edges.length - parentEdges,
@@ -617,11 +726,9 @@ function drawUniverse(
     elapsed = runtime.lastFrame > 0 ? Math.min(48, Math.max(1, time - runtime.lastFrame)) : 16.7;
     runtime.frameMs = runtime.frameMs * 0.92 + elapsed * 0.08;
     runtime.frameIndex += 1;
-    if (runtime.frameIndex % 45 === 0) {
+    if (runtime.frameIndex % 30 === 0) {
       const targetQuality = runtime.frameMs > 24 ? 0.58 : runtime.frameMs > 19.5 ? 0.78 : 1;
       runtime.quality += (targetQuality - runtime.quality) * 0.5;
-      context.canvas.dataset.frameMs = runtime.frameMs.toFixed(1);
-      context.canvas.dataset.renderQuality = runtime.quality.toFixed(2);
     }
     if (!runtime.dragging) {
       runtime.rotationY += runtime.velocityY * elapsed;
@@ -653,10 +760,25 @@ function drawUniverse(
   const radiusFactor = centered ? (width < 850 ? 0.53 : 0.43) : (width < 850 ? 0.5 : 0.39);
   const radius = Math.min(width * radiusFactor, height * (centered ? 0.57 : 0.52), 680) * runtime.zoom;
   const interactive = runtime.dragging || (time > 0 && time < runtime.interactionUntil);
+  const lod = resolveUniverseLod(model.nodes.length, runtime.quality, interactive);
+  runtime.lod = lod;
   const rotationY = runtime.rotationY;
   const rotationX = runtime.rotationX + (time === 0 ? 0 : Math.sin(time * 0.00009) * 0.025);
 
-  drawUniverseAtmosphere(context, centerX, centerY, radius, lightTheme, tone, time, rotationX, rotationY, runtime.quality, interactive);
+  drawUniverseAtmosphere(
+    context,
+    centerX,
+    centerY,
+    radius,
+    lightTheme,
+    tone,
+    time,
+    rotationX,
+    rotationY,
+    runtime.quality,
+    interactive,
+    lod
+  );
 
   const cosX = Math.cos(rotationX);
   const sinX = Math.sin(rotationX);
@@ -684,25 +806,28 @@ function drawUniverse(
 
   context.save();
   context.lineCap = "round";
+  runtime.drawnEdges = 0;
   for (let edgeIndex = 0; edgeIndex < model.edges.length; edgeIndex += 1) {
     const edge = model.edges[edgeIndex];
-    if (!edgeVisible(edge.kind, mode, runtime.hoverId, edge)) continue;
+    const highlighted = Boolean(runtime.hoverId && (edge.from === runtime.hoverId || edge.to === runtime.hoverId));
+    if (runtime.hoverId ? !highlighted : !edgeVisible(edge.kind, mode)) continue;
+    if (!runtime.hoverId) {
+      if (lod === 2 && edge.kind === "category") continue;
+      if (lod === 1 && edge.kind === "category" && edgeIndex % 2 === 1) continue;
+      if (lod === 2 && edge.kind === "conflict" && edgeIndex % 2 === 1) continue;
+      if ((interactive || lod === 2) && edge.kind === "parent" && edgeIndex % 2 === 1) continue;
+    }
     const from = runtime.projectedById.get(edge.from);
     const to = runtime.projectedById.get(edge.to);
     if (!from || !to || from.depth < 0.1 || to.depth < 0.1) continue;
-    const highlighted = Boolean(runtime.hoverId && (from.id === runtime.hoverId || to.id === runtime.hoverId));
-    if (interactive && !highlighted && (edge.kind !== "parent" || edgeIndex % 2 === 1)) continue;
-    if (!interactive && runtime.quality < 0.72 && !highlighted && edge.kind === "category") continue;
     const alpha = edgeAlpha(edge.kind, mode, highlighted) * Math.min(from.depth, to.depth);
+    const controlX = (from.screenX + to.screenX) / 2 + (to.screenY - from.screenY) *
+      (edge.kind === "parent" ? 0.025 : edge.kind === "conflict" ? 0.085 : 0.05);
+    const controlY = (from.screenY + to.screenY) / 2 - (to.screenX - from.screenX) *
+      (edge.kind === "parent" ? 0.025 : edge.kind === "conflict" ? 0.085 : 0.05);
     context.beginPath();
     context.moveTo(from.screenX, from.screenY);
-    const bend = edge.kind === "parent" ? 0.025 : edge.kind === "conflict" ? 0.085 : 0.05;
-    context.quadraticCurveTo(
-      (from.screenX + to.screenX) / 2 + (to.screenY - from.screenY) * bend,
-      (from.screenY + to.screenY) / 2 - (to.screenX - from.screenX) * bend,
-      to.screenX,
-      to.screenY
-    );
+    context.quadraticCurveTo(controlX, controlY, to.screenX, to.screenY);
     context.strokeStyle = edge.kind === "conflict"
       ? `rgba(255, 177, 105, ${alpha})`
       : `hsla(${to.hue}, 78%, ${lightTheme ? 38 : 70}%, ${alpha})`;
@@ -710,12 +835,34 @@ function drawUniverse(
     if (edge.kind === "conflict") context.setLineDash([4, 5]);
     context.stroke();
     context.setLineDash([]);
+    runtime.drawnEdges += 1;
+    if (highlighted) {
+      drawRelationshipPulse(context, from, to, controlX, controlY, edgeIndex, time, lightTheme);
+    }
   }
   context.restore();
 
-  runtime.projected.sort((a, b) => a.depth - b.depth);
+  if (lod < 2 || !interactive || runtime.frameIndex % 2 === 0) {
+    runtime.projected.sort((a, b) => a.depth - b.depth);
+  }
+  const hoveredNeighbors = runtime.hoverId ? model.neighbors.get(runtime.hoverId) : undefined;
+  const skillStride = lod === 2 ? Math.max(2, Math.ceil(model.nodes.length / 760)) : 1;
+  runtime.renderedNodes = 0;
   for (const node of runtime.projected) {
-    drawUniverseNode(context, node, runtime.hoverId === node.id, lightTheme, time, runtime.quality, interactive);
+    node.rendered = false;
+    const focus: UniverseNodeFocus = node.id === runtime.hoverId
+      ? "active"
+      : hoveredNeighbors?.has(node.id)
+        ? "neighbor"
+        : runtime.hoverId
+          ? "muted"
+          : "normal";
+    if (node.kind === "skill" && focus !== "active" && focus !== "neighbor" && node.seed % skillStride !== 0) {
+      continue;
+    }
+    node.rendered = true;
+    runtime.renderedNodes += 1;
+    drawUniverseNode(context, node, focus, lightTheme, time, lod, interactive);
   }
   if (runtime.hoverId) {
     const hovered = runtime.projectedById.get(runtime.hoverId);
@@ -734,54 +881,28 @@ function drawUniverseAtmosphere(
   rotationX: number,
   rotationY: number,
   quality: number,
-  interactive: boolean
+  interactive: boolean,
+  lod: UniverseLod
 ) {
-  const atmosphere =
-    tone === "prism"
-      ? {
-          center: lightTheme ? "rgba(64, 104, 184, .13)" : "rgba(161, 190, 255, .16)",
-          mid: lightTheme ? "rgba(127, 91, 166, .055)" : "rgba(112, 90, 190, .07)",
-          edge: "rgba(71, 117, 198, .025)",
-          line: lightTheme ? "rgba(54, 83, 145, .12)" : "rgba(165, 194, 255, .11)",
-          shell: lightTheme ? "rgba(60, 85, 136, .34)" : "rgba(221, 232, 255, .42)",
-          dust: lightTheme ? "rgba(77, 91, 131, .22)" : "rgba(202, 217, 255, .28)"
-        }
-      : tone === "parchment"
-        ? {
-            center: "rgba(154, 78, 48, .12)",
-            mid: "rgba(68, 91, 112, .055)",
-            edge: "rgba(122, 87, 55, .025)",
-            line: "rgba(122, 75, 49, .12)",
-            shell: "rgba(97, 73, 55, .32)",
-            dust: "rgba(108, 78, 55, .2)"
-          }
-        : {
-            center: lightTheme ? "rgba(23, 121, 111, .15)" : "rgba(205, 255, 249, .18)",
-            mid: lightTheme ? "rgba(41, 90, 128, .065)" : "rgba(68, 188, 180, .072)",
-            edge: lightTheme ? "rgba(41, 90, 128, .025)" : "rgba(88, 129, 166, .026)",
-            line: lightTheme ? "rgba(25, 105, 99, .12)" : "rgba(176, 239, 232, .12)",
-            shell: lightTheme ? "rgba(27, 98, 93, .34)" : "rgba(213, 246, 242, .4)",
-            dust: lightTheme ? "rgba(22, 93, 88, .22)" : "rgba(212, 247, 243, .26)"
-          };
-  const aura = context.createRadialGradient(centerX, centerY, radius * 0.02, centerX, centerY, radius * 1.28);
-  aura.addColorStop(0, atmosphere.center);
-  aura.addColorStop(0.28, atmosphere.mid);
-  aura.addColorStop(0.68, atmosphere.edge);
-  aura.addColorStop(1, "rgba(0, 0, 0, 0)");
-  context.fillStyle = aura;
-  context.fillRect(centerX - radius * 1.35, centerY - radius * 1.35, radius * 2.7, radius * 2.7);
+  const atmosphere = atmospherePalette(tone, lightTheme);
+  const aura = getAuraSprite(`${tone}:${lightTheme ? "light" : "dark"}`, atmosphere);
+  if (aura) {
+    context.drawImage(aura, centerX - radius * 1.35, centerY - radius * 1.35, radius * 2.7, radius * 2.7);
+  }
 
   context.save();
   context.translate(centerX, centerY);
   context.rotate(time * 0.000006);
   context.strokeStyle = atmosphere.line;
   context.lineWidth = 0.7;
-  for (let ring = 0; ring < 3; ring += 1) {
+  const ringCount = interactive || lod === 2 ? 1 : lod === 1 ? 2 : 3;
+  for (let ring = 0; ring < ringCount; ring += 1) {
     context.save();
-    context.rotate((ring - 1) * 0.42 + time * 0.000002 * (ring + 1));
-    context.scale(1, 0.48 + ring * 0.12);
+    const ringOffset = ring - (ringCount - 1) / 2;
+    context.rotate(ringOffset * 0.42 + time * 0.000002 * (ring + 1));
+    context.scale(1, 0.52 + ring * 0.12);
     context.beginPath();
-    context.arc(0, 0, radius * (0.72 + ring * 0.14), 0, Math.PI * 2);
+    context.arc(0, 0, radius * (0.78 + ring * 0.14), 0, Math.PI * 2);
     context.stroke();
     context.restore();
   }
@@ -791,7 +912,7 @@ function drawUniverseAtmosphere(
   const sinX = Math.sin(rotationX);
   const cosY = Math.cos(rotationY);
   const sinY = Math.sin(rotationY);
-  const shellStep = interactive || quality < 0.72 ? 2 : 1;
+  const shellStep = lod === 2 ? 3 : lod === 1 || interactive || quality < 0.72 ? 2 : 1;
   context.save();
   context.fillStyle = atmosphere.shell;
   for (let index = 0; index < SPHERE_SHELL.length; index += shellStep) {
@@ -809,7 +930,8 @@ function drawUniverseAtmosphere(
 
   context.save();
   context.fillStyle = atmosphere.dust;
-  const dustCount = interactive ? 32 : Math.round(DUST_PARTICLES.length * quality);
+  const dustScale = lod === 2 ? 0.32 : lod === 1 ? 0.58 : quality;
+  const dustCount = interactive ? Math.min(28, DUST_PARTICLES.length) : Math.round(DUST_PARTICLES.length * dustScale);
   for (let index = 0; index < dustCount; index += 1) {
     const dust = DUST_PARTICLES[index];
     const angle = dust.angle + time * dust.speed;
@@ -824,127 +946,218 @@ function drawUniverseAtmosphere(
 function drawUniverseNode(
   context: CanvasRenderingContext2D,
   node: ProjectedNode,
-  highlighted: boolean,
+  focus: UniverseNodeFocus,
   lightTheme: boolean,
   time: number,
-  quality: number,
+  lod: UniverseLod,
   interactive: boolean
 ) {
   const hue = node.hue;
-  const baseAlpha = node.enabled ? 0.5 + node.depth * 0.44 : 0.2;
-  const pulse = time === 0 ? 1 : 0.96 + Math.sin(time * 0.00092 + node.seed) * 0.04;
-  const radius = node.radius * (highlighted ? 1.34 : pulse);
+  const highlighted = focus === "active";
+  const neighbor = focus === "neighbor";
+  const focusAlpha = focus === "muted" ? 0.14 : neighbor ? 0.9 : 1;
+  const baseAlpha = node.enabled ? 0.54 + node.depth * 0.42 : 0.38;
+  const animatedNode = highlighted || node.kind !== "skill";
+  const pulse = time === 0 || !animatedNode ? 1 : 0.975 + Math.sin(time * 0.00082 + node.seed) * 0.025;
+  const radius = node.radius * (highlighted ? 1.3 : neighbor ? 1.08 : pulse);
   const lightness = lightTheme ? 43 : 67;
 
-  if (node.kind === "source") {
-    const halo = radius * (2.5 + Math.min(1.25, Math.log10(node.stars + 1) * 0.16));
-    const glow = context.createRadialGradient(
-      node.screenX,
-      node.screenY,
-      radius * 0.1,
-      node.screenX,
-      node.screenY,
-      halo
-    );
-    glow.addColorStop(0, `hsla(${hue}, 82%, ${lightness + 8}%, ${highlighted ? 0.28 : 0.16})`);
-    glow.addColorStop(0.42, `hsla(${hue}, 78%, ${lightness}%, ${highlighted ? 0.12 : 0.055})`);
-    glow.addColorStop(1, `hsla(${hue}, 76%, ${lightness}%, 0)`);
-    context.beginPath();
-    context.arc(node.screenX, node.screenY, halo, 0, Math.PI * 2);
-    context.fillStyle = glow;
-    context.fill();
-  }
-
   context.save();
-  context.globalCompositeOperation = "source-over";
+  context.globalAlpha = focusAlpha;
   if (highlighted) {
     context.beginPath();
-    context.arc(node.screenX, node.screenY, radius * 2.25, 0, Math.PI * 2);
-    context.fillStyle = `hsla(${hue}, 88%, ${lightness}%, .11)`;
+    context.arc(node.screenX, node.screenY, radius * (2.35 + Math.sin(time * 0.002) * 0.08), 0, Math.PI * 2);
+    context.fillStyle = `hsla(${hue}, 92%, ${lightness + 4}%, .1)`;
     context.fill();
-  }
-  if (node.kind === "source") {
-    context.save();
-    context.translate(node.screenX, node.screenY);
-    context.rotate(((node.seed % 29) - 14) * 0.01);
-    context.beginPath();
-    context.ellipse(0, 0, radius * 1.08, radius * 0.76, 0, 0, Math.PI * 2);
-    context.fillStyle = `hsla(${hue}, ${lightTheme ? 70 : 82}%, ${lightTheme ? 39 : 64}%, ${baseAlpha})`;
-    context.fill();
-    context.beginPath();
-    context.ellipse(-radius * 0.18, -radius * 0.12, radius * 0.42, radius * 0.2, -0.12, 0, Math.PI * 2);
-    context.fillStyle = `rgba(255, 255, 255, ${lightTheme ? 0.42 : 0.72})`;
-    context.fill();
-    context.restore();
-    context.beginPath();
-    context.arc(node.screenX, node.screenY, radius + 4, 0, Math.PI * 2);
-    context.strokeStyle = `hsla(${hue}, 84%, ${lightTheme ? 34 : 74}%, ${highlighted ? 0.88 : 0.38})`;
-    context.lineWidth = 0.8;
-    context.stroke();
-  } else if (node.kind === "router") {
-    drawPolygonPath(context, node.screenX, node.screenY, radius, 6, Math.PI / 6);
-    context.fillStyle = `hsla(${hue}, 76%, ${lightness}%, ${highlighted ? 1 : baseAlpha})`;
-    context.fill();
-    drawPolygonPath(context, node.screenX, node.screenY, radius + 5, 6, Math.PI / 6);
-    context.strokeStyle = `hsla(${hue}, 76%, ${lightTheme ? 34 : 78}%, ${highlighted ? 0.82 : 0.34})`;
-    context.lineWidth = 1;
-    context.stroke();
-    if (!interactive && quality > 0.7) {
-      context.beginPath();
-      context.arc(node.screenX, node.screenY, radius + 9, -0.2, 3.8);
-      context.strokeStyle = `hsla(${hue}, 78%, ${lightTheme ? 38 : 80}%, ${highlighted ? 0.46 : 0.17})`;
-      context.lineWidth = 0.7;
-      context.stroke();
-    }
-  } else {
-    context.beginPath();
-    context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
-    context.fillStyle = `hsla(${hue}, ${lightTheme ? 72 : 78}%, ${lightness}%, ${highlighted ? 1 : baseAlpha})`;
-    context.fill();
-    if (node.rating >= 4 || highlighted) {
-      context.beginPath();
-      context.arc(node.screenX, node.screenY, radius + 2.2, 0, Math.PI * 2);
-      context.strokeStyle = `hsla(${hue}, 72%, ${lightTheme ? 34 : 82}%, ${highlighted ? 0.68 : 0.24})`;
-      context.lineWidth = 0.65;
-      context.stroke();
-    }
   }
 
   if (node.kind === "source") {
-    if (!interactive && quality > 0.72) {
+    if (node.enabled && (lod < 2 || highlighted)) {
+      const popularityHalo = 2.2 + Math.min(0.7, Math.log10(node.stars + 1) * 0.1);
+      for (const [scale, alpha] of [[popularityHalo, 0.028], [1.78, 0.052], [1.38, 0.08]] as const) {
+        context.beginPath();
+        context.arc(node.screenX, node.screenY, radius * scale, 0, Math.PI * 2);
+        context.fillStyle = `hsla(${hue}, 88%, ${lightness + 5}%, ${highlighted ? alpha * 1.9 : alpha})`;
+        context.fill();
+      }
+    }
+
+    if (node.enabled) {
+      context.beginPath();
+      context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
+      context.fillStyle = `hsla(${hue}, ${lightTheme ? 72 : 84}%, ${lightTheme ? 38 : 57}%, ${baseAlpha})`;
+      context.fill();
+
+      context.beginPath();
+      context.arc(node.screenX + radius * 0.12, node.screenY + radius * 0.14, radius * 0.72, 0, Math.PI * 2);
+      context.fillStyle = `hsla(${hue + 8}, 80%, ${lightTheme ? 47 : 66}%, .3)`;
+      context.fill();
+
+      context.beginPath();
+      context.arc(node.screenX - radius * 0.3, node.screenY - radius * 0.3, radius * 0.18, 0, Math.PI * 2);
+      context.fillStyle = `rgba(255, 255, 255, ${lightTheme ? 0.58 : 0.78})`;
+      context.fill();
+    }
+
+    context.beginPath();
+    context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
+    context.strokeStyle = `hsla(${hue}, 92%, ${lightTheme ? 31 : 83}%, ${node.enabled ? highlighted ? 0.95 : 0.62 : 0.48})`;
+    context.lineWidth = node.enabled ? 1 : 1.15;
+    context.stroke();
+
+    context.beginPath();
+    context.arc(node.screenX, node.screenY, radius * 0.82, Math.PI * 0.9, Math.PI * 1.72);
+    context.strokeStyle = `rgba(255, 255, 255, ${node.enabled ? lightTheme ? 0.24 : 0.42 : 0.18})`;
+    context.lineWidth = Math.max(0.65, radius * 0.11);
+    context.stroke();
+
+    context.beginPath();
+    context.arc(node.screenX, node.screenY, radius + 4, 0, Math.PI * 2);
+    context.strokeStyle = `hsla(${hue}, 86%, ${lightTheme ? 34 : 76}%, ${highlighted ? 0.86 : 0.32})`;
+    context.lineWidth = 0.75;
+    context.stroke();
+
+    if (!interactive && lod < 2) {
       const orbit = radius + 9 + Math.log10(node.stars + 1) * 0.7;
       const markerAngle = time * 0.00032 + (node.seed % 360);
       context.beginPath();
       context.arc(node.screenX, node.screenY, orbit, markerAngle + 0.35, markerAngle + 4.8);
-      context.strokeStyle = `hsla(${hue}, 88%, ${lightTheme ? 38 : 82}%, .34)`;
+      context.strokeStyle = `hsla(${hue}, 88%, ${lightTheme ? 36 : 82}%, ${lod === 0 ? 0.34 : 0.2})`;
       context.lineWidth = 0.65;
       context.stroke();
       context.beginPath();
-      context.arc(node.screenX + Math.cos(markerAngle) * orbit, node.screenY + Math.sin(markerAngle) * orbit, 1.25, 0, Math.PI * 2);
-      context.fillStyle = `hsla(${hue}, 92%, ${lightTheme ? 36 : 82}%, .88)`;
+      context.arc(
+        node.screenX + Math.cos(markerAngle) * orbit,
+        node.screenY + Math.sin(markerAngle) * orbit,
+        highlighted ? 1.65 : 1.15,
+        0,
+        Math.PI * 2
+      );
+      context.fillStyle = `hsla(${hue}, 96%, ${lightTheme ? 34 : 84}%, .9)`;
       context.fill();
+    }
+  } else if (node.kind === "router") {
+    if (node.enabled) {
+      context.beginPath();
+      context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
+      context.fillStyle = `hsla(${hue}, 80%, ${lightness}%, ${highlighted ? 0.98 : baseAlpha})`;
+      context.fill();
+      context.beginPath();
+      context.arc(node.screenX - radius * 0.24, node.screenY - radius * 0.26, radius * 0.15, 0, Math.PI * 2);
+      context.fillStyle = `rgba(255, 255, 255, ${lightTheme ? 0.48 : 0.7})`;
+      context.fill();
+    }
+    context.beginPath();
+    context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
+    context.strokeStyle = `hsla(${hue}, 88%, ${lightTheme ? 31 : 82}%, ${node.enabled ? 0.66 : 0.5})`;
+    context.lineWidth = node.enabled ? 0.85 : 1.1;
+    context.stroke();
+    for (const [offset, alpha] of [[2.7, 0.58], [5.8, 0.3]] as const) {
+      context.beginPath();
+      context.arc(node.screenX, node.screenY, radius + offset, 0, Math.PI * 2);
+      context.strokeStyle = `hsla(${hue}, 84%, ${lightTheme ? 34 : 79}%, ${highlighted ? Math.min(0.95, alpha * 1.5) : alpha})`;
+      context.lineWidth = offset < 3 ? 0.9 : 0.65;
+      context.stroke();
+    }
+    if (lod < 2 || highlighted) {
+      const activeSegments = clamp(Math.round(node.rating), 0, 5);
+      const segmentRadius = radius + 9;
+      const segmentSpan = (Math.PI * 2) / 5;
+      for (let segment = 0; segment < 5; segment += 1) {
+        const start = -Math.PI / 2 + segment * segmentSpan + 0.12;
+        context.beginPath();
+        context.arc(node.screenX, node.screenY, segmentRadius, start, start + segmentSpan - 0.24);
+        context.strokeStyle = `hsla(${hue + segment * 3}, 90%, ${lightTheme ? 34 : 82}%, ${segment < activeSegments ? highlighted ? 0.96 : 0.72 : 0.13})`;
+        context.lineWidth = segment < activeSegments ? 1.15 : 0.7;
+        context.stroke();
+      }
+    }
+  } else {
+    context.beginPath();
+    context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
+    if (node.enabled) {
+      context.fillStyle = `hsla(${hue}, ${lightTheme ? 74 : 82}%, ${lightness}%, ${highlighted ? 1 : baseAlpha})`;
+      context.fill();
+    } else {
+      context.strokeStyle = `hsla(${hue}, 68%, ${lightTheme ? 35 : 72}%, .5)`;
+      context.lineWidth = 0.8;
+      context.stroke();
+    }
+    if (node.enabled && lod === 0 && radius > 2.35) {
+      context.beginPath();
+      context.arc(node.screenX - radius * 0.24, node.screenY - radius * 0.24, Math.max(0.42, radius * 0.17), 0, Math.PI * 2);
+      context.fillStyle = `rgba(255, 255, 255, ${lightTheme ? 0.38 : 0.58})`;
+      context.fill();
+    }
+    if (node.rating >= 4 || highlighted || neighbor) {
+      context.beginPath();
+      context.arc(node.screenX, node.screenY, radius + 2.2, 0, Math.PI * 2);
+      context.strokeStyle = `hsla(${hue}, 78%, ${lightTheme ? 32 : 84}%, ${highlighted ? 0.78 : neighbor ? 0.46 : 0.24})`;
+      context.lineWidth = 0.65;
+      context.stroke();
     }
   }
   context.restore();
 }
 
-function drawPolygonPath(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  radius: number,
-  sides: number,
-  rotation = 0
-) {
-  context.beginPath();
-  for (let index = 0; index < sides; index += 1) {
-    const angle = rotation + (index / sides) * Math.PI * 2;
-    const pointX = x + Math.cos(angle) * radius;
-    const pointY = y + Math.sin(angle) * radius;
-    if (index === 0) context.moveTo(pointX, pointY);
-    else context.lineTo(pointX, pointY);
+type AtmospherePalette = {
+  center: string;
+  dust: string;
+  edge: string;
+  line: string;
+  mid: string;
+  shell: string;
+};
+
+function atmospherePalette(tone: UniverseTone, lightTheme: boolean): AtmospherePalette {
+  if (tone === "prism") {
+    return {
+      center: lightTheme ? "rgba(64, 104, 184, .13)" : "rgba(161, 190, 255, .16)",
+      mid: lightTheme ? "rgba(127, 91, 166, .055)" : "rgba(112, 90, 190, .07)",
+      edge: "rgba(71, 117, 198, .025)",
+      line: lightTheme ? "rgba(54, 83, 145, .12)" : "rgba(165, 194, 255, .11)",
+      shell: lightTheme ? "rgba(60, 85, 136, .34)" : "rgba(221, 232, 255, .42)",
+      dust: lightTheme ? "rgba(77, 91, 131, .22)" : "rgba(202, 217, 255, .28)"
+    };
   }
-  context.closePath();
+  if (tone === "parchment") {
+    return {
+      center: "rgba(154, 78, 48, .12)",
+      mid: "rgba(68, 91, 112, .055)",
+      edge: "rgba(122, 87, 55, .025)",
+      line: "rgba(122, 75, 49, .12)",
+      shell: "rgba(97, 73, 55, .32)",
+      dust: "rgba(108, 78, 55, .2)"
+    };
+  }
+  return {
+    center: lightTheme ? "rgba(23, 121, 111, .15)" : "rgba(205, 255, 249, .18)",
+    mid: lightTheme ? "rgba(41, 90, 128, .065)" : "rgba(68, 188, 180, .072)",
+    edge: lightTheme ? "rgba(41, 90, 128, .025)" : "rgba(88, 129, 166, .026)",
+    line: lightTheme ? "rgba(25, 105, 99, .12)" : "rgba(176, 239, 232, .12)",
+    shell: lightTheme ? "rgba(27, 98, 93, .34)" : "rgba(213, 246, 242, .4)",
+    dust: lightTheme ? "rgba(22, 93, 88, .22)" : "rgba(212, 247, 243, .26)"
+  };
+}
+
+function getAuraSprite(key: string, palette: AtmospherePalette) {
+  const cached = AURA_SPRITES.get(key);
+  if (cached) return cached;
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const aura = context.createRadialGradient(128, 128, 3, 128, 128, 128);
+  aura.addColorStop(0, palette.center);
+  aura.addColorStop(0.28, palette.mid);
+  aura.addColorStop(0.68, palette.edge);
+  aura.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.fillStyle = aura;
+  context.fillRect(0, 0, 256, 256);
+  AURA_SPRITES.set(key, canvas);
+  return canvas;
 }
 
 function drawHoverLabel(
@@ -969,8 +1182,49 @@ function drawHoverLabel(
   context.restore();
 }
 
-function edgeVisible(kind: UniverseEdgeKind, mode: SkillUniverseMode, hoverId: string, edge: UniverseEdge) {
-  if (hoverId && (edge.from === hoverId || edge.to === hoverId)) return true;
+function drawRelationshipPulse(
+  context: CanvasRenderingContext2D,
+  from: ProjectedNode,
+  to: ProjectedNode,
+  controlX: number,
+  controlY: number,
+  edgeIndex: number,
+  time: number,
+  lightTheme: boolean
+) {
+  const progress = time === 0 ? 0.52 : (time * 0.00038 + edgeIndex * 0.137) % 1;
+  const inverse = 1 - progress;
+  const x = inverse * inverse * from.screenX + 2 * inverse * progress * controlX + progress * progress * to.screenX;
+  const y = inverse * inverse * from.screenY + 2 * inverse * progress * controlY + progress * progress * to.screenY;
+  context.beginPath();
+  context.arc(x, y, 4, 0, Math.PI * 2);
+  context.fillStyle = `hsla(${to.hue}, 94%, ${lightTheme ? 40 : 82}%, .12)`;
+  context.fill();
+  context.beginPath();
+  context.arc(x, y, 1.25, 0, Math.PI * 2);
+  context.fillStyle = `hsla(${to.hue}, 98%, ${lightTheme ? 34 : 88}%, .96)`;
+  context.fill();
+}
+
+function resolveUniverseLod(nodeCount: number, quality: number, interactive: boolean): UniverseLod {
+  let lod: UniverseLod = nodeCount >= 1200 ? 2 : nodeCount >= 650 ? 1 : 0;
+  if (interactive || quality < 0.68) lod = Math.min(2, lod + 1) as UniverseLod;
+  return lod;
+}
+
+function updateUniverseDiagnostics(canvas: HTMLCanvasElement, runtime: UniverseRuntime) {
+  const orderedFrames = [...runtime.frameSamples].sort((a, b) => a - b);
+  const p95Index = Math.max(0, Math.ceil(orderedFrames.length * 0.95) - 1);
+  canvas.dataset.frameMs = runtime.frameMs.toFixed(1);
+  canvas.dataset.frameP95 = (orderedFrames[p95Index] ?? runtime.frameMs).toFixed(1);
+  canvas.dataset.drawMs = runtime.drawMs.toFixed(2);
+  canvas.dataset.renderQuality = runtime.quality.toFixed(2);
+  canvas.dataset.lod = String(runtime.lod);
+  canvas.dataset.renderedNodes = String(runtime.renderedNodes);
+  canvas.dataset.drawnEdges = String(runtime.drawnEdges);
+}
+
+function edgeVisible(kind: UniverseEdgeKind, mode: SkillUniverseMode) {
   if (kind === "parent") return true;
   if (kind === "conflict") return mode === "relations";
   return mode !== "sources";
@@ -994,6 +1248,7 @@ function nodeRadius(node: UniverseNode, perspectiveScale: number) {
 function findHit(runtime: UniverseRuntime, x: number, y: number) {
   for (let index = runtime.projected.length - 1; index >= 0; index -= 1) {
     const node = runtime.projected[index];
+    if (!node.rendered) continue;
     const hitRadius = Math.max(node.kind === "skill" ? 10 : 12, node.radius + 5);
     if (Math.hypot(node.screenX - x, node.screenY - y) <= hitRadius) return node;
   }

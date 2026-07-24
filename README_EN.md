@@ -3,7 +3,9 @@
 [简体中文](README.md) | **English**
 
 AI SkillHub is a Windows desktop hub for managing AI agent Skills, Prompt
-materials, GitHub sources, and local AI-tool links from one place.
+materials, GitHub sources, and local AI-tool links from one place. It can infer
+purpose and usage from local source evidence while keeping user edits in
+control.
 
 V3.X
 <img width="2560" height="1526" alt="image" src="https://github.com/user-attachments/assets/408eab67-1912-47ca-af5d-3dad1c383e01" />
@@ -34,9 +36,10 @@ by Git. Public releases should be created with the release package workflow.
 2. Go to `Skill Library`.
 3. Paste a GitHub repository URL, select source type, category, tags, and notes.
 4. Click `一键添加并刷新`.
-5. AI SkillHub scans real `SKILL.md` folders, rebuilds parent router Skills,
-   refreshes the local index, and can synchronize the active Skill view into
-   Claude Code, Codex, and Antigravity.
+5. AI SkillHub scans real `SKILL.md` folders, proposes editable metadata,
+   checks staged files for risk, rebuilds parent router Skills, refreshes the
+   local index, and can synchronize the active Skill view into Claude Code,
+   Codex, and Antigravity.
 
 AI SkillHub installs only real Skills. A folder must contain `SKILL.md` before
 it is treated as a callable Skill. Prompt-only repositories remain source
@@ -55,8 +58,24 @@ material and are not installed as Skills.
   desktop-app and code-capability detection.
 - Source categories, tags, notes, search, sorting, usage counters, and GitHub
   popularity metadata.
+- Offline, bounded metadata recognition from `README`, `SKILL.md`, and source
+  identity, including editable summaries, purposes, usage guides, categories,
+  and custom tags.
+- Per-file staging security reports. High-risk findings block promotion;
+  medium-risk findings remain staged for explicit review.
 - Private 1–5 star Skill ratings, stored in local SQLite, with rating-first
   sorting at both source and Skill level.
+- Git source commit pins, upstream update-diff previews, and one-click rollback
+  when a verified source backup exists.
+- An explainable local quality score using personal/child rating, indexed
+  health, recorded local use, and security scanning. Missing evidence is
+  excluded; GitHub stars remain popularity only.
+- An Adapter Doctor that explains desktop-app detection, local Code capability,
+  PATH freshness, Skills-directory readiness, and stale directory residue.
+- An allowlist-only legacy cleanup assistant that is enabled only after
+  successful v4 migration and SQLite health checks. It moves confirmed old
+  data to a recoverable backup and never selects the developer `release`
+  directory.
 - Diagnostics, share checks, backup/restore dry runs, and release package
   preflight checks.
 
@@ -80,13 +99,17 @@ the background; when a newer signed release exists, Settings offers one-click
 download, replacement, and restart. The updater accepts only packages signed by
 the AI SkillHub release key.
 
-v3.0.2 and older builds do not contain this updater. Install v3.0.3 once, then
-future upgrades are handled inside the app. The portable zip remains a fallback
-for users who cannot install software.
+v3.0.2 and older builds do not contain this updater. Install the current formal
+release once, then future upgrades are handled inside the app. The portable zip
+remains a fallback for users who cannot install software.
 
-On first launch, the app performs a copy-only migration from the old portable
-`app-next/data/github_sources`, `skills`, and `.skillhub-next` locations; it
-does not delete the old copy.
+The v3.0.4 migration recovers old portable sources one source at a time,
+resumes interrupted copies, validates content before atomic promotion, and
+backs up SQLite before selectively merging user metadata. It does not overwrite
+a newer destination. Concurrent startup scans are serialized and a manifest
+cannot finish while a source has failed or still needs repair. After recovery,
+the user may explicitly move allowlisted legacy locations to a recoverable
+backup with the cleanup assistant.
 
 The internal `AI-SkillHub-local-routers` storage folder is not shown as a user
 source. Generated aliases and same-name conflict dispatchers are routing
@@ -126,6 +149,10 @@ tests, but public release packages do not contain personal sources or ratings.
 
 The public repository must not include personal Skills, cloned third-party
 repositories, local reports, local config, build output, or diagnostics.
+
+Metadata inference is local and does not execute source scripts. Generated
+metadata, security findings, adapter evidence, ratings, and migration manifests
+are private runtime data and are excluded from public release packages.
 
 Important ignored paths:
 

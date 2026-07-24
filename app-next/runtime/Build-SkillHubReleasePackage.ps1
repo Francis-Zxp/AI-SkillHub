@@ -55,6 +55,10 @@ $PackageName = "AI-SkillHub-$Version"
 $StagingRoot = Join-Path $ReleaseRoot $PackageName
 $ZipPath = Join-Path $ReleaseRoot ($PackageName + '.zip')
 $ShaPath = Join-Path $ReleaseRoot ($PackageName + '.sha256.txt')
+$AllowedDocs = @(
+  "release-notes\v$Version.md",
+  'skill-router-standard.md'
+)
 
 function Write-Utf8Bom([string]$Path, [string]$Text) {
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
@@ -69,22 +73,6 @@ function Copy-FileRequired([string]$Source, [string]$Destination) {
   if (-not (Test-Path -LiteralPath $Source -PathType Leaf)) { throw "Missing file: $Source" }
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
   Copy-Item -LiteralPath $Source -Destination $Destination -Force
-}
-
-function Copy-DirRequired([string]$Source, [string]$Destination) {
-  if (-not (Test-Path -LiteralPath $Source -PathType Container)) { throw "Missing directory: $Source" }
-  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Destination) | Out-Null
-  Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force
-}
-
-function Copy-DirContentsRequired([string]$Source, [string]$Destination, [string[]]$ExcludeNames = @()) {
-  if (-not (Test-Path -LiteralPath $Source -PathType Container)) { throw "Missing directory: $Source" }
-  New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-  Get-ChildItem -LiteralPath $Source -Force | Where-Object {
-    $ExcludeNames -notcontains $_.Name
-  } | ForEach-Object {
-    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Destination $_.Name) -Recurse -Force
-  }
 }
 
 function Get-HashText([string]$Path) {
@@ -124,8 +112,18 @@ try {
     $source = Join-Path $ProjectRoot $file
     if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-FileRequired $source (Join-Path $StagingRoot $file) }
   }
-  if (Test-Path -LiteralPath (Join-Path $ProjectRoot 'docs') -PathType Container) {
-    Copy-DirContentsRequired (Join-Path $ProjectRoot 'docs') (Join-Path $StagingRoot 'docs')
+  foreach ($relativeDoc in $AllowedDocs) {
+    Copy-FileRequired (Join-Path $ProjectRoot "docs\$relativeDoc") (Join-Path $StagingRoot "docs\$relativeDoc")
+  }
+  $packagedDocs = @(
+    Get-ChildItem -LiteralPath (Join-Path $StagingRoot 'docs') -File -Recurse |
+      ForEach-Object {
+        $_.FullName.Substring((Join-Path $StagingRoot 'docs').Length).TrimStart('\').Replace('/', '\')
+      }
+  )
+  $unexpectedDocs = @($packagedDocs | Where-Object { $AllowedDocs -notcontains $_ })
+  if ($unexpectedDocs.Count -gt 0) {
+    throw "Unexpected docs entered the portable package: $($unexpectedDocs -join ', ')"
   }
   foreach ($runtimeFile in @(
     'SkillHub.ps1',
@@ -137,7 +135,7 @@ try {
   }
   New-Item -ItemType Directory -Force -Path (Join-Path $StagingRoot 'skills') | Out-Null
   New-Item -ItemType Directory -Force -Path (Join-Path $StagingRoot 'app-next\data') | Out-Null
-  Add-Check 'copy.allowlist' 'ok' 'The package was copied from this Tauri release using an allowlist; developer tests and packaging scripts are excluded.'
+  Add-Check 'copy.allowlist' 'ok' "The package uses explicit file and docs allowlists ($($AllowedDocs.Count) docs); developer tests, design audits, and packaging scripts are excluded."
 } catch {
   Add-Check 'copy.allowlist' 'error' $_.Exception.Message
 }

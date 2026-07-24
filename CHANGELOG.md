@@ -2,6 +2,88 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.0.4 - Spectral Gravity, explainable imports, and recoverable migration
+
+### Added
+
+- Added offline metadata recognition for GitHub sources, local folders, and
+  standalone Skills. AI SkillHub reads bounded `README` / `SKILL.md` evidence
+  to propose a summary, purpose, usage guide, category, and custom tags without
+  executing imported code.
+- Added one-click re-recognition for the existing library. User-edited notes,
+  categories, tags, and ratings remain authoritative over generated metadata.
+- Added a bounded per-file security scan to source staging and promotion
+  reports. High-risk findings stop promotion; medium-risk findings remain in
+  staging with redacted file-level evidence until the user explicitly confirms
+  the review. The backend repeats the gate before any library or Agent write.
+- Added an Adapter Doctor that separates desktop-app presence, local Code
+  capability, PATH freshness, Skills-directory readiness, and stale directory
+  residue instead of collapsing them into a single detected/not-detected flag.
+- Added the recoverable v4 migration. It resumes interrupted source copies,
+  validates ownership and content before atomic promotion, backs up SQLite
+  before selective metadata merge, and never overwrites a newer destination.
+- Added source version governance for Git-backed sources: pin the current
+  commit, preview upstream file/addition/deletion differences, and restore the
+  latest verified source backup with a pre-rollback snapshot and audit trail.
+- Added an explainable local quality score based on up to four independent
+  evidence types: personal/child rating, indexed health, recorded local use,
+  and the per-file security scan. Missing evidence is excluded instead of
+  becoming a zero; GitHub stars remain a separate popularity signal.
+- Added an allowlist-only legacy cleanup assistant. It appears only after a
+  successful v4 manifest and healthy SQLite check, moves selected old portable
+  data to a recoverable backup, and never selects `release`.
+
+### Changed
+
+- Rebuilt the homepage visualization as Spectral Gravity. Source, parent
+  router, and child Skill nodes are true screen-space circles with role-specific
+  rings, rating segments, popularity emphasis, focused relationship pulses,
+  and category/source color separation.
+- Added adaptive LOD for large libraries, lower-cost interaction rendering,
+  hidden-window pausing, reduced-motion behavior, and a static fallback after
+  canvas context loss.
+- Refined the operational themes around quieter neutral surfaces, consistent
+  radii, clearer typography, and aligned controls. High-motion visual effects
+  remain limited to the homepage.
+- Shortened the localized homepage introduction. Chinese and English now use
+  concise product copy while the data visualization remains the primary focus.
+
+### Migration and privacy
+
+- Program updates continue to replace only managed application files.
+  Sources, ratings, user metadata, settings, and SQLite remain under
+  `%LOCALAPPDATA%\AI SkillHub\UserData`.
+- The v4 migration is copy-first and non-destructive. Legacy source bodies and
+  database backups remain available until the recovered library is verified.
+- The real legacy recovery restored 38 managed sources and 650 indexed Skills
+  from a 38-source / 649-Skill legacy database. The extra Skill is a real
+  same-source duplicate path found by the more complete current scanner, not a
+  fabricated local Skill. Ratings, tags, manual metadata, and usage records
+  were retained; “0 local” remains correct because the active `skills` entries
+  are managed links rather than independent local sources.
+- Migration scanning is process-serialized. Concurrent startup requests can no
+  longer finalize a partial manifest; the verified manifest completed with
+  zero failed and zero repair-needed sources.
+- Generated metadata, scan reports, and adapter evidence are local data. Public
+  packages continue to exclude personal sources, ratings, absolute paths,
+  diagnostics, databases, and build caches.
+- The desktop shell now enforces a production CSP and least-privilege
+  capabilities. Release binaries are stripped and path-remapped, then scanned
+  for developer paths; portable documentation is copied from a two-file
+  allowlist instead of the full project docs tree.
+
+### Validation status
+
+- Final local release gates passed: frontend production build; 91 Rust tests
+  (plus one network-only ignored unit); strict Clippy and formatting; explicit
+  security-review UI/backend contracts; clean Chinese-path DataRoot startup;
+  signed NSIS fresh/reinstall and public v3.0.3 → v3.0.4 upgrade; rating,
+  metadata, config, and sentinel preservation; zero uninstall residue; updater
+  signature verification; package privacy and path-remap checks.
+- Source governance and legacy cleanup remain deliberately local and guarded:
+  only Git-backed sources can be pinned/diffed/rolled back, rollback requires a
+  verified backup, and cleanup requires explicit user confirmation.
+
 ## 3.0.3 - Signed automatic updates and visual-system refinement
 
 ### Added

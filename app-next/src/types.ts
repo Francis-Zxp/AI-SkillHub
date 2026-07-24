@@ -21,6 +21,7 @@ export type LegacySnapshot = {
   agents: AgentCard[];
   agentSkillStatuses: AgentSkillStatusCard[];
   agentAdapters: AgentAdapterCard[];
+  agentDoctors: AgentDoctorCard[];
   adapterSafetyChecks: AdapterSafetyCheckCard[];
   adapterCapabilities: AdapterCapabilityCard[];
   workspaces: WorkspaceCard[];
@@ -34,6 +35,8 @@ export type LegacySnapshot = {
   releaseReports: ReleaseReportCard[];
   importPreviews: ImportPreviewCard[];
   sourcePopularity: SourcePopularityCard[];
+  sourceGovernance: SourceGovernanceCard[];
+  sourceQualitySignals: SourceQualitySignalCard[];
   skillConflicts: SkillConflictCard[];
   operatorConsent: OperatorConsentCard;
   tags: TagCard[];
@@ -69,6 +72,12 @@ export type SkillCard = {
   rating: number;
   relativePath: string;
   tags: string[];
+  /** Offline-inferred usage guidance. Manual note/description overrides remain authoritative. */
+  usageGuide?: string;
+  /** Evidence chain used by the deterministic metadata analyzer. */
+  metadataOrigin?: string;
+  /** 0–1 evidence completeness, not a quality score. */
+  metadataConfidence?: number;
   /**
    * Backend-computed marker for parent / router-hub Skills.
    * True when SKILL.md description contains the [ROUTER-HUB] marker,
@@ -161,6 +170,73 @@ export type SourceCard = {
   rating?: number;
   tags: string[];
   createdAt: string;
+  /** Offline-inferred usage guidance for this source collection. */
+  usageGuide?: string;
+  /** Evidence chain used by the deterministic metadata analyzer. */
+  metadataOrigin?: string;
+  /** 0–1 evidence completeness, not a quality score. */
+  metadataConfidence?: number;
+};
+
+export type SourceGovernanceCard = {
+  sourceId: string;
+  sourceName: string;
+  sourceFolder: string;
+  supportStatus: "git" | "local" | "snapshot" | string;
+  pinned: boolean;
+  pinnedRevision: string;
+  currentRevision: string;
+  remoteRevision: string;
+  relation:
+    | "up-to-date"
+    | "update-available"
+    | "local-ahead"
+    | "diverged"
+    | "rolled-back"
+    | "unknown"
+    | string;
+  aheadCount: number;
+  behindCount: number;
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+  remoteSummary: string;
+  lastCheckedAt: string;
+  diffSource: "live" | "cached" | "none" | string;
+  backupCount: number;
+  latestBackupId: string;
+  latestBackupRevision: string;
+  latestBackupAt: string;
+  canRollback: boolean;
+  status: string;
+  message: string;
+};
+
+export type SourceQualitySignalCard = {
+  sourceId: string;
+  sourceName: string;
+  score: number | null;
+  status:
+    | "excellent"
+    | "good"
+    | "mixed"
+    | "weak"
+    | "limited"
+    | "insufficient"
+    | string;
+  evidenceCount: number;
+  evidenceTotal: number;
+  summary: string;
+  factors: SourceQualityFactorCard[];
+};
+
+export type SourceQualityFactorCard = {
+  key: "personal-rating" | "health" | "actual-usage" | "security" | string;
+  label: string;
+  status: "available" | "missing" | string;
+  score: number | null;
+  weight: number;
+  detail: string;
 };
 
 export type AgentCard = {
@@ -198,6 +274,59 @@ export type AgentAdapterCard = {
   detected: boolean;
   managed: boolean;
   enabled: boolean;
+};
+
+export type AgentDoctorCard = {
+  adapterId: string;
+  adapterName: string;
+  detectionKind: string;
+  pathHint: string;
+  verdict:
+    | "ready"
+    | "code-detected"
+    | "desktop-only"
+    | "path-refresh-needed"
+    | "directory-residue"
+    | "not-detected"
+    | string;
+  summary: string;
+  desktopStatus: string;
+  cliStatus: string;
+  skillsStatus: string;
+  evidence: AgentDoctorEvidenceCard[];
+  checkedPaths: string[];
+  nextSteps: string[];
+  safeFixAvailable: boolean;
+};
+
+export type AgentDoctorEvidenceCard = {
+  probeKind: string;
+  label: string;
+  status: string;
+  detail: string;
+  path: string;
+};
+
+export type LegacyCleanupCandidateCard = {
+  id: string;
+  name: string;
+  reason: string;
+  path: string;
+  totalBytes: number;
+  fileCount: number;
+  directoryCount: number;
+  linkCount: number;
+};
+
+export type LegacyCleanupOperationCard = {
+  candidateId: string;
+  originalPath: string;
+  backupPath: string;
+  totalBytes: number;
+  fileCount: number;
+  linkCount: number;
+  recoverable: boolean;
+  detail: string;
 };
 
 export type AdapterSafetyCheckCard = {
@@ -429,6 +558,19 @@ export type SourceImportExecutionCard = {
   rollbackSteps: string[];
   realWriteScope: string;
   downloadMethod: string;
+  securityStatus: "not-run" | "passed" | "review" | "warn" | "blocked" | string;
+  securityScannedFiles: number;
+  securityFindings: SourceSecurityFindingCard[];
+};
+
+export type SourceSecurityFindingCard = {
+  id: string;
+  severity: "low" | "medium" | "high" | string;
+  category: string;
+  relativePath: string;
+  line: number;
+  summary: string;
+  evidence: string;
 };
 
 export type SourceImportPromotionCard = {
@@ -449,6 +591,10 @@ export type SourceImportPromotionCard = {
   blockingChecks: string[];
   rollbackSteps: string[];
   realWriteScope: string;
+  securityStatus: "not-run" | "passed" | "review" | "warn" | "blocked" | string;
+  securityScannedFiles: number;
+  securityFindings: SourceSecurityFindingCard[];
+  securityReviewConfirmed: boolean;
 };
 
 export type SourcePopularityCard = {

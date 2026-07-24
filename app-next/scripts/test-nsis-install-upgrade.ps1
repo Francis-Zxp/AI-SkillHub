@@ -2,7 +2,7 @@
 param(
   [Parameter(Mandatory = $true)]
   [string]$InstallerPath,
-  [string]$ExpectedVersion = '3.0.3',
+  [string]$ExpectedVersion = '3.0.4',
   [switch]$KeepSandbox
 )
 
@@ -81,7 +81,7 @@ try {
   $sentinel = Join-Path $DataRoot 'update-preserves-user-data.txt'
   [IO.File]::WriteAllText(
     $sentinel,
-    'preserve-v3.0.3',
+    'preserve-v3.0.4',
     [Text.UTF8Encoding]::new($false)
   )
   $second = Start-Process -FilePath $InstallerPath -ArgumentList @('/S', "/D=$InstallRoot") -Wait -PassThru -WindowStyle Hidden
@@ -89,7 +89,7 @@ try {
 
   $sentinelPreserved =
     (Test-Path -LiteralPath $sentinel -PathType Leaf) -and
-    ((Get-Content -LiteralPath $sentinel -Raw) -eq 'preserve-v3.0.3')
+    ((Get-Content -LiteralPath $sentinel -Raw) -eq 'preserve-v3.0.4')
   $installedVersion = (
     [string](Get-Item -LiteralPath $app).VersionInfo.ProductVersion -split '[+-]'
   )[0]
