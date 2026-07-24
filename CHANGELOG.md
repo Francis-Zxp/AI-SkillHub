@@ -2,6 +2,47 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.0.3 - Signed automatic updates and visual-system refinement
+
+### Added
+
+- Added an official signed update channel backed by GitHub Releases. The
+  desktop app checks automatically and offers one-click download, signature
+  verification, passive replacement, and restart.
+- Added a per-user NSIS installer. Program files are replaceable, while
+  sources, ratings, settings, reports, and SQLite remain in
+  `%LOCALAPPDATA%\AI SkillHub\UserData`.
+- Added a formal release builder that signs the installer, emits `latest.json`,
+  generates checksums, packages the portable fallback, and refreshes the
+  developer root `AI SkillHub.exe` from the same verified build.
+
+### Changed
+
+- Rebuilt the default dark theme as Midnight Prism with neutral black surfaces,
+  cobalt/ice hierarchy, a restrained warm signal color, dimmer navigation, and
+  higher-contrast operational pages.
+- Renamed Parchment to remove the product-name reference.
+- Reworked the Skill universe visual grammar: sources are orbital beacons,
+  parent Skills are polygonal route cores, and child Skills are lightweight
+  particles. Category colors are more distinct and source-level variation is
+  restrained.
+- Shortened and localized the homepage introduction.
+- Restricted Vite dependency discovery to the actual app entry so third-party
+  demo HTML inside managed source repositories cannot affect development.
+
+### Fixed
+
+- Formal installers now include all required runtime PowerShell resources.
+- The repository-root developer executable can no longer silently remain on an
+  older version after a formal build.
+- The update UI never displays raw network or installer errors to end users.
+
+### Upgrade note
+
+- v3.0.2 and older builds do not contain an updater, so install v3.0.3 once
+  using the official setup executable. Updates after v3.0.3 are detected inside
+  the app.
+
 ## 3.0.2 - Persistent data, automatic routing, and premium themes
 
 ### Added

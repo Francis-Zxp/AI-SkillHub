@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AI SkillHub",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "identifier": "com.franciszhu.aiskillhub",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -26,9 +26,38 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../runtime/SkillHub.ps1": "app-next/runtime/SkillHub.ps1",
+      "../runtime/Manage-AgentSkillLinks.ps1": "app-next/runtime/Manage-AgentSkillLinks.ps1",
+      "../runtime/Export-SkillHubDiagnostics.ps1": "app-next/runtime/Export-SkillHubDiagnostics.ps1",
+      "../runtime/skillhub.config.example.json": "app-next/runtime/skillhub.config.example.json"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ]
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE5ODE0ODVGMTU4NDU0RDYKUldUV1ZJUVZYMGlCcVhnd09CcFlYTXBQekFKZ0RFdEdDdCt5cHp4WTA2SlorL002cFNMb3RlMVkK",
+      "endpoints": [
+        "https://github.com/Francis-Zxp/AI-SkillHub/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

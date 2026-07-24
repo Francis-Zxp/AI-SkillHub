@@ -23,7 +23,8 @@ Older prototype app directories are no longer part of the product.
   skillhub.config.json        # local configuration
 ```
 
-The release package is replaceable program code. v3.0.2 migrates the old
+The release package is replaceable program code. v3.0.3 adds a signed official
+updater and migrates the old
 portable folders into the stable user-data directory with a copy-only first-run
 operation, leaving the legacy copy untouched.
 

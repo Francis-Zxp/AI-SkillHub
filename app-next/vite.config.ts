@@ -12,6 +12,11 @@ export default defineConfig({
     __APP_VERSION__: JSON.stringify(packageJson.version)
   },
   clearScreen: false,
+  optimizeDeps: {
+    // Keep Vite inside the app entry. Managed source repositories may contain
+    // unrelated demo HTML files and must never influence the desktop build.
+    entries: ["index.html"]
+  },
   server: {
     port: 1420,
     strictPort: true,

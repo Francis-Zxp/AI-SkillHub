@@ -12840,6 +12840,8 @@ fn json_u64(value: &Value, key: &str) -> u64 {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             load_indexed_snapshot,
             scan_legacy_snapshot,
@@ -14219,7 +14221,11 @@ mod tests {
 
     #[test]
     fn project_scan_tracks_workspace_instruction_files() {
-        let root = resolve_legacy_root().expect("legacy root should resolve");
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .canonicalize()
+            .expect("repository root should resolve");
         let workspaces = derive_workspaces(&root, &[], 0);
         let scans = derive_project_scans(&root, &workspaces);
         let app_next = scans

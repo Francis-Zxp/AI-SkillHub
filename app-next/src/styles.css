@@ -273,34 +273,36 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .theme-nocturne {
   --ui-font: "Segoe UI Variable Text", "Inter", "Microsoft YaHei UI", "Segoe UI", sans-serif;
   --ui-display: "Segoe UI Variable Display", "Inter Display", "Microsoft YaHei UI", sans-serif;
-  --bg: #080a0f;
-  --bg-soft: #0d1118;
-  --surface: rgba(18, 22, 30, .9);
-  --surface-soft: rgba(27, 32, 43, .82);
-  --surface-strong: rgba(38, 45, 59, .94);
-  --surface-elevated: rgba(16, 20, 28, .98);
-  --border: rgba(214, 222, 238, .11);
-  --border-strong: rgba(138, 174, 255, .34);
-  --text: #f4f6fa;
-  --text-soft: #bbc2cf;
-  --text-muted: #818b9b;
-  --brand: #8aaeff;
-  --brand-strong: #cbd9ff;
-  --brand-glow: rgba(98, 139, 232, .18);
-  --accent: #d8b56c;
-  --success: #63c9ae;
-  --warning: #d8b56c;
-  --danger: #f0838e;
-  --info: #8aaeff;
-  --success-soft: rgba(99, 201, 174, .11);
-  --warning-soft: rgba(216, 181, 108, .12);
-  --danger-soft: rgba(240, 131, 142, .11);
-  --info-soft: rgba(138, 174, 255, .12);
-  --shadow-card: 0 22px 72px rgba(0, 0, 0, .3);
-  --shadow-card-hover: 0 28px 84px rgba(0, 0, 0, .4);
+  --bg: #05060a;
+  --bg-soft: #090c13;
+  --surface: rgba(13, 16, 24, .9);
+  --surface-soft: rgba(22, 27, 40, .78);
+  --surface-strong: rgba(34, 42, 62, .92);
+  --surface-elevated: rgba(10, 13, 21, .98);
+  --border: rgba(220, 229, 248, .1);
+  --border-strong: rgba(111, 157, 255, .36);
+  --text: #f7f8fc;
+  --text-soft: #c7ccda;
+  --text-muted: #8c95a8;
+  --brand: #6f9dff;
+  --brand-strong: #d9e5ff;
+  --brand-glow: rgba(87, 132, 230, .22);
+  --accent: #ffbd7a;
+  --success: #62c9a8;
+  --warning: #e5ad65;
+  --danger: #ff7d91;
+  --info: #80a8ff;
+  --success-soft: rgba(98, 201, 168, .11);
+  --warning-soft: rgba(229, 173, 101, .12);
+  --danger-soft: rgba(255, 125, 145, .11);
+  --info-soft: rgba(111, 157, 255, .13);
+  --shadow-card: 0 24px 76px rgba(0, 0, 0, .38);
+  --shadow-card-hover: 0 30px 92px rgba(0, 0, 0, .5);
   --shadow-glow: 0 0 92px var(--brand-glow);
   --hero-grad:
-    linear-gradient(118deg, rgba(8, 10, 15, .98) 0 42%, rgba(13, 18, 28, .9) 72%, rgba(11, 13, 19, .98) 100%);
+    radial-gradient(ellipse at 72% 44%, rgba(68, 111, 205, .18), transparent 38%),
+    radial-gradient(ellipse at 58% 64%, rgba(166, 123, 219, .08), transparent 34%),
+    linear-gradient(118deg, rgba(5, 6, 10, .99) 0 38%, rgba(9, 13, 23, .94) 72%, rgba(6, 8, 14, .99) 100%);
   color: var(--text);
 }
 
@@ -2029,6 +2031,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 }
 .qa-status.done { background: var(--success-soft); color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
 .qa-status.blocked { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.qa-status.failed { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
 .qa-status.planned { background: var(--warning-soft); color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
 
 .runner-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-3); }
@@ -2138,7 +2141,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   margin-right: 7px;
   border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
   border-radius: 50%;
-  background: linear-gradient(135deg, #202638 0 48%, #8aa4ff 50% 100%);
+  background: linear-gradient(135deg, #080a11 0 42%, #6f9dff 44% 70%, #ffbd7a 72% 100%);
   content: "";
   box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 5%, transparent);
 }
@@ -4020,6 +4023,131 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   .theme-family-atlas.page-dashboard .dashboard-hero-inner,
   .theme-family-atlas.page-dashboard .skill-universe::before,
   .atlas-intro-toggle { transition-duration: 1ms; }
+}
+
+/* =============================================================
+   3.0.3 — signed updates + Midnight Prism
+   ============================================================= */
+
+.update-available-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 36%, transparent);
+  border-radius: 999px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--warning) 11%, var(--surface-elevated));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
+  font: 650 calc(10.5px * var(--ui-text-scale, 1))/1 var(--ui-font);
+  cursor: pointer;
+}
+.update-available-pill:hover { transform: translateY(-1px); border-color: var(--warning); }
+.update-available-pill .ui-icon { width: 15px; height: 15px; color: var(--warning); }
+
+.update-console {
+  display: grid;
+  grid-template-columns: minmax(150px, .34fr) minmax(320px, 1fr) auto;
+  align-items: stretch;
+  gap: 10px;
+}
+.update-version-stack,
+.update-policy {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-soft) 76%, transparent);
+}
+.update-version-stack {
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 14px 16px;
+}
+.update-version-stack span,
+.update-version-stack small { color: var(--text-muted); font-size: calc(10.5px * var(--ui-text-scale, 1)); }
+.update-version-stack strong { color: var(--text); font: 650 calc(24px * var(--ui-text-scale, 1))/1 var(--ui-display); letter-spacing: -.04em; }
+.update-policy {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+}
+.update-policy > .ui-icon { width: 23px; height: 23px; color: var(--success); }
+.update-policy strong { display: block; color: var(--text); font-size: calc(12.5px * var(--ui-text-scale, 1)); }
+.update-policy span { display: block; margin-top: 3px; color: var(--text-soft); font-size: calc(11px * var(--ui-text-scale, 1)); line-height: 1.45; }
+.update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 168px;
+}
+.update-progress {
+  position: relative;
+  flex: 1 0 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-strong);
+}
+.update-progress i {
+  display: block;
+  width: var(--update-progress);
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand), var(--brand-strong));
+  box-shadow: 0 0 14px var(--brand-glow);
+  transition: width 180ms ease-out;
+}
+
+.theme-nocturne.shell {
+  background:
+    radial-gradient(76% 56% at 78% -8%, rgba(71, 111, 198, .17), transparent 58%),
+    radial-gradient(48% 48% at 16% 88%, rgba(169, 112, 189, .065), transparent 66%),
+    linear-gradient(142deg, #05060a 0%, #080b12 48%, #06070c 100%);
+}
+.theme-nocturne .sidebar {
+  background: rgba(7, 8, 13, .9);
+  border-right-color: rgba(220, 229, 248, .075);
+  box-shadow: 18px 0 64px rgba(0, 0, 0, .18);
+}
+.theme-nocturne .topbar {
+  border-color: rgba(220, 229, 248, .09);
+  background: rgba(9, 11, 18, .78);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, .22), inset 0 1px 0 rgba(255, 255, 255, .035);
+}
+.theme-nocturne.theme-family-atlas:not(.page-dashboard) > .particle-field-cosmos,
+.theme-nocturne.theme-family-atlas:not(.page-dashboard) > .particle-field-backdrop {
+  opacity: .14;
+  filter: saturate(.82) contrast(1.05);
+}
+.theme-nocturne.theme-family-atlas:not(.page-dashboard) .page-header {
+  border-color: rgba(220, 229, 248, .09);
+  background:
+    radial-gradient(ellipse at 88% 12%, rgba(111, 157, 255, .11), transparent 35%),
+    linear-gradient(120deg, rgba(14, 17, 27, .98), rgba(10, 13, 21, .92));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .24), inset 0 1px 0 rgba(255, 255, 255, .035);
+}
+.theme-nocturne.theme-family-atlas:not(.page-dashboard) .panel,
+.theme-nocturne.theme-family-atlas:not(.page-dashboard) .library-toolbar,
+.theme-nocturne.theme-family-atlas:not(.page-dashboard) .source-group {
+  border-color: rgba(220, 229, 248, .085);
+  box-shadow: 0 22px 64px rgba(0, 0, 0, .2), inset 0 1px 0 rgba(255, 255, 255, .025);
+}
+
+@media (max-width: 1080px) {
+  .update-console { grid-template-columns: 180px minmax(0, 1fr); }
+  .update-actions { grid-column: 1 / -1; justify-content: flex-start; }
+}
+
+@media (max-width: 720px) {
+  .update-available-pill span { display: none; }
+  .update-console { grid-template-columns: 1fr; }
+  .update-actions { grid-column: auto; }
 }
 
 /* =============================================================

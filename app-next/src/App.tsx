@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
   type CSSProperties,
   Fragment,
@@ -80,6 +82,19 @@ type ImportFeedbackOptions = { quiet?: boolean };
 type OperationStatus = { title: string; detail: string; step: number; total: number; percent: number };
 type SourceSortKey = "recent" | "rating" | "usage" | "heat" | "skillCount" | "health" | "name";
 type ToastTone = "info" | "ok" | "warn" | "error";
+type AppUpdatePhase =
+  | "idle"
+  | "checking"
+  | "latest"
+  | "available"
+  | "downloading"
+  | "installing"
+  | "error";
+type AppUpdateState = {
+  phase: AppUpdatePhase;
+  progress: number;
+  version: string;
+};
 
 const TOAST_EVENT = "ai-skillhub-toast";
 const APP_VERSION = __APP_VERSION__;
@@ -177,6 +192,8 @@ export function App() {
   const [operation, setOperation] = useState<OperationStatus | null>(null);
   const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
   const [globalSearch, setGlobalSearch] = useState("");
+  const [appUpdate, setAppUpdate] = useState<AppUpdateState>({ phase: "idle", progress: 0, version: "" });
+  const updateRef = useRef<Update | null>(null);
   const runtimeAvailable = hasTauriRuntime();
   const realWritesEnabled = snapshot?.operatorConsent?.realWritesEnabled === true;
 
@@ -218,6 +235,64 @@ export function App() {
 
   function toastMessage(message: string, tone: ToastTone = "info") {
     setToast({ message, tone });
+  }
+
+  async function checkForAppUpdate(silent = false) {
+    if (!runtimeAvailable) {
+      setAppUpdate({ phase: "idle", progress: 0, version: "" });
+      if (!silent) toastMessage(t("update.desktopOnly"), "info");
+      return;
+    }
+    setAppUpdate(current => ({ ...current, phase: "checking", progress: 0 }));
+    try {
+      const nextUpdate = await check({ timeout: 15_000 });
+      if (!nextUpdate) {
+        if (updateRef.current) {
+          await updateRef.current.close().catch(() => undefined);
+          updateRef.current = null;
+        }
+        setAppUpdate({ phase: "latest", progress: 100, version: APP_VERSION });
+        if (!silent) toastMessage(t("update.latestToast"), "ok");
+        return;
+      }
+      if (updateRef.current) await updateRef.current.close().catch(() => undefined);
+      updateRef.current = nextUpdate;
+      setAppUpdate({ phase: "available", progress: 0, version: nextUpdate.version });
+      toastMessage(t("update.availableToast", { version: nextUpdate.version }), "info");
+    } catch {
+      setAppUpdate({ phase: "error", progress: 0, version: "" });
+      if (!silent) toastMessage(t("update.errorToast"), "error");
+    }
+  }
+
+  async function installAppUpdate() {
+    const nextUpdate = updateRef.current;
+    if (!nextUpdate) {
+      await checkForAppUpdate(false);
+      return;
+    }
+    let downloaded = 0;
+    let total = 0;
+    setAppUpdate(current => ({ ...current, phase: "downloading", progress: 1 }));
+    try {
+      await nextUpdate.downloadAndInstall(event => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? 0;
+          downloaded = 0;
+        } else if (event.event === "Progress") {
+          downloaded += event.data.chunkLength;
+          const progress = total > 0 ? Math.min(94, Math.max(2, Math.round((downloaded / total) * 94))) : 36;
+          setAppUpdate(current => ({ ...current, phase: "downloading", progress }));
+        } else {
+          setAppUpdate(current => ({ ...current, phase: "installing", progress: 98 }));
+        }
+      }, { timeout: 120_000 });
+      setAppUpdate(current => ({ ...current, phase: "installing", progress: 100 }));
+      await relaunch();
+    } catch {
+      setAppUpdate(current => ({ ...current, phase: "error", progress: 0 }));
+      toastMessage(t("update.errorToast"), "error");
+    }
   }
 
   function applySnapshot(nextSnapshot: LegacySnapshot, background = false) {
@@ -781,6 +856,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!runtimeAvailable) return;
+    const timer = window.setTimeout(() => void checkForAppUpdate(true), 2600);
+    return () => window.clearTimeout(timer);
+  }, [runtimeAvailable]);
+
+  useEffect(() => {
     document.body.dataset.theme = theme;
     window.localStorage.setItem("ai-skillhub-theme", theme);
   }, [theme]);
@@ -927,6 +1008,12 @@ export function App() {
           <div className="topbar-actions">
             <LanguageSwitcher current={lang} onChange={changeLang} />
             <ThemeSwitcher current={theme} onChange={changeTheme} />
+            {appUpdate.phase === "available" && (
+              <button className="update-available-pill" onClick={() => setActive("settings")} type="button">
+                <Icon name="download" />
+                <span>{t("update.availableShort", { version: appUpdate.version })}</span>
+              </button>
+            )}
             <button
               className="primary-pill"
               disabled={loading || Boolean(operation)}
@@ -1079,10 +1166,13 @@ export function App() {
               currentTextScale={textScale}
               currentTheme={theme}
               disabled={loading}
+              appUpdate={appUpdate}
               onChangeIconScale={changeIconScale}
               onChangeLang={changeLang}
               onChangeTextScale={changeTextScale}
               onChangeTheme={changeTheme}
+              onCheckUpdate={() => void checkForAppUpdate(false)}
+              onInstallUpdate={() => void installAppUpdate()}
               onOpenAdvanced={() => setActive("release")}
               snapshot={snapshot}
             />
@@ -1383,6 +1473,15 @@ function Dashboard({
             onOpenSkill={onOpenSkill}
             onOpenSource={onOpenSource}
             snapshot={snapshot}
+            tone={
+              theme === "nocturne"
+                ? "prism"
+                : theme === "parchment"
+                  ? "parchment"
+                  : theme === "atlas-light"
+                    ? "mist"
+                    : "biolume"
+            }
           />
         )}
         {!atlasMode && (
@@ -1408,7 +1507,7 @@ function Dashboard({
         )}
         <div aria-hidden={atlasMode && !atlasIntroVisible} className="dashboard-hero-inner">
           <div className="atlas-hero-copy">
-            <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · {atlasMode ? "3.0 / LIVING ATLAS" : "3.0 / CLASSIC"}</span>
+            <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · {atlasMode ? t("atlas.releaseTag") : "3.0 / CLASSIC"}</span>
             <h2>{atlasMode ? t("atlas.heroTitle") : t("dash.title")}</h2>
             <p>{atlasMode ? t("atlas.heroSubtitle", { skills: summary.skills, sources: summary.sources }) : t("dash.subtitle")}</p>
             {atlasMode && (
@@ -3941,6 +4040,7 @@ function Advanced({
    ============================================================= */
 
 function Settings({
+  appUpdate,
   currentIconScale,
   currentLang,
   currentTextScale,
@@ -3950,9 +4050,12 @@ function Settings({
   onChangeLang,
   onChangeTextScale,
   onChangeTheme,
+  onCheckUpdate,
+  onInstallUpdate,
   onOpenAdvanced,
   snapshot
 }: {
+  appUpdate: AppUpdateState;
   currentIconScale: UiScalePreset;
   currentLang: Lang;
   currentTextScale: UiScalePreset;
@@ -3962,9 +4065,18 @@ function Settings({
   onChangeLang: (lang: Lang) => void;
   onChangeTextScale: (scale: UiScalePreset) => void;
   onChangeTheme: (theme: ThemeName) => void;
+  onCheckUpdate: () => void;
+  onInstallUpdate: () => void;
   onOpenAdvanced: () => void;
   snapshot: LegacySnapshot | null;
 }) {
+  const updateBusy = appUpdate.phase === "checking" || appUpdate.phase === "downloading" || appUpdate.phase === "installing";
+  const updateAvailable = appUpdate.phase === "available";
+  const updateStatus = t(`update.status.${appUpdate.phase}`, {
+    progress: appUpdate.progress,
+    version: appUpdate.version || APP_VERSION
+  });
+
   return (
     <div className="view settings-view">
       <section className="page-header glow-card">
@@ -3972,6 +4084,49 @@ function Settings({
           <span className="eyebrow"><Icon name="settings" /> {t("nav.settings")}</span>
           <h2>{t("set.title")}</h2>
           <p>{t("set.subtitle")}</p>
+        </div>
+      </section>
+
+      <section className="panel glow-card update-panel">
+        <header className="panel-head">
+          <div>
+            <span className="eyebrow">{t("update.eyebrow")}</span>
+            <h3>{t("update.title")}</h3>
+            <p>{t("update.body")}</p>
+          </div>
+          <span className={`qa-status ${updateAvailable ? "planned" : appUpdate.phase === "error" ? "failed" : "done"}`}>
+            {updateStatus}
+          </span>
+        </header>
+        <div className="update-console">
+          <div className="update-version-stack">
+            <span>{t("update.current")}</span>
+            <strong>v{APP_VERSION}</strong>
+            <small>{t("update.channel")}</small>
+          </div>
+          <div className="update-policy">
+            <Icon name="shield" />
+            <div>
+              <strong>{t("update.signedTitle")}</strong>
+              <span>{t("update.signedBody")}</span>
+            </div>
+          </div>
+          <div className="update-actions">
+            {updateBusy && (
+              <span className="update-progress" aria-label={updateStatus}>
+                <i style={{ "--update-progress": `${Math.max(4, appUpdate.progress)}%` } as CSSProperties} />
+              </span>
+            )}
+            <button className="ghost-action" disabled={disabled || updateBusy} onClick={onCheckUpdate} type="button">
+              <Icon className={appUpdate.phase === "checking" ? "icon-spin" : ""} name="refresh" />
+              {appUpdate.phase === "checking" ? t("update.checking") : t("update.check")}
+            </button>
+            {updateAvailable && (
+              <button className="primary-action" disabled={disabled || updateBusy} onClick={onInstallUpdate} type="button">
+                <Icon name="download" /> {t("update.install", { version: appUpdate.version })}
+              </button>
+            )}
+          </div>
         </div>
       </section>
 
@@ -4233,8 +4388,8 @@ function atlasThemeVisual(theme: ThemeName) {
   }
   if (theme === "nocturne") {
     return {
-      accent: "#8aaeff",
-      palette: ["#8aaeff", "#d9e3ff", "#d8b56c", "#6dd5c1"]
+      accent: "#6f9dff",
+      palette: ["#6f9dff", "#d9e5ff", "#ffbd7a", "#b49cff", "#65c9df"]
     };
   }
   if (theme === "atlas-light") {

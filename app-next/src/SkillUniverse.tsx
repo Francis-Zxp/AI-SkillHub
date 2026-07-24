@@ -37,6 +37,7 @@ type UniverseNode = {
 };
 
 type UniverseEdge = { from: string; kind: UniverseEdgeKind; to: string };
+type UniverseTone = "biolume" | "mist" | "parchment" | "prism";
 type UniverseModel = {
   categories: Array<{ category: string; count: number; hue: number }>;
   edges: UniverseEdge[];
@@ -82,6 +83,7 @@ type SkillUniverseProps = {
   onOpenSkill: (skill: SkillCard) => void;
   onOpenSource: (source: SourceCard) => void;
   snapshot: LegacySnapshot | null;
+  tone: UniverseTone;
 };
 
 const MODES: SkillUniverseMode[] = ["relations", "sources", "categories"];
@@ -91,8 +93,8 @@ const POSITION_MODES: Record<SkillUniverseMode, SkillUniverseMode> = {
   categories: "categories"
 };
 
-const SPHERE_SHELL = Array.from({ length: 216 }, (_, index) => fibonacciPoint(index, 216, 1));
-const DUST_PARTICLES = Array.from({ length: 92 }, (_, index) => {
+const SPHERE_SHELL = Array.from({ length: 288 }, (_, index) => fibonacciPoint(index, 288, 1));
+const DUST_PARTICLES = Array.from({ length: 112 }, (_, index) => {
   const seed = stableHash(`universe-dust:${index}`);
   return {
     angle: (seed % 6283) / 1000,
@@ -110,7 +112,8 @@ export function SkillUniverse({
   onModeChange,
   onOpenSkill,
   onOpenSource,
-  snapshot
+  snapshot,
+  tone
 }: SkillUniverseProps) {
   const [internalMode, setInternalMode] = useState<SkillUniverseMode>("relations");
   const [hovered, setHovered] = useState<UniverseNode | null>(null);
@@ -189,7 +192,18 @@ export function SkillUniverse({
     const draw = (time: number) => {
       if (!visible) return;
       context.clearRect(0, 0, width, height);
-      drawUniverse(context, model, runtime, modeRef.current, width, height, reducedMotion ? 0 : time, centeredRef.current, lightTheme);
+      drawUniverse(
+        context,
+        model,
+        runtime,
+        modeRef.current,
+        width,
+        height,
+        reducedMotion ? 0 : time,
+        centeredRef.current,
+        lightTheme,
+        tone
+      );
       if (!reducedMotion) frame = window.requestAnimationFrame(draw);
     };
 
@@ -212,7 +226,7 @@ export function SkillUniverse({
       window.cancelAnimationFrame(frame);
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
-  }, [lightTheme, model]);
+  }, [lightTheme, model, tone]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -595,7 +609,8 @@ function drawUniverse(
   height: number,
   time: number,
   centered: boolean,
-  lightTheme: boolean
+  lightTheme: boolean,
+  tone: UniverseTone
 ) {
   let elapsed = 16.7;
   if (time > 0) {
@@ -641,7 +656,7 @@ function drawUniverse(
   const rotationY = runtime.rotationY;
   const rotationX = runtime.rotationX + (time === 0 ? 0 : Math.sin(time * 0.00009) * 0.025);
 
-  drawUniverseAtmosphere(context, centerX, centerY, radius, lightTheme, time, rotationX, rotationY, runtime.quality, interactive);
+  drawUniverseAtmosphere(context, centerX, centerY, radius, lightTheme, tone, time, rotationX, rotationY, runtime.quality, interactive);
 
   const cosX = Math.cos(rotationX);
   const sinX = Math.sin(rotationX);
@@ -714,16 +729,44 @@ function drawUniverseAtmosphere(
   centerY: number,
   radius: number,
   lightTheme: boolean,
+  tone: UniverseTone,
   time: number,
   rotationX: number,
   rotationY: number,
   quality: number,
   interactive: boolean
 ) {
+  const atmosphere =
+    tone === "prism"
+      ? {
+          center: lightTheme ? "rgba(64, 104, 184, .13)" : "rgba(161, 190, 255, .16)",
+          mid: lightTheme ? "rgba(127, 91, 166, .055)" : "rgba(112, 90, 190, .07)",
+          edge: "rgba(71, 117, 198, .025)",
+          line: lightTheme ? "rgba(54, 83, 145, .12)" : "rgba(165, 194, 255, .11)",
+          shell: lightTheme ? "rgba(60, 85, 136, .34)" : "rgba(221, 232, 255, .42)",
+          dust: lightTheme ? "rgba(77, 91, 131, .22)" : "rgba(202, 217, 255, .28)"
+        }
+      : tone === "parchment"
+        ? {
+            center: "rgba(154, 78, 48, .12)",
+            mid: "rgba(68, 91, 112, .055)",
+            edge: "rgba(122, 87, 55, .025)",
+            line: "rgba(122, 75, 49, .12)",
+            shell: "rgba(97, 73, 55, .32)",
+            dust: "rgba(108, 78, 55, .2)"
+          }
+        : {
+            center: lightTheme ? "rgba(23, 121, 111, .15)" : "rgba(205, 255, 249, .18)",
+            mid: lightTheme ? "rgba(41, 90, 128, .065)" : "rgba(68, 188, 180, .072)",
+            edge: lightTheme ? "rgba(41, 90, 128, .025)" : "rgba(88, 129, 166, .026)",
+            line: lightTheme ? "rgba(25, 105, 99, .12)" : "rgba(176, 239, 232, .12)",
+            shell: lightTheme ? "rgba(27, 98, 93, .34)" : "rgba(213, 246, 242, .4)",
+            dust: lightTheme ? "rgba(22, 93, 88, .22)" : "rgba(212, 247, 243, .26)"
+          };
   const aura = context.createRadialGradient(centerX, centerY, radius * 0.02, centerX, centerY, radius * 1.28);
-  aura.addColorStop(0, lightTheme ? "rgba(23, 121, 111, .15)" : "rgba(205, 255, 249, .18)");
-  aura.addColorStop(0.28, lightTheme ? "rgba(41, 90, 128, .065)" : "rgba(68, 188, 180, .072)");
-  aura.addColorStop(0.68, lightTheme ? "rgba(41, 90, 128, .025)" : "rgba(88, 129, 166, .026)");
+  aura.addColorStop(0, atmosphere.center);
+  aura.addColorStop(0.28, atmosphere.mid);
+  aura.addColorStop(0.68, atmosphere.edge);
   aura.addColorStop(1, "rgba(0, 0, 0, 0)");
   context.fillStyle = aura;
   context.fillRect(centerX - radius * 1.35, centerY - radius * 1.35, radius * 2.7, radius * 2.7);
@@ -731,7 +774,7 @@ function drawUniverseAtmosphere(
   context.save();
   context.translate(centerX, centerY);
   context.rotate(time * 0.000006);
-  context.strokeStyle = lightTheme ? "rgba(25, 105, 99, .12)" : "rgba(176, 239, 232, .12)";
+  context.strokeStyle = atmosphere.line;
   context.lineWidth = 0.7;
   for (let ring = 0; ring < 3; ring += 1) {
     context.save();
@@ -750,7 +793,7 @@ function drawUniverseAtmosphere(
   const sinY = Math.sin(rotationY);
   const shellStep = interactive || quality < 0.72 ? 2 : 1;
   context.save();
-  context.fillStyle = lightTheme ? "rgba(27, 98, 93, .34)" : "rgba(213, 246, 242, .4)";
+  context.fillStyle = atmosphere.shell;
   for (let index = 0; index < SPHERE_SHELL.length; index += shellStep) {
     const point = SPHERE_SHELL[index];
     const y0 = point.y * cosX - point.z * sinX;
@@ -765,7 +808,7 @@ function drawUniverseAtmosphere(
   context.restore();
 
   context.save();
-  context.fillStyle = lightTheme ? "rgba(22, 93, 88, .22)" : "rgba(212, 247, 243, .26)";
+  context.fillStyle = atmosphere.dust;
   const dustCount = interactive ? 32 : Math.round(DUST_PARTICLES.length * quality);
   for (let index = 0; index < dustCount; index += 1) {
     const dust = DUST_PARTICLES[index];
@@ -788,23 +831,28 @@ function drawUniverseNode(
   interactive: boolean
 ) {
   const hue = node.hue;
-  const baseAlpha = node.enabled ? 0.45 + node.depth * 0.5 : 0.22;
-  const pulse = time === 0 ? 1 : 0.93 + Math.sin(time * 0.0011 + node.seed) * 0.07;
-  const radius = node.radius * (highlighted ? 1.42 : pulse);
-  const lightness = lightTheme ? 39 : 69;
+  const baseAlpha = node.enabled ? 0.5 + node.depth * 0.44 : 0.2;
+  const pulse = time === 0 ? 1 : 0.96 + Math.sin(time * 0.00092 + node.seed) * 0.04;
+  const radius = node.radius * (highlighted ? 1.34 : pulse);
+  const lightness = lightTheme ? 43 : 67;
 
   if (node.kind === "source") {
-    const halo = radius * (2.2 + Math.min(1.5, Math.log10(node.stars + 1) * 0.18));
+    const halo = radius * (2.5 + Math.min(1.25, Math.log10(node.stars + 1) * 0.16));
+    const glow = context.createRadialGradient(
+      node.screenX,
+      node.screenY,
+      radius * 0.1,
+      node.screenX,
+      node.screenY,
+      halo
+    );
+    glow.addColorStop(0, `hsla(${hue}, 82%, ${lightness + 8}%, ${highlighted ? 0.28 : 0.16})`);
+    glow.addColorStop(0.42, `hsla(${hue}, 78%, ${lightness}%, ${highlighted ? 0.12 : 0.055})`);
+    glow.addColorStop(1, `hsla(${hue}, 76%, ${lightness}%, 0)`);
     context.beginPath();
     context.arc(node.screenX, node.screenY, halo, 0, Math.PI * 2);
-    context.fillStyle = `hsla(${hue}, 82%, ${lightness}%, ${highlighted ? 0.1 : 0.035})`;
+    context.fillStyle = glow;
     context.fill();
-    if (!interactive && quality > 0.7) {
-      context.beginPath();
-      context.arc(node.screenX, node.screenY, halo * 0.54, 0, Math.PI * 2);
-      context.fillStyle = `hsla(${hue}, 82%, ${lightness + 4}%, ${highlighted ? 0.16 : 0.065})`;
-      context.fill();
-    }
   }
 
   context.save();
@@ -815,33 +863,55 @@ function drawUniverseNode(
     context.fillStyle = `hsla(${hue}, 88%, ${lightness}%, .11)`;
     context.fill();
   }
-  context.beginPath();
-  context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
-  context.fillStyle = node.kind === "source"
-    ? `hsla(${hue}, ${lightTheme ? 78 : 88}%, ${lightTheme ? 34 : 64}%, ${baseAlpha})`
-    : `hsla(${hue}, 84%, ${lightness}%, ${highlighted ? 1 : baseAlpha})`;
-  context.fill();
-
-  context.beginPath();
-  context.arc(node.screenX - radius * 0.2, node.screenY - radius * 0.22, Math.max(0.55, radius * 0.34), 0, Math.PI * 2);
-  context.fillStyle = node.kind === "source"
-    ? `rgba(255, 255, 255, ${lightTheme ? 0.52 : 0.82})`
-    : `hsla(${hue}, 92%, ${lightTheme ? 72 : 88}%, ${0.42 + node.depth * 0.36})`;
-  context.fill();
-
-  if (node.kind !== "skill") {
+  if (node.kind === "source") {
+    context.save();
+    context.translate(node.screenX, node.screenY);
+    context.rotate(((node.seed % 29) - 14) * 0.01);
     context.beginPath();
-    context.arc(node.screenX, node.screenY, radius + (node.kind === "router" ? 5 : 4), 0, Math.PI * 2);
+    context.ellipse(0, 0, radius * 1.08, radius * 0.76, 0, 0, Math.PI * 2);
+    context.fillStyle = `hsla(${hue}, ${lightTheme ? 70 : 82}%, ${lightTheme ? 39 : 64}%, ${baseAlpha})`;
+    context.fill();
+    context.beginPath();
+    context.ellipse(-radius * 0.18, -radius * 0.12, radius * 0.42, radius * 0.2, -0.12, 0, Math.PI * 2);
+    context.fillStyle = `rgba(255, 255, 255, ${lightTheme ? 0.42 : 0.72})`;
+    context.fill();
+    context.restore();
+    context.beginPath();
+    context.arc(node.screenX, node.screenY, radius + 4, 0, Math.PI * 2);
     context.strokeStyle = `hsla(${hue}, 84%, ${lightTheme ? 34 : 74}%, ${highlighted ? 0.88 : 0.38})`;
-    context.lineWidth = node.kind === "router" ? 1.2 : 0.8;
+    context.lineWidth = 0.8;
     context.stroke();
-    if (node.kind === "router") {
+  } else if (node.kind === "router") {
+    drawPolygonPath(context, node.screenX, node.screenY, radius, 6, Math.PI / 6);
+    context.fillStyle = `hsla(${hue}, 76%, ${lightness}%, ${highlighted ? 1 : baseAlpha})`;
+    context.fill();
+    drawPolygonPath(context, node.screenX, node.screenY, radius + 5, 6, Math.PI / 6);
+    context.strokeStyle = `hsla(${hue}, 76%, ${lightTheme ? 34 : 78}%, ${highlighted ? 0.82 : 0.34})`;
+    context.lineWidth = 1;
+    context.stroke();
+    if (!interactive && quality > 0.7) {
       context.beginPath();
-      context.arc(node.screenX, node.screenY, radius + 9, 0, Math.PI * 2);
-      context.strokeStyle = `hsla(${hue}, 84%, ${lightTheme ? 34 : 74}%, ${highlighted ? 0.48 : 0.18})`;
+      context.arc(node.screenX, node.screenY, radius + 9, -0.2, 3.8);
+      context.strokeStyle = `hsla(${hue}, 78%, ${lightTheme ? 38 : 80}%, ${highlighted ? 0.46 : 0.17})`;
+      context.lineWidth = 0.7;
       context.stroke();
     }
-    if (node.kind === "source" && !interactive && quality > 0.72) {
+  } else {
+    context.beginPath();
+    context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
+    context.fillStyle = `hsla(${hue}, ${lightTheme ? 72 : 78}%, ${lightness}%, ${highlighted ? 1 : baseAlpha})`;
+    context.fill();
+    if (node.rating >= 4 || highlighted) {
+      context.beginPath();
+      context.arc(node.screenX, node.screenY, radius + 2.2, 0, Math.PI * 2);
+      context.strokeStyle = `hsla(${hue}, 72%, ${lightTheme ? 34 : 82}%, ${highlighted ? 0.68 : 0.24})`;
+      context.lineWidth = 0.65;
+      context.stroke();
+    }
+  }
+
+  if (node.kind === "source") {
+    if (!interactive && quality > 0.72) {
       const orbit = radius + 9 + Math.log10(node.stars + 1) * 0.7;
       const markerAngle = time * 0.00032 + (node.seed % 360);
       context.beginPath();
@@ -856,6 +926,25 @@ function drawUniverseNode(
     }
   }
   context.restore();
+}
+
+function drawPolygonPath(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  sides: number,
+  rotation = 0
+) {
+  context.beginPath();
+  for (let index = 0; index < sides; index += 1) {
+    const angle = rotation + (index / sides) * Math.PI * 2;
+    const pointX = x + Math.cos(angle) * radius;
+    const pointY = y + Math.sin(angle) * radius;
+    if (index === 0) context.moveTo(pointX, pointY);
+    else context.lineTo(pointX, pointY);
+  }
+  context.closePath();
 }
 
 function drawHoverLabel(
@@ -1073,25 +1162,25 @@ const SPECIALIZED_CATEGORIES = new Set([
 ]);
 
 const CATEGORY_HUES: Record<string, number> = {
-  "academic-writing": 214,
+  "academic-writing": 216,
   "literature-research": 174,
-  "scientific-figures": 46,
-  "ui-design": 292,
+  "scientific-figures": 42,
+  "ui-design": 310,
   "security-audit": 8,
-  "agent-tools": 248,
-  "image-generation": 326,
-  "knowledge-retrieval": 136,
-  presentations: 28,
-  "prompt-polishing": 346,
-  "life-sciences": 108,
-  "clinical-medical": 358,
-  "finance-economics": 58,
-  "document-tools": 18,
-  "browser-automation": 268,
-  "data-analysis": 190,
-  development: 226,
-  general: 72
+  "agent-tools": 258,
+  "image-generation": 334,
+  "knowledge-retrieval": 148,
+  presentations: 26,
+  "prompt-polishing": 286,
+  "life-sciences": 116,
+  "clinical-medical": 350,
+  "finance-economics": 52,
+  "document-tools": 196,
+  "browser-automation": 232,
+  "data-analysis": 184,
+  development: 224,
+  general: 204
 };
 
-const GENERAL_CLUSTER_HUES = [18, 48, 82, 118, 154, 186, 208, 232, 258, 286, 316, 344];
-const CLUSTER_HUE_OFFSETS = [-22, -11, 0, 11, 22];
+const GENERAL_CLUSTER_HUES = [12, 38, 116, 154, 184, 206, 224, 248, 274, 306, 334, 352];
+const CLUSTER_HUE_OFFSETS = [-14, -7, 0, 7, 14];
