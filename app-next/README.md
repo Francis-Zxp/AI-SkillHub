@@ -47,6 +47,12 @@ with visible progress, bounded Impeccable-compatible fallback downloads,
 source-scoped parent routing, two-axis atlas rotation, classic v3.0.2 theme
 options, and default-window alignment fixes.
 
+v3.0.6 adds bounded official-update retries, restores editing as a right-side
+glass drawer, optically centers the collapsed logo, and starts the live atlas
+from a privacy-bounded cache before transitioning to the current SQLite index.
+The atlas returns to one volumetric center; decorative points are quieter and
+meteors vary per app session without changing unpredictably during a session.
+
 Generated suggestions never replace manual metadata overrides, and imported
 source scripts are not executed during recognition.
 

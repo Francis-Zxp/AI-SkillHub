@@ -11,6 +11,7 @@ import {
   useRef,
   useState
 } from "react";
+import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./icons";
 import { CountUp, ParticleField, useCardGlow } from "./effects";
 import { LANG_OPTIONS, type Lang, categoryName, getLang, initialLang, setLang, t } from "./i18n";
@@ -96,6 +97,7 @@ type ToastTone = "info" | "ok" | "warn" | "error";
 type AppUpdatePhase =
   | "idle"
   | "checking"
+  | "retrying"
   | "latest"
   | "available"
   | "downloading"
@@ -207,6 +209,8 @@ export function App() {
   const [globalSearch, setGlobalSearch] = useState("");
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({ phase: "idle", progress: 0, version: "" });
   const updateRef = useRef<Update | null>(null);
+  const updateRetryTimerRef = useRef<number | null>(null);
+  const backgroundUpdateRetriesRef = useRef(0);
   const runtimeAvailable = hasTauriRuntime();
   const realWritesEnabled = snapshot?.operatorConsent?.realWritesEnabled === true;
 
@@ -256,25 +260,61 @@ export function App() {
       if (!silent) toastMessage(t("update.desktopOnly"), "info");
       return;
     }
-    setAppUpdate(current => ({ ...current, phase: "checking", progress: 0 }));
-    try {
-      const nextUpdate = await check({ timeout: 15_000 });
-      if (!nextUpdate) {
-        if (updateRef.current) {
-          await updateRef.current.close().catch(() => undefined);
-          updateRef.current = null;
-        }
-        setAppUpdate({ phase: "latest", progress: 100, version: APP_VERSION });
-        if (!silent) toastMessage(t("update.latestToast"), "ok");
-        return;
+    if (updateRetryTimerRef.current !== null) {
+      window.clearTimeout(updateRetryTimerRef.current);
+      updateRetryTimerRef.current = null;
+    }
+    if (!silent) backgroundUpdateRetriesRef.current = 0;
+
+    const retryDelays = silent ? [0, 1_600] : [0, 1_100, 3_200];
+    for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+      const delay = retryDelays[attempt];
+      if (delay > 0) {
+        setAppUpdate({ phase: "retrying", progress: attempt, version: "" });
+        await waitFor(delay);
+      } else {
+        setAppUpdate(current => ({ ...current, phase: "checking", progress: 0 }));
       }
-      if (updateRef.current) await updateRef.current.close().catch(() => undefined);
-      updateRef.current = nextUpdate;
-      setAppUpdate({ phase: "available", progress: 0, version: nextUpdate.version });
-      toastMessage(t("update.availableToast", { version: nextUpdate.version }), "info");
-    } catch {
-      setAppUpdate({ phase: "error", progress: 0, version: "" });
-      if (!silent) toastMessage(t("update.errorToast"), "error");
+
+      try {
+        const nextUpdate = await check({ timeout: 15_000 });
+        backgroundUpdateRetriesRef.current = 0;
+        if (!nextUpdate) {
+          if (updateRef.current) {
+            await updateRef.current.close().catch(() => undefined);
+            updateRef.current = null;
+          }
+          setAppUpdate({ phase: "latest", progress: 100, version: APP_VERSION });
+          if (!silent) toastMessage(t("update.latestToast"), "ok");
+          return;
+        }
+        if (updateRef.current) await updateRef.current.close().catch(() => undefined);
+        updateRef.current = nextUpdate;
+        setAppUpdate({ phase: "available", progress: 0, version: nextUpdate.version });
+        toastMessage(t("update.availableToast", { version: nextUpdate.version }), "info");
+        return;
+      } catch {
+        // A newly published release can take a short time to reach every
+        // GitHub endpoint. The bounded retry state below is the user-facing
+        // diagnostic; do not leak raw transport details into the UI/console.
+      }
+    }
+
+    setAppUpdate({ phase: "error", progress: 0, version: "" });
+    const retryNumber = backgroundUpdateRetriesRef.current;
+    if (retryNumber < 2) {
+      backgroundUpdateRetriesRef.current += 1;
+      const retryAfter = retryNumber === 0 ? 45_000 : 120_000;
+      updateRetryTimerRef.current = window.setTimeout(() => {
+        updateRetryTimerRef.current = null;
+        void checkForAppUpdate(true);
+      }, retryAfter);
+    }
+    if (!silent) {
+      toastMessage(
+        backgroundUpdateRetriesRef.current > 0 ? t("update.retryToast") : t("update.errorToast"),
+        "error"
+      );
     }
   }
 
@@ -991,7 +1031,13 @@ export function App() {
   useEffect(() => {
     if (!runtimeAvailable) return;
     const timer = window.setTimeout(() => void checkForAppUpdate(true), 2600);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      if (updateRetryTimerRef.current !== null) {
+        window.clearTimeout(updateRetryTimerRef.current);
+        updateRetryTimerRef.current = null;
+      }
+    };
   }, [runtimeAvailable]);
 
   useEffect(() => {
@@ -3356,7 +3402,7 @@ function Drawer({
   title: string;
   wide?: boolean;
 }) {
-  return (
+  return createPortal(
     <>
       <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
       <aside className={wide ? "drawer wide" : "drawer"} role="dialog" aria-label={title}>
@@ -3371,7 +3417,8 @@ function Drawer({
         </header>
         {children}
       </aside>
-    </>
+    </>,
+    document.body
   );
 }
 
@@ -4651,7 +4698,11 @@ function Settings({
   onOpenAdvanced: () => void;
   snapshot: LegacySnapshot | null;
 }) {
-  const updateBusy = appUpdate.phase === "checking" || appUpdate.phase === "downloading" || appUpdate.phase === "installing";
+  const updateBusy =
+    appUpdate.phase === "checking" ||
+    appUpdate.phase === "retrying" ||
+    appUpdate.phase === "downloading" ||
+    appUpdate.phase === "installing";
   const updateAvailable = appUpdate.phase === "available";
   const [cleanupCandidates, setCleanupCandidates] = useState<LegacyCleanupCandidateCard[]>([]);
   const [cleanupBusyId, setCleanupBusyId] = useState("");
@@ -4744,7 +4795,9 @@ function Settings({
             )}
             <button className="ghost-action" disabled={disabled || updateBusy} onClick={onCheckUpdate} type="button">
               <Icon className={appUpdate.phase === "checking" ? "icon-spin" : ""} name="refresh" />
-              {appUpdate.phase === "checking" ? t("update.checking") : t("update.check")}
+              {appUpdate.phase === "checking" || appUpdate.phase === "retrying"
+                ? t("update.checking")
+                : t("update.check")}
             </button>
             {updateAvailable && (
               <button className="primary-action" disabled={disabled || updateBusy} onClick={onInstallUpdate} type="button">
@@ -6226,6 +6279,10 @@ async function copyTextToClipboard(text: string, successMessage: string) {
   } catch {
     showUiToast(t("toast.copyManual"), "warn");
   }
+}
+
+function waitFor(milliseconds: number): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, milliseconds));
 }
 
 async function openReleaseGateExportPath(path: string) {

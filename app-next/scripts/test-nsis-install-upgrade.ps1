@@ -3,7 +3,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$InstallerPath,
   [string]$PreviousInstallerPath = '',
-  [string]$ExpectedVersion = '3.0.5',
+  [string]$ExpectedVersion = '3.0.6',
   [switch]$KeepSandbox
 )
 
@@ -129,7 +129,7 @@ INSERT OR REPLACE INTO source_overrides (
   $sentinel = Join-Path $DataRoot 'update-preserves-user-data.txt'
   [IO.File]::WriteAllText(
     $sentinel,
-    'preserve-v3.0.5',
+    'preserve-v3.0.6',
     [Text.UTF8Encoding]::new($false)
   )
   $second = Start-Process -FilePath $InstallerPath -ArgumentList @('/S', "/D=$InstallRoot") -Wait -PassThru -WindowStyle Hidden
@@ -137,7 +137,7 @@ INSERT OR REPLACE INTO source_overrides (
 
   $sentinelPreserved =
     (Test-Path -LiteralPath $sentinel -PathType Leaf) -and
-    ((Get-Content -LiteralPath $sentinel -Raw) -eq 'preserve-v3.0.5')
+    ((Get-Content -LiteralPath $sentinel -Raw) -eq 'preserve-v3.0.6')
   $installedVersion = (
     [string](Get-Item -LiteralPath $app).VersionInfo.ProductVersion -split '[+-]'
   )[0]

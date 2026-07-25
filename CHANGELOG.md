@@ -2,6 +2,39 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.0.6 - Resilient updates, cache-first atlas, and editor polish
+
+### Fixed
+
+- Added bounded retries for official update checks and delayed background retry
+  after a just-published GitHub release has not reached every `latest` endpoint.
+  Users no longer need to restart the app to make a transient miss recover.
+- Rendered Skill/source editing through a document-level portal so its fixed
+  glass drawer remains on the right edge of the desktop viewport and cannot be
+  trapped below the animated page or left navigation rail.
+- Optically centered the visible logo artwork rather than only centering the
+  transparent PNG canvas; removed the hidden second grid column that caused
+  the remaining horizontal offset.
+- Kept all theme names on one line at desktop and narrow-window breakpoints.
+
+### Changed
+
+- The capability atlas now restores a privacy-bounded cache of the previous
+  real graph immediately, then crossfades to the current SQLite index. It does
+  not pretend that the slower manual Git/source synchronization has completed.
+- Replaced the multiple bloom islands with one directional volumetric core and
+  reduced decorative shell/dust opacity. Meteor count, size, direction and
+  speed vary per app session but remain stable within that session.
+- Restored the right-side glass editing workflow and tightened its final
+  viewport geometry to 12 px top/right/bottom with a 520 px wide maximum.
+
+### Validation status
+
+- Production build and five v3.0.6 UI contracts pass. Headless Chromium QA at
+  1280×820 confirms a 0.21 px optical-logo offset, `cached → live` graph state,
+  no absolute paths/notes in graph cache, single-line theme labels, no
+  horizontal overflow, and a body-level glass drawer at z-index 101.
+
 ## 3.0.5 - Responsive imports, source-scoped routing, and visual finish
 
 ### Fixed

@@ -47,6 +47,7 @@ type UniverseModel = {
   nodes: UniverseNode[];
   parentEdges: number;
   relationEdges: number;
+  skillCount: number;
   sourceCount: number;
 };
 type ProjectedNode = UniverseNode & {
@@ -119,18 +120,20 @@ const DUST_PARTICLES = Array.from({ length: 112 }, (_, index) => {
     stretch: 0.78 + ((seed >>> 8) % 28) / 100
   };
 });
-const METEORS = Array.from({ length: 7 }, (_, index) => {
-  const seed = stableHash(`universe-meteor:${index}`);
+const METEOR_SESSION_SEED = randomSessionSeed();
+const METEORS = Array.from({ length: 3 + (METEOR_SESSION_SEED % 4) }, (_, index) => {
+  const seed = stableHash(`universe-meteor:${METEOR_SESSION_SEED}:${index}`);
   return {
     delay: (seed % 10_000) / 10_000,
-    duration: 0.12 + ((seed >>> 4) % 80) / 1000,
-    length: 34 + ((seed >>> 7) % 76),
+    duration: 0.1 + ((seed >>> 4) % 72) / 1000,
+    length: 24 + ((seed >>> 7) % 58),
     slope: 0.28 + ((seed >>> 11) % 30) / 100,
     x: -0.18 + ((seed >>> 14) % 136) / 100,
     y: 0.04 + ((seed >>> 18) % 84) / 100
   };
 });
 const AURA_SPRITES = new Map<string, HTMLCanvasElement>();
+const UNIVERSE_CACHE_KEY = "ai-skillhub-universe-cache-v1";
 
 export function SkillUniverse({
   centered,
@@ -150,9 +153,22 @@ export function SkillUniverse({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const runtimeRef = useRef<UniverseRuntime | null>(null);
   const hoverRef = useRef("");
-  const model = useMemo(() => buildUniverseModel(snapshot), [snapshot]);
+  const cachedModelRef = useRef<UniverseModel | null>(readUniverseModelCache());
+  const [promotingCache, setPromotingCache] = useState(false);
+  const liveModel = useMemo(() => snapshot ? buildUniverseModel(snapshot) : null, [snapshot]);
+  const model = liveModel ?? cachedModelRef.current ?? emptyUniverseModel();
+  const showingCachedModel = !snapshot && Boolean(cachedModelRef.current);
   modeRef.current = mode;
   centeredRef.current = centered;
+
+  useEffect(() => {
+    if (!liveModel) return;
+    writeUniverseModelCache(liveModel);
+    if (!cachedModelRef.current) return;
+    setPromotingCache(true);
+    const timer = window.setTimeout(() => setPromotingCache(false), 900);
+    return () => window.clearTimeout(timer);
+  }, [liveModel]);
 
   const selectMode = (next: SkillUniverseMode) => {
     if (controlledMode === undefined) setInternalMode(next);
@@ -447,9 +463,13 @@ export function SkillUniverse({
   };
 
   return (
-    <div className={`skill-universe${centered ? " is-centered" : ""}`} style={{ "--universe-hue": hovered?.hue ?? 178 } as CSSProperties}>
+    <div
+      className={`skill-universe${centered ? " is-centered" : ""}${promotingCache ? " is-promoting-cache" : ""}`}
+      data-universe-state={snapshot ? "live" : showingCachedModel ? "cached" : "empty"}
+      style={{ "--universe-hue": hovered?.hue ?? 178 } as CSSProperties}
+    >
       <canvas
-        aria-label={t("universe.aria", { skills: snapshot?.skills.length ?? 0, sources: model.sourceCount })}
+        aria-label={t("universe.aria", { skills: model.skillCount, sources: model.sourceCount })}
         className="skill-universe-canvas"
         onDoubleClick={openNode}
         onPointerCancel={endDrag}
@@ -476,7 +496,7 @@ export function SkillUniverse({
       </div>
 
       <div className="skill-universe-counter" aria-hidden="true">
-        <strong>{(snapshot?.skills.length ?? 0).toLocaleString()}</strong>
+        <strong>{model.skillCount.toLocaleString()}</strong>
         <span>{t("universe.realNodes")}</span>
         <small>{model.parentEdges.toLocaleString()} {t("universe.parentLinks")} · {model.relationEdges.toLocaleString()} {t("universe.relatedLinks")}</small>
       </div>
@@ -669,6 +689,7 @@ function buildUniverseModel(snapshot: LegacySnapshot | null): UniverseModel {
     nodes,
     parentEdges,
     relationEdges: edges.length - parentEdges,
+    skillCount: skills.length,
     sourceCount: sources.length
   };
 }
@@ -898,7 +919,7 @@ function drawUniverseAtmosphere(
   const atmosphere = atmospherePalette(tone, lightTheme);
   const aura = getAuraSprite(`${tone}:${lightTheme ? "light" : "dark"}`, atmosphere);
   if (aura) {
-    context.drawImage(aura, centerX - radius * 1.35, centerY - radius * 1.35, radius * 2.7, radius * 2.7);
+    context.drawImage(aura, centerX - radius * 1.18, centerY - radius * 1.18, radius * 2.36, radius * 2.36);
   }
   drawUniverseMeteors(context, centerX, centerY, radius, lightTheme, tone, time, interactive, lod);
 
@@ -935,7 +956,7 @@ function drawUniverseAtmosphere(
     const z = -point.x * sinY + z0 * cosY;
     const scale = 3.05 / (3.05 - z);
     const size = (z > 0 ? 1.05 : 0.48) * scale;
-    context.globalAlpha = z > 0 ? 0.9 : 0.3;
+    context.globalAlpha = z > 0 ? 0.68 : 0.18;
     context.beginPath();
     context.arc(
       centerX + x * radius * scale,
@@ -989,17 +1010,17 @@ function drawUniverseMeteors(
     const tailY = startY - meteor.length * meteor.slope;
     const gradient = context.createLinearGradient(tailX, tailY, startX, startY);
     gradient.addColorStop(0, `hsla(${meteorHue}, 92%, ${lightTheme ? 36 : 76}%, 0)`);
-    gradient.addColorStop(0.72, `hsla(${meteorHue}, 92%, ${lightTheme ? 36 : 76}%, ${fade * 0.1})`);
-    gradient.addColorStop(1, `hsla(${meteorHue}, 100%, ${lightTheme ? 32 : 88}%, ${fade * 0.54})`);
+    gradient.addColorStop(0.72, `hsla(${meteorHue}, 92%, ${lightTheme ? 36 : 76}%, ${fade * 0.06})`);
+    gradient.addColorStop(1, `hsla(${meteorHue}, 100%, ${lightTheme ? 32 : 88}%, ${fade * 0.36})`);
     context.beginPath();
     context.moveTo(tailX, tailY);
     context.lineTo(startX, startY);
     context.strokeStyle = gradient;
-    context.lineWidth = 0.75;
+    context.lineWidth = 0.58 + (meteor.length % 17) / 85;
     context.stroke();
     context.beginPath();
-    context.arc(startX, startY, 1.1, 0, Math.PI * 2);
-    context.fillStyle = `hsla(${meteorHue}, 100%, ${lightTheme ? 30 : 90}%, ${fade * 0.72})`;
+    context.arc(startX, startY, 0.65 + (meteor.length % 13) / 24, 0, Math.PI * 2);
+    context.fillStyle = `hsla(${meteorHue}, 100%, ${lightTheme ? 30 : 90}%, ${fade * 0.48})`;
     context.fill();
   }
   context.restore();
@@ -1196,8 +1217,8 @@ function atmospherePalette(tone: UniverseTone, lightTheme: boolean): AtmosphereP
       mid: lightTheme ? "rgba(127, 91, 166, .055)" : "rgba(112, 90, 190, .07)",
       edge: "rgba(71, 117, 198, .025)",
       line: lightTheme ? "rgba(54, 83, 145, .12)" : "rgba(165, 194, 255, .11)",
-      shell: lightTheme ? "rgba(60, 85, 136, .34)" : "rgba(221, 232, 255, .42)",
-      dust: lightTheme ? "rgba(77, 91, 131, .22)" : "rgba(202, 217, 255, .28)"
+      shell: lightTheme ? "rgba(60, 85, 136, .24)" : "rgba(221, 232, 255, .27)",
+      dust: lightTheme ? "rgba(77, 91, 131, .12)" : "rgba(202, 217, 255, .14)"
     };
   }
   if (tone === "parchment") {
@@ -1206,8 +1227,8 @@ function atmospherePalette(tone: UniverseTone, lightTheme: boolean): AtmosphereP
       mid: "rgba(68, 91, 112, .055)",
       edge: "rgba(122, 87, 55, .025)",
       line: "rgba(122, 75, 49, .12)",
-      shell: "rgba(97, 73, 55, .32)",
-      dust: "rgba(108, 78, 55, .2)"
+      shell: "rgba(97, 73, 55, .23)",
+      dust: "rgba(108, 78, 55, .11)"
     };
   }
   return {
@@ -1215,8 +1236,8 @@ function atmospherePalette(tone: UniverseTone, lightTheme: boolean): AtmosphereP
     mid: lightTheme ? "rgba(41, 90, 128, .065)" : "rgba(68, 188, 180, .072)",
     edge: lightTheme ? "rgba(41, 90, 128, .025)" : "rgba(88, 129, 166, .026)",
     line: lightTheme ? "rgba(25, 105, 99, .12)" : "rgba(176, 239, 232, .12)",
-    shell: lightTheme ? "rgba(27, 98, 93, .34)" : "rgba(213, 246, 242, .4)",
-    dust: lightTheme ? "rgba(22, 93, 88, .22)" : "rgba(212, 247, 243, .26)"
+    shell: lightTheme ? "rgba(27, 98, 93, .23)" : "rgba(213, 246, 242, .26)",
+    dust: lightTheme ? "rgba(22, 93, 88, .12)" : "rgba(212, 247, 243, .13)"
   };
 }
 
@@ -1225,29 +1246,18 @@ function getAuraSprite(key: string, palette: AtmospherePalette) {
   if (cached) return cached;
   if (typeof document === "undefined") return null;
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 256;
+  canvas.width = 384;
+  canvas.height = 384;
   const context = canvas.getContext("2d");
   if (!context) return null;
-  const aura = context.createRadialGradient(128, 128, 3, 128, 128, 128);
+  const aura = context.createRadialGradient(165, 154, 3, 192, 192, 190);
   aura.addColorStop(0, palette.center);
-  aura.addColorStop(0.28, palette.mid);
-  aura.addColorStop(0.68, palette.edge);
+  aura.addColorStop(0.18, palette.center);
+  aura.addColorStop(0.42, palette.mid);
+  aura.addColorStop(0.72, palette.edge);
   aura.addColorStop(1, "rgba(0, 0, 0, 0)");
   context.fillStyle = aura;
-  context.fillRect(0, 0, 256, 256);
-  const upperBloom = context.createRadialGradient(106, 91, 2, 106, 91, 76);
-  upperBloom.addColorStop(0, palette.center);
-  upperBloom.addColorStop(0.4, palette.mid);
-  upperBloom.addColorStop(1, "rgba(0, 0, 0, 0)");
-  context.fillStyle = upperBloom;
-  context.fillRect(0, 0, 256, 256);
-  const lowerBloom = context.createRadialGradient(154, 168, 2, 154, 168, 82);
-  lowerBloom.addColorStop(0, palette.mid);
-  lowerBloom.addColorStop(0.56, palette.edge);
-  lowerBloom.addColorStop(1, "rgba(0, 0, 0, 0)");
-  context.fillStyle = lowerBloom;
-  context.fillRect(0, 0, 256, 256);
+  context.fillRect(0, 0, 384, 384);
   AURA_SPRITES.set(key, canvas);
   return canvas;
 }
@@ -1460,6 +1470,138 @@ function truncateText(context: CanvasRenderingContext2D, value: string, maxWidth
   let text = value;
   while (text.length > 3 && context.measureText(`${text}…`).width > maxWidth) text = text.slice(0, -1);
   return `${text}…`;
+}
+
+function emptyUniverseModel(): UniverseModel {
+  return {
+    categories: [],
+    edges: [],
+    neighbors: new Map(),
+    nodes: [],
+    parentEdges: 0,
+    relationEdges: 0,
+    skillCount: 0,
+    sourceCount: 0
+  };
+}
+
+function readUniverseModelCache(): UniverseModel | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(UNIVERSE_CACHE_KEY);
+    if (!raw || raw.length > 2_000_000) return null;
+    const value = JSON.parse(raw) as {
+      version?: number;
+      categories?: UniverseModel["categories"];
+      edges?: UniverseEdge[];
+      nodes?: UniverseNode[];
+      parentEdges?: number;
+      relationEdges?: number;
+      skillCount?: number;
+      sourceCount?: number;
+    };
+    if (
+      value.version !== 1 ||
+      !Array.isArray(value.nodes) ||
+      !Array.isArray(value.edges) ||
+      !Array.isArray(value.categories) ||
+      value.nodes.length > 12_000 ||
+      value.edges.length > 48_000 ||
+      !value.nodes.every(isCachedUniverseNode) ||
+      !value.edges.every(edge =>
+        Boolean(edge) &&
+        typeof edge.from === "string" &&
+        typeof edge.to === "string" &&
+        (edge.kind === "parent" || edge.kind === "category" || edge.kind === "conflict")
+      )
+    ) {
+      return null;
+    }
+    return {
+      categories: value.categories,
+      edges: value.edges,
+      neighbors: buildNeighborMap(value.edges),
+      nodes: value.nodes,
+      parentEdges: finiteCount(value.parentEdges),
+      relationEdges: finiteCount(value.relationEdges),
+      skillCount: finiteCount(value.skillCount),
+      sourceCount: finiteCount(value.sourceCount)
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeUniverseModelCache(model: UniverseModel) {
+  if (typeof window === "undefined") return;
+  try {
+    const nodes = model.nodes.map(node => {
+      const cachedNode: UniverseNode = { ...node };
+      delete cachedNode.skill;
+      delete cachedNode.source;
+      return cachedNode;
+    });
+    window.localStorage.setItem(
+      UNIVERSE_CACHE_KEY,
+      JSON.stringify({
+        version: 1,
+        savedAt: Date.now(),
+        categories: model.categories,
+        edges: model.edges,
+        nodes,
+        parentEdges: model.parentEdges,
+        relationEdges: model.relationEdges,
+        skillCount: model.skillCount,
+        sourceCount: model.sourceCount
+      })
+    );
+  } catch {
+    // A cache miss is safe: the authoritative graph still loads from SQLite.
+  }
+}
+
+function isCachedUniverseNode(node: UniverseNode): boolean {
+  if (
+    !node ||
+    typeof node.id !== "string" ||
+    typeof node.label !== "string" ||
+    typeof node.category !== "string" ||
+    typeof node.sourceId !== "string" ||
+    typeof node.sourceName !== "string" ||
+    !Number.isFinite(node.hue) ||
+    !Number.isFinite(node.seed) ||
+    !node.positions
+  ) {
+    return false;
+  }
+  return MODES.every(mode => {
+    const point = node.positions[mode];
+    return point && Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.z);
+  });
+}
+
+function buildNeighborMap(edges: UniverseEdge[]): Map<string, Set<string>> {
+  const neighbors = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    const fromNeighbors = neighbors.get(edge.from) ?? new Set<string>();
+    const toNeighbors = neighbors.get(edge.to) ?? new Set<string>();
+    fromNeighbors.add(edge.to);
+    toNeighbors.add(edge.from);
+    neighbors.set(edge.from, fromNeighbors);
+    neighbors.set(edge.to, toNeighbors);
+  }
+  return neighbors;
+}
+
+function finiteCount(value: number | undefined): number {
+  return Number.isFinite(value) && Number(value) >= 0 ? Math.floor(Number(value)) : 0;
+}
+
+function randomSessionSeed(): number {
+  if (typeof globalThis.crypto?.getRandomValues === "function") {
+    return globalThis.crypto.getRandomValues(new Uint32Array(1))[0];
+  }
+  return stableHash(`${Date.now()}:${Math.random()}`);
 }
 
 function normalize(value: string) {
