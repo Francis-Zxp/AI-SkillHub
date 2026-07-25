@@ -30,7 +30,11 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
 const SOURCE_POPULARITY_FRESH_TTL_NANOS: u128 = 6 * 60 * 60 * NANOS_PER_SECOND;
 const SOURCE_POPULARITY_DEFERRED_BACKOFF_NANOS: u128 = 15 * 60 * NANOS_PER_SECOND;
-const GITHUB_FALLBACK_MAX_FILES: usize = 1_500;
+// Keep source imports bounded, but allow legitimate multi-provider Skill repositories
+// such as Impeccable (about 1,850 selected files). The security scanner has its own
+// stricter content rules and an 8,000-file ceiling, so imports remain fail-closed.
+const SOURCE_IMPORT_MAX_FILES: usize = 6_000;
+const GITHUB_FALLBACK_MAX_FILES: usize = SOURCE_IMPORT_MAX_FILES;
 const GITHUB_FALLBACK_MAX_BYTES: u64 = 80 * 1024 * 1024;
 const GITHUB_FALLBACK_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MANAGED_SOURCE_METADATA_FILE: &str = ".skillhub-source.json";
@@ -1908,80 +1912,92 @@ fn open_path_with_system(path: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn preview_source_import_candidate(
+async fn preview_source_import_candidate(
     import_kind: String,
     input: String,
 ) -> Result<SourceImportPlanCard, String> {
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    build_source_import_plan(&root, &connection, &import_kind, &input)
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = resolve_legacy_root()?;
+        let connection = open_index_database(&root)?;
+        build_source_import_plan(&root, &connection, &import_kind, &input)
+    })
+    .await
+    .map_err(|error| format!("Source import preview worker stopped: {error}"))?
 }
 
 #[tauri::command]
-fn stage_source_import_candidate(
+async fn stage_source_import_candidate(
     import_kind: String,
     input: String,
 ) -> Result<SourceImportExecutionCard, String> {
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    stage_source_import_candidate_in_connection(&root, &connection, &import_kind, &input)
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = resolve_legacy_root()?;
+        let connection = open_index_database(&root)?;
+        stage_source_import_candidate_in_connection(&root, &connection, &import_kind, &input)
+    })
+    .await
+    .map_err(|error| format!("Source import staging worker stopped: {error}"))?
 }
 
 #[tauri::command]
-fn promote_staged_source_import(
+async fn promote_staged_source_import(
     import_kind: String,
     staged_path: String,
     source_name: String,
     security_review_confirmed: bool,
 ) -> Result<SourceImportPromotionCard, String> {
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    let mut promotion = promote_staged_source_import_in_connection(
-        &root,
-        &connection,
-        &import_kind,
-        &staged_path,
-        &source_name,
-        security_review_confirmed,
-    )?;
-    if promotion.status == "promoted" || promotion.status == "already-managed" {
-        match sync_local_sources_to_agents(&root, &connection) {
-            Ok(()) => {
-                promotion.summary = format!(
-                    "{} 已刷新共享 Skills、父/子 Skill 路由和 Agent 托管链接。",
-                    promotion.summary
-                );
-                promotion.real_write_scope =
-                    "app-next/data/github_sources + skills + agent-links".to_string();
-                promotion.blocking_checks.retain(|check| {
-                    !check.contains("不写入 skills")
-                        && !check.contains("如已开启真实写入授权")
-                        && !check.contains("AI 工具链接")
-                });
-                promotion.blocking_checks.push(
-                    "已执行本地扫描同步：共享 Skills、父子路由、Claude/Codex/Antigravity 链接已刷新。"
-                        .to_string(),
-                );
-            }
-            Err(error) => {
-                promotion.summary = format!(
-                    "{} 来源已添加，但 Agent 链接同步未完成：{}",
-                    promotion.summary, error
-                );
-                promotion.blocking_checks.push(format!(
-                    "Agent 链接同步未完成：{}。可稍后点击同步 / 刷新重试。",
-                    error
-                ));
-            }
-        }
-        return write_source_import_promotion_report(
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = resolve_legacy_root()?;
+        let connection = open_index_database(&root)?;
+        let mut promotion = promote_staged_source_import_in_connection(
             &root,
             &connection,
-            promotion,
-            &unix_timestamp_string(),
-        );
-    }
-    Ok(promotion)
+            &import_kind,
+            &staged_path,
+            &source_name,
+            security_review_confirmed,
+        )?;
+        if promotion.status == "promoted" || promotion.status == "already-managed" {
+            match sync_local_sources_to_agents(&root, &connection) {
+                Ok(()) => {
+                    promotion.summary = format!(
+                        "{} 已刷新共享 Skills、父/子 Skill 路由和 Agent 托管链接。",
+                        promotion.summary
+                    );
+                    promotion.real_write_scope =
+                        "app-next/data/github_sources + skills + agent-links".to_string();
+                    promotion.blocking_checks.retain(|check| {
+                        !check.contains("不写入 skills")
+                            && !check.contains("如已开启真实写入授权")
+                            && !check.contains("AI 工具链接")
+                    });
+                    promotion.blocking_checks.push(
+                        "已执行本地扫描同步：共享 Skills、父子路由、Claude/Codex/Antigravity 链接已刷新。"
+                            .to_string(),
+                    );
+                }
+                Err(error) => {
+                    promotion.summary = format!(
+                        "{} 来源已添加，但 Agent 链接同步未完成：{}",
+                        promotion.summary, error
+                    );
+                    promotion.blocking_checks.push(format!(
+                        "Agent 链接同步未完成：{}。可稍后点击同步 / 刷新重试。",
+                        error
+                    ));
+                }
+            }
+            return write_source_import_promotion_report(
+                &root,
+                &connection,
+                promotion,
+                &unix_timestamp_string(),
+            );
+        }
+        Ok(promotion)
+    })
+    .await
+    .map_err(|error| format!("Source import promotion worker stopped: {error}"))?
 }
 
 #[tauri::command]
@@ -6984,15 +7000,16 @@ fn stage_local_source_import(
     }
 
     let (file_count, byte_count) = local_copy_preflight(&source_path)?;
-    if file_count > 1_500 || byte_count > 80 * 1024 * 1024 {
+    if file_count > SOURCE_IMPORT_MAX_FILES || byte_count > GITHUB_FALLBACK_MAX_BYTES {
         execution.status = "blocked".to_string();
         execution.summary = format!(
             "Local staging refused because the candidate is too large: {} file(s), {} byte(s).",
             file_count, byte_count
         );
-        execution
-            .blocking_checks
-            .push("Staging limit is 1500 files and 80 MB.".to_string());
+        execution.blocking_checks.push(format!(
+            "Staging limit is {} files and 80 MB.",
+            SOURCE_IMPORT_MAX_FILES
+        ));
         return Ok(());
     }
 
@@ -7029,15 +7046,18 @@ fn stage_package_source_import(
         execution.blocking_checks = inspection.blocking_checks;
         return Ok(());
     }
-    if inspection.file_count > 1_500 || inspection.uncompressed_bytes > 80 * 1024 * 1024 {
+    if inspection.file_count > SOURCE_IMPORT_MAX_FILES
+        || inspection.uncompressed_bytes > GITHUB_FALLBACK_MAX_BYTES
+    {
         execution.status = "blocked".to_string();
         execution.summary = format!(
             "Package staging refused because the archive is too large: {} file(s), {} byte(s).",
             inspection.file_count, inspection.uncompressed_bytes
         );
-        execution
-            .blocking_checks
-            .push("Staging limit is 1500 files and 80 MB.".to_string());
+        execution.blocking_checks.push(format!(
+            "Staging limit is {} files and 80 MB.",
+            SOURCE_IMPORT_MAX_FILES
+        ));
         return Ok(());
     }
 
@@ -8059,8 +8079,8 @@ fn inspect_package_archive(path: &Path) -> Result<PackageArchiveInspection, Stri
         if file.is_file() {
             file_count += 1;
             uncompressed_bytes = uncompressed_bytes.saturating_add(file.size());
-            if file_count > 1_500 {
-                blocking_checks.push("包内文件数量超过 1500 个。".to_string());
+            if file_count > SOURCE_IMPORT_MAX_FILES {
+                blocking_checks.push(format!("包内文件数量超过 {} 个。", SOURCE_IMPORT_MAX_FILES));
                 break;
             }
             if uncompressed_bytes > 80 * 1024 * 1024 {
@@ -12630,10 +12650,23 @@ fn router_hub_alias_skill_names(
 }
 
 /// Compose the body of a generated router-hub SKILL.md.
-fn build_router_hub_skill_md(collection: &str, router_name: &str, children: &[String]) -> String {
+fn build_router_hub_skill_md(
+    collection: &str,
+    router_name: &str,
+    children: &[String],
+    child_links: &BTreeMap<String, (String, String)>,
+) -> String {
     let mut child_lines = String::new();
     for child in children {
-        child_lines.push_str(&format!("- {} /{}\n", CHILD_SKILL_MARKER, child));
+        let key = normalize_skill_lookup(child);
+        let relative_path = child_links
+            .get(&key)
+            .map(|(_, relative)| relative.as_str())
+            .unwrap_or("SKILL.md");
+        child_lines.push_str(&format!(
+            "- {} /{} — source-scoped file `../../{}/{}`\n",
+            CHILD_SKILL_MARKER, child, collection, relative_path
+        ));
     }
     let description = format!(
         "{} AI SkillHub generated parent router for the local {} skill collection. \
@@ -12656,7 +12689,9 @@ fn build_router_hub_skill_md(collection: &str, router_name: &str, children: &[St
         - {marker} = parent collection entry generated by AI SkillHub.\n\
         - {child_marker} = focused child Skill from the source repository.\n\n\
         Rules:\n\
-        - If the user clearly names a specific child Skill, use that child directly.\n\
+        - Route only to the source-scoped child files listed below under `../../{collection}`.\n\
+        - Never substitute a same-name Skill from another source or parent collection.\n\
+        - If the user clearly names a specific child Skill, open and follow its listed source-scoped file.\n\
         - If the user names only this collection, choose the smallest child Skill that fits the task.\n\
         - If the right child is unclear, explain the top 2-3 choices briefly and ask only when the task cannot be safely routed.\n\n\
         Available child Skills:\n\
@@ -12888,9 +12923,10 @@ fn sync_skill_conflict_dispatchers_for_skills(
         }
     }
 
+    // Parent routers are source-scoped. Only an explicit advanced-user choice may
+    // create an unqualified global /child dispatcher across sources.
     for conflict in conflicts.iter().filter(|conflict| {
-        matches!(conflict.status.as_str(), "default-set" | "auto-set")
-            && !conflict.default_skill_id.is_empty()
+        conflict.status == "default-set" && !conflict.default_skill_id.is_empty()
     }) {
         let dispatcher_name = generated_skill_folder_name(&conflict.conflict_key);
         let Some(body) = build_conflict_dispatcher_skill_md(conflict) else {
@@ -13017,69 +13053,72 @@ fn check_router_hub_description_quoting(skill_md_path: &Path) -> Option<RouterHu
 
 /// Walk a single source/collection folder and collect callable child Skill names.
 /// A child is a sub-folder that contains a SKILL.md with a non-empty `name:` field.
-fn collect_child_skills_for_collection(collection_dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = Vec::new();
-    let Ok(entries) = fs::read_dir(collection_dir) else {
-        return names;
-    };
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if !file_type.is_dir() {
-            continue;
-        }
-        let entry_path = entry.path();
-        // Skip nested git internals and our own router output folder.
-        if let Some(name) = entry_path.file_name().and_then(|value| value.to_str()) {
-            if name.starts_with('.') {
-                continue;
-            }
-            if name == ROUTER_HUB_FOLDER {
-                continue;
-            }
-        }
-        let skill_md = entry_path.join("SKILL.md");
-        if !skill_md.exists() {
-            // Recurse one level — many collections nest skills inside an inner folder.
-            if let Some(child) = find_first_descendant_skill(&entry_path) {
-                names.push(child);
-            }
-            continue;
-        }
-        if let Some(child_name) = read_skill_name(&skill_md) {
-            names.push(child_name);
-        } else if let Some(folder) = entry_path.file_name().and_then(|value| value.to_str()) {
-            names.push(folder.to_string());
-        }
-    }
-    names.sort();
-    names.dedup();
-    names
-}
+fn collect_child_skill_links_for_collection(
+    collection_dir: &Path,
+) -> BTreeMap<String, (String, String)> {
+    let mut links = BTreeMap::new();
+    let mut pending = vec![collection_dir.to_path_buf()];
+    let mut visited_dirs = 0usize;
 
-/// One level of descent — used when the immediate child is not a Skill itself
-/// (some collections put SKILL.md one folder deeper).
-fn find_first_descendant_skill(dir: &Path) -> Option<String> {
-    let entries = fs::read_dir(dir).ok()?;
-    for entry in entries.flatten() {
-        let Ok(file_type) = entry.file_type() else {
+    while let Some(dir) = pending.pop() {
+        visited_dirs += 1;
+        if visited_dirs > SOURCE_IMPORT_MAX_FILES {
+            break;
+        }
+
+        if dir != collection_dir {
+            let skill_md = dir.join("SKILL.md");
+            if skill_md.is_file() {
+                let name = read_skill_name(&skill_md).or_else(|| {
+                    dir.file_name()
+                        .and_then(|value| value.to_str())
+                        .map(str::to_string)
+                });
+                if let Some(name) = name {
+                    let key = normalize_skill_lookup(&name);
+                    if !key.is_empty() {
+                        let relative = skill_md
+                            .strip_prefix(collection_dir)
+                            .unwrap_or(&skill_md)
+                            .to_string_lossy()
+                            .replace('\\', "/");
+                        links.entry(key).or_insert((name, relative));
+                    }
+                }
+            }
+        }
+
+        let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
-        if !file_type.is_dir() {
-            continue;
-        }
-        let skill_md = entry.path().join("SKILL.md");
-        if skill_md.exists() {
-            if let Some(name) = read_skill_name(&skill_md) {
-                return Some(name);
-            }
-            if let Some(folder) = entry.path().file_name().and_then(|value| value.to_str()) {
-                return Some(folder.to_string());
-            }
+        let mut child_dirs = entries
+            .flatten()
+            .filter_map(|entry| {
+                let file_type = entry.file_type().ok()?;
+                if !file_type.is_dir() || file_type.is_symlink() {
+                    return None;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if matches!(
+                    name.as_str(),
+                    ".git" | "node_modules" | "target" | ROUTER_HUB_FOLDER
+                ) {
+                    return None;
+                }
+                Some(entry.path())
+            })
+            .collect::<Vec<_>>();
+        child_dirs.sort_by(|left, right| {
+            left.to_string_lossy()
+                .to_lowercase()
+                .cmp(&right.to_string_lossy().to_lowercase())
+        });
+        for child in child_dirs.into_iter().rev() {
+            pending.push(child);
         }
     }
-    None
+
+    links
 }
 
 /// Read just the `name:` field of a SKILL.md frontmatter.
@@ -13151,7 +13190,11 @@ fn plan_or_write_router_hubs(
             continue;
         }
         let collection_dir = entry.path();
-        let children = collect_child_skills_for_collection(&collection_dir);
+        let child_links = collect_child_skill_links_for_collection(&collection_dir);
+        let children = child_links
+            .values()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
 
         // Walk one level of skill md files looking for unquoted [ROUTER-HUB] descriptions.
         for child in fs::read_dir(&collection_dir)
@@ -13224,7 +13267,8 @@ fn plan_or_write_router_hubs(
 
         let router_folder = routers_root.join(&router_name);
         let router_skill_md = router_folder.join("SKILL.md");
-        let body = build_router_hub_skill_md(&collection_name, &router_name, &children);
+        let body =
+            build_router_hub_skill_md(&collection_name, &router_name, &children, &child_links);
         let needs_write = if allow_write {
             match fs::read_to_string(&router_skill_md) {
                 Ok(existing) => existing != body,
@@ -13281,7 +13325,8 @@ fn plan_or_write_router_hubs(
         for alias_name in router_hub_alias_skill_names(&collection_name, &router_name, &children) {
             let alias_folder = routers_root.join(&alias_name);
             let alias_skill_md = alias_folder.join("SKILL.md");
-            let alias_body = build_router_hub_skill_md(&collection_name, &alias_name, &children);
+            let alias_body =
+                build_router_hub_skill_md(&collection_name, &alias_name, &children, &child_links);
             let alias_needs_write = if allow_write {
                 match fs::read_to_string(&alias_skill_md) {
                     Ok(existing) => existing != alias_body,
@@ -14268,7 +14313,7 @@ mod tests {
     }
 
     #[test]
-    fn conflict_default_writes_and_restores_automatic_dispatcher() {
+    fn conflict_default_writes_only_explicit_global_dispatcher() {
         let root = std::env::temp_dir().join(format!(
             "skillhub-conflict-dispatcher-test-{}",
             unix_timestamp_string()
@@ -14330,12 +14375,12 @@ mod tests {
             },
         );
         let automatic = sync_skill_conflict_dispatchers_for_skills(&root, &skills, &saved)
-            .expect("automatic dispatcher should replace the manual default");
+            .expect("automatic parent-scoped mode should remove the global dispatcher");
         assert_eq!(automatic, 1);
-        assert!(dispatcher.exists());
-        let automatic_body =
-            fs::read_to_string(&dispatcher).expect("automatic dispatcher should remain callable");
-        assert!(automatic_body.contains("Source: `Nature-Paper-Skills`"));
+        assert!(
+            !dispatcher.exists(),
+            "automatic mode must not create a cross-source bare-name dispatcher"
+        );
         assert!(nature_alias.exists());
         assert!(paperspine_alias.exists());
         let _ = fs::remove_dir_all(&root);
@@ -14829,6 +14874,50 @@ mod tests {
             .expect("duplicate aggregation should include shared-skill");
         assert!(dup.collections.contains(&"alpha".to_string()));
         assert!(dup.collections.contains(&"beta".to_string()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parent_router_links_only_to_its_own_source_children() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-router-source-scope-test-{}",
+            unix_timestamp_string()
+        ));
+        let sources_dir = active_sources_dir(&root);
+        for collection in &["alpha", "beta"] {
+            let children = vec!["shared-review".to_string(), format!("{}-only", collection)];
+            for child in children {
+                let folder = sources_dir.join(collection).join(&child);
+                fs::create_dir_all(&folder).unwrap();
+                fs::write(
+                    folder.join("SKILL.md"),
+                    format!("---\nname: {child}\ndescription: \"scoped\"\n---\nbody\n"),
+                )
+                .unwrap();
+            }
+        }
+
+        plan_or_write_router_hubs(&root, true, true).expect("routers should build");
+        let alpha = fs::read_to_string(
+            sources_dir
+                .join(ROUTER_HUB_FOLDER)
+                .join("alpha")
+                .join("SKILL.md"),
+        )
+        .unwrap();
+        let beta = fs::read_to_string(
+            sources_dir
+                .join(ROUTER_HUB_FOLDER)
+                .join("beta")
+                .join("SKILL.md"),
+        )
+        .unwrap();
+
+        assert!(alpha.contains("../../alpha/shared-review/SKILL.md"));
+        assert!(!alpha.contains("../../beta/"));
+        assert!(beta.contains("../../beta/shared-review/SKILL.md"));
+        assert!(!beta.contains("../../alpha/"));
+        assert!(alpha.contains("Never substitute a same-name Skill from another source"));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -15840,6 +15929,68 @@ mod tests {
             select_github_repository_files(&prompt_tree).expect("prompt tree should select");
         assert_eq!(selected.len(), 2);
         assert!(selected.iter().all(|file| file.path.ends_with(".md")));
+    }
+
+    #[test]
+    fn github_api_selection_accepts_bounded_multi_provider_repository() {
+        let mut tree = Vec::with_capacity(1_850);
+        tree.push(serde_json::json!({
+            "path": ".agents/skills/impeccable/SKILL.md",
+            "type": "blob",
+            "mode": "100644",
+            "size": 800
+        }));
+        for index in 1..1_850 {
+            tree.push(serde_json::json!({
+                "path": format!(".agents/skills/impeccable/references/file-{index}.md"),
+                "type": "blob",
+                "mode": "100644",
+                "size": 120
+            }));
+        }
+        let payload = serde_json::json!({ "tree": tree });
+        let selected = select_github_repository_files(&payload)
+            .expect("a bounded 1,850-file Skill repository should be accepted");
+        assert_eq!(selected.len(), 1_850);
+        assert!(selected.len() < SOURCE_IMPORT_MAX_FILES);
+    }
+
+    #[test]
+    #[ignore = "network-dependent Impeccable compatibility gate"]
+    fn github_codeload_stages_real_impeccable_repository_above_legacy_cap() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-impeccable-codeload-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test database should open");
+        let plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/pbakaus/impeccable.git",
+        )
+        .expect("Impeccable plan should build");
+        let staged_path = source_import_staging_root(&root).join("impeccable-codeload");
+
+        let downloaded_ref = stage_github_source_import_via_codeload(&plan, &staged_path)
+            .expect("the built-in codeload downloader should accept Impeccable");
+        let (skill_count, _) =
+            count_skill_dirs_in_path(&staged_path).expect("staged repository should scan");
+        let copied_files = count_files_in_path(&staged_path).expect("staged files should count");
+        let report =
+            security_scan::scan_source_tree(&staged_path).expect("staged tree should scan safely");
+
+        assert_eq!(downloaded_ref, "HEAD");
+        assert!(skill_count >= 1);
+        assert!(
+            copied_files > 1_500,
+            "the real repository should exercise the legacy 1,500-file failure path"
+        );
+        assert!(copied_files <= SOURCE_IMPORT_MAX_FILES + 1);
+        assert!(report.scanned_files > 0);
+        assert!(staged_path.join(MANAGED_SOURCE_METADATA_FILE).is_file());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

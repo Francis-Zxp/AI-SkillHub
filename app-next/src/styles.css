@@ -270,6 +270,72 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   color: var(--text);
 }
 
+.theme-atlas-legacy-dark {
+  --ui-font: "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  --ui-display: "Segoe UI Variable Display", "Aptos Display", "Microsoft YaHei UI", sans-serif;
+  --bg: #020607;
+  --bg-soft: #071011;
+  --surface: rgba(9, 19, 20, .68);
+  --surface-soft: rgba(17, 32, 33, .58);
+  --surface-strong: rgba(25, 44, 44, .78);
+  --surface-elevated: rgba(8, 20, 21, .96);
+  --border: rgba(193, 235, 229, .09);
+  --border-strong: rgba(124, 233, 223, .25);
+  --text: #f1faf8;
+  --text-soft: #a9bdb9;
+  --text-muted: #687d79;
+  --brand: #7ce9df;
+  --brand-strong: #c9f8f3;
+  --brand-glow: rgba(86, 222, 210, .22);
+  --accent: #79aee8;
+  --success: #69d7aa;
+  --warning: #d6b76c;
+  --danger: #ff747d;
+  --info: #79aee8;
+  --success-soft: rgba(105, 215, 170, .11);
+  --warning-soft: rgba(214, 183, 108, .11);
+  --danger-soft: rgba(255, 116, 125, .1);
+  --info-soft: rgba(121, 174, 232, .11);
+  --shadow-card: 0 28px 80px rgba(0, 0, 0, .34);
+  --shadow-card-hover: 0 34px 96px rgba(0, 0, 0, .44);
+  --shadow-glow: 0 0 100px var(--brand-glow);
+  --hero-grad: radial-gradient(circle at 66% 48%, rgba(33, 113, 108, .12), transparent 42%);
+  color: var(--text);
+}
+
+.theme-atlas-legacy-light {
+  --ui-font: "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  --ui-display: "Segoe UI Variable Display", "Aptos Display", "Microsoft YaHei UI", sans-serif;
+  --bg: #edf2ef;
+  --bg-soft: #f6f8f5;
+  --surface: rgba(250, 252, 249, .76);
+  --surface-soft: rgba(224, 235, 230, .68);
+  --surface-strong: rgba(212, 228, 221, .88);
+  --surface-elevated: rgba(250, 252, 249, .96);
+  --border: rgba(22, 61, 58, .09);
+  --border-strong: rgba(22, 121, 111, .24);
+  --text: #10201e;
+  --text-soft: #405c57;
+  --text-muted: #71847f;
+  --brand: #16796f;
+  --brand-strong: #0b574f;
+  --brand-glow: rgba(22, 121, 111, .16);
+  --accent: #295a80;
+  --success: #2d8a65;
+  --warning: #a87825;
+  --danger: #be4450;
+  --info: #436e9a;
+  --success-soft: rgba(45, 138, 101, .1);
+  --warning-soft: rgba(168, 120, 37, .1);
+  --danger-soft: rgba(190, 68, 80, .09);
+  --info-soft: rgba(67, 110, 154, .1);
+  --shadow-card: 0 24px 70px rgba(31, 68, 62, .12);
+  --shadow-card-hover: 0 30px 82px rgba(31, 68, 62, .17);
+  --shadow-glow: 0 0 72px var(--brand-glow);
+  --hero-grad: radial-gradient(circle at 66% 48%, rgba(22, 121, 111, .12), transparent 44%);
+  color: var(--text);
+}
+
 .theme-nocturne {
   --ui-font: "Segoe UI Variable Text", "Inter", "Microsoft YaHei UI", "Segoe UI", sans-serif;
   --ui-display: "Segoe UI Variable Display", "Inter Display", "Microsoft YaHei UI", sans-serif;
@@ -1973,6 +2039,58 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 }
 
 .import-actions { display: flex; justify-content: flex-end; }
+.import-progress {
+  display: grid;
+  gap: 8px;
+  padding: 11px 13px;
+  background: color-mix(in srgb, var(--brand) 7%, var(--surface-soft));
+  border: 1px solid color-mix(in srgb, var(--brand) 26%, var(--border));
+  border-radius: 11px;
+}
+.import-progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--text-soft);
+  font-size: calc(11.5px * var(--ui-text-scale, 1));
+}
+.import-progress-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: calc(12.5px * var(--ui-text-scale, 1));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-progress-track {
+  position: relative;
+  height: 6px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  border-radius: var(--radius-pill);
+}
+.import-progress-track > span {
+  position: relative;
+  display: block;
+  height: 100%;
+  min-width: 6px;
+  overflow: hidden;
+  background: linear-gradient(90deg, var(--brand-strong), var(--brand), var(--info));
+  border-radius: inherit;
+  box-shadow: 0 0 14px color-mix(in srgb, var(--brand) 42%, transparent);
+  transition: width 360ms var(--ease);
+}
+.import-progress.is-active .import-progress-track > span::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+  background: linear-gradient(105deg, transparent 20%, rgba(255,255,255,.5) 48%, transparent 72%);
+  transform: translateX(-100%);
+  animation: import-progress-sheen 1.35s linear infinite;
+}
+@keyframes import-progress-sheen {
+  to { transform: translateX(100%); }
+}
 .import-status {
   display: flex; flex-direction: column; gap: 4px;
   padding: var(--space-3) var(--space-4);
@@ -2502,6 +2620,12 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 }
 .settings-theme-row .segmented button[data-segment-value="atlas-light"]::before {
   background: linear-gradient(135deg, #eff7f4 0 48%, #3aafa2 50% 100%);
+}
+.settings-theme-row .segmented button[data-segment-value="atlas-legacy-dark"]::before {
+  background: linear-gradient(135deg, #020607 0 48%, #7ce9df 50% 100%);
+}
+.settings-theme-row .segmented button[data-segment-value="atlas-legacy-light"]::before {
+  background: linear-gradient(135deg, #edf2ef 0 48%, #16796f 50% 100%);
 }
 .settings-theme-row .segmented button[data-segment-value="dark"]::before,
 .settings-theme-row .segmented button[data-segment-value="classic-dark"]::before {
@@ -3084,6 +3208,8 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .theme-family-atlas > .particle-field-backdrop { opacity: .5; filter: blur(.1px); }
 .theme-atlas-light > .particle-field-cosmos,
 .theme-atlas-light > .particle-field-backdrop,
+.theme-atlas-legacy-light > .particle-field-cosmos,
+.theme-atlas-legacy-light > .particle-field-backdrop,
 .theme-parchment > .particle-field-cosmos,
 .theme-parchment > .particle-field-backdrop { mix-blend-mode: multiply; opacity: .4; }
 
@@ -4001,12 +4127,13 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .theme-family-atlas .atlas-hero-copy { max-width: 500px; }
 .theme-family-atlas.page-dashboard .dashboard-hero .eyebrow { font-size: calc(11px * var(--ui-text-scale, 1)); letter-spacing: .13em; }
 .theme-family-atlas.page-dashboard .dashboard-hero h2 {
-  max-width: 11ch;
+  max-width: 7em;
   margin: 20px 0 18px;
   font-size: clamp(34px, 3.25vw, 50px);
   font-weight: 510;
   line-height: 1.06;
   letter-spacing: -.055em;
+  text-wrap: balance;
 }
 .theme-family-atlas.page-dashboard .dashboard-hero p {
   max-width: 44ch;
@@ -4177,7 +4304,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 }
 
 /* =============================================================
-   3.0.4 — Spectral Gravity + metadata intelligence
+   3.0.5 — Spectral Gravity + metadata intelligence
    ============================================================= */
 
 .update-available-pill {
@@ -4302,7 +4429,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 }
 
 /* =============================================================
-   Living Atlas v3.0.4 — fixed stage + operational clarity
+   Living Atlas v3.0.5 — fixed stage + operational clarity
    The dashboard is a viewport, while operational pages use a
    denser, higher-contrast radius and alignment grammar.
    ============================================================= */
@@ -4333,6 +4460,34 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   --text: #172033;
   --text-soft: #46546a;
   --text-muted: #718096;
+}
+
+.theme-atlas-legacy-dark.theme-family-atlas:not(.page-dashboard) {
+  --bg: #080c12;
+  --bg-soft: #0d131c;
+  --surface: rgba(17, 24, 34, .93);
+  --surface-soft: rgba(26, 35, 48, .9);
+  --surface-strong: rgba(39, 50, 66, .96);
+  --surface-elevated: rgba(14, 21, 31, .98);
+  --border: rgba(201, 216, 232, .14);
+  --border-strong: rgba(121, 174, 232, .32);
+  --text: #f3f7fb;
+  --text-soft: #c1cbd7;
+  --text-muted: #8796a8;
+}
+
+.theme-atlas-legacy-light.theme-family-atlas:not(.page-dashboard) {
+  --bg: #e9efec;
+  --bg-soft: #f4f7f5;
+  --surface: rgba(250, 252, 250, .94);
+  --surface-soft: rgba(221, 233, 228, .92);
+  --surface-strong: rgba(207, 225, 217, .98);
+  --surface-elevated: rgba(252, 253, 251, .99);
+  --border: rgba(18, 57, 53, .14);
+  --border-strong: rgba(22, 121, 111, .32);
+  --text: #0d1d1a;
+  --text-soft: #334f49;
+  --text-muted: #607872;
 }
 
 .theme-family-atlas:not(.page-dashboard) {
@@ -4953,5 +5108,111 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   .source-quality-factors,
   .source-governance-revisions {
     grid-template-columns: 1fr;
+  }
+}
+
+/* =============================================================
+   v3.0.5 alignment pass — one shared axis for rail, topbar and pages
+   ============================================================= */
+
+.theme-family-atlas {
+  --atlas-page-gutter: clamp(20px, 1.7vw, 28px);
+}
+
+.theme-family-atlas .sidebar {
+  align-items: center;
+}
+
+.theme-family-atlas .brand {
+  align-self: center;
+  flex: 0 0 60px;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.theme-family-atlas .brand-logo {
+  display: block;
+  object-position: center;
+}
+
+.theme-family-atlas .topbar {
+  margin-right: var(--atlas-page-gutter);
+  margin-left: var(--atlas-page-gutter);
+}
+
+.theme-family-atlas:not(.page-dashboard) .workspace-body {
+  padding-right: var(--atlas-page-gutter);
+  padding-left: var(--atlas-page-gutter);
+}
+
+.theme-family-atlas:not(.page-dashboard) .view > * {
+  width: 100%;
+  min-width: 0;
+}
+
+.theme-family-atlas:not(.page-dashboard) .page-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.theme-family-atlas:not(.page-dashboard) .page-header > div:first-child,
+.theme-family-atlas:not(.page-dashboard) .panel-head > div:first-child {
+  min-width: 0;
+}
+
+.theme-family-atlas:not(.page-dashboard) .page-header > div:first-child {
+  width: 100%;
+}
+
+.theme-family-atlas:not(.page-dashboard) .panel-head > div:first-child {
+  flex: 1 1 auto;
+}
+
+.theme-family-atlas:not(.page-dashboard) .page-header p,
+.theme-family-atlas:not(.page-dashboard) .panel-head p {
+  max-width: none;
+  text-wrap: pretty;
+}
+
+.theme-family-atlas:not(.page-dashboard) .page-header-side {
+  flex-wrap: nowrap;
+  margin-left: auto;
+}
+
+.theme-family-atlas:not(.page-dashboard) .page-header-stats {
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  min-width: min(420px, 42vw);
+}
+
+.theme-family-atlas .atlas-event-tape {
+  right: var(--atlas-page-gutter);
+  left: calc(92px + var(--atlas-page-gutter));
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+}
+
+@media (max-width: 980px) {
+  .theme-family-atlas:not(.page-dashboard) .page-header {
+    grid-template-columns: 1fr;
+  }
+
+  .theme-family-atlas:not(.page-dashboard) .page-header-side {
+    width: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .theme-family-atlas:not(.page-dashboard) .page-header-stats {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .import-progress.is-active .import-progress-track > span::after {
+    animation: none;
   }
 }

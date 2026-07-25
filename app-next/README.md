@@ -42,6 +42,11 @@ v3.0.4 also adds:
 - the Spectral Gravity canvas visualization with adaptive LOD and static
   fallbacks.
 
+v3.0.5 keeps the same stable data boundary and adds non-blocking source imports
+with visible progress, bounded Impeccable-compatible fallback downloads,
+source-scoped parent routing, two-axis atlas rotation, classic v3.0.2 theme
+options, and default-window alignment fixes.
+
 Generated suggestions never replace manual metadata overrides, and imported
 source scripts are not executed during recognition.
 
@@ -92,9 +97,11 @@ Author-owned source repositories are not modified.
 ## Same-Name Child Skill Conflicts
 
 AI SkillHub detects exact duplicate non-router child Skill names across sources.
-It assigns a safe default automatically, preserves a source-qualified alias for
-every candidate, and exposes an optional manual override in Routing
-Observatory. The local SQLite table `skill_conflict_choices` stores manual
-decisions, so GitHub updates do not modify or erase them.
+Each generated parent routes only to explicit child files inside its own source.
+Every candidate keeps a source-qualified alias. Automatic mode does not create
+a cross-source bare-name dispatcher; an advanced user may explicitly choose one
+global default in Routing Observatory. The local SQLite table
+`skill_conflict_choices` stores that optional manual decision, so GitHub updates
+do not modify or erase it.
 
 See `SKILL_CONFLICT_SELECTOR.md` for the detailed rule.

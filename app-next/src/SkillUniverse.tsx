@@ -108,7 +108,7 @@ const POSITION_MODES: Record<SkillUniverseMode, SkillUniverseMode> = {
   categories: "categories"
 };
 
-const SPHERE_SHELL = Array.from({ length: 288 }, (_, index) => fibonacciPoint(index, 288, 1));
+const SPHERE_SHELL = Array.from({ length: 420 }, (_, index) => fibonacciPoint(index, 420, 1));
 const DUST_PARTICLES = Array.from({ length: 112 }, (_, index) => {
   const seed = stableHash(`universe-dust:${index}`);
   return {
@@ -117,6 +117,17 @@ const DUST_PARTICLES = Array.from({ length: 112 }, (_, index) => {
     size: 0.35 + (seed % 7) * 0.085,
     speed: 0.000004 + (seed % 5) * 0.0000015,
     stretch: 0.78 + ((seed >>> 8) % 28) / 100
+  };
+});
+const METEORS = Array.from({ length: 7 }, (_, index) => {
+  const seed = stableHash(`universe-meteor:${index}`);
+  return {
+    delay: (seed % 10_000) / 10_000,
+    duration: 0.12 + ((seed >>> 4) % 80) / 1000,
+    length: 34 + ((seed >>> 7) % 76),
+    slope: 0.28 + ((seed >>> 11) % 30) / 100,
+    x: -0.18 + ((seed >>> 14) % 136) / 100,
+    y: 0.04 + ((seed >>> 18) % 84) / 100
   };
 });
 const AURA_SPRITES = new Map<string, HTMLCanvasElement>();
@@ -360,8 +371,8 @@ export function SkillUniverse({
       const dy = event.movementY;
       const now = performance.now();
       const elapsed = Math.max(8, now - runtime.lastPointerTime);
-      runtime.rotationY += dx * 0.0048;
-      runtime.rotationX = clamp(runtime.rotationX + dy * 0.004, -1.05, 1.05);
+      runtime.rotationY = wrapAngle(runtime.rotationY + dx * 0.0048);
+      runtime.rotationX = wrapAngle(runtime.rotationX + dy * 0.004);
       runtime.velocityY = clamp((dx * 0.0048) / elapsed, -0.004, 0.004);
       runtime.velocityX = clamp((dy * 0.004) / elapsed, -0.003, 0.003);
       runtime.lastPointerTime = now;
@@ -731,9 +742,9 @@ function drawUniverse(
       runtime.quality += (targetQuality - runtime.quality) * 0.5;
     }
     if (!runtime.dragging) {
-      runtime.rotationY += runtime.velocityY * elapsed;
-      runtime.rotationX = clamp(runtime.rotationX + runtime.velocityX * elapsed, -1.05, 1.05);
-      const drag = Math.exp(-elapsed * 0.0075);
+      runtime.rotationY = wrapAngle(runtime.rotationY + runtime.velocityY * elapsed);
+      runtime.rotationX = wrapAngle(runtime.rotationX + runtime.velocityX * elapsed);
+      const drag = Math.exp(-elapsed * 0.0052);
       runtime.velocityX *= drag;
       runtime.velocityY *= drag;
       if (!runtime.pointerInside && Math.abs(runtime.velocityY) < 0.00004) runtime.rotationY += elapsed * 0.000022;
@@ -889,6 +900,7 @@ function drawUniverseAtmosphere(
   if (aura) {
     context.drawImage(aura, centerX - radius * 1.35, centerY - radius * 1.35, radius * 2.7, radius * 2.7);
   }
+  drawUniverseMeteors(context, centerX, centerY, radius, lightTheme, tone, time, interactive, lod);
 
   context.save();
   context.translate(centerX, centerY);
@@ -922,9 +934,17 @@ function drawUniverseAtmosphere(
     const x = point.x * cosY + z0 * sinY;
     const z = -point.x * sinY + z0 * cosY;
     const scale = 3.05 / (3.05 - z);
-    const size = (z > 0 ? 0.9 : 0.48) * scale;
-    context.globalAlpha = z > 0 ? 0.86 : 0.34;
-    context.fillRect(centerX + x * radius * scale, centerY + y0 * radius * scale, size, size);
+    const size = (z > 0 ? 1.05 : 0.48) * scale;
+    context.globalAlpha = z > 0 ? 0.9 : 0.3;
+    context.beginPath();
+    context.arc(
+      centerX + x * radius * scale,
+      centerY + y0 * radius * scale,
+      Math.max(0.36, size),
+      0,
+      Math.PI * 2
+    );
+    context.fill();
   }
   context.restore();
 
@@ -939,6 +959,48 @@ function drawUniverseAtmosphere(
     const x = centerX + Math.cos(angle) * distance * dust.stretch;
     const y = centerY + Math.sin(angle) * distance * 0.66;
     context.fillRect(x, y, dust.size, dust.size);
+  }
+  context.restore();
+}
+
+function drawUniverseMeteors(
+  context: CanvasRenderingContext2D,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  lightTheme: boolean,
+  tone: UniverseTone,
+  time: number,
+  interactive: boolean,
+  lod: UniverseLod
+) {
+  if (time === 0 || interactive || lod === 2) return;
+  const meteorHue = tone === "prism" ? 216 : tone === "parchment" ? 18 : tone === "mist" ? 166 : 178;
+  context.save();
+  context.lineCap = "round";
+  for (const meteor of METEORS) {
+    const phase = (time * 0.000028 + meteor.delay) % 1;
+    if (phase > meteor.duration) continue;
+    const progress = phase / meteor.duration;
+    const fade = Math.sin(progress * Math.PI);
+    const startX = centerX + (meteor.x - 0.5) * radius * 2.8 + progress * radius * 0.72;
+    const startY = centerY + (meteor.y - 0.5) * radius * 2.1 + progress * radius * meteor.slope;
+    const tailX = startX - meteor.length;
+    const tailY = startY - meteor.length * meteor.slope;
+    const gradient = context.createLinearGradient(tailX, tailY, startX, startY);
+    gradient.addColorStop(0, `hsla(${meteorHue}, 92%, ${lightTheme ? 36 : 76}%, 0)`);
+    gradient.addColorStop(0.72, `hsla(${meteorHue}, 92%, ${lightTheme ? 36 : 76}%, ${fade * 0.1})`);
+    gradient.addColorStop(1, `hsla(${meteorHue}, 100%, ${lightTheme ? 32 : 88}%, ${fade * 0.54})`);
+    context.beginPath();
+    context.moveTo(tailX, tailY);
+    context.lineTo(startX, startY);
+    context.strokeStyle = gradient;
+    context.lineWidth = 0.75;
+    context.stroke();
+    context.beginPath();
+    context.arc(startX, startY, 1.1, 0, Math.PI * 2);
+    context.fillStyle = `hsla(${meteorHue}, 100%, ${lightTheme ? 30 : 90}%, ${fade * 0.72})`;
+    context.fill();
   }
   context.restore();
 }
@@ -983,19 +1045,26 @@ function drawUniverseNode(
     }
 
     if (node.enabled) {
+      const sphere = context.createRadialGradient(
+        node.screenX - radius * 0.34,
+        node.screenY - radius * 0.38,
+        Math.max(0.6, radius * 0.06),
+        node.screenX,
+        node.screenY,
+        radius * 1.08
+      );
+      sphere.addColorStop(0, `hsla(${hue - 8}, 96%, ${lightTheme ? 82 : 92}%, ${Math.min(1, baseAlpha + 0.2)})`);
+      sphere.addColorStop(0.22, `hsla(${hue}, 92%, ${lightTheme ? 56 : 70}%, ${Math.min(1, baseAlpha + 0.12)})`);
+      sphere.addColorStop(0.7, `hsla(${hue + 7}, 84%, ${lightTheme ? 38 : 49}%, ${baseAlpha})`);
+      sphere.addColorStop(1, `hsla(${hue + 14}, 76%, ${lightTheme ? 24 : 25}%, ${baseAlpha * 0.92})`);
       context.beginPath();
       context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
-      context.fillStyle = `hsla(${hue}, ${lightTheme ? 72 : 84}%, ${lightTheme ? 38 : 57}%, ${baseAlpha})`;
+      context.fillStyle = sphere;
       context.fill();
 
       context.beginPath();
-      context.arc(node.screenX + radius * 0.12, node.screenY + radius * 0.14, radius * 0.72, 0, Math.PI * 2);
-      context.fillStyle = `hsla(${hue + 8}, 80%, ${lightTheme ? 47 : 66}%, .3)`;
-      context.fill();
-
-      context.beginPath();
-      context.arc(node.screenX - radius * 0.3, node.screenY - radius * 0.3, radius * 0.18, 0, Math.PI * 2);
-      context.fillStyle = `rgba(255, 255, 255, ${lightTheme ? 0.58 : 0.78})`;
+      context.arc(node.screenX - radius * 0.28, node.screenY - radius * 0.31, radius * 0.12, 0, Math.PI * 2);
+      context.fillStyle = `rgba(255, 255, 255, ${lightTheme ? 0.54 : 0.74})`;
       context.fill();
     }
 
@@ -1038,9 +1107,20 @@ function drawUniverseNode(
     }
   } else if (node.kind === "router") {
     if (node.enabled) {
+      const routerSphere = context.createRadialGradient(
+        node.screenX - radius * 0.3,
+        node.screenY - radius * 0.32,
+        Math.max(0.4, radius * 0.05),
+        node.screenX,
+        node.screenY,
+        radius
+      );
+      routerSphere.addColorStop(0, `hsla(${hue - 6}, 96%, ${lightTheme ? 80 : 91}%, .94)`);
+      routerSphere.addColorStop(0.28, `hsla(${hue}, 88%, ${lightTheme ? 52 : 68}%, ${highlighted ? 1 : baseAlpha})`);
+      routerSphere.addColorStop(1, `hsla(${hue + 12}, 74%, ${lightTheme ? 27 : 31}%, ${highlighted ? 0.98 : baseAlpha})`);
       context.beginPath();
       context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
-      context.fillStyle = `hsla(${hue}, 80%, ${lightness}%, ${highlighted ? 0.98 : baseAlpha})`;
+      context.fillStyle = routerSphere;
       context.fill();
       context.beginPath();
       context.arc(node.screenX - radius * 0.24, node.screenY - radius * 0.26, radius * 0.15, 0, Math.PI * 2);
@@ -1155,6 +1235,18 @@ function getAuraSprite(key: string, palette: AtmospherePalette) {
   aura.addColorStop(0.68, palette.edge);
   aura.addColorStop(1, "rgba(0, 0, 0, 0)");
   context.fillStyle = aura;
+  context.fillRect(0, 0, 256, 256);
+  const upperBloom = context.createRadialGradient(106, 91, 2, 106, 91, 76);
+  upperBloom.addColorStop(0, palette.center);
+  upperBloom.addColorStop(0.4, palette.mid);
+  upperBloom.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.fillStyle = upperBloom;
+  context.fillRect(0, 0, 256, 256);
+  const lowerBloom = context.createRadialGradient(154, 168, 2, 154, 168, 82);
+  lowerBloom.addColorStop(0, palette.mid);
+  lowerBloom.addColorStop(0.56, palette.edge);
+  lowerBloom.addColorStop(1, "rgba(0, 0, 0, 0)");
+  context.fillStyle = lowerBloom;
   context.fillRect(0, 0, 256, 256);
   AURA_SPRITES.set(key, canvas);
   return canvas;
@@ -1385,6 +1477,11 @@ function stableHash(value: string) {
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.max(minimum, Math.min(maximum, value));
+}
+
+function wrapAngle(value: number) {
+  const fullTurn = Math.PI * 2;
+  return ((value + Math.PI) % fullTurn + fullTurn) % fullTurn - Math.PI;
 }
 
 const CATEGORY_RULES = [

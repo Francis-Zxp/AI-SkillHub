@@ -161,14 +161,17 @@ Assert-PathInside $ReleaseInstaller $ReleaseRoot 'Release installer'
 Copy-Item -LiteralPath $Installer.FullName -Destination $ReleaseInstaller -Force
 Copy-Item -LiteralPath $InstallerSignature -Destination $ReleaseSignature -Force
 
+$global:LASTEXITCODE = 0
 & (Join-Path $AppRoot 'runtime\Build-SkillHubReleasePackage.ps1') -Version $Version
-if ($LASTEXITCODE -ne 0) { throw 'Portable packaging or developer-root refresh failed.' }
+if (-not $? -or $global:LASTEXITCODE -ne 0) {
+  throw 'Portable packaging or developer-root refresh failed.'
+}
 
 $SignatureText = (Get-Content -LiteralPath $ReleaseSignature -Raw -Encoding UTF8).Trim()
 $LatestJsonPath = Join-Path $ReleaseRoot 'latest.json'
 $LatestPayload = [ordered]@{
   version = $Version
-  notes = "AI SkillHub v${Version}: Spectral Gravity atlas, automatic Skill metadata, verified source recovery, version governance, and preserved user data."
+  notes = "AI SkillHub v${Version}: non-blocking source imports with visible progress, Impeccable-compatible bounded downloads, source-scoped parent routing, richer 360-degree atlas visuals, aligned layouts, and preserved user data."
   pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
   platforms = [ordered]@{
     'windows-x86_64' = [ordered]@{

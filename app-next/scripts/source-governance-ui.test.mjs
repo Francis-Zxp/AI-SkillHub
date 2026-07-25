@@ -7,6 +7,7 @@ const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8"
 const preview = await readFile(new URL("../src/preview.ts", import.meta.url), "utf8");
 const messages = await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8");
 const syncScript = await readFile(new URL("../runtime/SkillHub.ps1", import.meta.url), "utf8");
+const backend = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 
 test("desktop bridge exposes all source governance actions", () => {
   for (const command of [
@@ -41,4 +42,26 @@ test("sync script consumes the exact pin manifest and skips network updates", ()
   assert.match(syncScript, /Get-PinnedSourceRevision/);
   assert.match(syncScript, /network update skipped/);
   assert.match(syncScript, /governance-blocked/);
+});
+
+test("large source imports stay bounded, visible, and off the UI thread", () => {
+  assert.match(backend, /const SOURCE_IMPORT_MAX_FILES: usize = 6_000/);
+  for (const command of [
+    "preview_source_import_candidate",
+    "stage_source_import_candidate",
+    "promote_staged_source_import"
+  ]) {
+    assert.match(
+      backend,
+      new RegExp(`async fn ${command}\\([\\s\\S]*?tauri::async_runtime::spawn_blocking`)
+    );
+  }
+  assert.match(app, /role="progressbar"/);
+  assert.match(app, /className={`import-progress/);
+  assert.match(app, /setProgress\(\{ detail: t\("qa\.statusJoining"\), percent: 28/);
+});
+
+test("preset UI omits the non-deploying distribution matrix", () => {
+  assert.doesNotMatch(app, /onToggleDistribution/);
+  assert.doesNotMatch(app, /className="distribution-grid"/);
 });

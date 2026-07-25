@@ -36,10 +36,12 @@ by Git. Public releases should be created with the release package workflow.
 2. Go to `Skill Library`.
 3. Paste a GitHub repository URL, select source type, category, tags, and notes.
 4. Click `一键添加并刷新`.
-5. AI SkillHub scans real `SKILL.md` folders, proposes editable metadata,
-   checks staged files for risk, rebuilds parent router Skills, refreshes the
-   local index, and can synchronize the active Skill view into Claude Code,
-   Codex, and Antigravity.
+5. A five-stage progress bar remains visible while preview, bounded download,
+   security review, promotion, and refresh run off the WebView event thread.
+6. AI SkillHub scans real `SKILL.md` folders, proposes editable metadata,
+   rebuilds source-scoped parent router Skills, refreshes the local index, and
+   can synchronize the active Skill view into Claude Code, Codex, and
+   Antigravity.
 
 AI SkillHub installs only real Skills. A folder must contain `SKILL.md` before
 it is treated as a callable Skill. Prompt-only repositories remain source
@@ -52,8 +54,9 @@ material and are not installed as Skills.
 - Zip or `.skill` package previews.
 - Prompt/reference repositories.
 - Parent router Skills and child Skills.
-- Automatic same-name child Skill routing, source-qualified aliases, and
-  optional manual overrides.
+- Source-scoped parent-to-child routing. Exact same-name children keep
+  source-qualified aliases; only an explicit advanced choice creates a global
+  bare-name dispatcher.
 - Claude Code, OpenAI Codex, and Antigravity shared-skill links, with separate
   desktop-app and code-capability detection.
 - Source categories, tags, notes, search, sorting, usage counters, and GitHub
@@ -98,6 +101,11 @@ installation method. AI SkillHub checks the official GitHub Release channel in
 the background; when a newer signed release exists, Settings offers one-click
 download, replacement, and restart. The updater accepts only packages signed by
 the AI SkillHub release key.
+
+v3.0.5 moves large source operations to background workers, accepts up to 6000
+selected files under the unchanged 80 MB / 16 MB safety ceilings, and was
+validated against the real `pbakaus/impeccable` repository. Signed program
+updates keep the stable user-data directory in place.
 
 v3.0.2 and older builds do not contain this updater. Install the current formal
 release once, then future upgrades are handled inside the app. The portable zip

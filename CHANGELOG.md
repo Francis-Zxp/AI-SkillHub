@@ -2,6 +2,47 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.0.5 - Responsive imports, source-scoped routing, and visual finish
+
+### Fixed
+
+- Moved source preview, clone/download, security scan, promotion and Agent-link
+  refresh work off the WebView event thread. The import wizard now exposes an
+  accessible five-stage progress bar instead of appearing frozen.
+- Raised the bounded selected-file ceiling from 1500 to 6000 while preserving
+  the 80 MB archive/content ceiling, 16 MB per-file ceiling, safe path checks,
+  symlink rejection and per-file security scan. A real isolated
+  `pbakaus/impeccable` fallback download now passes.
+- Scoped every generated parent router to explicit child `SKILL.md` paths from
+  its own source. Automatic exact-name handling no longer writes a cross-source
+  global dispatcher; only an explicit advanced choice can do so.
+- Centered the collapsed sidebar logo and unified topbar, page-header, content
+  panel and bottom event-tape widths at the default and narrow desktop windows.
+- Restored natural text flow so short operational descriptions remain on one
+  line and wrap only when the available width requires it.
+
+### Changed
+
+- Removed the non-deploying Preset/workspace distribution matrix from the
+  product UI while retaining its SQLite data for backward compatibility.
+- Made maintenance tools closed by default.
+- Added two v3.0.2-compatible Classic Living Atlas themes without replacing the
+  current Deep Space and Mist themes; standardized all theme names and sun/moon
+  icons.
+- Refined Spectral Gravity with fuller layered atmosphere, circular glossy
+  source/parent nodes, subtle meteors, smoother inertia and unrestricted
+  two-axis rotation.
+
+### Validation status
+
+- Production frontend build, 9 UI contract checks, strict Rust formatting and
+  Clippy passed. Rust library suite completed with 93 passed, 0 failed and 2
+  network gates ignored by default; the real Impeccable network gate was run
+  separately and passed.
+- Browser QA at 1280×820 confirmed no horizontal overflow, exact logo centering,
+  aligned page axes, maintenance closed by default, distribution matrix absent,
+  natural update copy, two-axis graph response and graph-only wheel handling.
+
 ## 3.0.4 - Spectral Gravity, explainable imports, and recoverable migration
 
 ### Added

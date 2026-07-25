@@ -2,12 +2,16 @@
 param(
   [Parameter(Mandatory = $true)]
   [string]$InstallerPath,
-  [string]$ExpectedVersion = '3.0.4',
+  [string]$PreviousInstallerPath = '',
+  [string]$ExpectedVersion = '3.0.5',
   [switch]$KeepSandbox
 )
 
 $ErrorActionPreference = 'Stop'
 $InstallerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
+if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) {
+  $PreviousInstallerPath = (Resolve-Path -LiteralPath $PreviousInstallerPath).Path
+}
 $QaId = [Guid]::NewGuid().ToString('N')
 $TempBase = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
 $QaRoot = Join-Path $env:TEMP "AI-SkillHub-Installer-QA-$QaId"
@@ -56,7 +60,12 @@ New-Item -Path $ProductKey -Force | Out-Null
 Set-Item -LiteralPath $ProductKey -Value $InstallRoot
 
 try {
-  $first = Start-Process -FilePath $InstallerPath -ArgumentList @('/S', "/D=$InstallRoot") -Wait -PassThru -WindowStyle Hidden
+  $firstInstaller = if ([string]::IsNullOrWhiteSpace($PreviousInstallerPath)) {
+    $InstallerPath
+  } else {
+    $PreviousInstallerPath
+  }
+  $first = Start-Process -FilePath $firstInstaller -ArgumentList @('/S', "/D=$InstallRoot") -Wait -PassThru -WindowStyle Hidden
   if ($first.ExitCode -ne 0) { throw "First NSIS install failed: $($first.ExitCode)" }
 
   $app = Join-Path $InstallRoot 'ai-skillhub-next.exe'
@@ -78,10 +87,49 @@ try {
     throw "Installed runtime resources missing: $($missingRuntime -join ', ')"
   }
 
+  $preservedParentRating = -1
+  if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)) {
+    $oldPsi = [Diagnostics.ProcessStartInfo]::new()
+    $oldPsi.FileName = $app
+    $oldPsi.WorkingDirectory = $InstallRoot
+    $oldPsi.UseShellExecute = $false
+    $oldPsi.CreateNoWindow = $true
+    $oldPsi.EnvironmentVariables['AI_SKILLHUB_DATA_ROOT'] = $DataRoot
+    $oldProcess = [Diagnostics.Process]::Start($oldPsi)
+    Start-Sleep -Seconds 8
+    if ($oldProcess.HasExited) { throw 'Previous-version app did not stay running.' }
+    $oldProcess.Kill()
+    $oldProcess.WaitForExit()
+
+    $database = Join-Path $DataRoot 'state\skillhub-next.sqlite3'
+    if (-not (Test-Path -LiteralPath $database -PathType Leaf)) {
+      throw 'Previous-version app did not create its SQLite database.'
+    }
+    $sqlite = Get-Command sqlite3 -ErrorAction SilentlyContinue
+    if (-not $sqlite) { throw 'sqlite3 is required for the cross-version data gate.' }
+    $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+    & $sqlite.Source $database @"
+INSERT OR REPLACE INTO sources (
+  id, name, source_type, url, local_path, install_mode,
+  category_id, note, enabled, created_at, updated_at
+) VALUES (
+  'qa-upgrade-source', 'QA Upgrade Source', 'skill',
+  'https://github.com/example/qa-upgrade-source.git', '',
+  'scan', 'general', 'upgrade sentinel', 1, '$stamp', '$stamp'
+);
+INSERT OR REPLACE INTO source_overrides (
+  source_id, display_name, source_type, category_id, note, enabled, rating, updated_at
+) VALUES (
+  'qa-upgrade-source', '', '', '', 'upgrade sentinel', NULL, 5, '$stamp'
+);
+"@
+    if ($LASTEXITCODE -ne 0) { throw 'Could not seed previous-version user data.' }
+  }
+
   $sentinel = Join-Path $DataRoot 'update-preserves-user-data.txt'
   [IO.File]::WriteAllText(
     $sentinel,
-    'preserve-v3.0.4',
+    'preserve-v3.0.5',
     [Text.UTF8Encoding]::new($false)
   )
   $second = Start-Process -FilePath $InstallerPath -ArgumentList @('/S', "/D=$InstallRoot") -Wait -PassThru -WindowStyle Hidden
@@ -89,7 +137,7 @@ try {
 
   $sentinelPreserved =
     (Test-Path -LiteralPath $sentinel -PathType Leaf) -and
-    ((Get-Content -LiteralPath $sentinel -Raw) -eq 'preserve-v3.0.4')
+    ((Get-Content -LiteralPath $sentinel -Raw) -eq 'preserve-v3.0.5')
   $installedVersion = (
     [string](Get-Item -LiteralPath $app).VersionInfo.ProductVersion -split '[+-]'
   )[0]
@@ -110,14 +158,25 @@ try {
   $databaseCreated = Test-Path -LiteralPath (
     Join-Path $DataRoot 'state\skillhub-next.sqlite3'
   ) -PathType Leaf
+  if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath) -and $databaseCreated) {
+    $sqlite = Get-Command sqlite3 -ErrorAction SilentlyContinue
+    $preservedParentRating = [int](
+      & $sqlite.Source (Join-Path $DataRoot 'state\skillhub-next.sqlite3') `
+        "SELECT rating FROM source_overrides WHERE source_id='qa-upgrade-source';"
+    )
+  }
 
   $result = [pscustomobject]@{
+    upgradedFrom = if ([string]::IsNullOrWhiteSpace($PreviousInstallerPath)) { 'same-version' } else {
+      ([string](Get-Item -LiteralPath $PreviousInstallerPath).VersionInfo.ProductVersion -split '[+-]')[0]
+    }
     installerExit = $first.ExitCode
     inPlaceReinstallExit = $second.ExitCode
     installedVersion = $installedVersion
     runtimeResources = $runtimeFiles.Count
     missingRuntimeResources = $missingRuntime.Count
     userDataSentinelPreserved = $sentinelPreserved
+    parentRatingPreserved = $preservedParentRating
     installedAppStarted = $appStarted
     databaseCreated = $databaseCreated
   }
@@ -127,7 +186,11 @@ try {
     $installedVersion -ne $ExpectedVersion -or
     -not $sentinelPreserved -or
     -not $appStarted -or
-    -not $databaseCreated
+    -not $databaseCreated -or
+    (
+      -not [string]::IsNullOrWhiteSpace($PreviousInstallerPath) -and
+      $preservedParentRating -ne 5
+    )
   ) {
     throw 'Installer QA did not satisfy the release gate.'
   }

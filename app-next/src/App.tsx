@@ -23,7 +23,6 @@ import {
   updatePreviewDesktopQaStatus,
   updatePreviewEnabled,
   updatePreviewOperationRunner,
-  updatePreviewPresetDistribution,
   updatePreviewRealWriteAuthorization,
   updatePreviewSkillRating
 } from "./preview";
@@ -60,6 +59,8 @@ type ThemeName =
   | "parchment"
   | "atlas-dark"
   | "atlas-light"
+  | "atlas-legacy-dark"
+  | "atlas-legacy-light"
   | "dark"
   | "light"
   | "classic-dark"
@@ -81,6 +82,12 @@ type QuickAddStatus = {
   body: string;
   title: string;
   tone: "info" | "ok" | "warn" | "error";
+};
+type ImportProgress = {
+  detail: string;
+  percent: number;
+  step: number;
+  total: number;
 };
 type ImportFeedbackOptions = { quiet?: boolean; securityReviewConfirmed?: boolean };
 type OperationStatus = { title: string; detail: string; step: number; total: number; percent: number };
@@ -120,12 +127,14 @@ const UI_SCALE_OPTIONS: UiScalePreset[] = ["compact", "standard", "comfortable",
 const THEME_OPTIONS: Array<{ icon: IconName; labelKey: string; value: ThemeName }> = [
   { value: "nocturne", labelKey: "theme.nocturne", icon: "moon" },
   { value: "parchment", labelKey: "theme.parchment", icon: "sun" },
-  { value: "atlas-dark", labelKey: "theme.atlasDark", icon: "sparkle" },
-  { value: "atlas-light", labelKey: "theme.atlasLight", icon: "sparkle" },
+  { value: "atlas-dark", labelKey: "theme.atlasDark", icon: "moon" },
+  { value: "atlas-light", labelKey: "theme.atlasLight", icon: "sun" },
+  { value: "atlas-legacy-dark", labelKey: "theme.atlasLegacyDark", icon: "moon" },
+  { value: "atlas-legacy-light", labelKey: "theme.atlasLegacyLight", icon: "sun" },
   { value: "dark", labelKey: "theme.dark", icon: "moon" },
   { value: "light", labelKey: "theme.light", icon: "sun" },
-  { value: "classic-dark", labelKey: "theme.classicDark", icon: "sparkle" },
-  { value: "classic-light", labelKey: "theme.classicLight", icon: "sparkle" }
+  { value: "classic-dark", labelKey: "theme.classicDark", icon: "moon" },
+  { value: "classic-light", labelKey: "theme.classicLight", icon: "sun" }
 ];
 const NAV_ITEMS: Array<{ key: NavKey; icon: IconName }> = [
   { key: "dashboard", icon: "dashboard" },
@@ -737,32 +746,6 @@ export function App() {
     }
   }
 
-  async function updatePresetDistribution(presetId: string, workspaceId: string, enabled: boolean) {
-    setLoading(true);
-    try {
-      if (!runtimeAvailable) {
-        setSnapshot(prev =>
-          updatePreviewPresetDistribution(prev ?? createPreviewSnapshot(), presetId, workspaceId, enabled)
-        );
-        toastMessage(t("toast.previewToggleSim"), "info");
-        return;
-      }
-      const result = await invoke<LegacySnapshot>("set_preset_workspace_enabled", {
-        presetId,
-        workspaceId,
-        enabled
-      });
-      setSnapshot(result);
-      setLoadError("");
-      toastMessage(enabled ? t("preset.toastOn") : t("preset.toastOff"), "ok");
-    } catch (error) {
-      setLoadError(messageFromError(error));
-      toastMessage(t("preset.toastFailed"), "error");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function runReleaseGateRunner(runnerId: string) {
     setLoading(true);
     try {
@@ -1293,7 +1276,6 @@ export function App() {
             <Presets
               disabled={loading}
               onToggle={updateEnabled}
-              onToggleDistribution={updatePresetDistribution}
               snapshot={snapshot}
             />
           )}
@@ -1632,7 +1614,7 @@ function Dashboard({
                 ? "prism"
                 : theme === "parchment"
                   ? "parchment"
-                  : theme === "atlas-light"
+                  : theme === "atlas-light" || theme === "atlas-legacy-light"
                     ? "mist"
                     : "biolume"
             }
@@ -2334,13 +2316,9 @@ function Library(props: LibraryProps) {
   const [editingSourceId, setEditingSourceId] = useState("");
   const [editingSkillId, setEditingSkillId] = useState("");
   const [showImport, setShowImport] = useState(false);
-  const [showMaintenance, setShowMaintenance] = useState(atlasMode);
+  const [showMaintenance, setShowMaintenance] = useState(false);
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
   const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
-
-  useEffect(() => {
-    if (atlasMode) setShowMaintenance(true);
-  }, [atlasMode]);
 
   useEffect(() => {
     if (!searchQuery.trim()) return;
@@ -3623,7 +3601,11 @@ function SkillConflictPanel({
                 <span>{String(index + 1).padStart(2, "0")}</span>
                 <div>
                   <strong>/{conflict.childName}</strong>
-                  <small>{conflict.defaultSourceName || conflictStatusLabel(conflict.status)}</small>
+                  <small>
+                    {conflict.status === "default-set" && conflict.defaultSourceName
+                      ? conflict.defaultSourceName
+                      : conflictStatusLabel(conflict.status)}
+                  </small>
                 </div>
                 <em>{conflict.choices.length}</em>
               </button>
@@ -3653,7 +3635,8 @@ function SkillConflictPanel({
               <span role="columnheader">{t("conf.decision")}</span>
             </div>
             {selected.choices.map(choice => {
-              const isDefault = choice.skillId === selected.defaultSkillId;
+              const isDefault =
+                selected.status === "default-set" && choice.skillId === selected.defaultSkillId;
               const alias = conflictAliasName(choice.sourceName, selected.childName);
               return (
                 <article className={`routing-candidate${isDefault ? " selected" : ""}`} key={choice.skillId} role="row">
@@ -3752,6 +3735,7 @@ function ImportWizard({
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState<QuickAddStatus | null>(null);
+  const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [securityReview, setSecurityReview] = useState<{
     execution: SourceImportExecutionCard;
     plan: SourceImportPlanCard;
@@ -3769,6 +3753,7 @@ function ImportWizard({
     execution: SourceImportExecutionCard,
     securityReviewConfirmed: boolean
   ): Promise<boolean> {
+      setProgress({ detail: t("qa.statusWriting"), percent: 74, step: 3, total: 5 });
       setStatus({ tone: "info", title: t("qa.statusWriting"), body: t("qa.statusWritingBody") });
       const promotion = await onPromote(
         execution.importKind,
@@ -3781,6 +3766,7 @@ function ImportWizard({
         requiresSecurityReview(promotion.securityStatus) &&
         !securityReviewConfirmed
       ) {
+        setProgress({ detail: t("qa.securityReviewTitle"), percent: 70, step: 3, total: 5 });
         setSecurityReview({
           plan,
           execution: {
@@ -3804,11 +3790,13 @@ function ImportWizard({
       }
       if (promotion.status !== "promoted" && promotion.status !== "already-managed") {
         setSecurityReview(null);
+        setProgress(null);
         setStatus({ tone: "warn", title: t("qa.statusNotWritten"), body: promotion.summary });
         showUiToast(t("qa.toastPromoteStop"), "warn");
         return false;
       }
       setSecurityReview(null);
+      setProgress({ detail: t("qa.statusRefreshing"), percent: 88, step: 4, total: 5 });
       setStatus({ tone: "info", title: t("qa.statusRefreshing"), body: t("qa.statusRefreshingBody") });
       const refreshed = await onRefreshIndex();
       const promotedSource = refreshed?.sources.find(
@@ -3834,8 +3822,10 @@ function ImportWizard({
           sourceType: detectedSourceType,
           tags: mergeTagInputs(tags, extraTags)
         };
+        setProgress({ detail: t("qa.statusRefreshing"), percent: 96, step: 5, total: 5 });
         await onSaveSourceMetadata(promotedSource, draft);
       }
+      setProgress({ detail: t("qa.statusAddedTitle"), percent: 100, step: 5, total: 5 });
       setStatus({
         tone: "ok",
         title: t("qa.statusAddedTitle"),
@@ -3856,10 +3846,13 @@ function ImportWizard({
     }
     setPending(true);
     setSecurityReview(null);
+    setProgress({ detail: t("qa.statusChecking"), percent: 8, step: 1, total: 5 });
     setStatus({ tone: "info", title: t("qa.statusChecking"), body: t("qa.statusCheckingBody") });
+    let stageProgressTimer: number | undefined;
     try {
       const plan = await onPreview(importKind, value, { quiet: true });
       if (!plan.safeToContinue) {
+        setProgress(null);
         setStatus({
           tone: "warn",
           title: t("qa.statusBlockedTitle"),
@@ -3868,8 +3861,24 @@ function ImportWizard({
         showUiToast(t("qa.toastBlocked"), "warn");
         return;
       }
+      setProgress({ detail: t("qa.statusJoining"), percent: 28, step: 2, total: 5 });
       setStatus({ tone: "info", title: t("qa.statusJoining"), body: t("qa.statusJoiningBody") });
+      stageProgressTimer = window.setInterval(() => {
+        setProgress(current => {
+          if (!current || current.step !== 2 || current.percent >= 64) return current;
+          const remaining = 64 - current.percent;
+          return {
+            ...current,
+            percent: Math.min(64, current.percent + Math.max(1, Math.round(remaining * 0.08)))
+          };
+        });
+      }, 420);
       const execution = await onStage(plan.importKind, plan.input, { quiet: true });
+      if (stageProgressTimer !== undefined) {
+        window.clearInterval(stageProgressTimer);
+        stageProgressTimer = undefined;
+      }
+      setProgress({ detail: t("qa.statusJoining"), percent: 68, step: 2, total: 5 });
       if (execution.status !== "staged" && execution.status !== "warn") {
         const detail = execution.blockingChecks
           .filter(check => check.trim())
@@ -3880,10 +3889,12 @@ function ImportWizard({
           title: t("qa.statusNotWritten"),
           body: `${execution.summary}${detail && detail !== execution.summary ? `\n${detail}` : ""}`
         });
+        setProgress(null);
         showUiToast(t("qa.toastStagingStop"), "warn");
         return;
       }
       if (requiresSecurityReview(execution.securityStatus)) {
+        setProgress({ detail: t("qa.securityReviewTitle"), percent: 70, step: 3, total: 5 });
         setSecurityReview({ execution, plan });
         setStatus({
           tone: "warn",
@@ -3899,9 +3910,11 @@ function ImportWizard({
       await promoteAndFinalize(plan, execution, false);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      setProgress(null);
       setStatus({ tone: "error", title: t("qa.statusFailed"), body: message });
       showUiToast(t("qa.toastFailed"), "error");
     } finally {
+      if (stageProgressTimer !== undefined) window.clearInterval(stageProgressTimer);
       setPending(false);
     }
   }
@@ -3909,10 +3922,12 @@ function ImportWizard({
   async function confirmSecurityReview() {
     if (!securityReview) return;
     setPending(true);
+    setProgress({ detail: t("qa.statusWriting"), percent: 74, step: 3, total: 5 });
     try {
       await promoteAndFinalize(securityReview.plan, securityReview.execution, true);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      setProgress(null);
       setStatus({ tone: "error", title: t("qa.statusFailed"), body: message });
       showUiToast(t("qa.toastFailed"), "error");
     } finally {
@@ -3953,6 +3968,7 @@ function ImportWizard({
             onChange={value => {
               setImportKind(value);
               setSecurityReview(null);
+              setProgress(null);
             }}
           />
         </div>
@@ -3963,6 +3979,7 @@ function ImportWizard({
             onChange={event => {
               setInput(event.target.value);
               setSecurityReview(null);
+              setProgress(null);
             }}
             placeholder={placeholder}
             value={input}
@@ -4127,6 +4144,25 @@ function ImportWizard({
           <Icon name="add" /> {isBusy ? t("qa.submitting") : t("qa.submit")}
         </button>
       </div>
+
+      {progress && (
+        <div
+          aria-label={`${progress.detail} ${progress.percent}%`}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={progress.percent}
+          className={`import-progress${pending ? " is-active" : ""}`}
+          role="progressbar"
+        >
+          <div className="import-progress-copy">
+            <strong>{progress.detail}</strong>
+            <span>{progress.step} / {progress.total} · {progress.percent}%</span>
+          </div>
+          <div className="import-progress-track">
+            <span style={{ width: `${progress.percent}%` }} />
+          </div>
+        </div>
+      )}
 
       {status && (
         <div className={`import-status tone-${status.tone}`} role="status">
@@ -4306,16 +4342,13 @@ function WorkspaceDetailPanel({
 function Presets({
   disabled,
   onToggle,
-  onToggleDistribution,
   snapshot
 }: {
   disabled: boolean;
   onToggle: (command: string, id: string, enabled: boolean) => Promise<void>;
-  onToggleDistribution: (presetId: string, workspaceId: string, enabled: boolean) => Promise<void>;
   snapshot: LegacySnapshot | null;
 }) {
   const presets = snapshot?.presets ?? [];
-  const distributions = snapshot?.presetDistributions ?? [];
   return (
     <div className="view presets-view">
       <section className="page-header glow-card">
@@ -4351,34 +4384,6 @@ function Presets({
         {presets.length === 0 && <p className="empty-state">{t("preset.empty")}</p>}
       </div>
 
-      <section className="panel glow-card">
-        <header className="panel-head">
-          <div>
-            <span className="eyebrow">{t("preset.matrixEyebrow")}</span>
-            <h3>{t("preset.matrixTitle")}</h3>
-            <p>{t("preset.matrixBody")}</p>
-          </div>
-          <span className="badge-soft">{t("preset.plans", { n: distributions.length })}</span>
-        </header>
-        <div className="distribution-grid">
-          {distributions.map(item => (
-            <article className={`distribution-row${item.enabled ? " enabled" : ""}`} key={item.id}>
-              <div>
-                <strong>{item.presetName}</strong>
-                <span>{item.workspaceName} · {scopeLabel(item.workspaceScope)}</span>
-              </div>
-              <small>{item.summary}</small>
-              <ToggleSwitch
-                disabled={disabled}
-                enabled={item.enabled}
-                label={item.enabled ? t("preset.distributed") : t("preset.notDistributed")}
-                onClick={() => void onToggleDistribution(item.presetId, item.workspaceId, !item.enabled)}
-              />
-            </article>
-          ))}
-          {distributions.length === 0 && <p>{t("preset.matrixEmpty")}</p>}
-        </div>
-      </section>
     </div>
   );
 }
@@ -5027,6 +5032,8 @@ function isThemeName(value: string | null): value is ThemeName {
     value === "parchment" ||
     value === "atlas-dark" ||
     value === "atlas-light" ||
+    value === "atlas-legacy-dark" ||
+    value === "atlas-legacy-light" ||
     value === "dark" ||
     value === "light" ||
     value === "classic-dark" ||
@@ -5035,11 +5042,24 @@ function isThemeName(value: string | null): value is ThemeName {
 }
 
 function isAtlasTheme(theme: ThemeName): boolean {
-  return theme === "nocturne" || theme === "parchment" || theme === "atlas-dark" || theme === "atlas-light";
+  return (
+    theme === "nocturne" ||
+    theme === "parchment" ||
+    theme === "atlas-dark" ||
+    theme === "atlas-light" ||
+    theme === "atlas-legacy-dark" ||
+    theme === "atlas-legacy-light"
+  );
 }
 
 function isLightTheme(theme: ThemeName): boolean {
-  return theme === "parchment" || theme === "atlas-light" || theme === "light" || theme === "classic-light";
+  return (
+    theme === "parchment" ||
+    theme === "atlas-light" ||
+    theme === "atlas-legacy-light" ||
+    theme === "light" ||
+    theme === "classic-light"
+  );
 }
 
 function atlasThemeVisual(theme: ThemeName) {
@@ -5055,7 +5075,7 @@ function atlasThemeVisual(theme: ThemeName) {
       palette: ["#6f9dff", "#d9e5ff", "#ffbd7a", "#b49cff", "#65c9df"]
     };
   }
-  if (theme === "atlas-light") {
+  if (theme === "atlas-light" || theme === "atlas-legacy-light") {
     return {
       accent: "#16796f",
       palette: ["#16796f", "#295a80", "#b7882f", "#67746f"]
