@@ -111,6 +111,7 @@ type AppUpdateState = {
 
 const TOAST_EVENT = "ai-skillhub-toast";
 const APP_VERSION = __APP_VERSION__;
+const PROJECT_HOME_URL = "https://github.com/Francis-Zxp/AI-SkillHub";
 const UI_TEXT_SCALE_STORAGE_KEY = "ai-skillhub-ui-text-scale";
 const UI_ICON_SCALE_STORAGE_KEY = "ai-skillhub-ui-icon-scale";
 const UI_TEXT_SCALES: Record<UiScalePreset, number> = {
@@ -208,6 +209,7 @@ export function App() {
   const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
   const [globalSearch, setGlobalSearch] = useState("");
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>({ phase: "idle", progress: 0, version: "" });
+  const [dashboardImmersive, setDashboardImmersive] = useState(false);
   const updateRef = useRef<Update | null>(null);
   const updateRetryTimerRef = useRef<number | null>(null);
   const backgroundUpdateRetriesRef = useRef(0);
@@ -252,6 +254,18 @@ export function App() {
 
   function toastMessage(message: string, tone: ToastTone = "info") {
     setToast({ message, tone });
+  }
+
+  async function openProjectHome() {
+    try {
+      if (runtimeAvailable) {
+        await invoke("plugin:opener|open_url", { url: PROJECT_HOME_URL, with: null });
+      } else {
+        window.open(PROJECT_HOME_URL, "_blank", "noopener,noreferrer");
+      }
+    } catch {
+      toastMessage(t("project.openFailed"), "error");
+    }
   }
 
   async function checkForAppUpdate(silent = false) {
@@ -1061,7 +1075,17 @@ export function App() {
 
   useEffect(() => {
     document.scrollingElement?.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    if (active !== "dashboard") setDashboardImmersive(false);
   }, [active]);
+
+  useEffect(() => {
+    if (!dashboardImmersive) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDashboardImmersive(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [dashboardImmersive]);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -1102,7 +1126,7 @@ export function App() {
 
   return (
     <main
-      className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"} page-${active} lang-${lang}`}
+      className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"} page-${active} lang-${lang}${dashboardImmersive && active === "dashboard" ? " dashboard-immersive" : ""}`}
       style={{
         "--ui-icon-scale": UI_ICON_SCALES[iconScale],
         "--ui-text-scale": UI_TEXT_SCALES[textScale]
@@ -1187,6 +1211,15 @@ export function App() {
           <div className="topbar-actions">
             <LanguageSwitcher current={lang} onChange={changeLang} />
             <ThemeSwitcher current={theme} onChange={changeTheme} />
+            <button
+              aria-label={t("project.openGithub")}
+              className="icon-button project-home-link"
+              onClick={() => void openProjectHome()}
+              title={t("project.openGithub")}
+              type="button"
+            >
+              <Icon name="github" />
+            </button>
             {appUpdate.phase === "available" && (
               <button className="update-available-pill" onClick={() => setActive("settings")} type="button">
                 <Icon name="download" />
@@ -1205,7 +1238,9 @@ export function App() {
                   ? operation
                     ? t("topbar.backgroundSync")
                     : loading
-                      ? t("topbar.syncing")
+                      ? snapshot
+                        ? t("topbar.processing")
+                        : t("topbar.loadingIndex")
                       : realWritesEnabled
                         ? t("topbar.sync")
                         : t("topbar.refreshIndex")
@@ -1270,6 +1305,7 @@ export function App() {
 
           {active === "dashboard" && (
             <Dashboard
+              immersive={dashboardImmersive}
               loading={loading}
               onCopySkill={skill => void copySkillPrompt(skill, recordUsage)}
               onOpenAdvanced={() => setActive("release")}
@@ -1285,8 +1321,10 @@ export function App() {
               }}
               onRefreshPopularity={() => void refreshSourcePopularity()}
               onSync={() => void syncAndRefreshAll()}
+              onToggleImmersive={() => setDashboardImmersive(value => !value)}
               snapshot={snapshot}
               summary={summary}
+              syncing={Boolean(operation)}
               theme={theme}
             />
           )}
@@ -1376,6 +1414,7 @@ export function App() {
           </div>
         )}
       </section>
+      <div id="app-overlay-root" />
     </main>
   );
 }
@@ -1574,6 +1613,7 @@ function GlobalSearchResults({
 const ATLAS_INTRO_VISIBILITY_KEY = "ai-skillhub-atlas-intro-visible";
 
 function Dashboard({
+  immersive,
   loading,
   onCopySkill,
   onOpenAdvanced,
@@ -1583,10 +1623,13 @@ function Dashboard({
   onOpenSource,
   onRefreshPopularity,
   onSync,
+  onToggleImmersive,
   snapshot,
   summary,
+  syncing,
   theme
 }: {
+  immersive: boolean;
   loading: boolean;
   onCopySkill: (skill: SkillCard) => void;
   onOpenAdvanced: () => void;
@@ -1596,8 +1639,10 @@ function Dashboard({
   onOpenSource: (source: SourceCard) => void;
   onRefreshPopularity: () => void;
   onSync: () => void;
+  onToggleImmersive: () => void;
   snapshot: LegacySnapshot | null;
   summary: LegacySummary;
+  syncing: boolean;
   theme: ThemeName;
 }) {
   const backupBlocked = countByStatus(snapshot?.backupDryRun ?? [], "blocked");
@@ -1677,6 +1722,18 @@ function Dashboard({
         )}
         {atlasMode && (
           <button
+            aria-pressed={immersive}
+            className="atlas-immersive-toggle"
+            onClick={onToggleImmersive}
+            title={immersive ? t("atlas.exitImmersive") : t("atlas.enterImmersive")}
+            type="button"
+          >
+            <Icon name={immersive ? "exitFullscreen" : "fullscreen"} />
+            <span>{immersive ? t("atlas.exitImmersive") : t("atlas.enterImmersive")}</span>
+          </button>
+        )}
+        {atlasMode && (
+          <button
             aria-pressed={!atlasIntroVisible}
             className="atlas-intro-toggle"
             onClick={toggleAtlasIntro}
@@ -1699,7 +1756,7 @@ function Dashboard({
           {!atlasMode && (
             <div className="hero-actions">
               <button className="secondary-action" disabled={loading} onClick={onSync} type="button">
-                <Icon className={loading ? "icon-spin" : ""} name="refresh" /> {loading ? t("dash.syncing") : t("dash.sync")}
+                <Icon className={loading ? "icon-spin" : ""} name="refresh" /> {syncing ? t("dash.syncing") : loading ? snapshot ? t("dash.processing") : t("dash.loadingIndex") : t("dash.sync")}
               </button>
               <button className="primary-action" onClick={onOpenLibrary} type="button">
                 <Icon name="add" /> {t("dash.addSource")}
@@ -1746,7 +1803,7 @@ function Dashboard({
           <div className="atlas-touchbar-actions">
             <button disabled={loading} onClick={onSync} title={t("dash.sync")} type="button">
               <Icon className={loading ? "icon-spin" : ""} name="refresh" />
-              <span>{loading ? t("dash.syncing") : t("dash.sync")}</span>
+              <span>{syncing ? t("dash.syncing") : loading ? snapshot ? t("dash.processing") : t("dash.loadingIndex") : t("dash.sync")}</span>
             </button>
             <button onClick={onOpenLibrary} title={t("dash.addSource")} type="button">
               <Icon name="add" />
@@ -3405,7 +3462,7 @@ function Drawer({
   return createPortal(
     <>
       <div className="drawer-backdrop" onClick={onClose} aria-hidden="true" />
-      <aside className={wide ? "drawer wide" : "drawer"} role="dialog" aria-label={title}>
+      <aside aria-label={title} aria-modal="true" className={wide ? "drawer wide" : "drawer"} role="dialog">
         <header>
           <div>
             <span>{eyebrow}</span>
@@ -3418,7 +3475,7 @@ function Drawer({
         {children}
       </aside>
     </>,
-    document.body
+    document.getElementById("app-overlay-root") ?? document.body
   );
 }
 

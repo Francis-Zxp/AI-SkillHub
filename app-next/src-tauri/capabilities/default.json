@@ -12,7 +12,10 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         {
-          "url": "https://github.com/*"
+          "url": "https://github.com/Francis-Zxp/AI-SkillHub"
+        },
+        {
+          "url": "https://github.com/Francis-Zxp/AI-SkillHub/*"
         },
         {
           "url": "https://docs.github.com/*"

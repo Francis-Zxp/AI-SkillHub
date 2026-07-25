@@ -7,6 +7,9 @@ export type IconName =
   | "dashboard"
   | "download"
   | "edit"
+  | "exitFullscreen"
+  | "fullscreen"
+  | "github"
   | "globe"
   | "info"
   | "library"
@@ -53,6 +56,16 @@ export function Icon({ className = "", name }: { className?: string; name: IconN
       return <svg {...props}><path d="M12 3v12" /><path d="m7.5 10.5 4.5 4.5 4.5-4.5" /><path d="M5 20h14" /></svg>;
     case "edit":
       return <svg {...props}><path d="M4 20h4L19 9l-4-4L4 16v4Z" /><path d="m13.5 6.5 4 4" /></svg>;
+    case "exitFullscreen":
+      return <svg {...props}><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>;
+    case "fullscreen":
+      return <svg {...props}><path d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4" /></svg>;
+    case "github":
+      return (
+        <svg {...props} fill="currentColor" stroke="none">
+          <path d="M12 2.7a9.5 9.5 0 0 0-3 18.5c.5.1.7-.2.7-.5v-1.9c-2.8.6-3.4-1.2-3.4-1.2-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 0 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.4-1.1.6-1.3-2.3-.3-4.6-1.1-4.6-4.7 0-1 .4-1.9 1-2.6-.1-.3-.4-1.3.1-2.6 0 0 .8-.3 2.7 1a9.3 9.3 0 0 1 4.9 0c1.9-1.3 2.7-1 2.7-1 .5 1.3.2 2.3.1 2.6.7.7 1 1.6 1 2.6 0 3.6-2.3 4.4-4.6 4.7.4.3.7 1 .7 1.9v2.8c0 .3.2.6.7.5A9.5 9.5 0 0 0 12 2.7Z" />
+        </svg>
+      );
     case "globe":
       return <svg {...props}><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a13.4 13.4 0 0 1 0 18a13.4 13.4 0 0 1 0-18Z" /></svg>;
     case "info":

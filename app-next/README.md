@@ -53,6 +53,13 @@ from a privacy-bounded cache before transitioning to the current SQLite index.
 The atlas returns to one volumetric center; decorative points are quieter and
 meteors vary per app session without changing unpredictably during a session.
 
+v3.0.7 keeps the drawer inside the active theme host and gives every theme an
+explicit readable surface. The atlas core is mathematically concentric, space
+motion uses 5–20 bounded session-stable meteors, and startup distinguishes a
+local-index read from a real Git/tool synchronization. An allowlisted official
+GitHub shortcut and reversible immersive atlas mode complete the homepage
+workflow.
+
 Generated suggestions never replace manual metadata overrides, and imported
 source scripts are not executed during recognition.
 

@@ -107,6 +107,13 @@ selected files under the unchanged 80 MB / 16 MB safety ceilings, and was
 validated against the real `pbakaus/impeccable` repository. Signed program
 updates keep the stable user-data directory in place.
 
+v3.0.7 labels the fast startup cache/SQLite read as local-index loading rather
+than synchronization. Theme-aware editors now retain explicit high contrast in
+all ten themes, the atlas bloom is concentric with the graph geometry, and
+bounded 5–20 session-stable meteors add restrained depth. The homepage also
+offers a reversible immersive mode and an allowlisted shortcut to the official
+GitHub project.
+
 v3.0.2 and older builds do not contain this updater. Install the current formal
 release once, then future upgrades are handled inside the app. The portable zip
 remains a fallback for users who cannot install software.

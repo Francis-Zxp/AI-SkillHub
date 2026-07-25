@@ -418,7 +418,10 @@ code { font-family: var(--ui-mono); font-size: .92em; }
     radial-gradient(60% 50% at 20% 0%, color-mix(in srgb, var(--brand) 18%, transparent), transparent 60%),
     radial-gradient(50% 50% at 100% 30%, color-mix(in srgb, var(--accent) 15%, transparent), transparent 60%),
     var(--bg);
+  transition: grid-template-columns 440ms cubic-bezier(.16, 1, .3, 1);
 }
+
+#app-overlay-root { display: contents; }
 
 .theme-light.shell,
 .theme-classic-light.shell {
@@ -578,6 +581,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 }
 
 .topbar-actions { display: flex; align-items: center; gap: var(--space-2); }
+.project-home-link svg { width: 17px; height: 17px; }
 
 .icon-button {
   display: grid;
@@ -1827,32 +1831,47 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   display: flex; flex-direction: column; gap: var(--space-3);
   width: min(440px, calc(100vw - 24px));
   padding: var(--space-6);
-  background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
+  color: var(--text);
+  color-scheme: dark;
+  background: color-mix(in srgb, var(--bg) 88%, var(--surface-strong));
   border: 1px solid color-mix(in srgb, var(--border-strong) 82%, transparent);
   border-radius: 24px;
   box-shadow: -24px 18px 90px rgba(0, 0, 0, .38), inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
-  backdrop-filter: blur(28px) saturate(128%);
+  backdrop-filter: blur(22px) saturate(118%);
   overflow-y: auto;
   animation: drawer-in 220ms var(--ease-emphasis);
 }
+.theme-light .drawer,
+.theme-classic-light .drawer,
+.theme-atlas-light .drawer,
+.theme-atlas-legacy-light .drawer,
+.theme-parchment .drawer { color-scheme: light; }
 .drawer.wide { width: min(520px, calc(100vw - 24px)); }
 @keyframes drawer-in { from { transform: translateX(20px); opacity: 0; } to { transform: none; opacity: 1; } }
 .drawer header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
 .drawer header span { display: block; font-size: calc(11px * var(--ui-text-scale, 1)); color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
-.drawer header strong { display: block; margin-top: 4px; font-size: calc(17px * var(--ui-text-scale, 1)); font-weight: 600; }
+.drawer header strong { display: block; margin-top: 4px; color: var(--text); font-size: calc(17px * var(--ui-text-scale, 1)); font-weight: 600; }
 .drawer label { display: flex; flex-direction: column; gap: 6px; font-size: calc(12px * var(--ui-text-scale, 1)); color: var(--text-soft); font-weight: 500; }
 .drawer input, .drawer select, .drawer textarea {
   height: 38px;
   padding: 0 var(--space-3);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 74%, var(--surface-strong));
+  border: 1px solid var(--border-strong);
   border-radius: 10px;
   color: var(--text);
+  caret-color: var(--brand-strong);
   font-size: calc(13px * var(--ui-text-scale, 1));
-  transition: border-color var(--duration) var(--ease);
+  transition: border-color var(--duration) var(--ease), background var(--duration) var(--ease);
 }
+.drawer input::placeholder,
+.drawer textarea::placeholder { color: var(--text-muted); opacity: 1; }
 .drawer textarea { height: auto; padding: var(--space-3); }
-.drawer input:focus, .drawer select:focus, .drawer textarea:focus { outline: none; border-color: var(--brand); }
+.drawer input:focus, .drawer select:focus, .drawer textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--brand) 32%, transparent);
+  outline-offset: 1px;
+  border-color: var(--brand-strong);
+  background: color-mix(in srgb, var(--bg) 62%, var(--surface-strong));
+}
 .drawer footer { display: flex; align-items: center; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border); }
 .footer-spacer { flex: 1; }
 
@@ -4201,6 +4220,37 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .atlas-intro-toggle[aria-pressed="true"] { color: var(--brand-strong); }
 .browser-preview-shell.page-dashboard .atlas-intro-toggle { top: 166px; }
 
+.atlas-immersive-toggle {
+  position: absolute;
+  top: 100px;
+  right: calc(clamp(242px, 18vw, 278px) + 122px);
+  z-index: 9;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-soft);
+  background: color-mix(in srgb, var(--surface-elevated) 68%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 10%, transparent), 0 16px 44px color-mix(in srgb, var(--bg) 38%, transparent);
+  backdrop-filter: blur(8px) saturate(118%);
+  transition: color 180ms ease, background 180ms ease, transform 220ms cubic-bezier(.16,1,.3,1), box-shadow 220ms ease;
+}
+.atlas-immersive-toggle span { display: none; }
+.atlas-immersive-toggle svg { width: 16px; height: 16px; }
+.atlas-immersive-toggle:hover,
+.atlas-immersive-toggle:focus-visible {
+  color: var(--text);
+  background: color-mix(in srgb, var(--surface-strong) 80%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white 14%, transparent), 0 20px 56px color-mix(in srgb, var(--bg) 44%, transparent);
+  transform: translateY(-1px);
+}
+.atlas-immersive-toggle:focus-visible { outline: 2px solid var(--brand-strong); outline-offset: 3px; }
+.atlas-immersive-toggle[aria-pressed="true"] { color: var(--brand-strong); }
+.browser-preview-shell.page-dashboard .atlas-immersive-toggle { top: 166px; }
+
 .theme-family-atlas.page-dashboard .skill-universe::before {
   opacity: .78;
   will-change: opacity;
@@ -4313,7 +4363,8 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   .theme-family-atlas.page-dashboard .dashboard-hero::after,
   .theme-family-atlas.page-dashboard .dashboard-hero-inner,
   .theme-family-atlas.page-dashboard .skill-universe::before,
-  .atlas-intro-toggle { transition-duration: 1ms; }
+  .atlas-intro-toggle,
+  .atlas-immersive-toggle { transition-duration: 1ms; }
 }
 
 /* =============================================================
@@ -5257,4 +5308,87 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   .import-progress.is-active .import-progress-track > span::after {
     animation: none;
   }
+}
+
+/* v3.0.7 immersive atlas — the visualization becomes the whole desktop stage. */
+.dashboard-immersive.theme-family-atlas {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+.theme-family-atlas .sidebar,
+.theme-family-atlas .topbar,
+.theme-family-atlas .atlas-event-tape {
+  transition:
+    width 440ms cubic-bezier(.16, 1, .3, 1),
+    height 440ms cubic-bezier(.16, 1, .3, 1),
+    padding 440ms cubic-bezier(.16, 1, .3, 1),
+    margin 440ms cubic-bezier(.16, 1, .3, 1),
+    opacity 260ms ease,
+    transform 440ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.dashboard-immersive .sidebar {
+  width: 0;
+  padding-right: 0;
+  padding-left: 0;
+  border-right: 0;
+  opacity: 0;
+  transform: translateX(-100%);
+  pointer-events: none;
+}
+
+.dashboard-immersive .topbar {
+  height: 0;
+  min-height: 0;
+  padding: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  border: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(-100%);
+  pointer-events: none;
+}
+
+.dashboard-immersive .atlas-event-tape {
+  opacity: 0;
+  transform: translateY(100%);
+  pointer-events: none;
+}
+
+.dashboard-immersive .skill-universe-modes {
+  top: 22px;
+  right: 120px;
+}
+
+.dashboard-immersive .atlas-intro-toggle {
+  top: 22px;
+  right: 68px;
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
+}
+
+.dashboard-immersive .atlas-intro-toggle span { display: none; }
+
+.dashboard-immersive .atlas-immersive-toggle {
+  top: 22px;
+  right: 18px;
+}
+
+@media (max-width: 820px) {
+  .dashboard-immersive.theme-family-atlas { grid-template-columns: 1fr; }
+  .dashboard-immersive.theme-family-atlas.page-dashboard .workspace { height: 100dvh; }
+  .atlas-immersive-toggle { top: 80px; right: 68px; }
+  .browser-preview-shell.page-dashboard .atlas-immersive-toggle { top: 146px; }
+  .dashboard-immersive .atlas-intro-toggle { top: 18px; left: auto; right: 62px; }
+  .dashboard-immersive .atlas-immersive-toggle { top: 18px; right: 14px; }
+  .dashboard-immersive .skill-universe-modes { top: 64px; right: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell,
+  .theme-family-atlas .sidebar,
+  .theme-family-atlas .topbar,
+  .theme-family-atlas .atlas-event-tape { transition-duration: 1ms; }
 }

@@ -1,6 +1,6 @@
 {
   "name": "ai-skillhub-next",
-  "version": "3.0.6",
+  "version": "3.0.7",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.2.2",
@@ -14,6 +14,8 @@
     "test:security-review-gate": "node --test ./scripts/security-review-gate-ui.test.mjs",
     "test:ui-v3.0.6": "node --test ./scripts/v3.0.6-ui-contract.test.mjs",
     "test:visual-v3.0.6": "node ./scripts/v3.0.6-visual-qa.cjs",
+    "test:ui-v3.0.7": "node --test ./scripts/v3.0.7-ui-contract.test.mjs",
+    "test:visual-v3.0.7": "node ./scripts/v3.0.7-visual-qa.cjs",
     "stop:dev": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/stop-dev-runtime.ps1",
     "dev:desktop": "pnpm stop:dev && tauri dev",
     "check:toolchain": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/check-toolchain.ps1"

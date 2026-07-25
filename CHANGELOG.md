@@ -2,6 +2,40 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.0.7 - Theme-safe editors, centered atlas, and immersive focus
+
+### Fixed
+
+- Mounted source and Skill editors inside the active themed application host
+  instead of escaping CSS variables through a document-body portal. Every
+  shipped light and dark theme now has an explicit, high-contrast drawer,
+  input, placeholder and focus treatment.
+- Rebuilt the atlas atmosphere from one concentric radial gradient. The
+  volumetric core now shares the exact geometric center of the 384 px render
+  texture instead of being biased toward its former highlight coordinate.
+- Stopped describing the fast startup SQLite/cache load as a synchronization.
+  Startup now says that the local index is loading; only the explicit
+  synchronization path reports background sync progress.
+
+### Added
+
+- Added 5–20 session-stable meteors with bounded size, opacity, speed, slope
+  and direction variation. Decorative dust also twinkles subtly, while drag,
+  adaptive LOD and reduced-motion modes continue to suppress expensive effects.
+- Added a signed, allowlisted GitHub project shortcut. Desktop builds can open
+  only the official AI SkillHub project/docs paths through the opener
+  capability.
+- Added an immersive atlas control that animates the navigation rail and
+  topbar away, expands the graph to the full workspace and remains reversible
+  through the visible exit control or `Escape`.
+
+### Validation status
+
+- Ten-theme visual QA measured minimum drawer text contrast at 11.50:1 and
+  input contrast at 11.21:1. The production build, 14 frontend governance/UI
+  contracts, strict Rust formatting/Clippy, 93 Rust tests, npm production audit
+  and a real Tauri desktop pass with 650 Skills all pass.
+
 ## 3.0.6 - Resilient updates, cache-first atlas, and editor polish
 
 ### Fixed

@@ -110,24 +110,29 @@ const POSITION_MODES: Record<SkillUniverseMode, SkillUniverseMode> = {
 };
 
 const SPHERE_SHELL = Array.from({ length: 420 }, (_, index) => fibonacciPoint(index, 420, 1));
-const DUST_PARTICLES = Array.from({ length: 112 }, (_, index) => {
+const DUST_PARTICLES = Array.from({ length: 144 }, (_, index) => {
   const seed = stableHash(`universe-dust:${index}`);
   return {
     angle: (seed % 6283) / 1000,
     distance: 0.38 + ((seed >>> 5) % 1000) / 740,
     size: 0.35 + (seed % 7) * 0.085,
     speed: 0.000004 + (seed % 5) * 0.0000015,
-    stretch: 0.78 + ((seed >>> 8) % 28) / 100
+    stretch: 0.78 + ((seed >>> 8) % 28) / 100,
+    twinkle: 0.08 + ((seed >>> 12) % 16) / 100
   };
 });
 const METEOR_SESSION_SEED = randomSessionSeed();
-const METEORS = Array.from({ length: 3 + (METEOR_SESSION_SEED % 4) }, (_, index) => {
+const METEORS = Array.from({ length: 5 + (METEOR_SESSION_SEED % 16) }, (_, index) => {
   const seed = stableHash(`universe-meteor:${METEOR_SESSION_SEED}:${index}`);
   return {
     delay: (seed % 10_000) / 10_000,
-    duration: 0.1 + ((seed >>> 4) % 72) / 1000,
-    length: 24 + ((seed >>> 7) % 58),
-    slope: 0.28 + ((seed >>> 11) % 30) / 100,
+    duration: 0.12 + ((seed >>> 4) % 90) / 700,
+    direction: ((seed >>> 6) & 1) === 0 ? 1 : -1,
+    head: 0.55 + ((seed >>> 8) % 16) / 10,
+    length: 28 + ((seed >>> 10) % 86),
+    opacity: 0.32 + ((seed >>> 13) % 28) / 100,
+    slope: -0.48 + ((seed >>> 16) % 96) / 100,
+    width: 0.42 + ((seed >>> 20) % 11) / 10,
     x: -0.18 + ((seed >>> 14) % 136) / 100,
     y: 0.04 + ((seed >>> 18) % 84) / 100
   };
@@ -979,6 +984,7 @@ function drawUniverseAtmosphere(
     const distance = radius * dust.distance;
     const x = centerX + Math.cos(angle) * distance * dust.stretch;
     const y = centerY + Math.sin(angle) * distance * 0.66;
+    context.globalAlpha = 0.46 + Math.sin(time * 0.00045 + dust.angle * 2.7) * dust.twinkle;
     context.fillRect(x, y, dust.size, dust.size);
   }
   context.restore();
@@ -1004,23 +1010,23 @@ function drawUniverseMeteors(
     if (phase > meteor.duration) continue;
     const progress = phase / meteor.duration;
     const fade = Math.sin(progress * Math.PI);
-    const startX = centerX + (meteor.x - 0.5) * radius * 2.8 + progress * radius * 0.72;
-    const startY = centerY + (meteor.y - 0.5) * radius * 2.1 + progress * radius * meteor.slope;
-    const tailX = startX - meteor.length;
+    const startX = centerX + (meteor.x - 0.5) * radius * 2.8 + progress * radius * 0.72 * meteor.direction;
+    const startY = centerY + (meteor.y - 0.5) * radius * 2.1 + progress * radius * 0.72 * meteor.slope;
+    const tailX = startX - meteor.length * meteor.direction;
     const tailY = startY - meteor.length * meteor.slope;
     const gradient = context.createLinearGradient(tailX, tailY, startX, startY);
     gradient.addColorStop(0, `hsla(${meteorHue}, 92%, ${lightTheme ? 36 : 76}%, 0)`);
-    gradient.addColorStop(0.72, `hsla(${meteorHue}, 92%, ${lightTheme ? 36 : 76}%, ${fade * 0.06})`);
-    gradient.addColorStop(1, `hsla(${meteorHue}, 100%, ${lightTheme ? 32 : 88}%, ${fade * 0.36})`);
+    gradient.addColorStop(0.72, `hsla(${meteorHue}, 92%, ${lightTheme ? 36 : 76}%, ${fade * meteor.opacity * 0.16})`);
+    gradient.addColorStop(1, `hsla(${meteorHue}, 100%, ${lightTheme ? 32 : 88}%, ${fade * meteor.opacity})`);
     context.beginPath();
     context.moveTo(tailX, tailY);
     context.lineTo(startX, startY);
     context.strokeStyle = gradient;
-    context.lineWidth = 0.58 + (meteor.length % 17) / 85;
+    context.lineWidth = meteor.width;
     context.stroke();
     context.beginPath();
-    context.arc(startX, startY, 0.65 + (meteor.length % 13) / 24, 0, Math.PI * 2);
-    context.fillStyle = `hsla(${meteorHue}, 100%, ${lightTheme ? 30 : 90}%, ${fade * 0.48})`;
+    context.arc(startX, startY, meteor.head, 0, Math.PI * 2);
+    context.fillStyle = `hsla(${meteorHue}, 100%, ${lightTheme ? 30 : 90}%, ${fade * meteor.opacity * 0.86})`;
     context.fill();
   }
   context.restore();
@@ -1250,7 +1256,7 @@ function getAuraSprite(key: string, palette: AtmospherePalette) {
   canvas.height = 384;
   const context = canvas.getContext("2d");
   if (!context) return null;
-  const aura = context.createRadialGradient(165, 154, 3, 192, 192, 190);
+  const aura = context.createRadialGradient(192, 192, 2, 192, 192, 190);
   aura.addColorStop(0, palette.center);
   aura.addColorStop(0.18, palette.center);
   aura.addColorStop(0.42, palette.mid);
