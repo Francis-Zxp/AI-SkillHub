@@ -57,7 +57,7 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --test codex_plugin_doctor_read_only
 
       - name: Real Imbad0202 codeload recipient gate
-        run: cargo test --manifest-path src-tauri/Cargo.toml --lib tests::github_codeload_imports_real_academic_research_skills_without_following_symlinks -- --ignored --exact
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib tests::github_codeload_imports_real_academic_research_skills_codex_without_security_noise -- --ignored --exact
 
   frontend:
     name: tsc + vite build (React frontend)
@@ -91,6 +91,7 @@ jobs:
       - name: Frontend behavior contracts
         run: |
           pnpm test:source-governance-ui
+          pnpm test:security-review-gate
           pnpm test:ui-v3.0.7
           pnpm test:v3.1-foundation
 

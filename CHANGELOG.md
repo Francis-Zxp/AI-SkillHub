@@ -2,6 +2,31 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.1.2 - Reliable security review and source drafts
+
+### Fixed
+
+- Replaced one-finding-per-script security noise with a bounded executable-file
+  inventory. Large repositories no longer produce hundreds of duplicate review
+  items merely because they contain `.py`, `.sh`, or `.js` files.
+- Tightened multi-keyword rules to the same line and distinguishes non-executed
+  documentation, test fixtures, examples, and imported GitHub workflow files
+  from operational Skill instructions. Examples require explicit review;
+  dangerous commands in `SKILL.md` or runtime scripts still block promotion.
+- Persists the Add Source form locally across navigation and app restarts while
+  excluding progress, operation IDs, errors, and security-confirmation state.
+  Successful imports clear the draft; users can also clear it manually.
+- Added a live regression gate for
+  `Imbad0202/academic-research-skills-codex`, including the built-in codeload
+  path and per-file security review.
+
+### Security boundary
+
+- Review-only findings never bypass isolation automatically. The source is
+  promoted only after the user sees the evidence and explicitly confirms it.
+- True high-risk content, path-boundary failures, scan limits, and dangerous
+  operational instructions remain non-bypassable import blockers.
+
 ## 3.1.1 - Formal desktop import ACL hotfix
 
 ### Fixed

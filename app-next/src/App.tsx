@@ -80,6 +80,91 @@ type SourceDraft = {
   tags: string;
 };
 type QuickSourceDraft = Omit<SourceDraft, "name">;
+type ImportWizardDraft = {
+  customCategory: string;
+  enabled: boolean;
+  importKind: "github" | "local" | "zip";
+  input: string;
+  note: string;
+  selectedCategoryIds: string[];
+  sourceType: SourceCard["sourceType"];
+  tags: string;
+};
+
+const IMPORT_WIZARD_DRAFT_STORAGE_KEY = "ai-skillhub-source-import-draft-v1";
+const EMPTY_IMPORT_WIZARD_DRAFT: ImportWizardDraft = {
+  customCategory: "",
+  enabled: true,
+  importKind: "github",
+  input: "",
+  note: "",
+  selectedCategoryIds: [],
+  sourceType: "skill",
+  tags: ""
+};
+
+function loadImportWizardDraft(): ImportWizardDraft {
+  try {
+    const raw = window.localStorage.getItem(IMPORT_WIZARD_DRAFT_STORAGE_KEY);
+    if (!raw) return { ...EMPTY_IMPORT_WIZARD_DRAFT };
+    const saved = JSON.parse(raw) as Partial<ImportWizardDraft>;
+    const importKind = ["github", "local", "zip"].includes(saved.importKind ?? "")
+      ? saved.importKind as ImportWizardDraft["importKind"]
+      : "github";
+    const sourceType = ["skill", "prompt", "mixed"].includes(saved.sourceType ?? "")
+      ? saved.sourceType as SourceCard["sourceType"]
+      : "skill";
+    const text = (value: unknown, maxLength: number) =>
+      typeof value === "string" ? value.slice(0, maxLength) : "";
+    return {
+      customCategory: text(saved.customCategory, 500),
+      enabled: typeof saved.enabled === "boolean" ? saved.enabled : true,
+      importKind,
+      input: text(saved.input, 10_000),
+      note: text(saved.note, 20_000),
+      selectedCategoryIds: Array.isArray(saved.selectedCategoryIds)
+        ? saved.selectedCategoryIds.filter(value => typeof value === "string").slice(0, 100)
+        : [],
+      sourceType,
+      tags: text(saved.tags, 10_000)
+    };
+  } catch {
+    return { ...EMPTY_IMPORT_WIZARD_DRAFT };
+  }
+}
+
+function importWizardDraftHasContent(draft: ImportWizardDraft) {
+  return Boolean(
+    draft.input.trim() ||
+    draft.note.trim() ||
+    draft.tags.trim() ||
+    draft.customCategory.trim() ||
+    draft.selectedCategoryIds.length ||
+    draft.importKind !== EMPTY_IMPORT_WIZARD_DRAFT.importKind ||
+    draft.sourceType !== EMPTY_IMPORT_WIZARD_DRAFT.sourceType ||
+    draft.enabled !== EMPTY_IMPORT_WIZARD_DRAFT.enabled
+  );
+}
+
+function saveImportWizardDraft(draft: ImportWizardDraft) {
+  try {
+    if (importWizardDraftHasContent(draft)) {
+      window.localStorage.setItem(IMPORT_WIZARD_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } else {
+      window.localStorage.removeItem(IMPORT_WIZARD_DRAFT_STORAGE_KEY);
+    }
+  } catch {
+    // A disabled or full browser store must never prevent adding a source.
+  }
+}
+
+function clearImportWizardDraft() {
+  try {
+    window.localStorage.removeItem(IMPORT_WIZARD_DRAFT_STORAGE_KEY);
+  } catch {
+    // Keep the form usable when local storage is unavailable.
+  }
+}
 
 type QuickAddStatus = {
   body: string;
@@ -2477,7 +2562,7 @@ function Library(props: LibraryProps) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [editingSourceId, setEditingSourceId] = useState("");
   const [editingSkillId, setEditingSkillId] = useState("");
-  const [showImport, setShowImport] = useState(false);
+  const [showImport, setShowImport] = useState(() => importWizardDraftHasContent(loadImportWizardDraft()));
   const [showMaintenance, setShowMaintenance] = useState(false);
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
   const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
@@ -3891,14 +3976,15 @@ function ImportWizard({
   onStage: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
   sources: SourceCard[];
 }) {
-  const [importKind, setImportKind] = useState("github");
-  const [input, setInput] = useState("");
-  const [sourceType, setSourceType] = useState<SourceCard["sourceType"]>("skill");
-  const [note, setNote] = useState("");
-  const [tags, setTags] = useState("");
-  const [enabled, setEnabled] = useState(true);
-  const [customCategory, setCustomCategory] = useState("");
-  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
+  const [initialDraft] = useState(loadImportWizardDraft);
+  const [importKind, setImportKind] = useState<ImportWizardDraft["importKind"]>(initialDraft.importKind);
+  const [input, setInput] = useState(initialDraft.input);
+  const [sourceType, setSourceType] = useState<SourceCard["sourceType"]>(initialDraft.sourceType);
+  const [note, setNote] = useState(initialDraft.note);
+  const [tags, setTags] = useState(initialDraft.tags);
+  const [enabled, setEnabled] = useState(initialDraft.enabled);
+  const [customCategory, setCustomCategory] = useState(initialDraft.customCategory);
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>(initialDraft.selectedCategoryIds);
   const [pending, setPending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [activeOperationId, setActiveOperationId] = useState("");
@@ -3911,6 +3997,39 @@ function ImportWizard({
 
   const inferredIds = inferCategoryIds(`${input} ${note} ${sourceType} ${importKind}`);
   const effectiveCategoryIds = selectedCategoryIds.length > 0 ? selectedCategoryIds : inferredIds;
+
+  useEffect(() => {
+    saveImportWizardDraft({
+      customCategory,
+      enabled,
+      importKind,
+      input,
+      note,
+      selectedCategoryIds,
+      sourceType,
+      tags
+    });
+  }, [customCategory, enabled, importKind, input, note, selectedCategoryIds, sourceType, tags]);
+
+  function resetImportDraft() {
+    clearImportWizardDraft();
+    setImportKind(EMPTY_IMPORT_WIZARD_DRAFT.importKind);
+    setInput(EMPTY_IMPORT_WIZARD_DRAFT.input);
+    setSourceType(EMPTY_IMPORT_WIZARD_DRAFT.sourceType);
+    setNote(EMPTY_IMPORT_WIZARD_DRAFT.note);
+    setTags(EMPTY_IMPORT_WIZARD_DRAFT.tags);
+    setEnabled(EMPTY_IMPORT_WIZARD_DRAFT.enabled);
+    setCustomCategory(EMPTY_IMPORT_WIZARD_DRAFT.customCategory);
+    setSelectedCategoryIds([]);
+  }
+
+  function clearDraftManually() {
+    resetImportDraft();
+    setSecurityReview(null);
+    setProgress(null);
+    setStatus(null);
+    showUiToast(t("qa.draftCleared"), "info");
+  }
 
   function requiresSecurityReview(status: string) {
     return status === "review" || status === "warn";
@@ -4016,6 +4135,7 @@ function ImportWizard({
         await onSaveSourceMetadata(promotedSource, draft);
       }
       setProgress({ detail: t("qa.statusAddedTitle"), percent: 100, step: 5, total: 5 });
+      resetImportDraft();
       setStatus({
         tone: "ok",
         title: t("qa.statusAddedTitle"),
@@ -4345,6 +4465,23 @@ function ImportWizard({
       )}
 
       <div className="import-actions">
+        <button
+          className="secondary-action"
+          disabled={isBusy || !importWizardDraftHasContent({
+            customCategory,
+            enabled,
+            importKind,
+            input,
+            note,
+            selectedCategoryIds,
+            sourceType,
+            tags
+          })}
+          onClick={clearDraftManually}
+          type="button"
+        >
+          {t("qa.clearDraft")}
+        </button>
         {activeOperationId && (
           <button className="secondary-action import-cancel-action" disabled={cancelling} onClick={() => void cancelImport()} type="button">
             <Icon name="alert" /> {cancelling ? t("qa.cancelling") : t("qa.cancelImport")}

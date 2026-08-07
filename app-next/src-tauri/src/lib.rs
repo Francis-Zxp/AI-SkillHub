@@ -6566,6 +6566,16 @@ fn apply_security_scan_to_execution(
     execution: &mut SourceImportExecutionCard,
 ) -> Result<(), String> {
     let report = security_scan::scan_source_tree(staged_path)?;
+    let high_findings = report
+        .findings
+        .iter()
+        .filter(|finding| finding.severity == "high")
+        .count();
+    let review_findings = report
+        .findings
+        .iter()
+        .filter(|finding| finding.severity != "high")
+        .count();
     execution.security_status = report.status.clone();
     execution.security_scanned_files = report.scanned_files;
     execution.security_findings = report.findings.clone();
@@ -6591,15 +6601,16 @@ fn apply_security_scan_to_execution(
     if !report.safe_to_promote() {
         execution.status = "blocked".to_string();
         execution.summary = format!(
-            "Source staged but blocked by the per-file security scan: {} finding(s) in {} scanned file(s).",
-            report.findings.len(),
-            report.scanned_files
+            "安全扫描已阻止写入：{} 个高风险项、{} 个待复核项；已扫描 {} 个文件，其中 {} 个为脚本或可执行文件。来源仍保留在隔离区。",
+            high_findings,
+            review_findings,
+            report.scanned_files,
+            report.executable_files
         );
     } else if report.status == "review" && execution.status == "staged" {
         execution.summary = format!(
-            "{} Security review found {} non-blocking item(s).",
-            execution.summary,
-            report.findings.len()
+            "{} 安全扫描发现 {} 个待复核内容信号，并识别到 {} 个脚本或可执行文件；来源仍在隔离区，确认后才会写入技能库。",
+            execution.summary, review_findings, report.executable_files
         );
     }
     Ok(())
@@ -16710,7 +16721,7 @@ mod tests {
 
     #[test]
     #[ignore = "network-dependent Imbad0202 recipient gate"]
-    fn github_codeload_imports_real_academic_research_skills_without_following_symlinks() {
+    fn github_codeload_imports_real_academic_research_skills_codex_without_security_noise() {
         let root = std::env::temp_dir().join(format!(
             "skillhub-academic-research-recipient-test-{}",
             unix_timestamp_string()
@@ -16720,7 +16731,7 @@ mod tests {
             &root,
             &connection,
             "github",
-            "https://github.com/Imbad0202/academic-research-skills.git",
+            "https://github.com/Imbad0202/academic-research-skills-codex.git",
         )
         .expect("academic research plan should build");
         let staged_path = source_import_staging_root(&root).join("academic-research-codeload");
@@ -16757,21 +16768,41 @@ mod tests {
         apply_security_scan_to_execution(&staged_path, &mut execution)
             .expect("the staged repository should complete a per-file scan");
 
+        eprintln!(
+            "recipient security gate: status={}, files={}, findings={}, skills={}",
+            execution.security_status,
+            execution.security_scanned_files,
+            execution.security_findings.len(),
+            execution.skill_count
+        );
+
         assert_eq!(execution.download_method, "github-codeload");
         assert!(
-            execution.skill_count >= 3,
-            "expected the real Skill directories"
+            execution.skill_count >= 2,
+            "expected the real Codex wrapper and source Skill directories"
         );
         assert!(execution.copied_files > 0);
         assert!(execution.security_scanned_files > 0);
-        assert!(execution
-            .blocking_checks
-            .iter()
-            .any(|message| message.contains("符号链接") && message.contains("不创建、不跟随")));
+        assert_ne!(
+            execution.status, "blocked",
+            "documentation, tests and the script inventory must not block the whole repository"
+        );
+        assert_eq!(execution.security_status, "review");
+        assert!(
+            execution
+                .security_findings
+                .iter()
+                .all(|finding| finding.severity != "high"),
+            "real executable Skill instructions remain blocking, but this repository's examples must stay review-only"
+        );
+        assert!(
+            execution.security_findings.len() < 100,
+            "script inventory must not create one finding per executable file"
+        );
         assert!(!staged_path.join(".git").exists());
         assert!(!Path::new(&source_import_target_path(
             &root,
-            "academic-research-skills"
+            "academic-research-skills-codex"
         ))
         .exists());
 

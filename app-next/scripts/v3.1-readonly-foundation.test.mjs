@@ -63,3 +63,16 @@ test("new capability surfaces are lazy-loaded instead of expanding the initial b
   assert.match(files.app, /lazy\(\(\) => import\("\.\/McpCenter"\)/);
   assert.match(files.app, /import\("\.\/CodexPluginDoctorPanel"\)/);
 });
+
+test("source import drafts survive navigation without persisting transient execution state", () => {
+  assert.match(files.app, /IMPORT_WIZARD_DRAFT_STORAGE_KEY = "ai-skillhub-source-import-draft-v1"/);
+  assert.match(files.app, /const \[initialDraft\] = useState\(loadImportWizardDraft\)/);
+  assert.match(files.app, /useEffect\(\(\) => \{\s*saveImportWizardDraft\(\{/);
+  assert.match(files.app, /resetImportDraft\(\);\s*setStatus\(\{\s*tone: "ok"/);
+  assert.match(files.app, /t\("qa\.clearDraft"\)/);
+
+  const draftType = files.app.match(/type ImportWizardDraft = \{([\s\S]*?)\n\};/)?.[1] ?? "";
+  assert.match(draftType, /input: string/);
+  assert.match(draftType, /selectedCategoryIds: string\[\]/);
+  assert.doesNotMatch(draftType, /progress|status|securityReview|activeOperationId|operationId/);
+});
