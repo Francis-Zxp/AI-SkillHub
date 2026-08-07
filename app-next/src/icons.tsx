@@ -3,6 +3,7 @@ export type IconName =
   | "agent"
   | "alert"
   | "chevron"
+  | "connections"
   | "copy"
   | "dashboard"
   | "download"
@@ -48,6 +49,8 @@ export function Icon({ className = "", name }: { className?: string; name: IconN
       return <svg {...props}><path d="M12 4 21 20H3L12 4Z" /><path d="M12 10v4M12 17h.01" /></svg>;
     case "chevron":
       return <svg {...props}><path d="m9 6 6 6-6 6" /></svg>;
+    case "connections":
+      return <svg {...props}><circle cx="7" cy="12" r="3" /><circle cx="17" cy="6" r="3" /><circle cx="17" cy="18" r="3" /><path d="m9.6 10.5 4.8-3M9.6 13.5l4.8 3" /></svg>;
     case "copy":
       return <svg {...props}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" transform="translate(2 2)" /></svg>;
     case "dashboard":

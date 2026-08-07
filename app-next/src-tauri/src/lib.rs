@@ -1,9 +1,19 @@
 mod adapter_doctor;
+mod codex_plugin_doctor;
 mod legacy_cleanup;
+mod mcp_center;
 mod metadata;
 mod migration_v4;
 mod security_scan;
 mod source_governance;
+
+// Cargo builds `#[cfg(test)]` for the library test harness, which is a separate
+// Windows executable from the Tauri app binary. Pull the full Tauri-generated
+// resource library into that harness so it receives the same Common Controls v6
+// manifest and can start on a clean Windows runner.
+#[cfg(all(test, target_os = "windows"))]
+#[link(name = "resource", kind = "static")]
+unsafe extern "C" {}
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -16,9 +26,13 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
+};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tauri::Emitter;
 use zip::ZipArchive;
 
 #[cfg(target_os = "windows")]
@@ -39,6 +53,11 @@ const GITHUB_FALLBACK_MAX_BYTES: u64 = 80 * 1024 * 1024;
 const GITHUB_FALLBACK_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MANAGED_SOURCE_METADATA_FILE: &str = ".skillhub-source.json";
 static SNAPSHOT_SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static SOURCE_IMPORT_CANCELLATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
+    OnceLock::new();
+const SOURCE_IMPORT_PROGRESS_EVENT: &str = "source-import-progress";
+const SOURCE_IMPORT_CANCELLED_MESSAGE: &str =
+    "导入已取消；本次未完成的隔离下载已清理，正式技能库没有改变。";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -828,6 +847,88 @@ struct SourceImportExecutionCard {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct SourceImportProgressEvent {
+    operation_id: String,
+    stage: String,
+    state: String,
+    message: String,
+    current: u64,
+    total: u64,
+}
+
+#[derive(Clone)]
+struct SourceImportControl {
+    operation_id: String,
+    cancelled: Arc<AtomicBool>,
+    app: Option<tauri::AppHandle>,
+}
+
+impl SourceImportControl {
+    #[cfg(test)]
+    fn detached(operation_id: impl Into<String>) -> Self {
+        Self {
+            operation_id: operation_id.into(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            app: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn detached_with_cancellation(
+        operation_id: impl Into<String>,
+        cancelled: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            operation_id: operation_id.into(),
+            cancelled,
+            app: None,
+        }
+    }
+
+    fn with_app(
+        operation_id: impl Into<String>,
+        cancelled: Arc<AtomicBool>,
+        app: tauri::AppHandle,
+    ) -> Self {
+        Self {
+            operation_id: operation_id.into(),
+            cancelled,
+            app: Some(app),
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    fn ensure_active(&self) -> Result<(), String> {
+        if self.is_cancelled() {
+            Err(SOURCE_IMPORT_CANCELLED_MESSAGE.to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn emit(&self, stage: &str, state: &str, message: impl Into<String>, current: u64, total: u64) {
+        let Some(app) = self.app.as_ref() else {
+            return;
+        };
+        let _ = app.emit(
+            SOURCE_IMPORT_PROGRESS_EVENT,
+            SourceImportProgressEvent {
+                operation_id: self.operation_id.clone(),
+                stage: stage.to_string(),
+                state: state.to_string(),
+                message: message.into(),
+                current,
+                total,
+            },
+        );
+    }
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct SourceImportPromotionCard {
     id: String,
     import_kind: String,
@@ -1597,6 +1698,15 @@ fn command_output_with_timeout(
     timeout: Duration,
     timeout_message: &str,
 ) -> Result<std::process::Output, String> {
+    command_output_with_timeout_and_cancel(command, timeout, timeout_message, None)
+}
+
+fn command_output_with_timeout_and_cancel(
+    command: &mut Command,
+    timeout: Duration,
+    timeout_message: &str,
+    cancellation: Option<&AtomicBool>,
+) -> Result<std::process::Output, String> {
     configure_background_command(command);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
@@ -1622,9 +1732,17 @@ fn command_output_with_timeout(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
+                if cancellation
+                    .map(|token| token.load(Ordering::SeqCst))
+                    .unwrap_or(false)
+                {
+                    terminate_child_process_tree(&mut child);
+                    let _ = join_output_reader(stdout_reader);
+                    let _ = join_output_reader(stderr_reader);
+                    return Err(SOURCE_IMPORT_CANCELLED_MESSAGE.to_string());
+                }
                 if started.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    terminate_child_process_tree(&mut child);
                     let _ = join_output_reader(stdout_reader);
                     let _ = join_output_reader(stderr_reader);
                     return Err(timeout_message.to_string());
@@ -1632,8 +1750,7 @@ fn command_output_with_timeout(
                 thread::sleep(Duration::from_millis(250));
             }
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                terminate_child_process_tree(&mut child);
                 let _ = join_output_reader(stdout_reader);
                 let _ = join_output_reader(stderr_reader);
                 return Err(format!("无法检查后台命令状态：{error}"));
@@ -1648,6 +1765,25 @@ fn command_output_with_timeout(
         stdout,
         stderr,
     })
+}
+
+fn terminate_child_process_tree(child: &mut std::process::Child) {
+    #[cfg(target_os = "windows")]
+    {
+        // `Child::kill` only terminates the direct process on Windows. Git may
+        // spawn credential/network helpers, and command wrappers keep stdout or
+        // stderr pipes open after their parent exits. Terminate the exact owned
+        // PID tree so cancellation cannot leave the UI waiting on inherited pipes.
+        let mut taskkill = Command::new("taskkill.exe");
+        taskkill
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_background_command(&mut taskkill);
+        let _ = taskkill.status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 fn join_output_reader(reader: Option<thread::JoinHandle<Vec<u8>>>) -> Vec<u8> {
@@ -1851,6 +1987,66 @@ fn open_release_gate_export_path(path: String) -> Result<(), String> {
     open_path_with_system(&target)
 }
 
+/// Inventory only: this command never starts an MCP server and never accepts
+/// arbitrary paths from the webview. Home and workspace roots are resolved in
+/// Rust from the current user and AI SkillHub's registered SQLite workspaces.
+#[tauri::command]
+async fn scan_mcp_connections() -> Result<mcp_center::McpInventory, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home_dir = std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .ok_or_else(|| "无法确定当前用户目录；MCP 只读扫描未运行。".to_string())?;
+
+        let root = resolve_legacy_root()?;
+        let db_file = database_file(&root);
+        let workspaces = if db_file.is_file() {
+            let connection = Connection::open_with_flags(
+                &db_file,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .map_err(|_| "无法以只读方式打开 AI SkillHub 工作区索引。".to_string())?;
+            read_indexed_workspaces(&connection)?
+        } else {
+            Vec::new()
+        };
+        let registered_workspaces = workspaces
+            .into_iter()
+            .filter(|workspace| workspace.enabled && workspace.scope != "global")
+            .filter_map(|workspace| {
+                let path = PathBuf::from(workspace.path);
+                path.is_absolute()
+                    .then_some(mcp_center::RegisteredWorkspace {
+                        id: workspace.id,
+                        display_name: workspace.name,
+                        path,
+                    })
+            })
+            .collect();
+
+        Ok(mcp_center::scan_connections(mcp_center::McpScanRequest {
+            home_dir,
+            registered_workspaces,
+            registered_codex_profiles: Vec::new(),
+            platform: Some(std::env::consts::OS.to_string()),
+        }))
+    })
+    .await
+    .map_err(|_| "MCP 只读扫描后台任务意外停止；没有修改任何配置。".to_string())?
+}
+
+/// Strictly read-only. The probe does not execute Codex, PowerShell, npm,
+/// setup.ps1, cached JavaScript, or the standalone desktop repair utility.
+#[tauri::command]
+async fn scan_codex_plugin_doctor() -> Result<codex_plugin_doctor::CodexPluginDoctorReport, String>
+{
+    tauri::async_runtime::spawn_blocking(codex_plugin_doctor::scan_default)
+        .await
+        .map_err(|_| "Codex 插件只读检查后台任务意外停止；没有执行任何修复。".to_string())
+}
+
 fn validate_release_gate_export_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -1927,16 +2123,59 @@ async fn preview_source_import_candidate(
 
 #[tauri::command]
 async fn stage_source_import_candidate(
+    app: tauri::AppHandle,
+    operation_id: Option<String>,
     import_kind: String,
     input: String,
 ) -> Result<SourceImportExecutionCard, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let operation_id = normalize_source_import_operation_id(operation_id.as_deref())?;
+    let cancellation = Arc::new(AtomicBool::new(false));
+    {
+        let mut cancellations = SOURCE_IMPORT_CANCELLATIONS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .map_err(|_| "暂时无法启动导入任务，请重试。".to_string())?;
+        if cancellations.contains_key(&operation_id) {
+            return Err("同一个导入任务仍在运行，请等待完成或先取消。".to_string());
+        }
+        cancellations.insert(operation_id.clone(), Arc::clone(&cancellation));
+    }
+    let operation_id_for_worker = operation_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let root = resolve_legacy_root()?;
         let connection = open_index_database(&root)?;
-        stage_source_import_candidate_in_connection(&root, &connection, &import_kind, &input)
+        let control = SourceImportControl::with_app(operation_id_for_worker, cancellation, app);
+        stage_source_import_candidate_in_connection_with_control(
+            &root,
+            &connection,
+            &import_kind,
+            &input,
+            &control,
+        )
     })
     .await
-    .map_err(|error| format!("Source import staging worker stopped: {error}"))?
+    .map_err(|_| "导入后台任务意外停止；正式技能库没有改变。".to_string());
+    if let Ok(mut cancellations) = SOURCE_IMPORT_CANCELLATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        cancellations.remove(&operation_id);
+    }
+    result?
+}
+
+#[tauri::command]
+fn cancel_source_import(operation_id: String) -> Result<bool, String> {
+    let operation_id = normalize_source_import_operation_id(Some(&operation_id))?;
+    let cancellations = SOURCE_IMPORT_CANCELLATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "暂时无法取消导入任务，请重试。".to_string())?;
+    let Some(cancellation) = cancellations.get(&operation_id) else {
+        return Ok(false);
+    };
+    cancellation.store(true, Ordering::SeqCst);
+    Ok(true)
 }
 
 #[tauri::command]
@@ -6073,6 +6312,29 @@ fn source_import_promotion_report_root(root: &Path) -> PathBuf {
         .join("source-import-promotion")
 }
 
+fn normalize_source_import_operation_id(value: Option<&str>) -> Result<String, String> {
+    let candidate = value.unwrap_or("").trim();
+    if candidate.is_empty() {
+        return Ok(format!("source-import-{}", unix_timestamp_string()));
+    }
+    if candidate.len() > 96
+        || !candidate.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+    {
+        return Err("导入任务标识无效，请重新开始导入。".to_string());
+    }
+    Ok(candidate.to_string())
+}
+
+fn cleanup_cancelled_source_import(staged_path: &Path) -> Result<(), String> {
+    if !staged_path.exists() {
+        return Ok(());
+    }
+    fs::remove_dir_all(staged_path)
+        .map_err(|_| "导入已取消，但临时隔离目录未能自动清理；请在维护工具中重试清理。".to_string())
+}
+
 fn sanitize_source_folder_name(value: &str) -> String {
     let folder = value
         .trim()
@@ -6166,12 +6428,31 @@ fn build_source_import_plan(
     }
 }
 
+#[cfg(test)]
 fn stage_source_import_candidate_in_connection(
     root: &Path,
     connection: &Connection,
     import_kind: &str,
     input: &str,
 ) -> Result<SourceImportExecutionCard, String> {
+    let control = SourceImportControl::detached("source-import-test");
+    stage_source_import_candidate_in_connection_with_control(
+        root,
+        connection,
+        import_kind,
+        input,
+        &control,
+    )
+}
+
+fn stage_source_import_candidate_in_connection_with_control(
+    root: &Path,
+    connection: &Connection,
+    import_kind: &str,
+    input: &str,
+    control: &SourceImportControl,
+) -> Result<SourceImportExecutionCard, String> {
+    control.emit("inspect", "started", "正在检查来源地址与导入边界。", 0, 0);
     let plan = build_source_import_plan(root, connection, import_kind, input)?;
     let timestamp = unix_timestamp_string();
     let staging_root = source_import_staging_root(root);
@@ -6182,6 +6463,12 @@ fn stage_source_import_candidate_in_connection(
         sanitize_source_folder_name(&plan.display_name),
         timestamp
     ));
+    if let Err(error) = control.ensure_active() {
+        let _ = cleanup_cancelled_source_import(&staged_path);
+        control.emit("inspect", "cancelled", &error, 0, 0);
+        return Err(error);
+    }
+    control.emit("inspect", "completed", "来源检查完成。", 1, 1);
 
     let mut execution = SourceImportExecutionCard {
         id: format!("source-import-stage-{}-{}", plan.id, timestamp),
@@ -6216,11 +6503,17 @@ fn stage_source_import_candidate_in_connection(
         return write_source_import_execution_report(root, connection, execution, &timestamp);
     }
 
-    match plan.import_kind.as_str() {
-        "github" => stage_github_source_import(&plan, &staged_path, &mut execution)?,
-        "local" => stage_local_source_import(root, &plan, &staged_path, &mut execution)?,
+    let stage_result = match plan.import_kind.as_str() {
+        "github" => {
+            stage_github_source_import_with_control(&plan, &staged_path, &mut execution, control)
+        }
+        "local" => {
+            control.emit("write", "started", "正在复制到隔离区。", 0, 0);
+            stage_local_source_import(root, &plan, &staged_path, &mut execution)
+        }
         "zip" | "skill" | "package" => {
-            stage_package_source_import(&plan, &staged_path, &mut execution)?
+            control.emit("zip", "started", "正在读取本地压缩包。", 0, 0);
+            stage_package_source_import(&plan, &staged_path, &mut execution)
         }
         _ => {
             execution.status = "blocked".to_string();
@@ -6228,11 +6521,41 @@ fn stage_source_import_candidate_in_connection(
             execution
                 .blocking_checks
                 .push("Unsupported import kind.".to_string());
+            Ok(())
         }
+    };
+    if let Err(error) = stage_result {
+        if control.is_cancelled() || error == SOURCE_IMPORT_CANCELLED_MESSAGE {
+            cleanup_cancelled_source_import(&staged_path)?;
+            control.emit("write", "cancelled", SOURCE_IMPORT_CANCELLED_MESSAGE, 0, 0);
+            return Err(SOURCE_IMPORT_CANCELLED_MESSAGE.to_string());
+        }
+        return Err(error);
     }
+    control.ensure_active().inspect_err(|error| {
+        let _ = cleanup_cancelled_source_import(&staged_path);
+        control.emit("write", "cancelled", error, 0, 0);
+    })?;
+    control.emit("write", "completed", "隔离区写入完成。", 1, 1);
 
     if staged_path.is_dir() {
+        control.emit("security", "started", "正在执行逐文件安全扫描。", 0, 0);
         apply_security_scan_to_execution(&staged_path, &mut execution)?;
+        if let Err(error) = control.ensure_active() {
+            cleanup_cancelled_source_import(&staged_path)?;
+            control.emit("security", "cancelled", &error, 0, 0);
+            return Err(error);
+        }
+        control.emit(
+            "security",
+            "completed",
+            format!(
+                "安全扫描完成：检查 {} 个文件。",
+                execution.security_scanned_files
+            ),
+            execution.security_scanned_files as u64,
+            execution.security_scanned_files as u64,
+        );
     }
 
     write_source_import_execution_report(root, connection, execution, &timestamp)
@@ -6282,20 +6605,47 @@ fn apply_security_scan_to_execution(
     Ok(())
 }
 
-fn stage_github_source_import(
+fn stage_github_source_import_with_control(
     plan: &SourceImportPlanCard,
     staged_path: &Path,
     execution: &mut SourceImportExecutionCard,
+    control: &SourceImportControl,
 ) -> Result<(), String> {
-    stage_github_source_import_with_git_program(plan, staged_path, execution, "git")
+    stage_github_source_import_with_git_program_and_control(
+        plan,
+        staged_path,
+        execution,
+        "git",
+        control,
+    )
 }
 
+#[cfg(test)]
 fn stage_github_source_import_with_git_program(
     plan: &SourceImportPlanCard,
     staged_path: &Path,
     execution: &mut SourceImportExecutionCard,
     git_program: &str,
 ) -> Result<(), String> {
+    let control = SourceImportControl::detached("source-import-github-test");
+    stage_github_source_import_with_git_program_and_control(
+        plan,
+        staged_path,
+        execution,
+        git_program,
+        &control,
+    )
+}
+
+fn stage_github_source_import_with_git_program_and_control(
+    plan: &SourceImportPlanCard,
+    staged_path: &Path,
+    execution: &mut SourceImportExecutionCard,
+    git_program: &str,
+    control: &SourceImportControl,
+) -> Result<(), String> {
+    control.ensure_active()?;
+    control.emit("git", "started", "正在连接系统 Git。", 0, 0);
     let mut command = Command::new(git_program);
     command
         .args([
@@ -6306,11 +6656,20 @@ fn stage_github_source_import_with_git_program(
             &plan.normalized_target,
         ])
         .arg(staged_path);
-    let git_result = command_output_with_timeout(
+    let git_result = command_output_with_timeout_and_cancel(
         &mut command,
         Duration::from_secs(120),
         "GitHub 仓库下载超过 120 秒，已自动停止。请检查网络、仓库地址，或稍后重试。",
+        Some(control.cancelled.as_ref()),
     );
+
+    if control.is_cancelled()
+        || matches!(&git_result, Err(message) if message == SOURCE_IMPORT_CANCELLED_MESSAGE)
+    {
+        let _ = cleanup_cancelled_source_import(staged_path);
+        control.emit("git", "cancelled", SOURCE_IMPORT_CANCELLED_MESSAGE, 0, 0);
+        return Err(SOURCE_IMPORT_CANCELLED_MESSAGE.to_string());
+    }
 
     let git_failure = match git_result {
         Ok(output) if output.status.success() => None,
@@ -6326,6 +6685,13 @@ fn stage_github_source_import_with_git_program(
     };
 
     if let Some(git_failure) = git_failure {
+        control.emit(
+            "git",
+            "fallback",
+            "系统 Git 连接失败，正在切换到 GitHub ZIP 下载。",
+            0,
+            0,
+        );
         if staged_path.exists() {
             fs::remove_dir_all(staged_path).map_err(|error| {
                 format!(
@@ -6335,10 +6701,20 @@ fn stage_github_source_import_with_git_program(
                 )
             })?;
         }
-        let (download_method, downloaded_ref, fallback_error) =
-            match stage_github_source_import_via_codeload(plan, staged_path) {
-                Ok(downloaded_ref) => ("github-codeload", downloaded_ref, None),
+        let (download_method, downloaded_ref, skipped_symlinks, fallback_error) =
+            match stage_github_source_import_via_codeload_with_control(plan, staged_path, control) {
+                Ok(download) => (
+                    "github-codeload",
+                    download.downloaded_ref,
+                    download.skipped_symlinks,
+                    None,
+                ),
                 Err(codeload_error) => {
+                    if control.is_cancelled() || codeload_error == SOURCE_IMPORT_CANCELLED_MESSAGE {
+                        let _ = cleanup_cancelled_source_import(staged_path);
+                        control.emit("zip", "cancelled", SOURCE_IMPORT_CANCELLED_MESSAGE, 0, 0);
+                        return Err(SOURCE_IMPORT_CANCELLED_MESSAGE.to_string());
+                    }
                     if staged_path.exists() {
                         fs::remove_dir_all(staged_path).map_err(|error| {
                             format!(
@@ -6349,10 +6725,11 @@ fn stage_github_source_import_with_git_program(
                         })?;
                     }
                     match stage_github_source_import_via_api(plan, staged_path) {
-                        Ok(default_branch) => ("github-api", default_branch, None),
+                        Ok(default_branch) => ("github-api", default_branch, Vec::new(), None),
                         Err(api_error) => (
                             "failed",
                             String::new(),
+                            Vec::new(),
                             Some(format!(
                                 "归档下载：{}；API 下载：{}",
                                 codeload_error, api_error
@@ -6362,10 +6739,16 @@ fn stage_github_source_import_with_git_program(
                 }
             };
         if let Some(fallback_error) = fallback_error {
+            if staged_path.exists() {
+                fs::remove_dir_all(staged_path).map_err(|_| {
+                    "GitHub 下载失败，且隔离暂存目录未能自动清理；正式技能库没有改变，请在维护工具中重试清理。"
+                        .to_string()
+                })?;
+            }
             execution.status = "blocked".to_string();
             execution.summary = "GitHub 来源下载失败；没有写入正式技能库。".to_string();
             execution.blocking_checks = vec![
-                format!("系统 Git：{}", git_failure),
+                friendly_git_import_failure(&git_failure),
                 format!("内置 GitHub 下载器：{}", fallback_error),
                 "请检查网络/代理；私有仓库仍需要本机 Git 和相应凭据。".to_string(),
             ];
@@ -6381,7 +6764,20 @@ fn stage_github_source_import_with_git_program(
             "内置下载器只保留可安装的 Skill 目录；若仓库没有 SKILL.md，则只保留根目录 Prompt/说明文档。"
                 .to_string(),
         ];
+        if !skipped_symlinks.is_empty() {
+            execution.blocking_checks.push(format!(
+                "安全提示：已跳过 {} 个符号链接别名（不创建、不跟随）：{}",
+                skipped_symlinks.len(),
+                skipped_symlinks
+                    .iter()
+                    .take(6)
+                    .map(|path| compact_note(path))
+                    .collect::<Vec<_>>()
+                    .join("、")
+            ));
+        }
     } else {
+        control.emit("git", "completed", "系统 Git 下载完成。", 1, 1);
         execution.download_method = "git".to_string();
         write_managed_source_metadata(staged_path, &plan.normalized_target, "git", "")?;
     }
@@ -6418,6 +6814,7 @@ fn stage_github_source_import_via_api(
     plan: &SourceImportPlanCard,
     staged_path: &Path,
 ) -> Result<String, String> {
+    ensure_github_api_file_fallback_allowed(github_api_token().is_some())?;
     let (owner, repo) = parse_github_repo(&plan.normalized_target)
         .ok_or_else(|| "GitHub 地址无法解析。".to_string())?;
     let agent = github_http_agent();
@@ -6555,13 +6952,90 @@ fn stage_github_source_import_via_api(
     Ok(default_branch)
 }
 
+fn ensure_github_api_file_fallback_allowed(has_token: bool) -> Result<(), String> {
+    if has_token {
+        return Ok(());
+    }
+    Err(
+        "已停止匿名 GitHub API 逐文件回退：匿名额度每小时仅 60 次，无法可靠下载多文件仓库。请等待系统 Git/ZIP 网络恢复；私有仓库可在系统中配置 GITHUB_TOKEN 或 GH_TOKEN 后重试。"
+            .to_string(),
+    )
+}
+
+fn friendly_git_import_failure(raw: &str) -> String {
+    let normalized = raw.to_ascii_lowercase();
+    if normalized.contains("could not connect")
+        || normalized.contains("failed to connect")
+        || normalized.contains("timed out")
+        || normalized.contains("recv failure")
+        || normalized.contains("connection was reset")
+    {
+        "系统 Git 无法连接 GitHub；已自动尝试内置 ZIP 下载。请检查网络、代理或防火墙后重试。"
+            .to_string()
+    } else if normalized.contains("repository not found")
+        || normalized.contains("authentication failed")
+        || normalized.contains("permission denied")
+    {
+        "系统 Git 无法访问该仓库；请确认地址、仓库可见性和本机 Git 凭据。".to_string()
+    } else {
+        "系统 Git 克隆未完成；已自动尝试内置 ZIP 下载。".to_string()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GithubCodeloadResult {
+    downloaded_ref: String,
+    skipped_symlinks: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CodeloadEntryInspection {
+    File(PathBuf),
+    Skip,
+    SkipSymlink(String),
+}
+
+fn inspect_codeload_archive_entry(
+    entry: &zip::read::ZipFile<'_>,
+) -> Result<CodeloadEntryInspection, String> {
+    if archive_entry_is_symlink(entry) {
+        return Ok(CodeloadEntryInspection::SkipSymlink(compact_note(
+            entry.name(),
+        )));
+    }
+    if !entry.is_file() {
+        return Ok(CodeloadEntryInspection::Skip);
+    }
+    let archive_path = safe_archive_entry_path(entry)
+        .ok_or_else(|| format!("GitHub 归档含不安全路径：{}", compact_note(entry.name())))?;
+    let relative_path = strip_codeload_root(&archive_path)
+        .ok_or_else(|| format!("GitHub 归档缺少标准根目录：{}", compact_note(entry.name())))?;
+    if archive_entry_should_skip(&relative_path) {
+        return Ok(CodeloadEntryInspection::Skip);
+    }
+    Ok(CodeloadEntryInspection::File(relative_path))
+}
+
+#[cfg(test)]
 fn stage_github_source_import_via_codeload(
     plan: &SourceImportPlanCard,
     staged_path: &Path,
 ) -> Result<String, String> {
+    let control = SourceImportControl::detached("source-import-codeload-test");
+    stage_github_source_import_via_codeload_with_control(plan, staged_path, &control)
+        .map(|result| result.downloaded_ref)
+}
+
+fn stage_github_source_import_via_codeload_with_control(
+    plan: &SourceImportPlanCard,
+    staged_path: &Path,
+    control: &SourceImportControl,
+) -> Result<GithubCodeloadResult, String> {
+    control.ensure_active()?;
     let (owner, repo) = parse_github_repo(&plan.normalized_target)
         .ok_or_else(|| "GitHub 地址无法解析。".to_string())?;
     let url = format!("https://codeload.github.com/{}/{}/zip/HEAD", owner, repo);
+    control.emit("zip", "started", "正在下载 GitHub ZIP 归档。", 0, 0);
     let agent = github_http_agent();
     let response = agent
         .get(&url)
@@ -6575,10 +7049,10 @@ fn stage_github_source_import_via_codeload(
                 github_download_error_message(error)
             )
         })?;
-    if let Some(content_length) = response
+    let expected_bytes = response
         .header("Content-Length")
-        .and_then(|value| value.parse::<u64>().ok())
-    {
+        .and_then(|value| value.parse::<u64>().ok());
+    if let Some(content_length) = expected_bytes {
         if content_length > GITHUB_FALLBACK_MAX_BYTES {
             return Err(format!(
                 "仓库归档超过 80 MB 安全上限（{} bytes）。",
@@ -6588,15 +7062,37 @@ fn stage_github_source_import_via_codeload(
     }
 
     let mut archive_bytes = Vec::new();
-    response
-        .into_reader()
-        .take(GITHUB_FALLBACK_MAX_BYTES + 1)
-        .read_to_end(&mut archive_bytes)
-        .map_err(|error| format!("GitHub 归档下载失败：{}", error))?;
+    let mut reader = response.into_reader().take(GITHUB_FALLBACK_MAX_BYTES + 1);
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        control.ensure_active()?;
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("GitHub 归档下载失败：{}", error))?;
+        if read == 0 {
+            break;
+        }
+        archive_bytes.extend_from_slice(&buffer[..read]);
+        control.emit(
+            "zip",
+            "progress",
+            "正在下载 GitHub ZIP 归档。",
+            archive_bytes.len() as u64,
+            expected_bytes.unwrap_or(0),
+        );
+    }
     if archive_bytes.len() as u64 > GITHUB_FALLBACK_MAX_BYTES {
         return Err("仓库归档超过 80 MB 安全上限。".to_string());
     }
 
+    control.emit(
+        "zip",
+        "completed",
+        "GitHub ZIP 归档下载完成。",
+        archive_bytes.len() as u64,
+        archive_bytes.len() as u64,
+    );
+    control.emit("inspect", "started", "正在检查归档路径与安全边界。", 0, 0);
     let cursor = std::io::Cursor::new(archive_bytes);
     let mut archive =
         ZipArchive::new(cursor).map_err(|error| format!("GitHub 归档无法读取：{}", error))?;
@@ -6619,26 +7115,20 @@ fn stage_github_source_import_via_codeload(
 
     let mut files = Vec::new();
     let mut skill_roots = HashSet::new();
+    let mut skipped_symlinks = Vec::new();
     for index in 0..archive.len() {
+        control.ensure_active()?;
         let entry = archive
             .by_index(index)
             .map_err(|error| format!("Cannot inspect GitHub archive entry {}: {}", index, error))?;
-        if !entry.is_file() {
-            continue;
-        }
-        if archive_entry_is_symlink(&entry) {
-            return Err(format!(
-                "GitHub 归档含符号链接，已拒绝：{}",
-                compact_note(entry.name())
-            ));
-        }
-        let archive_path = safe_archive_entry_path(&entry)
-            .ok_or_else(|| format!("GitHub 归档含不安全路径：{}", compact_note(entry.name())))?;
-        let relative_path = strip_codeload_root(&archive_path)
-            .ok_or_else(|| format!("GitHub 归档缺少标准根目录：{}", compact_note(entry.name())))?;
-        if archive_entry_should_skip(&relative_path) {
-            continue;
-        }
+        let relative_path = match inspect_codeload_archive_entry(&entry)? {
+            CodeloadEntryInspection::File(path) => path,
+            CodeloadEntryInspection::Skip => continue,
+            CodeloadEntryInspection::SkipSymlink(path) => {
+                skipped_symlinks.push(path);
+                continue;
+            }
+        };
         if entry.size() > GITHUB_FALLBACK_MAX_FILE_BYTES {
             return Err(format!(
                 "单个文件超过 16 MB 安全上限：{}",
@@ -6709,6 +7199,17 @@ fn stage_github_source_import_via_codeload(
             planned_bytes
         ));
     }
+    control.emit(
+        "inspect",
+        "completed",
+        format!(
+            "归档检查完成：将写入 {} 个文件，跳过 {} 个符号链接。",
+            selected.len(),
+            skipped_symlinks.len()
+        ),
+        selected.len() as u64,
+        selected.len() as u64,
+    );
 
     fs::create_dir_all(staged_path).map_err(|error| {
         format!(
@@ -6718,7 +7219,10 @@ fn stage_github_source_import_via_codeload(
         )
     })?;
     let mut extracted_bytes = 0u64;
-    for selected_file in selected {
+    let selected_count = selected.len() as u64;
+    control.emit("write", "started", "正在写入隔离区。", 0, selected_count);
+    for (selected_index, selected_file) in selected.into_iter().enumerate() {
+        control.ensure_active()?;
         let mut entry = archive.by_index(selected_file.index).map_err(|error| {
             format!(
                 "Cannot read GitHub archive entry {}: {}",
@@ -6770,6 +7274,16 @@ fn stage_github_source_import_via_codeload(
                 error
             )
         })?;
+        let completed = selected_index as u64 + 1;
+        if completed == selected_count || completed.is_multiple_of(25) {
+            control.emit(
+                "write",
+                "progress",
+                "正在写入隔离区。",
+                completed,
+                selected_count,
+            );
+        }
     }
     write_managed_source_metadata(
         staged_path,
@@ -6777,7 +7291,17 @@ fn stage_github_source_import_via_codeload(
         "github-codeload",
         "HEAD",
     )?;
-    Ok("HEAD".to_string())
+    control.emit(
+        "write",
+        "completed",
+        "GitHub 来源已写入隔离区。",
+        selected_count,
+        selected_count,
+    );
+    Ok(GithubCodeloadResult {
+        downloaded_ref: "HEAD".to_string(),
+        skipped_symlinks,
+    })
 }
 
 fn strip_codeload_root(path: &Path) -> Option<PathBuf> {
@@ -8614,23 +9138,73 @@ fn github_api_error_message(owner: &str, repo: &str, error: ureq::Error) -> Stri
                 .chars()
                 .take(240)
                 .collect::<String>();
-            let mut details = vec![format!("GitHub API status {} for {}/{}", code, owner, repo)];
-            if !remaining.is_empty() {
-                details.push(format!("remaining={remaining}"));
-            }
-            if !reset.is_empty() {
-                details.push(format!("reset={reset}"));
-            }
-            if !body.trim().is_empty() {
-                details.push(compact_note(&body));
-            }
-            details.join("; ")
+            format_github_api_status_error(code, owner, repo, &remaining, &reset, &body)
         }
-        other => format!(
-            "GitHub API request failed for {}/{}: {}",
-            owner, repo, other
+        ureq::Error::Transport(error) => format!(
+            "无法连接 GitHub API（{}/{}）：{}。请检查网络或代理后重试。",
+            owner,
+            repo,
+            compact_note(&error.to_string())
         ),
     }
+}
+
+fn format_github_api_status_error(
+    code: u16,
+    owner: &str,
+    repo: &str,
+    remaining: &str,
+    reset: &str,
+    body: &str,
+) -> String {
+    let rate_limited = matches!(code, 403 | 429) && remaining.trim() == "0";
+    if rate_limited {
+        let reset_label = reset
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .map(format_unix_epoch_utc)
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "GitHub 返回的恢复时间".to_string());
+        return format!(
+            "GitHub API 请求额度已用尽（{owner}/{repo}）；预计 {reset_label} 后恢复。无需反复重试：请优先使用系统 Git/ZIP，私有仓库可配置 GITHUB_TOKEN 或 GH_TOKEN。"
+        );
+    }
+    let detail = compact_note(body);
+    if detail.is_empty() {
+        format!("GitHub API 返回 HTTP {code}（{owner}/{repo}）。")
+    } else {
+        format!(
+            "GitHub API 返回 HTTP {code}（{owner}/{repo}）：{}",
+            detail.chars().take(180).collect::<String>()
+        )
+    }
+}
+
+fn format_unix_epoch_utc(epoch_seconds: u64) -> String {
+    let days = (epoch_seconds / 86_400) as i64;
+    let seconds = epoch_seconds % 86_400;
+    let (year, month, day) = civil_date_from_unix_days(days);
+    let hour = seconds / 3_600;
+    let minute = (seconds % 3_600) / 60;
+    let second = seconds % 60;
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
+}
+
+// Howard Hinnant's civil-from-days algorithm, adapted for Unix day zero.
+fn civil_date_from_unix_days(days_since_epoch: i64) -> (i64, u64, u64) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += if month <= 2 { 1 } else { 0 };
+    (year, month as u64, day as u64)
 }
 
 fn source_popularity_cache_status_for_error(error: &str) -> &'static str {
@@ -13656,8 +14230,11 @@ pub fn run() {
             set_real_write_authorization,
             run_release_gate_runner,
             open_release_gate_export_path,
+            scan_mcp_connections,
+            scan_codex_plugin_doctor,
             preview_source_import_candidate,
             stage_source_import_candidate,
+            cancel_source_import,
             promote_staged_source_import,
             record_usage_event,
             refresh_source_popularity,
@@ -16132,6 +16709,172 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "network-dependent Imbad0202 recipient gate"]
+    fn github_codeload_imports_real_academic_research_skills_without_following_symlinks() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-academic-research-recipient-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test database should open");
+        let plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/Imbad0202/academic-research-skills.git",
+        )
+        .expect("academic research plan should build");
+        let staged_path = source_import_staging_root(&root).join("academic-research-codeload");
+        let mut execution = SourceImportExecutionCard {
+            id: "academic-research-no-git".to_string(),
+            import_kind: "github".to_string(),
+            input: plan.input.clone(),
+            status: "blocked".to_string(),
+            risk_level: "low".to_string(),
+            summary: String::new(),
+            staged_path: staged_path.display().to_string(),
+            report_path: String::new(),
+            manifest_path: String::new(),
+            copied_files: 0,
+            copied_bytes: 0,
+            skill_count: 0,
+            prompt_count: 0,
+            blocking_checks: Vec::new(),
+            rollback_steps: Vec::new(),
+            real_write_scope: "staging-only".to_string(),
+            download_method: String::new(),
+            security_status: "not-run".to_string(),
+            security_scanned_files: 0,
+            security_findings: Vec::new(),
+        };
+
+        stage_github_source_import_with_git_program(
+            &plan,
+            &staged_path,
+            &mut execution,
+            "ai-skillhub-test-missing-git.exe",
+        )
+        .expect("codeload fallback should import the real repository");
+        apply_security_scan_to_execution(&staged_path, &mut execution)
+            .expect("the staged repository should complete a per-file scan");
+
+        assert_eq!(execution.download_method, "github-codeload");
+        assert!(
+            execution.skill_count >= 3,
+            "expected the real Skill directories"
+        );
+        assert!(execution.copied_files > 0);
+        assert!(execution.security_scanned_files > 0);
+        assert!(execution
+            .blocking_checks
+            .iter()
+            .any(|message| message.contains("符号链接") && message.contains("不创建、不跟随")));
+        assert!(!staged_path.join(".git").exists());
+        assert!(!Path::new(&source_import_target_path(
+            &root,
+            "academic-research-skills"
+        ))
+        .exists());
+
+        for entry in fs::read_dir(&staged_path).expect("staged root should remain readable") {
+            let entry = entry.expect("staged entry should be readable");
+            let metadata = fs::symlink_metadata(entry.path()).expect("metadata should be readable");
+            assert!(
+                !metadata.file_type().is_symlink(),
+                "no symlink may be materialized"
+            );
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn cancelling_a_running_git_import_stops_the_child_and_preserves_formal_sources() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-running-cancel-test-{}",
+            unix_timestamp_string()
+        ));
+        fs::create_dir_all(&root).expect("test root should create");
+        let connection = open_index_database(&root).expect("test database should open");
+        let plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/Imbad0202/academic-research-skills.git",
+        )
+        .expect("cancel plan should build");
+        let staged_path = source_import_staging_root(&root).join("cancelled-running-clone");
+        let formal_path = managed_sources_dir(&root).join("existing-source");
+        fs::create_dir_all(&formal_path).expect("formal source should create");
+        fs::write(formal_path.join("SKILL.md"), b"# Existing\n")
+            .expect("formal source sentinel should write");
+
+        let slow_git = root.join("slow-git.cmd");
+        fs::write(
+            &slow_git,
+            b"@echo off\r\nping 127.0.0.1 -n 30 >nul\r\nexit /b 0\r\n",
+        )
+        .expect("slow Git fixture should write");
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let control = SourceImportControl::detached_with_cancellation(
+            "running-cancel-test",
+            Arc::clone(&cancelled),
+        );
+        let cancel_signal = Arc::clone(&cancelled);
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(350));
+            cancel_signal.store(true, Ordering::SeqCst);
+        });
+        let mut execution = SourceImportExecutionCard {
+            id: "cancel-running-git".to_string(),
+            import_kind: "github".to_string(),
+            input: plan.input.clone(),
+            status: "blocked".to_string(),
+            risk_level: "low".to_string(),
+            summary: String::new(),
+            staged_path: staged_path.display().to_string(),
+            report_path: String::new(),
+            manifest_path: String::new(),
+            copied_files: 0,
+            copied_bytes: 0,
+            skill_count: 0,
+            prompt_count: 0,
+            blocking_checks: Vec::new(),
+            rollback_steps: Vec::new(),
+            real_write_scope: "staging-only".to_string(),
+            download_method: String::new(),
+            security_status: "not-run".to_string(),
+            security_scanned_files: 0,
+            security_findings: Vec::new(),
+        };
+
+        let started = Instant::now();
+        let result = stage_github_source_import_with_git_program_and_control(
+            &plan,
+            &staged_path,
+            &mut execution,
+            &slow_git.to_string_lossy(),
+            &control,
+        );
+        canceller.join().expect("cancellation thread should finish");
+
+        assert_eq!(
+            result.expect_err("the running import must cancel"),
+            SOURCE_IMPORT_CANCELLED_MESSAGE
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "cancellation must terminate the owned process tree promptly"
+        );
+        assert!(!staged_path.exists(), "partial staging must be removed");
+        assert!(
+            formal_path.join("SKILL.md").exists(),
+            "formal sources must remain untouched"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn source_import_staging_copies_local_candidate_without_formal_install() {
         let root = std::env::temp_dir().join(format!(
             "skillhub-import-stage-test-{}",
@@ -17005,6 +17748,91 @@ mod tests {
                     .any(|check| check.contains("真实写入授权开关"))
         }));
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn github_codeload_symlink_entry_is_skipped_without_following_it() {
+        use std::io::{Cursor, Write};
+        use zip::write::FileOptions;
+
+        let mut bytes = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut bytes);
+            writer
+                .start_file(
+                    "repository-main/skills/academic-paper",
+                    FileOptions::default().unix_permissions(0o777),
+                )
+                .expect("symlink fixture should start");
+            writer
+                .write_all(b"../academic-paper")
+                .expect("symlink target should write");
+            writer.finish().expect("zip fixture should finish");
+        }
+        // zip 0.6 masks file-type bits in FileOptions. Mark the central-directory
+        // record as a Unix symlink so this fixture matches GitHub codeload archives.
+        let archive_bytes = bytes.get_mut();
+        let central_offset = archive_bytes
+            .windows(4)
+            .position(|window| window == [0x50, 0x4b, 0x01, 0x02])
+            .expect("central directory should exist");
+        archive_bytes[central_offset + 5] = 3;
+        archive_bytes[central_offset + 38..central_offset + 42]
+            .copy_from_slice(&(0o120777u32 << 16).to_le_bytes());
+        bytes.set_position(0);
+        let mut archive = ZipArchive::new(bytes).expect("zip fixture should open");
+        let entry = archive.by_index(0).expect("symlink entry should exist");
+
+        assert_eq!(
+            inspect_codeload_archive_entry(&entry).expect("inspection should not reject archive"),
+            CodeloadEntryInspection::SkipSymlink(
+                "repository-main/skills/academic-paper".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn anonymous_github_api_file_fallback_is_refused_before_blob_requests() {
+        let error = ensure_github_api_file_fallback_allowed(false)
+            .expect_err("anonymous per-blob fallback must be disabled");
+        assert!(error.contains("匿名 GitHub API"));
+        assert!(error.contains("GITHUB_TOKEN"));
+        assert!(ensure_github_api_file_fallback_allowed(true).is_ok());
+
+        let rate_error = format_github_api_status_error(
+            403,
+            "Imbad0202",
+            "academic-research-skills",
+            "0",
+            "1786032416",
+            "API rate limit exceeded",
+        );
+        assert!(rate_error.contains("请求额度已用尽"));
+        assert!(rate_error.contains("2026-08-06 16:06:56 UTC"));
+        assert!(!rate_error.contains("remaining=0"));
+    }
+
+    #[test]
+    fn cancelled_source_import_cleans_partial_staging_only() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-cancelled-import-test-{}",
+            unix_timestamp_string()
+        ));
+        let staged_path = source_import_staging_root(&root).join("partial-download");
+        let formal_path = managed_sources_dir(&root).join("existing-source");
+        fs::create_dir_all(&staged_path).expect("staging fixture should create");
+        fs::create_dir_all(&formal_path).expect("formal fixture should create");
+        fs::write(staged_path.join("partial.zip"), b"partial")
+            .expect("partial fixture should write");
+        fs::write(formal_path.join("SKILL.md"), b"# Existing")
+            .expect("formal fixture should write");
+
+        cleanup_cancelled_source_import(&staged_path)
+            .expect("cancelled staging should be recoverably cleaned");
+
+        assert!(!staged_path.exists());
+        assert!(formal_path.join("SKILL.md").exists());
         let _ = fs::remove_dir_all(root);
     }
 }

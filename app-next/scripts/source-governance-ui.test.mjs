@@ -58,7 +58,13 @@ test("large source imports stay bounded, visible, and off the UI thread", () => 
   }
   assert.match(app, /role="progressbar"/);
   assert.match(app, /className={`import-progress/);
-  assert.match(app, /setProgress\(\{ detail: t\("qa\.statusJoining"\), percent: 28/);
+  assert.match(backend, /SOURCE_IMPORT_PROGRESS_EVENT/);
+  assert.match(backend, /fn cancel_source_import/);
+  assert.match(app, /listen<SourceImportProgressEvent>\("source-import-progress"/);
+  assert.match(app, /is-indeterminate/);
+  assert.match(app, /onCancel\(activeOperationId\)/);
+  assert.doesNotMatch(app, /setInterval\(\(\) => \{\s*setProgress/);
+  assert.doesNotMatch(app, /current\.percent >= 64/);
 });
 
 test("preset UI omits the non-deploying distribution matrix", () => {

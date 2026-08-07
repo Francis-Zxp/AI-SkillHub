@@ -4,7 +4,9 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
   type CSSProperties,
   Fragment,
+  Suspense,
   type PointerEvent,
+  lazy,
   startTransition,
   useEffect,
   useMemo,
@@ -86,11 +88,25 @@ type QuickAddStatus = {
 };
 type ImportProgress = {
   detail: string;
+  indeterminate?: boolean;
   percent: number;
   step: number;
   total: number;
 };
-type ImportFeedbackOptions = { quiet?: boolean; securityReviewConfirmed?: boolean };
+type SourceImportProgressEvent = {
+  operationId: string;
+  stage: "inspect" | "git" | "zip" | "write" | "security" | string;
+  state: "started" | "progress" | "completed" | "cancelled" | string;
+  message: string;
+  current: number;
+  total: number;
+};
+type ImportFeedbackOptions = {
+  quiet?: boolean;
+  securityReviewConfirmed?: boolean;
+  operationId?: string;
+  onProgress?: (event: SourceImportProgressEvent) => void;
+};
 type OperationStatus = { title: string; detail: string; step: number; total: number; percent: number };
 type SourceSortKey = "recent" | "rating" | "usage" | "heat" | "skillCount" | "health" | "name";
 type ToastTone = "info" | "ok" | "warn" | "error";
@@ -144,9 +160,14 @@ const NAV_ITEMS: Array<{ key: NavKey; icon: IconName }> = [
   { key: "library", icon: "library" },
   { key: "workspaces", icon: "workspaces" },
   { key: "presets", icon: "list" },
-  { key: "agents", icon: "agent" }
+  { key: "agents", icon: "agent" },
+  { key: "connections", icon: "connections" }
 ];
 const ADVANCED_NAV: NavKey[] = ["release", "snapshots"];
+const McpCenter = lazy(() => import("./McpCenter").then(module => ({ default: module.McpCenter })));
+const CodexPluginDoctorPanel = lazy(() =>
+  import("./CodexPluginDoctorPanel").then(module => ({ default: module.CodexPluginDoctorPanel }))
+);
 const CATEGORY_IDS = [
   "academic-writing",
   "literature-research",
@@ -1005,12 +1026,27 @@ export function App() {
       if (!options.quiet) toastMessage(t("toast.previewStaging"), "info");
       return execution;
     }
-    const result = await invoke<SourceImportExecutionCard>("stage_source_import_candidate", {
-      importKind,
-      input
+    const operationId = options.operationId ?? createSourceImportOperationId();
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen<SourceImportProgressEvent>("source-import-progress", event => {
+      if (event.payload.operationId === operationId) options.onProgress?.(event.payload);
     });
-    if (!options.quiet) toastMessage(result.status === "staged" ? t("toast.staged") : t("toast.stageDone"), "info");
-    return result;
+    try {
+      const result = await invoke<SourceImportExecutionCard>("stage_source_import_candidate", {
+        operationId,
+        importKind,
+        input
+      });
+      if (!options.quiet) toastMessage(result.status === "staged" ? t("toast.staged") : t("toast.stageDone"), "info");
+      return result;
+    } finally {
+      unlisten();
+    }
+  }
+
+  async function cancelSourceImport(operationId: string): Promise<boolean> {
+    if (!runtimeAvailable) return false;
+    return invoke<boolean>("cancel_source_import", { operationId });
   }
 
   async function promoteStagedSourceImport(
@@ -1332,6 +1368,7 @@ export function App() {
             <Library
               loading={loading}
               onDeleteSource={deleteSource}
+              onCancelImport={cancelSourceImport}
               onPreviewImport={previewSourceImportCandidate}
               onStageImport={stageSourceImportCandidate}
               onPromoteImport={promoteStagedSourceImport}
@@ -1368,8 +1405,14 @@ export function App() {
               disabled={loading}
               onRefreshAgents={() => void refreshLocalAgents()}
               onToggle={updateEnabled}
+              runtimeAvailable={runtimeAvailable}
               snapshot={snapshot}
             />
+          )}
+          {active === "connections" && (
+            <Suspense fallback={<DeferredSurface label={t("mcp.scanning")} />}>
+              <McpCenter runtimeAvailable={runtimeAvailable} />
+            </Suspense>
           )}
           {(active === "release" || active === "snapshots") && (
             <Advanced
@@ -1416,6 +1459,15 @@ export function App() {
       </section>
       <div id="app-overlay-root" />
     </main>
+  );
+}
+
+function DeferredSurface({ label }: { label: string }) {
+  return (
+    <section className="deferred-surface glow-card" role="status">
+      <Icon className="icon-spin" name="refresh" />
+      <span>{label}</span>
+    </section>
   );
 }
 
@@ -2351,6 +2403,7 @@ function MiniTrendLine({ points }: { points: number[] }) {
 type LibraryProps = {
   atlasMode: boolean;
   loading: boolean;
+  onCancelImport: (operationId: string) => Promise<boolean>;
   onDeleteSource: (source: SourceCard) => Promise<"failed" | "preview" | "deleted">;
   onPreviewImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportPlanCard>;
   onPromoteImport: (
@@ -2391,6 +2444,7 @@ function Library(props: LibraryProps) {
   const {
     atlasMode,
     loading,
+    onCancelImport,
     onDeleteSource,
     onPreviewImport,
     onPromoteImport,
@@ -2612,6 +2666,7 @@ function Library(props: LibraryProps) {
       {showImport && (
         <ImportWizard
           disabled={loading}
+          onCancel={onCancelImport}
           onPreview={onPreviewImport}
           onPromote={onPromoteImport}
           onRefreshIndex={onRefreshIndex}
@@ -3809,6 +3864,7 @@ function SkillConflictPanel({
 
 function ImportWizard({
   disabled,
+  onCancel,
   onPreview,
   onPromote,
   onRefreshIndex,
@@ -3817,6 +3873,7 @@ function ImportWizard({
   sources
 }: {
   disabled: boolean;
+  onCancel: (operationId: string) => Promise<boolean>;
   onPreview: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportPlanCard>;
   onPromote: (
     importKind: string,
@@ -3838,6 +3895,8 @@ function ImportWizard({
   const [customCategory, setCustomCategory] = useState("");
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
   const [pending, setPending] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [activeOperationId, setActiveOperationId] = useState("");
   const [status, setStatus] = useState<QuickAddStatus | null>(null);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [securityReview, setSecurityReview] = useState<{
@@ -3850,6 +3909,28 @@ function ImportWizard({
 
   function requiresSecurityReview(status: string) {
     return status === "review" || status === "warn";
+  }
+
+  function applyBackendProgress(event: SourceImportProgressEvent) {
+    const ranges: Record<string, { start: number; end: number; step: number }> = {
+      inspect: { start: 10, end: 20, step: 1 },
+      git: { start: 24, end: 38, step: 2 },
+      zip: { start: 40, end: 54, step: 2 },
+      write: { start: 56, end: 68, step: 2 },
+      security: { start: 70, end: 78, step: 3 }
+    };
+    const range = ranges[event.stage] ?? { start: 22, end: 68, step: 2 };
+    const measured = event.total > 0 ? Math.min(1, Math.max(0, event.current / event.total)) : 0;
+    const percent = event.state === "completed"
+      ? range.end
+      : Math.round(range.start + (range.end - range.start) * measured);
+    setProgress(current => ({
+      detail: event.message || current?.detail || t("qa.statusJoining"),
+      indeterminate: event.total <= 0 && event.state !== "completed",
+      percent: Math.max(current?.percent ?? 0, percent),
+      step: Math.max(current?.step ?? 1, range.step),
+      total: 5
+    }));
   }
 
   async function promoteAndFinalize(
@@ -3952,7 +4033,6 @@ function ImportWizard({
     setSecurityReview(null);
     setProgress({ detail: t("qa.statusChecking"), percent: 8, step: 1, total: 5 });
     setStatus({ tone: "info", title: t("qa.statusChecking"), body: t("qa.statusCheckingBody") });
-    let stageProgressTimer: number | undefined;
     try {
       const plan = await onPreview(importKind, value, { quiet: true });
       if (!plan.safeToContinue) {
@@ -3965,24 +4045,21 @@ function ImportWizard({
         showUiToast(t("qa.toastBlocked"), "warn");
         return;
       }
-      setProgress({ detail: t("qa.statusJoining"), percent: 28, step: 2, total: 5 });
+      setProgress({ detail: t("qa.statusJoining"), percent: 20, step: 2, total: 5 });
       setStatus({ tone: "info", title: t("qa.statusJoining"), body: t("qa.statusJoiningBody") });
-      stageProgressTimer = window.setInterval(() => {
-        setProgress(current => {
-          if (!current || current.step !== 2 || current.percent >= 64) return current;
-          const remaining = 64 - current.percent;
-          return {
-            ...current,
-            percent: Math.min(64, current.percent + Math.max(1, Math.round(remaining * 0.08)))
-          };
-        });
-      }, 420);
-      const execution = await onStage(plan.importKind, plan.input, { quiet: true });
-      if (stageProgressTimer !== undefined) {
-        window.clearInterval(stageProgressTimer);
-        stageProgressTimer = undefined;
-      }
-      setProgress({ detail: t("qa.statusJoining"), percent: 68, step: 2, total: 5 });
+      const operationId = createSourceImportOperationId();
+      setActiveOperationId(operationId);
+      const execution = await onStage(plan.importKind, plan.input, {
+        quiet: true,
+        operationId,
+        onProgress: applyBackendProgress
+      });
+      setProgress(current => ({
+        detail: t("qa.statusJoining"),
+        percent: Math.max(current?.percent ?? 0, 68),
+        step: Math.max(current?.step ?? 2, 2),
+        total: 5
+      }));
       if (execution.status !== "staged" && execution.status !== "warn") {
         const detail = execution.blockingChecks
           .filter(check => check.trim())
@@ -4013,13 +4090,32 @@ function ImportWizard({
       }
       await promoteAndFinalize(plan, execution, false);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = messageFromError(error);
+      const wasCancelled = /cancel|取消|취소/i.test(message);
       setProgress(null);
-      setStatus({ tone: "error", title: t("qa.statusFailed"), body: message });
-      showUiToast(t("qa.toastFailed"), "error");
+      setStatus({
+        tone: wasCancelled ? "info" : "error",
+        title: wasCancelled ? t("qa.cancelled") : t("qa.statusFailed"),
+        body: message
+      });
+      showUiToast(wasCancelled ? t("qa.cancelled") : t("qa.toastFailed"), wasCancelled ? "info" : "error");
     } finally {
-      if (stageProgressTimer !== undefined) window.clearInterval(stageProgressTimer);
+      setActiveOperationId("");
+      setCancelling(false);
       setPending(false);
+    }
+  }
+
+  async function cancelImport() {
+    if (!activeOperationId || cancelling) return;
+    setCancelling(true);
+    setStatus({ tone: "info", title: t("qa.cancelling"), body: t("qa.cancellingBody") });
+    try {
+      const accepted = await onCancel(activeOperationId);
+      if (!accepted) showUiToast(t("qa.cancelNoTask"), "info");
+    } catch (error) {
+      setCancelling(false);
+      showUiToast(messageFromError(error), "error");
     }
   }
 
@@ -4244,6 +4340,11 @@ function ImportWizard({
       )}
 
       <div className="import-actions">
+        {activeOperationId && (
+          <button className="secondary-action import-cancel-action" disabled={cancelling} onClick={() => void cancelImport()} type="button">
+            <Icon name="alert" /> {cancelling ? t("qa.cancelling") : t("qa.cancelImport")}
+          </button>
+        )}
         <button className="primary-action large" disabled={isBusy} onClick={() => void quickAdd()} type="button">
           <Icon name="add" /> {isBusy ? t("qa.submitting") : t("qa.submit")}
         </button>
@@ -4254,16 +4355,16 @@ function ImportWizard({
           aria-label={`${progress.detail} ${progress.percent}%`}
           aria-valuemax={100}
           aria-valuemin={0}
-          aria-valuenow={progress.percent}
-          className={`import-progress${pending ? " is-active" : ""}`}
+          aria-valuenow={progress.indeterminate ? undefined : progress.percent}
+          className={`import-progress${pending ? " is-active" : ""}${progress.indeterminate ? " is-indeterminate" : ""}`}
           role="progressbar"
         >
           <div className="import-progress-copy">
             <strong>{progress.detail}</strong>
-            <span>{progress.step} / {progress.total} · {progress.percent}%</span>
+            <span>{progress.step} / {progress.total}{progress.indeterminate ? ` · ${t("qa.measuring")}` : ` · ${progress.percent}%`}</span>
           </div>
           <div className="import-progress-track">
-            <span style={{ width: `${progress.percent}%` }} />
+            <span style={{ width: progress.indeterminate ? "28%" : `${progress.percent}%` }} />
           </div>
         </div>
       )}
@@ -4496,11 +4597,13 @@ function Agents({
   disabled,
   onRefreshAgents,
   onToggle,
+  runtimeAvailable,
   snapshot
 }: {
   disabled: boolean;
   onRefreshAgents: () => void;
   onToggle: (command: string, id: string, enabled: boolean) => Promise<void>;
+  runtimeAvailable: boolean;
   snapshot: LegacySnapshot | null;
 }) {
   const adapters = snapshot?.agentAdapters ?? [];
@@ -4536,6 +4639,10 @@ function Agents({
           </div>
         </header>
       </section>
+
+      <Suspense fallback={<DeferredSurface label={t("pluginDoctor.scanning")} />}>
+        <CodexPluginDoctorPanel runtimeAvailable={runtimeAvailable} />
+      </Suspense>
 
       <div className="adapter-grid">
         {adapters.map(adapter => {
@@ -5214,6 +5321,7 @@ function isNavKey(value: string | null): value is NavKey {
     value === "presets" ||
     value === "sources" ||
     value === "agents" ||
+    value === "connections" ||
     value === "snapshots" ||
     value === "release" ||
     value === "settings"
@@ -5227,6 +5335,12 @@ function showUiToast(message: string, tone: ToastTone = "info") {
 
 function messageFromError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function createSourceImportOperationId() {
+  const random = globalThis.crypto?.randomUUID?.().replace(/[^a-zA-Z0-9_-]/g, "")
+    ?? Math.random().toString(36).slice(2);
+  return `source-import-${Date.now()}-${random}`.slice(0, 92);
 }
 
 function friendlyErrorMessage(message: string) {

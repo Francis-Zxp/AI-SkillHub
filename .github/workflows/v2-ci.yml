@@ -6,7 +6,7 @@ name: AI SkillHub CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "codex/v3.1-*"]
     paths:
       - "app-next/**"
       - ".github/workflows/v2-ci.yml"
@@ -44,8 +44,20 @@ jobs:
       - name: cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml --tests
 
+      - name: cargo fmt
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: MCP read-only integration contract
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test mcp_center_read_only
+
+      - name: Codex doctor read-only integration contract
+        run: cargo test --manifest-path src-tauri/Cargo.toml --test codex_plugin_doctor_read_only
+
+      - name: Real Imbad0202 codeload recipient gate
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib tests::github_codeload_imports_real_academic_research_skills_without_following_symlinks -- --ignored --exact
 
   frontend:
     name: tsc + vite build (React frontend)
@@ -75,6 +87,12 @@ jobs:
 
       - name: TypeScript type-check
         run: pnpm exec tsc --noEmit -p .
+
+      - name: Frontend behavior contracts
+        run: |
+          pnpm test:source-governance-ui
+          pnpm test:ui-v3.0.7
+          pnpm test:v3.1-foundation
 
       - name: Vite production build
         run: pnpm exec vite build

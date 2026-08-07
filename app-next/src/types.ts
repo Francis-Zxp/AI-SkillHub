@@ -5,6 +5,7 @@ export type NavKey =
   | "presets"
   | "sources"
   | "agents"
+  | "connections"
   | "snapshots"
   | "release"
   | "settings";

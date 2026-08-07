@@ -2,6 +2,45 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.1.0 - Reliable imports and read-only connection diagnostics
+
+### Fixed
+
+- Reworked GitHub imports around real backend stages instead of a simulated
+  percentage. System Git, codeload ZIP inspection, security scanning, staging
+  writes and promotion now report their actual state and remain off the UI
+  thread.
+- Codeload archives now skip repository symlink aliases without following or
+  materializing them. Real Skill directories continue through bounded path,
+  file-count, size and per-file security checks.
+- Disabled anonymous per-file GitHub API fallback before it can exhaust the
+  60-request public-IP quota. Network and rate-limit failures now explain the
+  useful recovery path without exposing raw stacks.
+- Cancellation now terminates the owned Windows process tree, removes partial
+  staging and leaves formal sources untouched. A deterministic gate verifies
+  prompt return rather than only checking the cancellation flag.
+- Embedded the production Common Controls v6 resource in the Rust library test
+  harness, so clean Windows runners can execute the complete backend suite.
+
+### Added
+
+- Added an MCP Connection Center that inventories existing Codex and Claude
+  Code configuration without starting servers or reading secret values.
+  Logical servers and host bindings are shown separately; live Tools,
+  Resources and Prompts remain explicitly “not probed”.
+- Added a zero-write Codex Plugin Doctor that classifies local evidence and
+  configuration faults without executing PowerShell, JavaScript, setup scripts
+  or the separate desktop repair utility.
+- Added a clean-Windows CI release gate with frontend behavior contracts, 115+
+  Rust tests, MCP/doctor read-only integration tests, deterministic cancellation
+  and a real `Imbad0202/academic-research-skills` codeload import.
+
+### Safety boundary
+
+- v3.1.0 does not edit MCP configuration, manage OAuth/tokens, start unknown MCP
+  servers or repair plugins. Those mutations require a later signed, reversible
+  design; the existing standalone Codex health tool remains untouched.
+
 ## 3.0.7 - Theme-safe editors, centered atlas, and immersive focus
 
 ### Fixed
