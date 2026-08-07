@@ -2,6 +2,24 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.1.1 - Formal desktop import ACL hotfix
+
+### Fixed
+
+- Grants the main window the minimum Tauri event permissions required to listen
+  and unlisten from real source-import progress events. v3.1.0 could otherwise
+  fail before download with `Command plugin:event|listen not allowed by ACL`.
+- Treats progress-event subscription as optional telemetry: if a future runtime
+  or policy blocks it, source import continues without live progress instead of
+  aborting the actual staging command.
+- Adds a source contract that rejects broad event-default or frontend-emission
+  permissions and requires the exact listen/unlisten pair used by the UI.
+
+### Security boundary
+
+- The frontend is not granted event emit or emit-to access. GitHub import,
+  archive scanning, staging containment and promotion rules are unchanged.
+
 ## 3.1.0 - Reliable imports and read-only connection diagnostics
 
 ### Fixed

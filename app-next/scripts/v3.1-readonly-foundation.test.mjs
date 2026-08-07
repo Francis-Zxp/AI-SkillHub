@@ -6,6 +6,7 @@ const files = {
   app: await readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
   mcpUi: await readFile(new URL("../src/McpCenter.tsx", import.meta.url), "utf8"),
   doctorUi: await readFile(new URL("../src/CodexPluginDoctorPanel.tsx", import.meta.url), "utf8"),
+  capabilities: await readFile(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"),
   backend: await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8"),
   mcp: await readFile(new URL("../src-tauri/src/mcp_center.rs", import.meta.url), "utf8"),
   doctor: await readFile(new URL("../src-tauri/src/codex_plugin_doctor.rs", import.meta.url), "utf8")
@@ -18,6 +19,16 @@ test("GitHub import is driven by backend stages and supports cancellation", () =
   assert.match(files.app, /cancel_source_import/);
   assert.doesNotMatch(files.app, /current\.percent >= 64/);
   assert.doesNotMatch(files.app, /setInterval\(\(\) => \{\s*setProgress/);
+});
+
+test("formal desktop ACL grants only the event commands required by import progress", () => {
+  const capabilities = JSON.parse(files.capabilities);
+  assert.ok(capabilities.permissions.includes("core:event:allow-listen"));
+  assert.ok(capabilities.permissions.includes("core:event:allow-unlisten"));
+  assert.ok(!capabilities.permissions.includes("core:event:default"));
+  assert.ok(!capabilities.permissions.includes("core:event:allow-emit"));
+  assert.match(files.app, /catch \(error\) \{[\s\S]*continuing without live progress/);
+  assert.match(files.app, /unlisten\?\.\(\)/);
 });
 
 test("archive symlinks are skipped without following or materializing", () => {

@@ -1027,10 +1027,15 @@ export function App() {
       return execution;
     }
     const operationId = options.operationId ?? createSourceImportOperationId();
-    const { listen } = await import("@tauri-apps/api/event");
-    const unlisten = await listen<SourceImportProgressEvent>("source-import-progress", event => {
-      if (event.payload.operationId === operationId) options.onProgress?.(event.payload);
-    });
+    let unlisten: (() => void) | null = null;
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen<SourceImportProgressEvent>("source-import-progress", event => {
+        if (event.payload.operationId === operationId) options.onProgress?.(event.payload);
+      });
+    } catch (error) {
+      console.warn("Source import progress events are unavailable; continuing without live progress.", error);
+    }
     try {
       const result = await invoke<SourceImportExecutionCard>("stage_source_import_candidate", {
         operationId,
@@ -1040,7 +1045,7 @@ export function App() {
       if (!options.quiet) toastMessage(result.status === "staged" ? t("toast.staged") : t("toast.stageDone"), "info");
       return result;
     } finally {
-      unlisten();
+      unlisten?.();
     }
   }
 
