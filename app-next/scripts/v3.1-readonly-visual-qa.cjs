@@ -22,12 +22,18 @@ async function auditSurface(page, { theme, view, selector, viewport, name }) {
       const style = getComputedStyle(node);
       return style.visibility === "hidden" || Number(style.opacity) < 0.35;
     });
+    const topbar = document.querySelector(".topbar");
+    const topbarActions = document.querySelector(".topbar-actions");
+    const topbarRect = topbar?.getBoundingClientRect();
+    const actionRect = topbarActions?.getBoundingClientRect();
     return {
       documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       surfaceOverflow: surface.scrollWidth - surface.clientWidth,
       buttonCount: buttons.length,
       unnamedButtons: buttons.filter((button) => !(button.textContent || button.getAttribute("aria-label") || button.title).trim()).length,
       transparentText: transparentText.length,
+      topbarRightOverflow: actionRect ? Math.max(0, actionRect.right - innerWidth) : 0,
+      topbarBottomOverflow: actionRect && topbarRect ? Math.max(0, actionRect.bottom - topbarRect.bottom) : 0,
       themeApplied: document.querySelector(".shell")?.classList.contains(`theme-${new URLSearchParams(location.search).get("theme")}`) ?? false,
     };
   }, selector);
@@ -37,6 +43,8 @@ async function auditSurface(page, { theme, view, selector, viewport, name }) {
   assert.ok(audit.surfaceOverflow <= 1, `${name}: surface overflow ${audit.surfaceOverflow}`);
   assert.equal(audit.unnamedButtons, 0, `${name}: unnamed buttons`);
   assert.equal(audit.transparentText, 0, `${name}: unexpectedly transparent text`);
+  assert.ok(audit.topbarRightOverflow <= 1, `${name}: topbar right overflow ${audit.topbarRightOverflow}`);
+  assert.ok(audit.topbarBottomOverflow <= 1, `${name}: topbar bottom overflow ${audit.topbarBottomOverflow}`);
   await page.screenshot({ path: path.join(reportDir, `${name}.png`), fullPage: true });
   return { name, ...audit };
 }
@@ -71,6 +79,10 @@ async function auditSurface(page, { theme, view, selector, viewport, name }) {
   audits.push(await auditSurface(page, {
     theme: "nocturne", view: "agents", selector: ".plugin-doctor-panel",
     viewport: { width: 1280, height: 860 }, name: "doctor-nocturne",
+  }));
+  audits.push(await auditSurface(page, {
+    theme: "nocturne", view: "dashboard", selector: ".dashboard-view",
+    viewport: { width: 860, height: 720 }, name: "dashboard-nocturne-high-dpi-window",
   }));
 
   const actionableConsoleErrors = consoleErrors.filter((message) => !message.includes("Failed to load resource"));

@@ -3,7 +3,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$PackagePath,
   [string]$SqliteExe = '',
-  [string]$RepositoryUrl = 'https://github.com/BehiSecc/VibeSec-Skill.git',
+  [string]$RepositoryUrl = 'https://github.com/Imbad0202/academic-research-skills.git',
   [switch]$KeepSandbox
 )
 
@@ -41,6 +41,13 @@ function Remove-Sandbox([string]$Path) {
 
 if ($RepositoryUrl -notmatch '^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?$') {
   throw "Only a canonical HTTPS GitHub repository URL is allowed: $RepositoryUrl"
+}
+$RepositoryName = [regex]::Match(
+  $RepositoryUrl,
+  '/([A-Za-z0-9_.-]+?)(?:\.git)?$'
+).Groups[1].Value
+if ([string]::IsNullOrWhiteSpace($RepositoryName)) {
+  throw "Could not derive a bounded repository name: $RepositoryUrl"
 }
 
 $PackagePath = (Resolve-Path -LiteralPath $PackagePath).Path
@@ -89,17 +96,20 @@ try {
   & $WindowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $RuntimeScript -NoPull -ReportOnly | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'First-run report-only initialization failed.' }
 
-  git clone --depth 1 $RepositoryUrl (Join-Path $SourcesRoot 'VibeSec-Skill') | Out-Null
+  # This packaging/index test needs a complete checkout. Keep the long-path
+  # override process-local: the real app can fall back to its selective codeload
+  # importer, while this script must not mutate a recipient's global Git config.
+  git -c core.longpaths=true clone --depth 1 $RepositoryUrl (Join-Path $SourcesRoot $RepositoryName) | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Public Skill repository clone failed.' }
 
   $ConfigPath = Join-Path $DataRoot 'skillhub.config.json'
   $Config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
   $Config.repositories = @(
     [pscustomobject]@{
-      name = 'VibeSec-Skill'
+      name = $RepositoryName
       url = $RepositoryUrl
       type = 'skill'
-      category = 'security-audit'
+      category = 'general'
       enabled = $true
     }
   )
@@ -134,11 +144,13 @@ try {
     throw 'sqlite3 is required to verify the fresh-recipient index.'
   }
 
-  $SourceCount = [int](& $SqliteExe $DatabasePath "SELECT COUNT(*) FROM sources WHERE lower(name)='vibesec-skill';")
-  $SkillCount = [int](& $SqliteExe $DatabasePath "SELECT COUNT(*) FROM skills WHERE lower(name)='vibesec-skill' OR lower(folder_name)='vibesec-skill';")
+  $RepositoryNameSql = $RepositoryName.Replace("'", "''")
+  $SourceCount = [int](& $SqliteExe $DatabasePath "SELECT COUNT(*) FROM sources WHERE lower(name)=lower('$RepositoryNameSql');")
   $OrphanRouterCount = [int](& $SqliteExe $DatabasePath 'SELECT COUNT(*) FROM skills WHERE source_id IS NULL AND COALESCE(is_router_hub, 0)=1;')
-  $SourceId = [string](& $SqliteExe $DatabasePath "SELECT id FROM sources WHERE lower(name)='vibesec-skill' LIMIT 1;")
+  $SourceId = [string](& $SqliteExe $DatabasePath "SELECT id FROM sources WHERE lower(name)=lower('$RepositoryNameSql') LIMIT 1;")
   if ([string]::IsNullOrWhiteSpace($SourceId)) { throw 'The indexed source id is missing.' }
+  $SourceIdSql = $SourceId.Replace("'", "''")
+  $SkillCount = [int](& $SqliteExe $DatabasePath "SELECT COUNT(*) FROM skills WHERE source_id='$SourceIdSql';")
   & $SqliteExe $DatabasePath "INSERT OR REPLACE INTO source_overrides (source_id, display_name, source_type, category_id, note, enabled, rating, updated_at) VALUES ('$SourceId','','','','',NULL,5,'recipient-upgrade-test');"
   if ($LASTEXITCODE -ne 0) { throw 'Could not seed a persistent parent rating.' }
 
@@ -150,7 +162,7 @@ try {
   Stop-SandboxProcesses $UpgradeRoot
   Start-Sleep -Milliseconds 700
   $PreservedRating = [int](& $SqliteExe $DatabasePath "SELECT rating FROM source_overrides WHERE source_id='$SourceId';")
-  $PreservedSourceCount = [int](& $SqliteExe $DatabasePath "SELECT COUNT(*) FROM sources WHERE lower(name)='vibesec-skill';")
+  $PreservedSourceCount = [int](& $SqliteExe $DatabasePath "SELECT COUNT(*) FROM sources WHERE lower(name)=lower('$RepositoryNameSql');")
 
   $ConfigCreated = Test-Path -LiteralPath (Join-Path $DataRoot 'skillhub.config.json') -PathType Leaf
   $SyncReportCreated = Test-Path -LiteralPath (Join-Path $DataRoot 'reports\last-sync.md') -PathType Leaf
@@ -158,6 +170,7 @@ try {
 
   $Result = [pscustomobject]@{
     package = Split-Path -Leaf $PackagePath
+    repository = $RepositoryUrl
     migrationAppStarted = $MigrationAppStarted
     legacyDataMigrated = $LegacyMigrated
     migrationManifestCreated = $MigrationManifestCreated

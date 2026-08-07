@@ -21,6 +21,9 @@ All notable changes to AI SkillHub are documented here.
   prompt return rather than only checking the cancellation flag.
 - Embedded the production Common Controls v6 resource in the Rust library test
   harness, so clean Windows runners can execute the complete backend suite.
+- Kept atlas topbar actions inside the glass surface at 125–150% Windows DPI;
+  the search field now yields width instead of pushing theme/sync controls out
+  of a default-sized desktop window.
 
 ### Added
 
