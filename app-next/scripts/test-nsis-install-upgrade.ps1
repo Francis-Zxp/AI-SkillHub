@@ -3,7 +3,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$InstallerPath,
   [string]$PreviousInstallerPath = '',
-  [string]$ExpectedVersion = '3.1.3',
+  [string]$ExpectedVersion = '3.1.4',
   [switch]$KeepSandbox
 )
 

@@ -6,13 +6,33 @@ const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 const universe = readFileSync(new URL("../src/SkillUniverse.tsx", import.meta.url), "utf8");
 const translations = readFileSync(new URL("../src/i18n.ts", import.meta.url), "utf8");
+const tauriConfig = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 
-test("updater retries transient release propagation failures without restarting", () => {
+test("updater uses redundant signed channels, bounded retries, and sanitized diagnostics", () => {
+  const endpoints = tauriConfig.plugins.updater.endpoints;
+  assert.equal(endpoints.length, 3);
+  assert.equal(new Set(endpoints.map(endpoint => new URL(endpoint.replace("{{current_version}}", "3.1.4")).hostname)).size, 3);
+  assert.ok(endpoints.every(endpoint => endpoint.includes("installed={{current_version}}")));
+  assert.match(endpoints[0], /github\.com\/Francis-Zxp\/AI-SkillHub\/releases\/latest\/download\/latest\.json/);
+  assert.match(endpoints[1], /raw\.githubusercontent\.com\/Francis-Zxp\/AI-SkillHub\/main\/updates\/latest\.json/);
+  assert.match(endpoints[2], /cdn\.jsdelivr\.net\/gh\/Francis-Zxp\/AI-SkillHub@main\/updates\/latest\.json/);
   assert.match(app, /"retrying"/);
-  assert.match(app, /const retryDelays = silent \? \[0, 1_600\] : \[0, 1_100, 3_200\]/);
-  assert.match(app, /retryNumber === 0 \? 45_000 : 120_000/);
+  assert.match(app, /const retryDelays = silent \? \[0\] : \[0, 1_800\]/);
+  assert.match(app, /\[30_000, 120_000, 480_000\]\[retryNumber\]/);
+  assert.match(app, /updateCheckInFlightRef/);
+  assert.match(app, /updateInstallInFlightRef/);
+  assert.match(app, /addEventListener\("online", checkAfterReconnect\)/);
+  assert.match(app, /addEventListener\("visibilitychange", checkAfterResume\)/);
+  assert.match(app, /15 \* 60_000/);
+  assert.match(app, /timeout: 600_000/);
+  assert.match(app, /classifyUpdateFailure/);
+  assert.match(app, /UPDATE_DIAGNOSTIC_STORAGE_KEY/);
+  assert.match(app, /Raw transport[\s\S]*never reach UI\/storage/);
+  assert.match(app, /const PROJECT_RELEASES_URL = "https:\/\/github\.com\/Francis-Zxp\/AI-SkillHub\/releases\/latest"/);
   assert.match(translations, /"update\.retryToast"/);
   assert.match(translations, /"update\.status\.retrying"/);
+  assert.match(translations, /"update\.failure\.tls"/);
+  assert.match(translations, /"update\.openReleases"/);
 });
 
 test("skill metadata editor remains a viewport-level readable glass drawer", () => {

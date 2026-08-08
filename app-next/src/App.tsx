@@ -208,11 +208,36 @@ type AppUpdateState = {
   phase: AppUpdatePhase;
   progress: number;
   version: string;
+  failure: UpdateFailureKind | "";
+  failureStage: UpdateFailureStage | "";
+  attempts: number;
+  checkedAt: string;
+};
+type UpdateFailureKind =
+  | "network"
+  | "timeout"
+  | "tls"
+  | "proxy"
+  | "manifest"
+  | "signature"
+  | "permission"
+  | "download"
+  | "install"
+  | "unknown";
+type UpdateFailureStage = "check" | "download" | "install";
+type StoredUpdateDiagnostic = {
+  kind: UpdateFailureKind;
+  stage: UpdateFailureStage;
+  checkedAt: string;
+  appVersion: string;
 };
 
 const TOAST_EVENT = "ai-skillhub-toast";
 const APP_VERSION = __APP_VERSION__;
 const PROJECT_HOME_URL = "https://github.com/Francis-Zxp/AI-SkillHub";
+const PROJECT_RELEASES_URL = "https://github.com/Francis-Zxp/AI-SkillHub/releases/latest";
+const UPDATE_DIAGNOSTIC_STORAGE_KEY = "ai-skillhub-update-diagnostic-v1";
+const UPDATE_CHECK_HEADERS = { "Cache-Control": "no-cache", Pragma: "no-cache" } as const;
 const UI_TEXT_SCALE_STORAGE_KEY = "ai-skillhub-ui-text-scale";
 const UI_ICON_SCALE_STORAGE_KEY = "ai-skillhub-ui-icon-scale";
 const UI_TEXT_SCALES: Record<UiScalePreset, number> = {
@@ -314,9 +339,12 @@ export function App() {
   const [operation, setOperation] = useState<OperationStatus | null>(null);
   const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
   const [globalSearch, setGlobalSearch] = useState("");
-  const [appUpdate, setAppUpdate] = useState<AppUpdateState>({ phase: "idle", progress: 0, version: "" });
+  const [appUpdate, setAppUpdate] = useState<AppUpdateState>(() => initialAppUpdateState());
   const [dashboardImmersive, setDashboardImmersive] = useState(false);
   const updateRef = useRef<Update | null>(null);
+  const updateCheckInFlightRef = useRef<Promise<void> | null>(null);
+  const updateInstallInFlightRef = useRef<Promise<void> | null>(null);
+  const updateCheckStartedAtRef = useRef(0);
   const updateRetryTimerRef = useRef<number | null>(null);
   const backgroundUpdateRetriesRef = useRef(0);
   const runtimeAvailable = hasTauriRuntime();
@@ -374,9 +402,37 @@ export function App() {
     }
   }
 
+  async function openOfficialReleases() {
+    try {
+      if (runtimeAvailable) {
+        await invoke("plugin:opener|open_url", { url: PROJECT_RELEASES_URL, with: null });
+      } else {
+        window.open(PROJECT_RELEASES_URL, "_blank", "noopener,noreferrer");
+      }
+    } catch {
+      toastMessage(t("project.openFailed"), "error");
+    }
+  }
+
   async function checkForAppUpdate(silent = false) {
+    if (updateCheckInFlightRef.current) {
+      if (!silent) toastMessage(t("update.checkInProgress"), "info");
+      await updateCheckInFlightRef.current;
+      return;
+    }
+    const task = runAppUpdateCheck(silent);
+    updateCheckInFlightRef.current = task;
+    try {
+      await task;
+    } finally {
+      if (updateCheckInFlightRef.current === task) updateCheckInFlightRef.current = null;
+    }
+  }
+
+  async function runAppUpdateCheck(silent: boolean) {
+    updateCheckStartedAtRef.current = Date.now();
     if (!runtimeAvailable) {
-      setAppUpdate({ phase: "idle", progress: 0, version: "" });
+      setAppUpdate(initialAppUpdateState());
       if (!silent) toastMessage(t("update.desktopOnly"), "info");
       return;
     }
@@ -386,45 +442,87 @@ export function App() {
     }
     if (!silent) backgroundUpdateRetriesRef.current = 0;
 
-    const retryDelays = silent ? [0, 1_600] : [0, 1_100, 3_200];
+    const retryDelays = silent ? [0] : [0, 1_800];
+    let lastFailure: UpdateFailureKind = "unknown";
     for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
       const delay = retryDelays[attempt];
       if (delay > 0) {
-        setAppUpdate({ phase: "retrying", progress: attempt, version: "" });
+        setAppUpdate(current => ({
+          ...current,
+          phase: "retrying",
+          progress: attempt,
+          failure: "",
+          failureStage: "",
+          attempts: attempt + 1
+        }));
         await waitFor(delay);
       } else {
-        setAppUpdate(current => ({ ...current, phase: "checking", progress: 0 }));
+        setAppUpdate(current => ({
+          ...current,
+          phase: "checking",
+          progress: 0,
+          failure: "",
+          failureStage: "",
+          attempts: attempt + 1
+        }));
       }
 
       try {
-        const nextUpdate = await check({ timeout: 15_000 });
+        const nextUpdate = await check({ headers: UPDATE_CHECK_HEADERS, timeout: 18_000 });
         backgroundUpdateRetriesRef.current = 0;
+        clearStoredUpdateDiagnostic();
         if (!nextUpdate) {
           if (updateRef.current) {
             await updateRef.current.close().catch(() => undefined);
             updateRef.current = null;
           }
-          setAppUpdate({ phase: "latest", progress: 100, version: APP_VERSION });
+          setAppUpdate({
+            phase: "latest",
+            progress: 100,
+            version: APP_VERSION,
+            failure: "",
+            failureStage: "",
+            attempts: attempt + 1,
+            checkedAt: new Date().toISOString()
+          });
           if (!silent) toastMessage(t("update.latestToast"), "ok");
           return;
         }
         if (updateRef.current) await updateRef.current.close().catch(() => undefined);
         updateRef.current = nextUpdate;
-        setAppUpdate({ phase: "available", progress: 0, version: nextUpdate.version });
+        setAppUpdate({
+          phase: "available",
+          progress: 0,
+          version: nextUpdate.version,
+          failure: "",
+          failureStage: "",
+          attempts: attempt + 1,
+          checkedAt: new Date().toISOString()
+        });
         toastMessage(t("update.availableToast", { version: nextUpdate.version }), "info");
         return;
-      } catch {
-        // A newly published release can take a short time to reach every
-        // GitHub endpoint. The bounded retry state below is the user-facing
-        // diagnostic; do not leak raw transport details into the UI/console.
+      } catch (error) {
+        lastFailure = classifyUpdateFailure(error, "check");
+        // Store only an allowlisted category and timestamp. Raw transport
+        // errors can contain proxy URLs or local details and never reach UI/storage.
       }
     }
 
-    setAppUpdate({ phase: "error", progress: 0, version: "" });
+    const checkedAt = new Date().toISOString();
+    persistUpdateDiagnostic({ kind: lastFailure, stage: "check", checkedAt, appVersion: APP_VERSION });
+    setAppUpdate({
+      phase: "error",
+      progress: 0,
+      version: "",
+      failure: lastFailure,
+      failureStage: "check",
+      attempts: retryDelays.length,
+      checkedAt
+    });
     const retryNumber = backgroundUpdateRetriesRef.current;
-    if (retryNumber < 2) {
+    if (retryNumber < 3) {
       backgroundUpdateRetriesRef.current += 1;
-      const retryAfter = retryNumber === 0 ? 45_000 : 120_000;
+      const retryAfter = [30_000, 120_000, 480_000][retryNumber];
       updateRetryTimerRef.current = window.setTimeout(() => {
         updateRetryTimerRef.current = null;
         void checkForAppUpdate(true);
@@ -439,6 +537,20 @@ export function App() {
   }
 
   async function installAppUpdate() {
+    if (updateInstallInFlightRef.current) {
+      await updateInstallInFlightRef.current;
+      return;
+    }
+    const task = runAppUpdateInstall();
+    updateInstallInFlightRef.current = task;
+    try {
+      await task;
+    } finally {
+      if (updateInstallInFlightRef.current === task) updateInstallInFlightRef.current = null;
+    }
+  }
+
+  async function runAppUpdateInstall() {
     const nextUpdate = updateRef.current;
     if (!nextUpdate) {
       await checkForAppUpdate(false);
@@ -446,6 +558,7 @@ export function App() {
     }
     let downloaded = 0;
     let total = 0;
+    let installStage: UpdateFailureStage = "download";
     setAppUpdate(current => ({ ...current, phase: "downloading", progress: 1 }));
     try {
       await nextUpdate.downloadAndInstall(event => {
@@ -457,13 +570,25 @@ export function App() {
           const progress = total > 0 ? Math.min(94, Math.max(2, Math.round((downloaded / total) * 94))) : 36;
           setAppUpdate(current => ({ ...current, phase: "downloading", progress }));
         } else {
+          installStage = "install";
           setAppUpdate(current => ({ ...current, phase: "installing", progress: 98 }));
         }
-      }, { timeout: 120_000 });
+      }, { headers: UPDATE_CHECK_HEADERS, timeout: 600_000 });
       setAppUpdate(current => ({ ...current, phase: "installing", progress: 100 }));
       await relaunch();
-    } catch {
-      setAppUpdate(current => ({ ...current, phase: "error", progress: 0 }));
+    } catch (error) {
+      const stage = installStage;
+      const failure = classifyUpdateFailure(error, stage);
+      const checkedAt = new Date().toISOString();
+      persistUpdateDiagnostic({ kind: failure, stage, checkedAt, appVersion: APP_VERSION });
+      setAppUpdate(current => ({
+        ...current,
+        phase: "error",
+        progress: 0,
+        failure,
+        failureStage: stage,
+        checkedAt
+      }));
       toastMessage(t("update.errorToast"), "error");
     }
   }
@@ -1177,6 +1302,26 @@ export function App() {
         window.clearTimeout(updateRetryTimerRef.current);
         updateRetryTimerRef.current = null;
       }
+      if (updateRef.current) {
+        void updateRef.current.close().catch(() => undefined);
+        updateRef.current = null;
+      }
+    };
+  }, [runtimeAvailable]);
+
+  useEffect(() => {
+    if (!runtimeAvailable) return;
+    const checkAfterReconnect = () => void checkForAppUpdate(true);
+    const checkAfterResume = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - updateCheckStartedAtRef.current < 15 * 60_000) return;
+      void checkForAppUpdate(true);
+    };
+    window.addEventListener("online", checkAfterReconnect);
+    document.addEventListener("visibilitychange", checkAfterResume);
+    return () => {
+      window.removeEventListener("online", checkAfterReconnect);
+      document.removeEventListener("visibilitychange", checkAfterResume);
     };
   }, [runtimeAvailable]);
 
@@ -1526,6 +1671,7 @@ export function App() {
               onChangeTheme={changeTheme}
               onCheckUpdate={() => void checkForAppUpdate(false)}
               onInstallUpdate={() => void installAppUpdate()}
+              onOpenOfficialReleases={() => void openOfficialReleases()}
               onOpenAdvanced={() => setActive("release")}
               snapshot={snapshot}
             />
@@ -4986,6 +5132,7 @@ function Settings({
   onChangeTheme,
   onCheckUpdate,
   onInstallUpdate,
+  onOpenOfficialReleases,
   onOpenAdvanced,
   snapshot
 }: {
@@ -5001,6 +5148,7 @@ function Settings({
   onChangeTheme: (theme: ThemeName) => void;
   onCheckUpdate: () => void;
   onInstallUpdate: () => void;
+  onOpenOfficialReleases: () => void;
   onOpenAdvanced: () => void;
   snapshot: LegacySnapshot | null;
 }) {
@@ -5016,6 +5164,9 @@ function Settings({
     progress: appUpdate.progress,
     version: appUpdate.version || APP_VERSION
   });
+  const updateFailureDetail = appUpdate.failure
+    ? t(`update.failure.${appUpdate.failure}`, { attempts: appUpdate.attempts })
+    : "";
 
   useEffect(() => {
     let cancelled = false;
@@ -5110,8 +5261,23 @@ function Settings({
                 <Icon name="download" /> {t("update.install", { version: appUpdate.version })}
               </button>
             )}
+            {(appUpdate.phase === "error" || appUpdate.phase === "available") && (
+              <button className="ghost-action" onClick={onOpenOfficialReleases} type="button">
+                <Icon name="github" /> {t("update.openReleases")}
+              </button>
+            )}
           </div>
         </div>
+        {appUpdate.phase === "error" && updateFailureDetail && (
+          <div className="update-diagnostic" role="status">
+            <Icon name="alert" />
+            <div>
+              <strong>{t(`update.stage.${appUpdate.failureStage || "check"}`)}</strong>
+              <span>{updateFailureDetail}</span>
+              <small>{t("update.manualFallback")}</small>
+            </div>
+          </div>
+        )}
       </section>
 
       {cleanupCandidates.length > 0 && (
@@ -5477,6 +5643,72 @@ function showUiToast(message: string, tone: ToastTone = "info") {
 
 function messageFromError(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function initialAppUpdateState(): AppUpdateState {
+  const diagnostic = readStoredUpdateDiagnostic();
+  return {
+    phase: "idle",
+    progress: 0,
+    version: "",
+    failure: diagnostic?.kind ?? "",
+    failureStage: diagnostic?.stage ?? "",
+    attempts: 0,
+    checkedAt: diagnostic?.checkedAt ?? ""
+  };
+}
+
+function classifyUpdateFailure(error: unknown, stage: UpdateFailureStage): UpdateFailureKind {
+  const message = messageFromError(error).toLocaleLowerCase("en-US");
+  if (/timed?\s*out|timeout|deadline/.test(message)) return "timeout";
+  if (/tls|ssl|certificate|cert\b|unexpected end of file/.test(message)) return "tls";
+  if (/proxy|407\b|tunnel/.test(message)) return "proxy";
+  if (/signature|minisign|public key|verification/.test(message)) return "signature";
+  if (/permission|access denied|eacces|eperm|privilege/.test(message)) return "permission";
+  if (/manifest|json|semver|invalid version|release metadata|status code 4\d\d/.test(message)) return "manifest";
+  if (/network|dns|connect|connection|request|socket|resolve|host|offline|failed to send/.test(message)) {
+    return "network";
+  }
+  if (stage === "download") return "download";
+  if (stage === "install") return "install";
+  return "unknown";
+}
+
+function readStoredUpdateDiagnostic(): StoredUpdateDiagnostic | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(UPDATE_DIAGNOSTIC_STORAGE_KEY);
+    if (!raw || raw.length > 1_024) return null;
+    const value = JSON.parse(raw) as Partial<StoredUpdateDiagnostic>;
+    const kinds: UpdateFailureKind[] = [
+      "network", "timeout", "tls", "proxy", "manifest", "signature", "permission", "download", "install", "unknown"
+    ];
+    const stages: UpdateFailureStage[] = ["check", "download", "install"];
+    if (!kinds.includes(value.kind as UpdateFailureKind) || !stages.includes(value.stage as UpdateFailureStage)) return null;
+    if (typeof value.checkedAt !== "string" || !Number.isFinite(Date.parse(value.checkedAt))) return null;
+    if (typeof value.appVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(value.appVersion)) return null;
+    return value as StoredUpdateDiagnostic;
+  } catch {
+    return null;
+  }
+}
+
+function persistUpdateDiagnostic(diagnostic: StoredUpdateDiagnostic) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(UPDATE_DIAGNOSTIC_STORAGE_KEY, JSON.stringify(diagnostic));
+  } catch {
+    // Diagnostics must never make a signed update check fail.
+  }
+}
+
+function clearStoredUpdateDiagnostic() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(UPDATE_DIAGNOSTIC_STORAGE_KEY);
+  } catch {
+    // Storage can be unavailable in hardened WebView profiles.
+  }
 }
 
 function createSourceImportOperationId() {

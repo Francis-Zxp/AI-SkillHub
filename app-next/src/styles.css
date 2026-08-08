@@ -4452,6 +4452,25 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   box-shadow: 0 0 14px var(--brand-glow);
   transition: width 180ms ease-out;
 }
+.update-diagnostic {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 11px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border));
+  border-radius: 14px;
+  color: var(--text-soft);
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface-soft));
+}
+.update-diagnostic > .ui-icon { width: 19px; height: 19px; color: var(--warning); }
+.update-diagnostic strong,
+.update-diagnostic span,
+.update-diagnostic small { display: block; }
+.update-diagnostic strong { color: var(--text); font-size: calc(12px * var(--ui-text-scale, 1)); }
+.update-diagnostic span { margin-top: 3px; font-size: calc(11px * var(--ui-text-scale, 1)); line-height: 1.48; }
+.update-diagnostic small { margin-top: 5px; color: var(--text-muted); font-size: calc(10.5px * var(--ui-text-scale, 1)); line-height: 1.4; }
 
 .theme-nocturne.shell {
   background:
