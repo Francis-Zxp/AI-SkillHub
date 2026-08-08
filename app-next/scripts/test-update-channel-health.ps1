@@ -34,7 +34,15 @@ $Results = foreach ($Channel in $Channels) {
     if ([int]$response.StatusCode -lt 200 -or [int]$response.StatusCode -ge 300) {
       throw "HTTP $($response.StatusCode)"
     }
-    $manifest = $response.Content | ConvertFrom-Json
+    $content = if ($response.Content -is [byte[]]) {
+      [System.Text.Encoding]::UTF8.GetString([byte[]]$response.Content)
+    } else {
+      [string]$response.Content
+    }
+    if ([string]::IsNullOrWhiteSpace($content) -or $content.Length -gt 256KB) {
+      throw "manifest payload size is invalid: $($content.Length) bytes"
+    }
+    $manifest = $content | ConvertFrom-Json
     if ([string]$manifest.version -ne $ExpectedVersion) {
       throw "manifest version $($manifest.version), expected $ExpectedVersion"
     }
