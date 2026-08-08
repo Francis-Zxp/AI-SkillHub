@@ -1,0 +1,11 @@
+{
+  "version": "3.1.4",
+  "notes": "AI SkillHub v3.1.4: redundant signed update channels, bounded retry and reconnect checks, safe failure diagnostics, longer installer downloads, and preserved local user data.",
+  "pub_date": "2026-08-08T15:10:13Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVhuR3dhMjE1eHRUVC80TUxYaUs2OSsyQnpNVjZYNmhhM1NaRTRxWWZxdE1NVkZSRExGRlpHWXRDaHRrcUswZlVTNXFJVHg0NFFaS0NYL1FnZURSU1E4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2MjAxNjg2CWZpbGU6QUkgU2tpbGxIdWJfMy4xLjRfeDY0LXNldHVwLmV4ZQpPaFJNcWxiTjMrc2l1OC85bnpSbWlSeWhmMTRZczlMZnBxZVVkaVQ4NURYSTBDVUpVUGpJSEZQcWl6UzlPbTlLS0ZJNHJPU3pMZytvVVdwRERCek1EQT09Cg==",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.1.4/AI-SkillHub-3.1.4-setup.exe"
+    }
+  }
+}
