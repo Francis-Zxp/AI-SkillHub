@@ -45,7 +45,11 @@ test("sync script consumes the exact pin manifest and skips network updates", ()
 });
 
 test("large source imports stay bounded, visible, and off the UI thread", () => {
-  assert.match(backend, /const SOURCE_IMPORT_MAX_FILES: usize = 6_000/);
+  assert.match(backend, /const SOURCE_IMPORT_MAX_FILES: usize = 20_000/);
+  assert.match(backend, /--filter=blob:none/);
+  assert.match(backend, /fn complete_sparse_skill_checkout/);
+  assert.match(backend, /fn stage_github_source_import_via_release_asset_with_control/);
+  assert.match(backend, /github-release-skill/);
   for (const command of [
     "preview_source_import_candidate",
     "stage_source_import_candidate",

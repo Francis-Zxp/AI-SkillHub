@@ -5,7 +5,9 @@ use std::path::Path;
 #[cfg(test)]
 use std::path::PathBuf;
 
-const DEFAULT_MAX_FILES: usize = 8_000;
+// Large, self-contained Skills can legitimately ship extensive SVG/icon/template
+// libraries. Keep this aligned with the import ceiling while retaining the byte cap.
+const DEFAULT_MAX_FILES: usize = 20_000;
 const DEFAULT_MAX_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_MAX_TEXT_FILE_BYTES: u64 = 2 * 1024 * 1024;
 

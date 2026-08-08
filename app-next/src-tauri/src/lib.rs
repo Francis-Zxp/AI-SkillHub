@@ -44,10 +44,10 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
 const SOURCE_POPULARITY_FRESH_TTL_NANOS: u128 = 6 * 60 * 60 * NANOS_PER_SECOND;
 const SOURCE_POPULARITY_DEFERRED_BACKOFF_NANOS: u128 = 15 * 60 * NANOS_PER_SECOND;
-// Keep source imports bounded, but allow legitimate multi-provider Skill repositories
-// such as Impeccable (about 1,850 selected files). The security scanner has its own
-// stricter content rules and an 8,000-file ceiling, so imports remain fail-closed.
-const SOURCE_IMPORT_MAX_FILES: usize = 6_000;
+// Keep source imports bounded, but allow self-contained production Skills with large
+// template/icon libraries. ppt-master v4.4.0 contains about 12,350 files but only
+// ~67 MB in its installable Skill subtree. Byte and per-file ceilings remain enforced.
+const SOURCE_IMPORT_MAX_FILES: usize = 20_000;
 const GITHUB_FALLBACK_MAX_FILES: usize = SOURCE_IMPORT_MAX_FILES;
 const GITHUB_FALLBACK_MAX_BYTES: u64 = 80 * 1024 * 1024;
 const GITHUB_FALLBACK_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -6656,23 +6656,37 @@ fn stage_github_source_import_with_git_program_and_control(
     control: &SourceImportControl,
 ) -> Result<(), String> {
     control.ensure_active()?;
-    control.emit("git", "started", "正在连接系统 Git。", 0, 0);
+    control.emit("git", "started", "正在连接系统 Git，并读取仓库目录。", 0, 0);
     let mut command = Command::new(git_program);
     command
         .args([
             "clone",
             "--depth",
             "1",
+            "--filter=blob:none",
+            "--no-checkout",
+            "--no-tags",
             "--progress",
             &plan.normalized_target,
         ])
         .arg(staged_path);
-    let git_result = command_output_with_timeout_and_cancel(
+    let mut git_result = command_output_with_timeout_and_cancel(
         &mut command,
         Duration::from_secs(120),
-        "GitHub 仓库下载超过 120 秒，已自动停止。请检查网络、仓库地址，或稍后重试。",
+        "GitHub 仓库目录下载超过 120 秒，已自动停止。请检查网络、仓库地址，或稍后重试。",
         Some(control.cancelled.as_ref()),
     );
+
+    if matches!(&git_result, Ok(output) if output.status.success()) {
+        control.emit(
+            "git",
+            "progress",
+            "仓库目录已读取，正在只下载可安装的 Skill 文件。",
+            1,
+            3,
+        );
+        git_result = complete_sparse_skill_checkout(git_program, staged_path, control);
+    }
 
     if control.is_cancelled()
         || matches!(&git_result, Err(message) if message == SOURCE_IMPORT_CANCELLED_MESSAGE)
@@ -6735,17 +6749,48 @@ fn stage_github_source_import_with_git_program_and_control(
                             )
                         })?;
                     }
-                    match stage_github_source_import_via_api(plan, staged_path) {
-                        Ok(default_branch) => ("github-api", default_branch, Vec::new(), None),
-                        Err(api_error) => (
-                            "failed",
-                            String::new(),
-                            Vec::new(),
-                            Some(format!(
-                                "归档下载：{}；API 下载：{}",
-                                codeload_error, api_error
-                            )),
+                    match stage_github_source_import_via_release_asset_with_control(
+                        plan,
+                        staged_path,
+                        control,
+                    ) {
+                        Ok(download) => (
+                            "github-release-skill",
+                            download.downloaded_ref,
+                            download.skipped_symlinks,
+                            None,
                         ),
+                        Err(release_error) => {
+                            if control.is_cancelled()
+                                || release_error == SOURCE_IMPORT_CANCELLED_MESSAGE
+                            {
+                                let _ = cleanup_cancelled_source_import(staged_path);
+                                return Err(SOURCE_IMPORT_CANCELLED_MESSAGE.to_string());
+                            }
+                            if staged_path.exists() {
+                                fs::remove_dir_all(staged_path).map_err(|error| {
+                                    format!(
+                                        "Cannot clear incomplete release staging folder {}: {}",
+                                        staged_path.display(),
+                                        error
+                                    )
+                                })?;
+                            }
+                            match stage_github_source_import_via_api(plan, staged_path) {
+                                Ok(default_branch) => {
+                                    ("github-api", default_branch, Vec::new(), None)
+                                }
+                                Err(api_error) => (
+                                    "failed",
+                                    String::new(),
+                                    Vec::new(),
+                                    Some(format!(
+                                        "整仓归档：{}；Skill Release：{}；API 下载：{}",
+                                        codeload_error, release_error, api_error
+                                    )),
+                                ),
+                            }
+                        }
                     }
                 }
             };
@@ -6819,6 +6864,93 @@ fn stage_github_source_import_with_git_program_and_control(
         ];
     }
     Ok(())
+}
+
+fn complete_sparse_skill_checkout(
+    git_program: &str,
+    staged_path: &Path,
+    control: &SourceImportControl,
+) -> Result<std::process::Output, String> {
+    control.ensure_active()?;
+    let mut tree_command = Command::new(git_program);
+    tree_command.arg("-C").arg(staged_path).args([
+        "-c",
+        "core.quotepath=false",
+        "ls-tree",
+        "-r",
+        "--name-only",
+        "-z",
+        "HEAD",
+    ]);
+    let tree_output = command_output_with_timeout_and_cancel(
+        &mut tree_command,
+        Duration::from_secs(45),
+        "读取 GitHub 仓库目录超过 45 秒，已自动停止。",
+        Some(control.cancelled.as_ref()),
+    )?;
+    if !tree_output.status.success() {
+        return Ok(tree_output);
+    }
+
+    let paths = tree_output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter_map(|path| std::str::from_utf8(path).ok())
+        .filter(|path| !path.trim().is_empty())
+        .collect::<Vec<_>>();
+    let mut skill_roots = paths
+        .iter()
+        .filter(|path| {
+            Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.eq_ignore_ascii_case("SKILL.md"))
+                .unwrap_or(false)
+        })
+        .filter_map(|path| Path::new(path).parent())
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect::<Vec<_>>();
+    skill_roots.sort();
+    skill_roots.dedup();
+
+    let root_skill = skill_roots.iter().any(|root| root.is_empty());
+    if !root_skill {
+        let mut sparse_command = Command::new(git_program);
+        sparse_command.arg("-C").arg(staged_path);
+        if skill_roots.is_empty() {
+            // Prompt repositories without SKILL.md only need their root Markdown.
+            sparse_command.args(["sparse-checkout", "set", "--no-cone", "/*.md"]);
+        } else {
+            sparse_command.args(["sparse-checkout", "set", "--cone", "--"]);
+            for root in &skill_roots {
+                sparse_command.arg(root);
+            }
+        }
+        let output = command_output_with_timeout_and_cancel(
+            &mut sparse_command,
+            Duration::from_secs(180),
+            "Skill 文件下载超过 180 秒，已自动停止。请检查网络后重试。",
+            Some(control.cancelled.as_ref()),
+        )?;
+        if !output.status.success() {
+            return Ok(output);
+        }
+    }
+
+    control.ensure_active()?;
+    control.emit("git", "progress", "正在完成 Skill 文件校验。", 2, 3);
+    let mut checkout_command = Command::new(git_program);
+    checkout_command
+        .arg("-C")
+        .arg(staged_path)
+        .args(["checkout", "--force", "HEAD"]);
+    let checkout_output = command_output_with_timeout_and_cancel(
+        &mut checkout_command,
+        Duration::from_secs(180),
+        "Skill 文件检出超过 180 秒，已自动停止。请检查网络后重试。",
+        Some(control.cancelled.as_ref()),
+    )?;
+    Ok(checkout_output)
 }
 
 fn stage_github_source_import_via_api(
@@ -6997,6 +7129,153 @@ fn friendly_git_import_failure(raw: &str) -> String {
 struct GithubCodeloadResult {
     downloaded_ref: String,
     skipped_symlinks: Vec<String>,
+}
+
+fn stage_github_source_import_via_release_asset_with_control(
+    plan: &SourceImportPlanCard,
+    staged_path: &Path,
+    control: &SourceImportControl,
+) -> Result<GithubCodeloadResult, String> {
+    control.ensure_active()?;
+    let (owner, repo) = parse_github_repo(&plan.normalized_target)
+        .ok_or_else(|| "GitHub 地址无法解析。".to_string())?;
+    control.emit(
+        "zip",
+        "fallback",
+        "整仓过大或下载失败，正在查找作者发布的 Skill 专用包。",
+        0,
+        0,
+    );
+    let agent = github_http_agent();
+    let release_url = format!(
+        "https://api.github.com/repos/{}/{}/releases/latest",
+        owner, repo
+    );
+    let release = github_json_request(&agent, &release_url, &owner, &repo)?;
+    let tag = release
+        .get("tag_name")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let expected_prefix = format!(
+        "https://github.com/{}/{}/releases/download/",
+        owner.to_ascii_lowercase(),
+        repo.to_ascii_lowercase()
+    );
+    let asset = release
+        .get("assets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|asset| {
+            let name = asset.get("name")?.as_str()?.to_string();
+            let normalized_name = name.to_ascii_lowercase();
+            if !normalized_name.ends_with(".zip") || !normalized_name.contains("skill") {
+                return None;
+            }
+            let size = asset.get("size")?.as_u64()?;
+            let url = asset.get("browser_download_url")?.as_str()?.to_string();
+            if size == 0
+                || size > GITHUB_FALLBACK_MAX_BYTES
+                || !url.to_ascii_lowercase().starts_with(&expected_prefix)
+            {
+                return None;
+            }
+            Some((name, size, url))
+        })
+        .min_by_key(|(_, size, _)| *size)
+        .ok_or_else(|| {
+            "最新 Release 没有找到名称含 skill、格式为 ZIP 且不超过 80 MB 的正式资产。".to_string()
+        })?;
+
+    control.emit(
+        "zip",
+        "started",
+        format!("正在下载作者发布的 Skill 包：{}。", compact_note(&asset.0)),
+        0,
+        asset.1,
+    );
+    let request = agent
+        .get(&asset.2)
+        .set("User-Agent", "AI-SkillHub")
+        .set("Accept", "application/zip");
+    let response = request.call().map_err(|error| {
+        format!(
+            "Skill Release 下载失败 {}：{}",
+            compact_note(&asset.0),
+            github_download_error_message(error)
+        )
+    })?;
+    let mut bytes = Vec::new();
+    let mut reader = response.into_reader().take(GITHUB_FALLBACK_MAX_BYTES + 1);
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        control.ensure_active()?;
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("Skill Release 下载中断：{error}"))?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        if bytes.len() as u64 > GITHUB_FALLBACK_MAX_BYTES {
+            return Err("Skill Release 超过 80 MB 安全上限。".to_string());
+        }
+        control.emit(
+            "zip",
+            "progress",
+            "正在下载作者发布的 Skill 专用包。",
+            bytes.len() as u64,
+            asset.1,
+        );
+    }
+
+    let archive_path =
+        staged_path.with_extension(format!("skillhub-release-{}.zip", unix_timestamp_string()));
+    if let Some(parent) = archive_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Cannot create release staging directory: {error}"))?;
+    }
+    fs::write(&archive_path, &bytes)
+        .map_err(|error| format!("Cannot write temporary Skill Release archive: {error}"))?;
+    let extraction = (|| {
+        let inspection = inspect_package_archive(&archive_path)?;
+        if !inspection.safe_to_extract || inspection.skill_count == 0 {
+            return Err(if inspection.blocking_checks.is_empty() {
+                "Skill Release 中没有发现 SKILL.md。".to_string()
+            } else {
+                inspection.blocking_checks.join("；")
+            });
+        }
+        control.ensure_active()?;
+        extract_package_archive_filtered(&archive_path, staged_path)?;
+        write_managed_source_metadata(
+            staged_path,
+            &plan.normalized_target,
+            "github-release-skill",
+            &tag,
+        )?;
+        Ok(())
+    })();
+    let _ = fs::remove_file(&archive_path);
+    if let Err(error) = extraction {
+        if staged_path.exists() {
+            let _ = fs::remove_dir_all(staged_path);
+        }
+        return Err(error);
+    }
+    control.emit(
+        "write",
+        "completed",
+        "作者发布的 Skill 专用包已写入隔离区。",
+        1,
+        1,
+    );
+    Ok(GithubCodeloadResult {
+        downloaded_ref: tag,
+        skipped_symlinks: Vec::new(),
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16577,6 +16856,113 @@ mod tests {
         assert!(copied_files <= SOURCE_IMPORT_MAX_FILES + 1);
         assert!(report.scanned_files > 0);
         assert!(staged_path.join(MANAGED_SOURCE_METADATA_FILE).is_file());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "network-dependent ppt-master sparse clone compatibility gate"]
+    fn github_sparse_git_stages_real_ppt_master_without_full_repository_checkout() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-ppt-master-sparse-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test database should open");
+        let plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/hugohe3/ppt-master.git",
+        )
+        .expect("ppt-master plan should build");
+        let staged_path = source_import_staging_root(&root).join("ppt-master-sparse");
+        let mut execution = SourceImportExecutionCard {
+            id: "ppt-master-sparse".to_string(),
+            import_kind: "github".to_string(),
+            input: plan.input.clone(),
+            status: "blocked".to_string(),
+            risk_level: "low".to_string(),
+            summary: String::new(),
+            staged_path: staged_path.display().to_string(),
+            report_path: String::new(),
+            manifest_path: String::new(),
+            copied_files: 0,
+            copied_bytes: 0,
+            skill_count: 0,
+            prompt_count: 0,
+            blocking_checks: Vec::new(),
+            rollback_steps: Vec::new(),
+            real_write_scope: "staging-only".to_string(),
+            download_method: String::new(),
+            security_status: "not-run".to_string(),
+            security_scanned_files: 0,
+            security_findings: Vec::new(),
+        };
+        stage_github_source_import_with_control(
+            &plan,
+            &staged_path,
+            &mut execution,
+            &SourceImportControl::detached("ppt-master-sparse-test"),
+        )
+        .expect("sparse Git import should complete");
+
+        assert_eq!(execution.download_method, "git");
+        assert_eq!(execution.skill_count, 1);
+        assert!(staged_path.join("skills/ppt-master/SKILL.md").is_file());
+        assert!(!staged_path.join("examples").exists());
+        let report = security_scan::scan_source_tree(&staged_path)
+            .expect("the bounded Skill-only tree should pass scanner limits");
+        assert!(report.scanned_files > 10_000);
+        assert!(report.blocking_reasons.is_empty());
+        assert!(
+            report.safe_to_promote(),
+            "ppt-master should not be blocked by false-positive high-risk findings: {:?}",
+            report
+                .findings
+                .iter()
+                .filter(|finding| finding.severity == "high")
+                .take(8)
+                .collect::<Vec<_>>()
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "network-dependent ppt-master release asset compatibility gate"]
+    fn github_release_asset_stages_real_ppt_master_without_git_or_full_archive() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-ppt-master-release-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test database should open");
+        let plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/hugohe3/ppt-master.git",
+        )
+        .expect("ppt-master plan should build");
+        let staged_path = source_import_staging_root(&root).join("ppt-master-release");
+        let result = stage_github_source_import_via_release_asset_with_control(
+            &plan,
+            &staged_path,
+            &SourceImportControl::detached("ppt-master-release-test"),
+        )
+        .expect("the official Skill-only release asset should stage");
+
+        assert!(!result.downloaded_ref.is_empty());
+        assert!(staged_path
+            .join("ppt-master/skills/ppt-master/SKILL.md")
+            .is_file());
+        assert!(!staged_path.join("examples").exists());
+        let (skill_count, _) =
+            count_skill_dirs_in_path(&staged_path).expect("release asset should index");
+        assert_eq!(skill_count, 1);
+        let report = security_scan::scan_source_tree(&staged_path)
+            .expect("release Skill tree should stay inside scanner bounds");
+        assert!(report.scanned_files > 10_000);
+        assert!(report.safe_to_promote());
 
         let _ = fs::remove_dir_all(root);
     }
