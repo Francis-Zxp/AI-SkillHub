@@ -49,6 +49,8 @@ test("MCP center is read-only, secret-safe and never probes live capabilities", 
   assert.match(files.mcp, /Secret values[\s\S]*never enter the returned snapshot/);
   assert.doesNotMatch(files.mcp, /Command::new|\.spawn\(/);
   assert.match(files.mcpUi, /Capabilities not probed|mcp\.unprobed/);
+  assert.match(files.mcpUi, /next\.bindings\.some\(item => item\.id === current\)/);
+  assert.match(files.mcpUi, /mcp\.copyPath/);
 });
 
 test("Codex doctor guarantees zero writes and does not execute the standalone repair path", () => {
@@ -57,6 +59,8 @@ test("Codex doctor guarantees zero writes and does not execute the standalone re
   assert.match(files.doctor, /write_capable: false/);
   assert.doesNotMatch(files.doctor, /Command::new|powershell\.exe|setup\.ps1"\)/i);
   assert.doesNotMatch(files.doctorUi, /AutoRepair|ExecutionPolicy|setup\.ps1.*invoke/);
+  assert.match(files.doctorUi, /showAllEvidence/);
+  assert.match(files.doctorUi, /pluginDoctor\.copy/);
 });
 
 test("new capability surfaces are lazy-loaded instead of expanding the initial bundle", () => {

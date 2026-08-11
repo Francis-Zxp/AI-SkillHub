@@ -17,6 +17,7 @@ type DoctorFinding = {
   code: string;
   title: string;
   detail: string;
+  remediation?: string;
 };
 
 type CodexPluginDoctorReport = {
@@ -32,6 +33,8 @@ export function CodexPluginDoctorPanel({ runtimeAvailable }: { runtimeAvailable:
   const [report, setReport] = useState<CodexPluginDoctorReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showAllEvidence, setShowAllEvidence] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   async function scan() {
     if (!runtimeAvailable) {
@@ -42,6 +45,7 @@ export function CodexPluginDoctorPanel({ runtimeAvailable }: { runtimeAvailable:
     setError("");
     try {
       setReport(await invoke<CodexPluginDoctorReport>("scan_codex_plugin_doctor"));
+      setShowAllEvidence(false);
     } catch (reason) {
       const raw = reason instanceof Error ? reason.message : String(reason ?? "");
       setError(raw.length > 260 ? `${raw.slice(0, 257)}…` : raw || t("pluginDoctor.scanFailedBody"));
@@ -50,12 +54,33 @@ export function CodexPluginDoctorPanel({ runtimeAvailable }: { runtimeAvailable:
     }
   }
 
+  async function copyReport() {
+    if (!report) return;
+    const lines = [
+      `AI SkillHub · ${t("pluginDoctor.eyebrow")}`,
+      `${t("pluginDoctor.result")}: ${statusLabel(report.status)}`,
+      report.detectedVersion ? `Version: ${report.detectedVersion}` : "",
+      report.summary,
+      ...report.findings.flatMap(item => [
+        `- [${item.severity}] ${item.title}: ${item.detail}`,
+        item.remediation ? `  ${item.remediation}` : ""
+      ])
+    ].filter(Boolean);
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError(t("pluginDoctor.copyFailed"));
+    }
+  }
+
   useEffect(() => {
     void scan();
   }, [runtimeAvailable]);
 
   return (
-    <section className="plugin-doctor-panel glow-card">
+    <section aria-busy={loading} className="plugin-doctor-panel glow-card">
       <header>
         <div>
           <span className="eyebrow"><Icon name="shield" /> {t("pluginDoctor.eyebrow")}</span>
@@ -64,6 +89,9 @@ export function CodexPluginDoctorPanel({ runtimeAvailable }: { runtimeAvailable:
         </div>
         <div className="plugin-doctor-actions">
           <span className="readonly-badge"><Icon name="shield" /> {t("pluginDoctor.readOnly")}</span>
+          <button className="ghost-action" disabled={!report || loading} onClick={() => void copyReport()} type="button">
+            <Icon name="copy" /> {copied ? t("pluginDoctor.copied") : t("pluginDoctor.copy")}
+          </button>
           <button className="secondary-action" disabled={loading} onClick={() => void scan()} type="button">
             <Icon className={loading ? "icon-spin" : ""} name="refresh" />
             {loading ? t("pluginDoctor.scanning") : t("pluginDoctor.scan")}
@@ -80,7 +108,7 @@ export function CodexPluginDoctorPanel({ runtimeAvailable }: { runtimeAvailable:
             <em>{report.detectedVersion || t("pluginDoctor.versionUnknown")}</em>
           </div>
           <div className="plugin-doctor-evidence">
-            {report.evidence.slice(0, 8).map(item => (
+            {(showAllEvidence ? report.evidence : report.evidence.slice(0, 8)).map(item => (
               <article className={`evidence-${item.status}`} key={item.id}>
                 <span className="evidence-state" />
                 <div><strong>{item.label}</strong><p>{item.detail}</p>{item.redactedPath && <code>{item.redactedPath}</code>}</div>
@@ -88,6 +116,13 @@ export function CodexPluginDoctorPanel({ runtimeAvailable }: { runtimeAvailable:
             ))}
             {report.evidence.length === 0 && <p className="empty-inline">{t("pluginDoctor.noEvidence")}</p>}
           </div>
+          {report.evidence.length > 8 && (
+            <button className="plugin-doctor-more ghost-action" onClick={() => setShowAllEvidence(value => !value)} type="button">
+              {showAllEvidence
+                ? t("pluginDoctor.showLess")
+                : t("pluginDoctor.showMore", { n: report.evidence.length - 8 })}
+            </button>
+          )}
           {report.findings.length > 0 && (
             <details className="plugin-doctor-findings">
               <summary>{t("pluginDoctor.findings", { n: report.findings.length })}</summary>

@@ -2,7 +2,6 @@ export type NavKey =
   | "dashboard"
   | "library"
   | "workspaces"
-  | "presets"
   | "sources"
   | "agents"
   | "connections"
@@ -38,9 +37,11 @@ export type LegacySnapshot = {
   sourcePopularity: SourcePopularityCard[];
   sourceGovernance: SourceGovernanceCard[];
   sourceQualitySignals: SourceQualitySignalCard[];
+  lastSyncSummary?: SyncSummaryCard;
   skillConflicts: SkillConflictCard[];
   operatorConsent: OperatorConsentCard;
   tags: TagCard[];
+  skillFolders?: SkillFolderCard[];
   presetDistributions: PresetDistributionCard[];
   operationRunners: OperationRunnerCard[];
   writeGates: WriteGateCard[];
@@ -61,6 +62,10 @@ export type LegacySummary = {
 };
 
 export type SkillCard = {
+  /** Stable SQLite identity. Browser-preview fixtures may omit it. */
+  id?: string;
+  /** Exact owning source identity. Empty only for truly standalone/local Skills. */
+  sourceId?: string;
   name: string;
   folderName: string;
   category: string;
@@ -87,6 +92,37 @@ export type SkillCard = {
    * Optional during the rollout window; older SQLite snapshots may omit it.
    */
   isRouterHub?: boolean;
+  /** Optional user-created primary folder used for library organization. */
+  userFolderId?: string;
+  userFolderName?: string;
+  userFolderColor?: string;
+};
+
+export type SyncSummaryCard = {
+  generatedAt: string;
+  status: "ok" | "partial" | "failed" | "no-network-update" | string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  activeSkills: number;
+  repositories: Array<{
+    repository: string;
+    action: string;
+    status: string;
+    message: string;
+  }>;
+};
+
+export type SkillFolderCard = {
+  id: string;
+  name: string;
+  note: string;
+  color: string;
+  sortOrder: number;
+  skillCount: number;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type SkillConflictCard = {
@@ -177,6 +213,10 @@ export type SourceCard = {
   metadataOrigin?: string;
   /** 0–1 evidence completeness, not a quality score. */
   metadataConfidence?: number;
+  /** User folder assigned to the complete parent/source tree. */
+  userFolderId?: string;
+  userFolderName?: string;
+  userFolderColor?: string;
 };
 
 export type SourceGovernanceCard = {
@@ -256,7 +296,7 @@ export type AgentSkillStatusCard = {
   agentName: string;
   skillName: string;
   skillFolderName: string;
-  status: "installed" | "missing" | "agent-missing" | "agent-disabled" | string;
+  status: "installed" | "missing" | "agent-missing" | "agent-disabled" | "skill-disabled" | "invalid-manifest" | string;
   expectedPath: string;
   targetPath: string;
   summary: string;

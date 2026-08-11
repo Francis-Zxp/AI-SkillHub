@@ -261,6 +261,12 @@ pub fn scan(environment: &ProbeEnvironment) -> CodexPluginDoctorReport {
             &mut findings,
             &mut inventory,
         );
+        inspect_current_bundled_plugin_evidence(
+            &codex_home,
+            environment,
+            &mut evidence,
+            &mut findings,
+        );
     }
 
     let status = overall_status(&findings, &version_state, home_exists);
@@ -292,6 +298,148 @@ pub fn scan(environment: &ProbeEnvironment) -> CodexPluginDoctorReport {
             "不返回 Token、API Key、Authorization 或环境变量值。".to_string(),
             "未知 Codex 版本只允许查看证据，不提供修复入口。".to_string(),
         ],
+    }
+}
+
+fn inspect_current_bundled_plugin_evidence(
+    codex_home: &Path,
+    environment: &ProbeEnvironment,
+    evidence: &mut Vec<ProbeEvidence>,
+    findings: &mut Vec<ProbeFinding>,
+) {
+    let bundled_root = codex_home
+        .join("plugins")
+        .join("cache")
+        .join("openai-bundled");
+    if !matches!(inspect_entry_kind(&bundled_root), Ok(EntryKind::Directory)) {
+        return;
+    }
+    for component in ["chrome", "computer-use"] {
+        let latest = bundled_root.join(component).join("latest");
+        let kind = inspect_entry_kind(&latest);
+        let status = match kind {
+            Ok(EntryKind::Directory | EntryKind::Link) => STATUS_READY,
+            Ok(_) => STATUS_ERROR,
+            Err(ref error) if error.kind() == io::ErrorKind::NotFound => STATUS_WARN,
+            Err(_) => STATUS_ERROR,
+        };
+        evidence.push(path_evidence(
+            &format!("bundled-{component}-latest"),
+            "bundled-plugin-current",
+            status,
+            &format!(
+                "{} 当前缓存",
+                if component == "chrome" {
+                    "Chrome"
+                } else {
+                    "Computer Use"
+                }
+            ),
+            if status == STATUS_READY {
+                "发现当前缓存入口；只读取路径类型，不执行缓存内容。"
+            } else {
+                "当前缓存入口缺失或类型异常。"
+            },
+            &latest,
+            environment,
+            kind.ok(),
+            String::new(),
+            0,
+        ));
+        if status != STATUS_READY {
+            findings.push(finding(
+                &format!("bundled-{component}-latest-missing"),
+                status,
+                &format!(
+                    "{} 当前缓存不完整",
+                    if component == "chrome" {
+                        "Chrome"
+                    } else {
+                        "Computer Use"
+                    }
+                ),
+                "只读检查没有找到可信的 latest 缓存入口。",
+                "先更新或重启 Codex；如仍异常，再使用独立健康检查工具进行明确确认的修复。",
+            ));
+        }
+    }
+
+    if let Some(local) = &environment.local_app_data {
+        let runtime_root = local
+            .join("OpenAI")
+            .join("Codex")
+            .join("runtimes")
+            .join("cua_node");
+        let runtime_kind = inspect_entry_kind(&runtime_root);
+        let runtime_status = if matches!(runtime_kind, Ok(EntryKind::Directory)) {
+            STATUS_READY
+        } else {
+            STATUS_WARN
+        };
+        evidence.push(path_evidence(
+            "computer-use-runtime",
+            "computer-use-runtime",
+            runtime_status,
+            "Computer Use 用户运行时",
+            if runtime_status == STATUS_READY {
+                "发现用户运行时目录；没有启动 Node 或任何插件脚本。"
+            } else {
+                "未发现当前用户的 Computer Use 运行时目录。"
+            },
+            &runtime_root,
+            environment,
+            runtime_kind.ok(),
+            String::new(),
+            0,
+        ));
+        if runtime_status != STATUS_READY {
+            findings.push(finding(
+                "computer-use-runtime-missing",
+                STATUS_WARN,
+                "Computer Use 运行时未发现",
+                "插件缓存存在时仍需要与当前 Codex 版本匹配的用户运行时。",
+                "先启动最新版 Codex 让它完成初始化；只读医生不会创建假目录。",
+            ));
+        }
+
+        let native_manifest = local
+            .join("OpenAI")
+            .join("extension")
+            .join("com.openai.codexextension.json");
+        if matches!(inspect_entry_kind(&native_manifest), Ok(EntryKind::File)) {
+            let (status, hash, size) = match read_bounded(&native_manifest, CONFIG_READ_LIMIT) {
+                Ok(bytes) if serde_json::from_slice::<serde_json::Value>(&bytes).is_ok() => {
+                    (STATUS_READY, sha256_hex(&bytes), bytes.len() as u64)
+                }
+                Ok(bytes) => (STATUS_ERROR, sha256_hex(&bytes), bytes.len() as u64),
+                Err(_) => (STATUS_ERROR, String::new(), 0),
+            };
+            evidence.push(path_evidence(
+                "chrome-native-manifest",
+                "chrome-native-host",
+                status,
+                "Chrome 原生通信清单",
+                if status == STATUS_READY {
+                    "清单是有效 JSON；未读取凭据，也未启动 Chrome。"
+                } else {
+                    "清单无法安全解析。"
+                },
+                &native_manifest,
+                environment,
+                Some(EntryKind::File),
+                hash,
+                size,
+            ));
+            if status == STATUS_ERROR {
+                findings.push(finding(
+                    "chrome-native-manifest-invalid",
+                    STATUS_ERROR,
+                    "Chrome 原生通信清单异常",
+                    "清单不是有效 JSON 或超过安全读取上限。",
+                    "使用独立健康检查工具检查并在明确确认后修复；AI SkillHub 不会改写它。",
+                ));
+            }
+        }
     }
 }
 
@@ -1710,6 +1858,49 @@ mod tests {
             .findings
             .iter()
             .any(|item| item.code == "codex-version-unsupported"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn current_bundled_plugin_evidence_is_checked_without_running_tools() {
+        let root = fixture_root("bundled-current");
+        let env = environment(&root);
+        let codex_home = env.user_home.join(".codex");
+        for component in ["chrome", "computer-use"] {
+            fs::create_dir_all(
+                codex_home
+                    .join("plugins/cache/openai-bundled")
+                    .join(component)
+                    .join("latest"),
+            )
+            .unwrap();
+        }
+        let local = env.local_app_data.as_ref().unwrap();
+        fs::create_dir_all(local.join("OpenAI/Codex/runtimes/cua_node")).unwrap();
+        let manifest = local.join("OpenAI/extension/com.openai.codexextension.json");
+        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        fs::write(&manifest, br#"{"name":"com.openai.codexextension"}"#).unwrap();
+
+        let before = snapshot(&root);
+        let report = probe_codex_plugin_health(&env);
+        let after = snapshot(&root);
+        assert_eq!(before, after);
+        assert!(report
+            .evidence
+            .iter()
+            .any(|item| item.id == "bundled-chrome-latest" && item.status == STATUS_READY));
+        assert!(report
+            .evidence
+            .iter()
+            .any(|item| item.id == "bundled-computer-use-latest" && item.status == STATUS_READY));
+        assert!(report
+            .evidence
+            .iter()
+            .any(|item| item.id == "computer-use-runtime" && item.status == STATUS_READY));
+        assert!(report
+            .evidence
+            .iter()
+            .any(|item| item.id == "chrome-native-manifest" && item.status == STATUS_READY));
         fs::remove_dir_all(root).unwrap();
     }
 

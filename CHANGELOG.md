@@ -2,6 +2,163 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.1.9 - Parent ratings and actionable diagnostics
+
+### Fixed
+
+- Restores the five-star rating control on every parent/source card and keeps
+  existing parent ratings in SQLite. Source names can now use two lines before
+  truncation, with the complete name available as a tooltip.
+- Replaces the misleading clickable list icon with a labeled six-dot drag grip.
+  It moves the complete parent/child tree; the adjacent folder selector remains
+  the accessible keyboard fallback.
+- Keeps `[ROUTER-HUB]` as a hidden machine marker while showing the concise
+  `父 Skill` label in Codex, Claude and AI SkillHub user-facing descriptions.
+- Codex Plugin Doctor no longer hides evidence after the first eight entries and
+  can copy a redacted diagnosis. MCP Connection Center repairs stale selection
+  after rescans, includes host-level findings and can copy redacted config paths.
+
+### Safety and verification
+
+- Plugin Doctor and MCP Connection Center remain zero-write, bounded and
+  secret-safe. They never execute plugins, MCP servers or repair scripts.
+- Parent-rating persistence, hidden router markers, drag affordance, diagnostic
+  expansion and MCP rescan selection are covered by frontend and Rust tests.
+
+## 3.1.8 - Parent-first routing and a calmer Skill Library
+
+### Changed
+
+- Treats every non-empty source as one parent Skill namespace. A canonical
+  `[ROUTER-HUB]` is generated even for a single-child source, fixing missing
+  entries such as `/figures4papers` and `@figures4papers`.
+- Isolates same-name children by parent source and removes the manual global
+  child-conflict workflow. Generated parents list child functions and exact
+  source paths, then select only children inside their own source.
+- Publishes the same curated parent-first catalog to Codex, Claude and
+  Antigravity. Legacy whole-catalog Claude junctions are migrated safely to
+  managed per-entry links; user-owned folders and links are preserved.
+- Removes evidence scores, raw revisions, popularity and rating clutter from
+  primary Skill Library cards. Maintenance and rollback details remain in the
+  source drawer.
+- Displays locally generated Chinese or Korean functional summaries according
+  to the selected UI language while preserving original author metadata.
+
+### Safety and verification
+
+- Generated router writes use temporary files and recoverable previous-file
+  backups. Stale AI SkillHub dispatchers and short aliases are removed without
+  modifying author repositories.
+- Parent router, parent isolation, Agent allowlist, PowerShell 5.1 delivery and
+  frontend product-contract tests cover the new behavior.
+
+## 3.1.7 - Reliable partial sync and readable source names
+
+### Fixed
+
+- Fixes a Windows PowerShell 5.1 generic-list serialization error that occurred
+  after repository updates had already completed. Partial syncs now write a
+  valid `last-sync.json`, return success to the desktop bridge, and show the
+  real updated/failed/skipped counts instead of a raw operation-failed dialog.
+- Treats repositories with local modified or untracked files as protected
+  skips, never as destructive update failures. Timed-out or diverged sources
+  remain available from their local copy and are listed separately.
+- Keeps real script crashes concise in the UI and directs technical details to
+  the diagnostics bundle instead of exposing a long internal console transcript.
+- Reserves readable space for source names at the default desktop width and
+  lets metadata controls wrap within their own column. Container-driven
+  fallback stacks the controls when the source card becomes narrow.
+
+### Verification
+
+- A real 38-repository sync completed with exit code 0 and a structured partial
+  result: 30 updated, 2 failed, and 6 protected skips; 654 active Skills were
+  refreshed.
+- Source names remained visible without header overflow at 1920×1271,
+  1536×900, and 1280×820, including the maximum-metadata source card.
+
+## 3.1.6 - Source-tree folders, exact ownership, and truthful updates
+
+### Fixed
+
+- Classifies a complete source tree as one folder item. Parent Skills and every
+  current or newly indexed child inherit the same folder; sourced children can
+  no longer be dragged away from their parent accidentally.
+- Adds an explicit source drag handle and folder selector to source cards and
+  editors, a visible delete action to every folder, and theme-proof named color
+  swatches in both dark and light themes.
+- Prevents repositories with generic names such as `skills` from colliding.
+  GitHub imports now use an owner-qualified storage identity and exact
+  `sourceId` matching instead of fuzzy path containment.
+- Changes the dashboard cluster from “folder/type” to “My folders”. Entries
+  without a user folder are shown only under the explicit Unfiled group; no
+  inferred type is presented as a user-created classification.
+- Makes large sources responsive by indexing children once, removing repeated
+  fuzzy source scans, initially rendering 36 child cards, and progressively
+  revealing the remainder.
+- Makes sync results truthful and safe. Partial failures are reported instead
+  of a universal success toast, while dirty or untracked repositories are
+  preserved and skipped rather than overwritten by `git pull`.
+- Clarifies evidence and Git revision chips, including insufficient evidence,
+  up to date, behind, locally ahead, diverged, pinned, and unknown states.
+
+### Software update
+
+- Publishes the signed v3.1.6 installer metadata to both release and tracked
+  fallback manifests. Installed builds check three update endpoints shortly
+  after startup, when network connectivity returns, and after resume.
+- Keeps existing settings, folders, ratings, tags, and user data outside the
+  application directory during an installer upgrade.
+
+## 3.1.5 - Verified Codex delivery and concise Skill metadata
+
+### Fixed
+
+- Publishes enabled standalone Skills to the current OpenAI user scope,
+  `$HOME/.agents/skills`, for ChatGPT Desktop and Codex. An existing
+  `$HOME/.codex/skills` directory remains a compatibility mirror but is never
+  created on a clean recipient.
+- Detects desktop-only installations consistently across diagnostics and the
+  delivery worker, expands redacted home paths before filesystem checks, and
+  verifies a readable `SKILL.md` after every managed link is created.
+- Correctly enumerates multi-item JSON allowlists under Windows PowerShell 5.1.
+  A malformed or stale non-empty policy that matches no active Skill now fails
+  before touching the recipient, so it can never erase known-good links.
+- Resolves the delivery policy and status against the final active entry names,
+  including source-qualified conflict aliases and generated parent routers,
+  instead of assuming the SQLite folder name is the Host-visible name.
+- Makes Skill and Source enable switches control the real delivery allowlist.
+  Disabled Sources/Skills and manifests without non-empty `name` and
+  `description` are no longer published to a host.
+- Runs cached startup first, then refreshes host detection and repairs missing
+  managed delivery in the background. Status badges now reflect recipient
+  files instead of a writable or redacted path.
+- Corrects invocation guidance: ChatGPT uses `@`; Codex uses `/skills` or
+  `$skill-name`. Large catalogs explain the host discovery-budget limit and
+  recommend parent Skills instead of promising every entry will appear in the
+  initial chooser.
+
+### Changed
+
+- Intelligent recognition now produces at most one or two compact sentences:
+  what the Skill/source does and, for a parent, which child Skills it contains.
+  The duplicated “Usage” paragraph is no longer generated or displayed.
+- Removes the display-only Task bundles page from primary navigation. The old
+  SQLite rows remain readable for compatibility, but the feature will not
+  return until users can edit a persistent bundle and publish a verified parent
+  entry.
+
+### Verification
+
+- Clean temporary Windows recipient: desktop-only delivery, official user
+  scope, no fake `.codex` directory, legacy compatibility, enabled allowlist
+  and invalid-manifest exclusion all pass.
+- Rust: 127 passed, 0 failed, 5 explicitly network-gated; strict Clippy and
+  formatting pass. Frontend production build and delivery/metadata/folder/
+  security/source-governance contracts pass.
+- Real local profile: 653/653 active entries were mapped and delivered under
+  `.agents/skills`; Codex finished as detected, managed, enabled and ready.
+
 ## 3.1.2 - Reliable security review and source drafts
 
 ### Fixed

@@ -265,7 +265,10 @@ function Test-OpenAIDesktopPresent {
   foreach ($candidate in @(
     (Join-Path $localAppData 'Programs\ChatGPT\ChatGPT.exe'),
     (Join-Path $localAppData 'OpenAI\ChatGPT\ChatGPT.exe'),
-    (Join-Path $env:ProgramFiles 'ChatGPT\ChatGPT.exe')
+    (Join-Path $localAppData 'Programs\Codex\Codex.exe'),
+    (Join-Path $localAppData 'OpenAI\Codex\Codex.exe'),
+    (Join-Path $env:ProgramFiles 'ChatGPT\ChatGPT.exe'),
+    (Join-Path $env:ProgramFiles 'Codex\Codex.exe')
   )) {
     if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
   }
@@ -306,11 +309,19 @@ function Add-AgentStatus(
   $skillsInfo = @()
   foreach ($dir in $SkillsDirs) {
     $exists = if ($simulateMissing -or $simulateDesktopOnly) { $false } else { Test-Path -LiteralPath $dir -PathType Container }
+    $containsSkillMd = if ($exists) {
+      $null -ne (Get-ChildItem -LiteralPath $dir -Force -Directory -ErrorAction SilentlyContinue |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') -PathType Leaf } |
+        Select-Object -First 1)
+    } else {
+      $false
+    }
     $skillsInfo += [PSCustomObject]@{
       path = Protect-Text $dir
       exists = $exists
       writable = if ($exists) { Test-DirWritable $dir } else { $false }
       isLink = if ($exists) { ((Get-Item -LiteralPath $dir -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 } else { $false }
+      containsSkillMd = $containsSkillMd
     }
   }
   $detected = $baseExists -or ($null -ne $command) -or $AdditionalDetected
@@ -324,7 +335,7 @@ function Add-AgentStatus(
   } elseif ($Id -eq 'codex' -and $DesktopDetected -and $CodeDetected) {
     'ChatGPT 桌面版与 OpenAI Codex 代码能力已检测到。'
   } elseif ($Id -eq 'codex' -and $DesktopDetected) {
-    'ChatGPT 桌面版已检测到；本地 Skills 接管仍需 Codex 代码能力。'
+    'ChatGPT 桌面版已检测到；可通过用户级 .agents\skills 目录发现本地 Skills。'
   } elseif ($Id -eq 'codex' -and $CodeDetected) {
     'OpenAI Codex 代码能力已检测到。'
   } elseif ($detected) {
@@ -335,7 +346,7 @@ function Add-AgentStatus(
   $fix = if ($Id -eq 'claude' -and $DesktopDetected -and -not $CodeDetected) {
     '点击同步后可为 Claude Code/Code 模式准备本地 Skills；Chat/Cowork 的自定义 Skill 请在 Claude 设置中上传 ZIP。'
   } elseif ($Id -eq 'codex' -and $DesktopDetected -and -not $CodeDetected) {
-    '桌面应用已识别，但不会据此创建假的 .codex 目录；安装或启用 Codex 代码能力后再同步本地 Skills。'
+    '点击同步后写入官方用户级 .agents\skills；不会创建假的 .codex 目录。'
   } elseif ($detected) {
     '如需接管，请确认对应 skills 目录存在且可写。'
   } else {
@@ -423,7 +434,7 @@ $codexCodeDetected = Test-CodexCodePresent $codexConfigRoot
 $codexDetectionKinds = @()
 if ($openAIDesktopDetected) { $codexDetectionKinds += 'desktop-app' }
 if ($codexCodeDetected) { $codexDetectionKinds += 'codex-code' }
-Add-AgentStatus 'codex' 'ChatGPT Desktop / OpenAI Codex' $codexConfigRoot @((Join-Path $codexConfigRoot 'skills'), (Join-Path $HomePath '.agents\skills')) 'codex' ($openAIDesktopDetected -or $codexCodeDetected) $codexCodeDetected $openAIDesktopDetected $codexDetectionKinds
+Add-AgentStatus 'codex' 'ChatGPT Desktop / OpenAI Codex' $codexConfigRoot @((Join-Path $HomePath '.agents\skills'), (Join-Path $codexConfigRoot 'skills')) 'codex' ($openAIDesktopDetected -or $codexCodeDetected) $codexCodeDetected $openAIDesktopDetected $codexDetectionKinds
 Add-AgentStatus 'antigravity' 'Antigravity' (Join-Path $HomePath '.gemini\antigravity') @((Join-Path $HomePath '.gemini\antigravity\skills'), (Join-Path $HomePath '.antigravity\skills')) 'antigravity'
 
 if ((@($Agents | Where-Object { $_.detected }).Count) -eq 0) {

@@ -154,21 +154,31 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
         .any(|probe| probe.exists && probe.is_directory);
     let path_refresh_needed =
         !cli_on_path && (cli_executable_exists || cli_package_installed) && code_installed;
+    let desktop_supports_local_skills = adapter_id == "codex" && desktop_installed;
 
-    let (verdict, summary, safe_fix_available) = if path_refresh_needed {
+    let (verdict, summary, safe_fix_available) = if skills_directory_usable
+        && (cli_on_path || desktop_supports_local_skills)
+    {
+        (
+            VERDICT_READY,
+            if desktop_supports_local_skills {
+                format!(
+                    "{} 与官方用户级 .agents/skills 目录均已确认。",
+                    display_name(input)
+                )
+            } else {
+                format!(
+                    "{} 的代码能力与 Skills 目录均已确认，可进入接管前检查。",
+                    display_name(input)
+                )
+            },
+            false,
+        )
+    } else if path_refresh_needed {
         (
             VERDICT_PATH_REFRESH_NEEDED,
             path_refresh_summary(&adapter_id),
             true,
-        )
-    } else if cli_on_path && skills_directory_usable {
-        (
-            VERDICT_READY,
-            format!(
-                "{} 的代码能力与 Skills 目录均已确认，可进入接管前检查。",
-                display_name(input)
-            ),
-            false,
         )
     } else if code_installed {
         (
@@ -177,6 +187,12 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
                 "{} 的代码能力已确认，但 Skills 目录尚未验证；不会为通过检测而创建空目录。",
                 display_name(input)
             ),
+            false,
+        )
+    } else if desktop_installed && adapter_id == "codex" {
+        (
+            VERDICT_CODE_DETECTED,
+            "ChatGPT Desktop 已检测到；同步后将使用官方用户级 .agents/skills 目录。".to_string(),
             false,
         )
     } else if desktop_installed && is_split_product {
@@ -231,7 +247,7 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
         "not-detected"
     };
     let skills_status = if skills_directory_usable {
-        if cli_on_path {
+        if cli_on_path || desktop_supports_local_skills {
             "ready"
         } else {
             "directory-only"
@@ -325,7 +341,7 @@ fn desktop_only_summary(adapter_id: &str, running: bool) -> String {
     let activity = if running { "正在运行" } else { "已安装" };
     match adapter_id {
         "codex" => format!(
-            "ChatGPT Desktop {}，但未发现 Codex CLI/代码能力；两者不能视为同一个安装。",
+            "ChatGPT Desktop {}；本地 Skills 使用官方用户级 .agents/skills，无需额外安装 CLI。",
             activity
         ),
         "claude" => format!(
@@ -353,9 +369,9 @@ fn next_steps(
         ],
         VERDICT_DESKTOP_ONLY => match input.adapter_id.trim().to_ascii_lowercase().as_str() {
             "codex" => vec![
-                "ChatGPT Desktop 可以继续使用，但本地 Skills 接管必须另外确认 Codex CLI/代码能力。"
+                "点击同步，将受管理 Skill 写入 ~/.agents/skills；不要创建假的 ~/.codex 目录。"
                     .to_string(),
-                "不要因为 ~/.codex/skills 存在就把 ChatGPT Desktop 标记为 Codex 已安装。"
+                "在 ChatGPT 输入 @，在 Codex 输入 /skills 或 $skill-name；未刷新时重启应用。"
                     .to_string(),
             ],
             "claude" => vec![
@@ -638,7 +654,7 @@ mod tests {
             adapter_id: "codex".to_string(),
             adapter_name: "ChatGPT Desktop / OpenAI Codex".to_string(),
             detection_kind: "split-product".to_string(),
-            path_hint: r"C:\Users\ExampleUser\.codex\skills".to_string(),
+            path_hint: r"C:\Users\ExampleUser\.agents\skills".to_string(),
             home_dir: r"C:\Users\ExampleUser".to_string(),
             redact_paths: true,
             ..AdapterDoctorInput::default()
@@ -646,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_running_without_cli_is_not_codex_ready() {
+    fn desktop_running_without_skills_directory_needs_delivery_not_cli() {
         let mut input = codex_input();
         input.apps.push(AppProbeEvidence {
             product_id: "chatgpt-desktop".to_string(),
@@ -665,11 +681,38 @@ mod tests {
         });
 
         let card = diagnose_adapter(&input);
-        assert_eq!(card.verdict, VERDICT_DESKTOP_ONLY);
+        assert_eq!(card.verdict, VERDICT_CODE_DETECTED);
         assert_eq!(card.desktop_status, "running");
         assert_eq!(card.cli_status, "not-detected");
-        assert!(card.summary.contains("不能视为同一个安装"));
+        assert!(card.summary.contains(".agents/skills"));
         assert!(!card.safe_fix_available);
+    }
+
+    #[test]
+    fn desktop_running_with_official_user_skills_is_ready_without_cli() {
+        let mut input = codex_input();
+        input.apps.push(AppProbeEvidence {
+            product_id: "chatgpt-desktop".to_string(),
+            display_name: "ChatGPT Desktop".to_string(),
+            role: "desktop-app".to_string(),
+            installed: true,
+            running: true,
+            ..AppProbeEvidence::default()
+        });
+        input.paths.push(PathProbeEvidence {
+            path: r"C:\Users\ExampleUser\.agents\skills".to_string(),
+            purpose: "skills-directory".to_string(),
+            exists: true,
+            is_directory: true,
+            writable: true,
+            contains_skill_md: true,
+            ..PathProbeEvidence::default()
+        });
+
+        let card = diagnose_adapter(&input);
+        assert_eq!(card.verdict, VERDICT_READY);
+        assert_eq!(card.skills_status, "ready");
+        assert!(card.summary.contains(".agents/skills"));
     }
 
     #[test]
@@ -715,7 +758,7 @@ mod tests {
     fn skills_directory_alone_is_reported_as_residue() {
         let mut input = codex_input();
         input.paths.push(PathProbeEvidence {
-            path: r"C:\Users\ExampleUser\.codex\skills".to_string(),
+            path: r"C:\Users\ExampleUser\.agents\skills".to_string(),
             purpose: "skills-directory".to_string(),
             exists: true,
             is_directory: true,

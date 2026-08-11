@@ -89,9 +89,11 @@ struct LegacySnapshot {
     source_popularity: Vec<SourcePopularityCard>,
     source_governance: Vec<source_governance::SourceGovernanceCard>,
     source_quality_signals: Vec<source_governance::SourceQualitySignalCard>,
+    last_sync_summary: SyncSummaryCard,
     skill_conflicts: Vec<SkillConflictCard>,
     operator_consent: OperatorConsentCard,
     tags: Vec<TagCard>,
+    skill_folders: Vec<SkillFolderCard>,
     preset_distributions: Vec<PresetDistributionCard>,
     operation_runners: Vec<OperationRunnerCard>,
     write_gates: Vec<WriteGateCard>,
@@ -113,9 +115,33 @@ struct LegacySummary {
     diagnostics_status: String,
 }
 
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SyncSummaryCard {
+    generated_at: String,
+    status: String,
+    total: usize,
+    succeeded: usize,
+    failed: usize,
+    skipped: usize,
+    active_skills: usize,
+    repositories: Vec<SyncRepositoryCard>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SyncRepositoryCard {
+    repository: String,
+    action: String,
+    status: String,
+    message: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SkillCard {
+    id: String,
+    source_id: String,
     name: String,
     folder_name: String,
     category: String,
@@ -136,6 +162,9 @@ struct SkillCard {
     /// matches its source collection name (the convention used by
     /// docs/skill-router-standard.md).
     is_router_hub: bool,
+    user_folder_id: String,
+    user_folder_name: String,
+    user_folder_color: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -275,6 +304,9 @@ fn resolve_skill_source_id(
     skill: &SkillCard,
     source_ids: &HashMap<String, String>,
 ) -> Option<String> {
+    if !skill.source_id.is_empty() && source_ids.values().any(|value| value == &skill.source_id) {
+        return Some(skill.source_id.clone());
+    }
     if skill.is_router_hub && skill.source.eq_ignore_ascii_case(ROUTER_HUB_FOLDER) {
         for candidate in [&skill.folder_name, &skill.name] {
             let key = candidate.to_lowercase();
@@ -456,6 +488,19 @@ fn derive_skill_conflicts(
 fn insert_source_id_alias(source_ids: &mut HashMap<String, String>, alias: &str, source_id: &str) {
     let key = alias.trim().to_lowercase();
     if !key.is_empty() {
+        source_ids
+            .entry(key)
+            .or_insert_with(|| source_id.to_string());
+    }
+}
+
+fn insert_source_id_primary(
+    source_ids: &mut HashMap<String, String>,
+    alias: &str,
+    source_id: &str,
+) {
+    let key = alias.trim().to_lowercase();
+    if !key.is_empty() {
         source_ids.insert(key, source_id.to_string());
     }
 }
@@ -480,6 +525,9 @@ struct SourceCard {
     usage_guide: String,
     metadata_origin: String,
     metadata_confidence: f64,
+    user_folder_id: String,
+    user_folder_name: String,
+    user_folder_color: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -689,6 +737,19 @@ struct TagCard {
     name: String,
     color: String,
     target_count: usize,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SkillFolderCard {
+    id: String,
+    name: String,
+    note: String,
+    color: String,
+    sort_order: i64,
+    skill_count: usize,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -1072,6 +1133,11 @@ async fn run_skillhub_sync() -> Result<LegacySnapshot, String> {
 }
 
 #[tauri::command]
+async fn ensure_agent_skill_delivery() -> Result<LegacySnapshot, String> {
+    run_blocking_task(ensure_agent_skill_delivery_blocking).await
+}
+
+#[tauri::command]
 async fn set_source_version_pin(source_id: String, pinned: bool) -> Result<LegacySnapshot, String> {
     run_blocking_task(move || set_source_version_pin_blocking(source_id, pinned)).await
 }
@@ -1283,6 +1349,7 @@ fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
         source_popularity: Vec::new(),
         source_governance: Vec::new(),
         source_quality_signals: Vec::new(),
+        last_sync_summary: SyncSummaryCard::default(),
         skill_conflicts,
         operator_consent: OperatorConsentCard {
             real_writes_enabled: false,
@@ -1291,6 +1358,7 @@ fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
             summary: "真实写入授权未开启；当前只允许 dry-run、报告和 SQLite 元数据。".to_string(),
         },
         tags: Vec::new(),
+        skill_folders: Vec::new(),
         preset_distributions: Vec::new(),
         operation_runners: Vec::new(),
         write_gates: Vec::new(),
@@ -1387,6 +1455,7 @@ fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
         snapshot.operator_consent =
             read_operator_consent(&connection).unwrap_or(snapshot.operator_consent);
         snapshot.tags = read_indexed_tags(&connection).unwrap_or_default();
+        snapshot.skill_folders = read_indexed_skill_folders(&connection).unwrap_or_default();
         snapshot.preset_distributions =
             read_indexed_preset_distributions(&connection).unwrap_or_default();
         snapshot.operation_runners =
@@ -1500,6 +1569,21 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
         run_skillhub_script_no_pull(&root)?;
     }
     run_agent_link_script(&root)?;
+    run_diagnostics_export_script(&root)?;
+    scan_legacy_snapshot_blocking()
+}
+
+fn ensure_agent_skill_delivery_blocking() -> Result<LegacySnapshot, String> {
+    let root = resolve_legacy_root()?;
+    if !database_file(&root).exists() {
+        let _ = scan_legacy_snapshot_blocking()?;
+    }
+    let connection = open_index_database(&root)?;
+    let snapshot = read_snapshot_from_database(&root, &connection)?;
+    if snapshot.skills.is_empty() {
+        return Ok(snapshot);
+    }
+    sync_local_sources_to_agents(&root, &connection)?;
     scan_legacy_snapshot_blocking()
 }
 
@@ -1559,7 +1643,8 @@ fn sync_local_sources_to_agents(root: &Path, connection: &Connection) -> Result<
     if let Ok(report) = plan_or_write_router_hubs(root, true, true) {
         let _ = record_router_hub_audit(connection, &report);
     }
-    run_agent_link_script(root)
+    run_agent_link_script(root)?;
+    run_diagnostics_export_script(root)
 }
 
 fn run_skillhub_script(root: &Path) -> Result<(), String> {
@@ -1591,19 +1676,17 @@ fn run_skillhub_script_with_options(root: &Path, no_pull: bool) -> Result<(), St
     )?;
 
     if !output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = [stdout.trim(), stderr.trim()]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let detail = if detail.chars().count() > 1600 {
-            detail.chars().take(1600).collect::<String>()
-        } else {
-            detail
-        };
-        return Err(format!("SkillHub 同步脚本执行失败：{detail}"));
+        let detail = stderr
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("同步脚本异常退出")
+            .trim();
+        let detail = detail.chars().take(280).collect::<String>();
+        return Err(format!(
+            "同步未完成，但本地来源和未提交内容均未删除。请打开“维护工具 → 导出排错包”查看详情。技术摘要：{detail}"
+        ));
     }
 
     Ok(())
@@ -1621,6 +1704,10 @@ fn run_agent_link_script(root: &Path) -> Result<(), String> {
         .arg(&script)
         .arg("-Quiet");
     configure_user_data_command(&mut command, root);
+    if database_file(root).exists() {
+        let allowlist = write_agent_skill_allowlist(root)?;
+        command.env("AI_SKILLHUB_AGENT_SKILL_ALLOWLIST", allowlist);
+    }
     let output = command_output_with_timeout(
         &mut command,
         Duration::from_secs(180),
@@ -1644,6 +1731,251 @@ fn run_agent_link_script(root: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct AgentSkillAllowlistRule {
+    folder_name: String,
+    source_name: String,
+    source_local_path: String,
+    enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum GeneratedAgentSkillDependency {
+    Skill { source: String, skill: String },
+    Source(String),
+}
+
+#[derive(Clone, Debug)]
+struct ActiveAgentSkillEntry {
+    name: String,
+    dependency: Option<GeneratedAgentSkillDependency>,
+}
+
+fn markdown_code_value(line: &str, prefixes: &[&str]) -> Option<String> {
+    let line = line.trim();
+    prefixes.iter().find_map(|prefix| {
+        line.strip_prefix(prefix).and_then(|value| {
+            let value = value
+                .trim()
+                .trim_matches('`')
+                .trim_start_matches('$')
+                .trim()
+                .to_string();
+            (!value.is_empty()).then_some(value)
+        })
+    })
+}
+
+fn generated_agent_skill_dependency(raw: &str) -> Option<GeneratedAgentSkillDependency> {
+    if raw.contains(CONFLICT_DISPATCHER_MARKER) {
+        let source = raw
+            .lines()
+            .find_map(|line| markdown_code_value(line, &["- Source:"]))?;
+        let skill = raw
+            .lines()
+            .find_map(|line| markdown_code_value(line, &["- Skill:", "- Skill name:"]))?;
+        return Some(GeneratedAgentSkillDependency::Skill { source, skill });
+    }
+
+    if raw.contains(ROUTER_HUB_MARKER) {
+        if let Some(source) = raw
+            .lines()
+            .find_map(|line| markdown_code_value(line, &["- Managed source:", "- 管理来源："]))
+        {
+            return Some(GeneratedAgentSkillDependency::Source(source));
+        }
+        const PREFIX: &str = "generated parent router for the local ";
+        const SUFFIX: &str = " skill collection.";
+        let start = raw.find(PREFIX)? + PREFIX.len();
+        let tail = &raw[start..];
+        let end = tail.find(SUFFIX)?;
+        let source = tail[..end].trim();
+        if !source.is_empty() {
+            return Some(GeneratedAgentSkillDependency::Source(source.to_string()));
+        }
+    }
+
+    None
+}
+
+fn agent_skill_source_keys(rule: &AgentSkillAllowlistRule) -> Vec<String> {
+    let mut keys = vec![normalize_skill_lookup(&rule.source_name)];
+    if let Some(folder_name) = Path::new(&rule.source_local_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+    {
+        keys.push(normalize_skill_lookup(folder_name));
+    }
+    keys.retain(|key| !key.is_empty());
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+fn collect_active_agent_skill_entries(
+    active_skills_root: &Path,
+) -> Result<Vec<ActiveAgentSkillEntry>, String> {
+    let entries = fs::read_dir(active_skills_root).map_err(|error| {
+        format!(
+            "Cannot read final active Skill view {}: {}",
+            active_skills_root.display(),
+            error
+        )
+    })?;
+    let mut active_entries = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let manifest = path.join("SKILL.md");
+        if !manifest.is_file() {
+            continue;
+        }
+        let raw = fs::read_to_string(&manifest).unwrap_or_default();
+        active_entries.push(ActiveAgentSkillEntry {
+            name: entry.file_name().to_string_lossy().to_string(),
+            dependency: generated_agent_skill_dependency(&raw),
+        });
+    }
+
+    active_entries.sort_by_key(|entry| entry.name.to_lowercase());
+    Ok(active_entries)
+}
+
+fn active_agent_entry_names_for_skill(
+    skill: &SkillCard,
+    active_entries: &[ActiveAgentSkillEntry],
+) -> Vec<String> {
+    let direct_name = skill.folder_name.to_lowercase();
+    let identity = source_skill_identity_key(&skill.source, &skill.name);
+    let source_key = normalize_skill_lookup(&skill.source);
+    let mut names = active_entries
+        .iter()
+        .filter_map(|entry| {
+            let matches = match &entry.dependency {
+                Some(GeneratedAgentSkillDependency::Skill { source, skill }) => {
+                    source_skill_identity_key(source, skill) == identity
+                }
+                Some(GeneratedAgentSkillDependency::Source(source)) => {
+                    normalize_skill_lookup(source) == source_key
+                }
+                None => entry.name.eq_ignore_ascii_case(&direct_name),
+            };
+            matches.then(|| entry.name.clone())
+        })
+        .collect::<Vec<_>>();
+    names.sort_by_key(|name| {
+        (
+            !name.eq_ignore_ascii_case(&skill.folder_name),
+            name.to_lowercase(),
+        )
+    });
+    names.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    names
+}
+
+fn select_agent_skill_allowlist_entries(
+    active_skills_root: &Path,
+    rules: &[AgentSkillAllowlistRule],
+) -> Result<Vec<String>, String> {
+    let mut enabled_direct_sources: HashMap<String, Vec<String>> = HashMap::new();
+    let mut sources_with_enabled_skills = HashSet::new();
+
+    for rule in rules.iter().filter(|rule| rule.enabled) {
+        let source_keys = agent_skill_source_keys(rule);
+        enabled_direct_sources
+            .entry(rule.folder_name.to_lowercase())
+            .or_default()
+            .extend(source_keys.iter().cloned());
+        for source_key in agent_skill_source_keys(rule) {
+            sources_with_enabled_skills.insert(source_key);
+        }
+    }
+
+    let active_entries = collect_active_agent_skill_entries(active_skills_root)?;
+    let parent_source_keys = active_entries
+        .iter()
+        .filter_map(|entry| match &entry.dependency {
+            Some(GeneratedAgentSkillDependency::Source(source))
+                if sources_with_enabled_skills.contains(&normalize_skill_lookup(source)) =>
+            {
+                Some(normalize_skill_lookup(source))
+            }
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let mut enabled = Vec::new();
+
+    for entry in active_entries {
+        let is_enabled = match entry.dependency {
+            // Same-name child aliases belonged to the old flat catalog. Parent
+            // routers now own their children, so aliases stay internal and are
+            // intentionally not published into Codex/Claude menus.
+            Some(GeneratedAgentSkillDependency::Skill { .. }) => false,
+            Some(GeneratedAgentSkillDependency::Source(source)) => {
+                sources_with_enabled_skills.contains(&normalize_skill_lookup(&source))
+            }
+            None => enabled_direct_sources
+                .get(&entry.name.to_lowercase())
+                .is_some_and(|source_keys| {
+                    // Keep truly standalone/local Skills visible. A Skill from a
+                    // managed source is reached through that source's parent.
+                    !source_keys
+                        .iter()
+                        .any(|source| parent_source_keys.contains(source))
+                }),
+        };
+        if is_enabled {
+            enabled.push(entry.name);
+        }
+    }
+
+    enabled.sort_by_key(|name| name.to_lowercase());
+    enabled.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    Ok(enabled)
+}
+
+fn write_agent_skill_allowlist(root: &Path) -> Result<PathBuf, String> {
+    let connection = open_index_database(root)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT skills.folder_name,
+                    COALESCE(sources.name, ''), COALESCE(sources.local_path, ''),
+                    CASE
+                      WHEN COALESCE(skill_overrides.enabled, skills.enabled, 1) = 1
+                       AND COALESCE(source_overrides.enabled, sources.enabled, 1) = 1
+                      THEN 1 ELSE 0
+                    END
+             FROM skills
+             LEFT JOIN skill_overrides ON skill_overrides.skill_id = skills.id
+             LEFT JOIN sources ON sources.id = skills.source_id
+             LEFT JOIN source_overrides ON source_overrides.source_id = sources.id",
+        )
+        .map_err(|error| format!("Cannot prepare Agent Skill allowlist: {}", error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(AgentSkillAllowlistRule {
+                folder_name: row.get(0)?,
+                source_name: row.get(1)?,
+                source_local_path: row.get(2)?,
+                enabled: row.get::<_, i64>(3)? != 0,
+            })
+        })
+        .map_err(|error| format!("Cannot read Agent Skill allowlist: {}", error))?;
+    let rules = collect_rows(rows, "Agent Skill allowlist")?;
+    let enabled = select_agent_skill_allowlist_entries(&active_skills_dir(root), &rules)?;
+    let path = private_state_dir(root).join("agent-skill-allowlist.json");
+    let body = serde_json::to_string_pretty(&enabled)
+        .map_err(|error| format!("Cannot serialize Agent Skill allowlist: {}", error))?;
+    fs::write(&path, format!("{}\n", body)).map_err(|error| {
+        format!(
+            "Cannot write Agent Skill allowlist {}: {}",
+            path.display(),
+            error
+        )
+    })?;
+    Ok(path)
 }
 
 fn run_diagnostics_export_script(root: &Path) -> Result<(), String> {
@@ -1838,8 +2170,11 @@ fn set_skill_metadata(
 
 #[tauri::command]
 fn set_skill_enabled(folder_name: String, enabled: bool) -> Result<LegacySnapshot, String> {
-    set_skill_enabled_override(&folder_name, enabled)?;
-    load_indexed_snapshot_blocking()
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    set_skill_enabled_override_in_connection(&connection, &folder_name, enabled)?;
+    sync_local_sources_to_agents(&root, &connection)?;
+    scan_legacy_snapshot_blocking()
 }
 
 #[tauri::command]
@@ -1854,6 +2189,341 @@ fn set_source_rating(source_id: String, rating: u8) -> Result<LegacySnapshot, St
     load_indexed_snapshot_blocking()
 }
 
+const SKILL_FOLDER_COLORS: &[&str] = &[
+    "cyan", "violet", "magenta", "amber", "emerald", "blue", "coral", "slate",
+];
+
+fn validate_skill_folder_fields(
+    name: &str,
+    note: &str,
+    color: &str,
+) -> Result<(String, String, String), String> {
+    let name = compact_note(name);
+    let note = note.trim().to_string();
+    let color = color.trim().to_ascii_lowercase();
+    if name.is_empty() {
+        return Err("文件夹名称不能为空。".to_string());
+    }
+    if name.chars().count() > 48 {
+        return Err("文件夹名称最多 48 个字符。".to_string());
+    }
+    if note.chars().count() > 500 {
+        return Err("文件夹备注最多 500 个字符。".to_string());
+    }
+    if !SKILL_FOLDER_COLORS.contains(&color.as_str()) {
+        return Err("不支持的文件夹颜色。".to_string());
+    }
+    Ok((name, note, color))
+}
+
+#[tauri::command]
+fn create_skill_folder(
+    name: String,
+    note: String,
+    color: String,
+) -> Result<LegacySnapshot, String> {
+    let (name, note, color) = validate_skill_folder_fields(&name, &note, &color)?;
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM skill_folders", [], |row| row.get(0))
+        .map_err(|error| format!("Cannot count Skill folders: {}", error))?;
+    if count >= 100 {
+        return Err("最多可创建 100 个 Skill 文件夹。".to_string());
+    }
+    let timestamp = unix_timestamp_string();
+    let id = format!("{}-{}", stable_id("skill-folder", &name), timestamp);
+    let sort_order: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), -10) + 10 FROM skill_folders",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    connection
+        .execute(
+            "INSERT INTO skill_folders
+                (id, name, note, color, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+            params![id, name, note, color, sort_order, timestamp],
+        )
+        .map_err(|error| {
+            if error.to_string().contains("UNIQUE") {
+                "已经有同名文件夹。".to_string()
+            } else {
+                format!("Cannot create Skill folder: {}", error)
+            }
+        })?;
+    write_audit_event(
+        &connection,
+        "skill_folder_created",
+        "Created local Skill folder",
+        serde_json::json!({ "folderId": id, "name": name, "scope": "sqlite-only" }),
+    )?;
+    load_indexed_snapshot_blocking()
+}
+
+#[tauri::command]
+fn update_skill_folder(
+    folder_id: String,
+    name: String,
+    note: String,
+    color: String,
+) -> Result<LegacySnapshot, String> {
+    let folder_id = compact_note(&folder_id);
+    let (name, note, color) = validate_skill_folder_fields(&name, &note, &color)?;
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let changed = connection
+        .execute(
+            "UPDATE skill_folders
+             SET name = ?1, note = ?2, color = ?3, updated_at = ?4
+             WHERE id = ?5",
+            params![name, note, color, unix_timestamp_string(), folder_id],
+        )
+        .map_err(|error| {
+            if error.to_string().contains("UNIQUE") {
+                "已经有同名文件夹。".to_string()
+            } else {
+                format!("Cannot update Skill folder: {}", error)
+            }
+        })?;
+    if changed == 0 {
+        return Err("找不到要编辑的 Skill 文件夹。".to_string());
+    }
+    write_audit_event(
+        &connection,
+        "skill_folder_updated",
+        "Updated local Skill folder",
+        serde_json::json!({ "folderId": folder_id, "name": name, "scope": "sqlite-only" }),
+    )?;
+    load_indexed_snapshot_blocking()
+}
+
+#[tauri::command]
+fn delete_skill_folder(folder_id: String) -> Result<LegacySnapshot, String> {
+    let folder_id = compact_note(&folder_id);
+    let root = resolve_legacy_root()?;
+    let mut connection = open_index_database(&root)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot start Skill folder deletion: {}", error))?;
+    transaction
+        .execute(
+            "DELETE FROM skill_folder_memberships WHERE folder_id = ?1",
+            params![folder_id],
+        )
+        .map_err(|error| format!("Cannot unfile Skills: {}", error))?;
+    transaction
+        .execute(
+            "DELETE FROM source_folder_memberships WHERE folder_id = ?1",
+            params![folder_id],
+        )
+        .map_err(|error| format!("Cannot unfile source trees: {}", error))?;
+    let changed = transaction
+        .execute(
+            "DELETE FROM skill_folders WHERE id = ?1",
+            params![folder_id],
+        )
+        .map_err(|error| format!("Cannot delete Skill folder: {}", error))?;
+    if changed == 0 {
+        return Err("找不到要删除的 Skill 文件夹。".to_string());
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit Skill folder deletion: {}", error))?;
+    write_audit_event(
+        &connection,
+        "skill_folder_deleted",
+        "Deleted local Skill folder; Skills were kept",
+        serde_json::json!({ "folderId": folder_id, "skillsDeleted": 0, "scope": "sqlite-only" }),
+    )?;
+    load_indexed_snapshot_blocking()
+}
+
+fn require_skill_folder(connection: &Connection, folder_id: &str) -> Result<(), String> {
+    let exists: Option<String> = connection
+        .query_row(
+            "SELECT id FROM skill_folders WHERE id = ?1 LIMIT 1",
+            params![folder_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot locate Skill folder: {}", error))?;
+    exists
+        .map(|_| ())
+        .ok_or_else(|| "选择的 Skill 文件夹不存在。".to_string())
+}
+
+#[tauri::command]
+fn move_skill_to_folder(skill_id: String, folder_id: String) -> Result<LegacySnapshot, String> {
+    let skill_id = compact_note(&skill_id);
+    let folder_id = compact_note(&folder_id);
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let skill_source_id: Option<Option<String>> = connection
+        .query_row(
+            "SELECT source_id FROM skills WHERE id = ?1 LIMIT 1",
+            params![skill_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot locate Skill: {}", error))?;
+    let skill_source_id = skill_source_id
+        .ok_or_else(|| "找不到要归档的 Skill。".to_string())?
+        .unwrap_or_default();
+    if !skill_source_id.is_empty() {
+        update_source_folder_membership(&connection, &skill_source_id, &folder_id)?;
+        write_audit_event(
+            &connection,
+            "source_tree_folder_updated",
+            "Moved the full source tree because a child Skill was selected",
+            serde_json::json!({ "sourceId": skill_source_id, "skillId": skill_id, "folderId": folder_id, "scope": "sqlite-only" }),
+        )?;
+        return load_indexed_snapshot_blocking();
+    }
+    if folder_id.is_empty() {
+        connection
+            .execute(
+                "DELETE FROM skill_folder_memberships WHERE skill_id = ?1",
+                params![skill_id],
+            )
+            .map_err(|error| format!("Cannot remove Skill from folder: {}", error))?;
+    } else {
+        require_skill_folder(&connection, &folder_id)?;
+        let timestamp = unix_timestamp_string();
+        connection
+            .execute(
+                "INSERT INTO skill_folder_memberships (skill_id, folder_id, sort_order, updated_at)
+                 VALUES (?1, ?2, 0, ?3)
+                 ON CONFLICT(skill_id) DO UPDATE SET
+                    folder_id = excluded.folder_id,
+                    updated_at = excluded.updated_at",
+                params![skill_id, folder_id, timestamp],
+            )
+            .map_err(|error| format!("Cannot move Skill into folder: {}", error))?;
+    }
+    write_audit_event(
+        &connection,
+        "skill_folder_membership_updated",
+        "Moved Skill between local folders",
+        serde_json::json!({ "skillId": skill_id, "folderId": folder_id, "scope": "sqlite-only" }),
+    )?;
+    load_indexed_snapshot_blocking()
+}
+
+#[tauri::command]
+fn move_source_skills_to_folder(
+    source_id: String,
+    folder_id: String,
+) -> Result<LegacySnapshot, String> {
+    let source_id = compact_note(&source_id);
+    let folder_id = compact_note(&folder_id);
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let source_exists: Option<String> = connection
+        .query_row(
+            "SELECT id FROM sources WHERE id = ?1 LIMIT 1",
+            params![source_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot locate source tree: {}", error))?;
+    source_exists.ok_or_else(|| "找不到要归档的父 Skill 来源。".to_string())?;
+    let changed = update_source_folder_membership(&connection, &source_id, &folder_id)?;
+    write_audit_event(
+        &connection,
+        "source_skills_folder_updated",
+        "Filed every Skill from one source",
+        serde_json::json!({ "sourceId": source_id, "folderId": folder_id, "changed": changed, "scope": "sqlite-only" }),
+    )?;
+    load_indexed_snapshot_blocking()
+}
+
+fn update_source_folder_membership(
+    connection: &Connection,
+    source_id: &str,
+    folder_id: &str,
+) -> Result<usize, String> {
+    if !folder_id.is_empty() {
+        require_skill_folder(connection, folder_id)?;
+    }
+    let timestamp = unix_timestamp_string();
+    let changed = if folder_id.is_empty() {
+        connection
+            .execute(
+                "DELETE FROM source_folder_memberships WHERE source_id = ?1",
+                params![source_id],
+            )
+            .map_err(|error| format!("Cannot unfile source tree: {}", error))?
+    } else {
+        connection
+            .execute(
+                "INSERT INTO source_folder_memberships (source_id, folder_id, sort_order, updated_at)
+                 VALUES (?1, ?2, 0, ?3)
+                 ON CONFLICT(source_id) DO UPDATE SET
+                    folder_id = excluded.folder_id,
+                    updated_at = excluded.updated_at",
+                params![source_id, folder_id, timestamp],
+            )
+            .map_err(|error| format!("Cannot file source tree: {}", error))?
+    };
+    connection
+        .execute(
+            "DELETE FROM skill_folder_memberships
+             WHERE skill_id IN (SELECT id FROM skills WHERE source_id = ?1)",
+            params![source_id],
+        )
+        .map_err(|error| format!("Cannot clear legacy child folder assignments: {}", error))?;
+    Ok(changed)
+}
+
+#[tauri::command]
+fn move_skill_folder(folder_id: String, direction: String) -> Result<LegacySnapshot, String> {
+    let folder_id = compact_note(&folder_id);
+    let direction = direction.trim();
+    if direction != "up" && direction != "down" {
+        return Err("Unsupported Skill folder direction.".to_string());
+    }
+    let root = resolve_legacy_root()?;
+    let mut connection = open_index_database(&root)?;
+    let folders = read_indexed_skill_folders(&connection)?;
+    let current = folders
+        .iter()
+        .position(|folder| folder.id == folder_id)
+        .ok_or_else(|| "找不到要排序的 Skill 文件夹。".to_string())?;
+    let neighbor = if direction == "up" {
+        current.checked_sub(1)
+    } else if current + 1 < folders.len() {
+        Some(current + 1)
+    } else {
+        None
+    };
+    let Some(neighbor) = neighbor else {
+        return load_indexed_snapshot_blocking();
+    };
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot start Skill folder reorder: {}", error))?;
+    let timestamp = unix_timestamp_string();
+    transaction
+        .execute(
+            "UPDATE skill_folders SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+            params![folders[neighbor].sort_order, timestamp, folders[current].id],
+        )
+        .map_err(|error| format!("Cannot reorder Skill folder: {}", error))?;
+    transaction
+        .execute(
+            "UPDATE skill_folders SET sort_order = ?1, updated_at = ?2 WHERE id = ?3",
+            params![folders[current].sort_order, timestamp, folders[neighbor].id],
+        )
+        .map_err(|error| format!("Cannot reorder Skill folder: {}", error))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit Skill folder reorder: {}", error))?;
+    load_indexed_snapshot_blocking()
+}
+
 #[tauri::command]
 fn set_source_metadata(
     source_id: String,
@@ -1863,7 +2533,25 @@ fn set_source_metadata(
     note: String,
     enabled: bool,
 ) -> Result<LegacySnapshot, String> {
-    set_source_metadata_override(&source_id, &name, &source_type, &category, &note, enabled)?;
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let previous_enabled = read_indexed_sources(&connection)?
+        .into_iter()
+        .find(|source| source.id == source_id)
+        .map(|source| source.enabled);
+    set_source_metadata_override_in_connection(
+        &connection,
+        &source_id,
+        &name,
+        &source_type,
+        &category,
+        &note,
+        enabled,
+    )?;
+    if previous_enabled != Some(enabled) {
+        sync_local_sources_to_agents(&root, &connection)?;
+        return scan_legacy_snapshot_blocking();
+    }
     load_indexed_snapshot_blocking()
 }
 
@@ -1876,6 +2564,10 @@ fn set_sources_bulk_metadata(
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_sources_bulk_metadata_in_connection(&connection, &source_ids, &category, enabled)?;
+    if enabled.is_some() {
+        sync_local_sources_to_agents(&root, &connection)?;
+        return scan_legacy_snapshot_blocking();
+    }
     load_indexed_snapshot_blocking()
 }
 
@@ -2500,6 +3192,70 @@ fn diagnostics_file(root: &Path) -> PathBuf {
     reports_dir(root).join("latest-diagnostics.json")
 }
 
+fn read_last_sync_summary(root: &Path) -> SyncSummaryCard {
+    let path = reports_dir(root).join("last-sync.json");
+    let Ok(raw) = fs::read_to_string(path) else {
+        return SyncSummaryCard::default();
+    };
+    let Ok(payload) = serde_json::from_str::<Value>(&raw) else {
+        return SyncSummaryCard::default();
+    };
+    let usize_field = |key: &str| payload.get(key).and_then(Value::as_u64).unwrap_or(0) as usize;
+    let repositories = payload
+        .get("repositories")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| SyncRepositoryCard {
+                    repository: item
+                        .get("Repository")
+                        .or_else(|| item.get("repository"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    action: item
+                        .get("Action")
+                        .or_else(|| item.get("action"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    status: item
+                        .get("Status")
+                        .or_else(|| item.get("status"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    message: item
+                        .get("Message")
+                        .or_else(|| item.get("message"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    SyncSummaryCard {
+        generated_at: payload
+            .get("generatedAt")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        status: payload
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        total: usize_field("total"),
+        succeeded: usize_field("succeeded"),
+        failed: usize_field("failed"),
+        skipped: usize_field("skipped"),
+        active_skills: usize_field("activeSkills"),
+        repositories,
+    }
+}
+
 fn skillhub_config_file(root: &Path) -> PathBuf {
     if cfg!(test) {
         app_next_runtime_root(root).join("skillhub.config.json")
@@ -2917,6 +3673,35 @@ fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
                 FOREIGN KEY(source_id) REFERENCES sources(id),
                 FOREIGN KEY(tag_id) REFERENCES tags(id)
             );
+            CREATE TABLE IF NOT EXISTS skill_folders (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                color TEXT NOT NULL DEFAULT 'cyan',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_folders_name_nocase
+                ON skill_folders(name COLLATE NOCASE);
+            CREATE TABLE IF NOT EXISTS skill_folder_memberships (
+                skill_id TEXT PRIMARY KEY,
+                folder_id TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(folder_id) REFERENCES skill_folders(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_folder_memberships_folder
+                ON skill_folder_memberships(folder_id, sort_order, skill_id);
+            CREATE TABLE IF NOT EXISTS source_folder_memberships (
+                source_id TEXT PRIMARY KEY,
+                folder_id TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(folder_id) REFERENCES skill_folders(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_source_folder_memberships_folder
+                ON source_folder_memberships(folder_id, sort_order, source_id);
             CREATE TABLE IF NOT EXISTS preset_workspaces (
                 preset_id TEXT NOT NULL,
                 workspace_id TEXT NOT NULL,
@@ -2942,6 +3727,28 @@ fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
             );",
         )
         .map_err(|error| format!("Cannot ensure v2 metadata event tables: {}", error))?;
+    // v3.1.6 migration: a user folder owns the complete source tree. Any legacy
+    // child-only assignments that agree on one folder are promoted once, then
+    // removed so future children inherit without materialized rows.
+    connection
+        .execute_batch(
+            "INSERT OR IGNORE INTO source_folder_memberships (source_id, folder_id, sort_order, updated_at)
+             SELECT skills.source_id, MIN(skill_folder_memberships.folder_id), 0,
+                    MAX(skill_folder_memberships.updated_at)
+             FROM skill_folder_memberships
+             INNER JOIN skills ON skills.id = skill_folder_memberships.skill_id
+             WHERE skills.source_id IS NOT NULL AND skills.source_id <> ''
+             GROUP BY skills.source_id
+             HAVING COUNT(DISTINCT skill_folder_memberships.folder_id) = 1;
+             DELETE FROM skill_folder_memberships
+             WHERE skill_id IN (
+                SELECT skills.id
+                FROM skills
+                INNER JOIN source_folder_memberships
+                    ON source_folder_memberships.source_id = skills.source_id
+             );",
+        )
+        .map_err(|error| format!("Cannot migrate source-tree folder assignments: {}", error))?;
     ensure_column(connection, "skill_overrides", "enabled", "INTEGER")?;
     ensure_column(
         connection,
@@ -3085,10 +3892,12 @@ fn read_snapshot_from_database(
     let source_popularity = read_indexed_source_popularity(connection, &sources, &usage_stats)?;
     let source_governance = source_governance::read_governance_cards(root, connection, &sources)?;
     let source_quality_signals = source_governance::read_quality_signals(connection, &sources)?;
+    let last_sync_summary = read_last_sync_summary(root);
     let skill_conflict_choices = read_skill_conflict_choice_state(connection)?;
     let skill_conflicts = derive_skill_conflicts(&skills, &skill_conflict_choices);
     let operator_consent = read_operator_consent(connection)?;
     let tags = read_indexed_tags(connection)?;
+    let skill_folders = read_indexed_skill_folders(connection)?;
     let preset_distributions = read_indexed_preset_distributions(connection)?;
     let operation_runners = read_indexed_operation_runners(connection, root)?;
     let audit_events = read_indexed_audit_events(connection)?;
@@ -3160,9 +3969,11 @@ fn read_snapshot_from_database(
         source_popularity,
         source_governance,
         source_quality_signals,
+        last_sync_summary,
         skill_conflicts,
         operator_consent,
         tags,
+        skill_folders,
         preset_distributions,
         operation_runners,
         write_gates,
@@ -3374,12 +4185,6 @@ fn set_skill_metadata_override(
     )
 }
 
-fn set_skill_enabled_override(folder_name: &str, enabled: bool) -> Result<(), String> {
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    set_skill_enabled_override_in_connection(&connection, folder_name, enabled)
-}
-
 fn set_skill_rating_override(folder_name: &str, rating: u8) -> Result<(), String> {
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
@@ -3390,27 +4195,6 @@ fn set_source_rating_override(source_id: &str, rating: u8) -> Result<(), String>
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_source_rating_override_in_connection(&connection, source_id, rating)
-}
-
-fn set_source_metadata_override(
-    source_id: &str,
-    name: &str,
-    source_type: &str,
-    category: &str,
-    note: &str,
-    enabled: bool,
-) -> Result<(), String> {
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    set_source_metadata_override_in_connection(
-        &connection,
-        source_id,
-        name,
-        source_type,
-        category,
-        note,
-        enabled,
-    )
 }
 
 fn set_source_metadata_override_in_connection(
@@ -5204,13 +5988,13 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
         } else {
             source.id.clone()
         };
-        insert_source_id_alias(&mut source_ids, &source.name, &source_id);
-        insert_source_id_alias(&mut source_ids, &source.id, &source_id);
+        insert_source_id_primary(&mut source_ids, &source.name, &source_id);
+        insert_source_id_primary(&mut source_ids, &source.id, &source_id);
         if let Some(folder_name) = Path::new(&source.local_path)
             .file_name()
             .and_then(|value| value.to_str())
         {
-            insert_source_id_alias(&mut source_ids, folder_name, &source_id);
+            insert_source_id_primary(&mut source_ids, folder_name, &source_id);
         }
         if let Some((_owner, repo_name)) = parse_github_repo(&source.url) {
             insert_source_id_alias(&mut source_ids, &repo_name, &source_id);
@@ -5314,6 +6098,20 @@ fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexRepor
         }
     }
     restore_tag_overrides(&transaction, "skill", &skill_tag_overrides, &indexed_at)?;
+    transaction
+        .execute(
+            "DELETE FROM skill_folder_memberships
+             WHERE skill_id NOT IN (SELECT id FROM skills)",
+            [],
+        )
+        .map_err(|error| format!("Cannot remove stale Skill folder memberships: {}", error))?;
+    transaction
+        .execute(
+            "DELETE FROM source_folder_memberships
+             WHERE source_id NOT IN (SELECT id FROM sources)",
+            [],
+        )
+        .map_err(|error| format!("Cannot remove stale source folder memberships: {}", error))?;
 
     for agent in &snapshot.agents {
         transaction
@@ -5650,9 +6448,14 @@ fn read_indexed_sources(connection: &Connection) -> Result<Vec<SourceCard>, Stri
                     THEN 1.0
                     ELSE sources.metadata_confidence
                 END AS metadata_confidence
+                ,COALESCE(source_folder_memberships.folder_id, '') AS user_folder_id
+                ,COALESCE(skill_folders.name, '') AS user_folder_name
+                ,COALESCE(skill_folders.color, '') AS user_folder_color
             FROM sources
             LEFT JOIN skills ON skills.source_id = sources.id
             LEFT JOIN source_overrides ON source_overrides.source_id = sources.id
+            LEFT JOIN source_folder_memberships ON source_folder_memberships.source_id = sources.id
+            LEFT JOIN skill_folders ON skill_folders.id = source_folder_memberships.folder_id
             GROUP BY sources.id
             ORDER BY lower(display_name)",
         )
@@ -5678,6 +6481,9 @@ fn read_indexed_sources(connection: &Connection) -> Result<Vec<SourceCard>, Stri
                 usage_guide: row.get(13)?,
                 metadata_origin: row.get(14)?,
                 metadata_confidence: row.get(15)?,
+                user_folder_id: row.get(16)?,
+                user_folder_name: row.get(17)?,
+                user_folder_color: row.get(18)?,
             })
         })
         .map_err(|error| format!("Cannot read indexed sources: {}", error))?;
@@ -5700,6 +6506,7 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
                 COALESCE(NULLIF(skill_overrides.category_id, ''), skills.category_id) AS category_id,
                 COALESCE(NULLIF(skill_overrides.description, ''), skills.description) AS description,
                 COALESCE(skill_overrides.note, '') AS note,
+                COALESCE(skills.source_id, '') AS source_id,
                 COALESCE(sources.name, 'local') AS source_name,
                 skills.health_status,
                 COALESCE(skill_overrides.enabled, skills.enabled) AS enabled,
@@ -5726,10 +6533,16 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
                     )
                     THEN 1.0
                     ELSE skills.metadata_confidence
-                END AS metadata_confidence
+                END AS metadata_confidence,
+                COALESCE(skill_folder_memberships.folder_id, source_folder_memberships.folder_id, '') AS user_folder_id,
+                COALESCE(skill_folders.name, '') AS user_folder_name,
+                COALESCE(skill_folders.color, '') AS user_folder_color
             FROM skills
             LEFT JOIN sources ON sources.id = skills.source_id
             LEFT JOIN skill_overrides ON skill_overrides.skill_id = skills.id
+            LEFT JOIN skill_folder_memberships ON skill_folder_memberships.skill_id = skills.id
+            LEFT JOIN source_folder_memberships ON source_folder_memberships.source_id = skills.source_id
+            LEFT JOIN skill_folders ON skill_folders.id = COALESCE(skill_folder_memberships.folder_id, source_folder_memberships.folder_id)
             WHERE NOT (
                 skills.source_id IS NULL
                 AND COALESCE(skills.is_router_hub, 0) = 1
@@ -5747,21 +6560,26 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
             Ok((
                 row.get::<_, String>(0)?,
                 SkillCard {
+                    id: row.get(0)?,
+                    source_id: row.get(6)?,
                     name: row.get(1)?,
                     folder_name: row.get(2)?,
                     category: row.get(3)?,
                     description: row.get(4)?,
                     note: row.get(5)?,
-                    source: row.get(6)?,
-                    health: row.get(7)?,
-                    enabled: row.get::<_, i64>(8)? != 0,
-                    rating: row.get::<_, i64>(9)?.clamp(0, 5) as u8,
-                    relative_path: row.get(10)?,
+                    source: row.get(7)?,
+                    health: row.get(8)?,
+                    enabled: row.get::<_, i64>(9)? != 0,
+                    rating: row.get::<_, i64>(10)?.clamp(0, 5) as u8,
+                    relative_path: row.get(11)?,
                     tags: Vec::new(),
-                    is_router_hub: row.get::<_, i64>(11)? != 0,
-                    usage_guide: row.get(12)?,
-                    metadata_origin: row.get(13)?,
-                    metadata_confidence: row.get(14)?,
+                    is_router_hub: row.get::<_, i64>(12)? != 0,
+                    usage_guide: row.get(13)?,
+                    metadata_origin: row.get(14)?,
+                    metadata_confidence: row.get(15)?,
+                    user_folder_id: row.get(16)?,
+                    user_folder_name: row.get(17)?,
+                    user_folder_color: row.get(18)?,
                 },
             ))
         })
@@ -6101,6 +6919,24 @@ fn source_import_target_path(root: &Path, display_name: &str) -> String {
         .join(sanitize_source_folder_name(display_name))
         .to_string_lossy()
         .to_string()
+}
+
+fn github_source_storage_name(owner: &str, repo: &str) -> String {
+    sanitize_source_folder_name(&format!("{}--{}", owner.trim(), repo.trim()))
+}
+
+fn staged_github_storage_name(staged_path: &Path, fallback: &str) -> String {
+    let metadata_path = staged_path.join(MANAGED_SOURCE_METADATA_FILE);
+    if let Ok(metadata) = fs::read_to_string(metadata_path) {
+        if let Ok(payload) = serde_json::from_str::<Value>(&metadata) {
+            if let Some(url) = payload.get("url").and_then(Value::as_str) {
+                if let Some((owner, repo)) = parse_github_repo(url) {
+                    return github_source_storage_name(&owner, &repo);
+                }
+            }
+        }
+    }
+    sanitize_source_folder_name(fallback)
 }
 
 fn validate_managed_source_delete_path(
@@ -8021,7 +8857,12 @@ fn promote_staged_source_import_in_connection(
     let source_name = sanitize_source_folder_name(&raw_source_name);
     let staging_root = source_import_staging_root(root);
     let staged_candidate = PathBuf::from(staged_path.trim());
-    let target_path = PathBuf::from(source_import_target_path(root, &source_name));
+    let storage_name = if normalized_kind == "github" {
+        staged_github_storage_name(&staged_candidate, &source_name)
+    } else {
+        source_name.clone()
+    };
+    let target_path = PathBuf::from(source_import_target_path(root, &storage_name));
     let mut promotion = SourceImportPromotionCard {
         id: format!(
             "source-import-promote-{}-{}",
@@ -8381,8 +9222,9 @@ fn build_github_source_import_plan(
         })
         .unwrap_or_default();
     let safe_to_continue = true;
-    let target_path = source_import_target_path(root, &display_name);
-    let backup_path = source_import_backup_path(root, &display_name);
+    let storage_name = github_source_storage_name(&owner, &repo);
+    let target_path = source_import_target_path(root, &storage_name);
+    let backup_path = source_import_backup_path(root, &storage_name);
     let mut blocking_checks = Vec::new();
     if !duplicate_reason.is_empty() {
         blocking_checks.push(duplicate_reason.clone());
@@ -10020,6 +10862,51 @@ fn read_indexed_tags(connection: &Connection) -> Result<Vec<TagCard>, String> {
     collect_rows(rows, "tag")
 }
 
+fn read_indexed_skill_folders(connection: &Connection) -> Result<Vec<SkillFolderCard>, String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT
+                skill_folders.id,
+                skill_folders.name,
+                skill_folders.note,
+                skill_folders.color,
+                skill_folders.sort_order,
+                (
+                    SELECT COUNT(*)
+                    FROM skills source_skills
+                    INNER JOIN source_folder_memberships
+                        ON source_folder_memberships.source_id = source_skills.source_id
+                    WHERE source_folder_memberships.folder_id = skill_folders.id
+                ) + (
+                    SELECT COUNT(*)
+                    FROM skill_folder_memberships standalone_memberships
+                    INNER JOIN skills standalone_skills ON standalone_skills.id = standalone_memberships.skill_id
+                    WHERE standalone_memberships.folder_id = skill_folders.id
+                      AND (standalone_skills.source_id IS NULL OR standalone_skills.source_id = '')
+                ) AS skill_count,
+                skill_folders.created_at,
+                skill_folders.updated_at
+             FROM skill_folders
+             ORDER BY skill_folders.sort_order, lower(skill_folders.name)",
+        )
+        .map_err(|error| format!("Cannot prepare Skill folder query: {}", error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(SkillFolderCard {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                note: row.get(2)?,
+                color: row.get(3)?,
+                sort_order: row.get(4)?,
+                skill_count: row.get::<_, i64>(5)?.max(0) as usize,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })
+        .map_err(|error| format!("Cannot read Skill folders: {}", error))?;
+    collect_rows(rows, "Skill folder")
+}
+
 fn read_tag_map(
     connection: &Connection,
     target_type: &str,
@@ -11247,7 +12134,7 @@ fn derive_agent_doctors(
                             is_directory: json_bool(item, "exists"),
                             writable: json_bool(item, "writable"),
                             is_link: json_bool(item, "isLink"),
-                            contains_skill_md: false,
+                            contains_skill_md: json_bool(item, "containsSkillMd"),
                             detail: String::new(),
                         })
                         .collect::<Vec<_>>()
@@ -11271,35 +12158,87 @@ fn derive_agent_doctors(
 }
 
 fn derive_agent_skill_statuses(
-    _root: &Path,
+    root: &Path,
     skills: &[SkillCard],
     agents: &[AgentCard],
 ) -> Vec<AgentSkillStatusCard> {
     let mut statuses = Vec::new();
+    let active_root = active_skills_dir(root);
+    let active_entries = collect_active_agent_skill_entries(&active_root).unwrap_or_default();
 
     for agent in agents {
         for skill in skills {
-            let expected_path = if agent.path.trim().is_empty() {
+            let active_entry_names = active_agent_entry_names_for_skill(skill, &active_entries);
+            let manifest_eligible = active_entry_names.is_empty()
+                || active_entry_names.iter().any(|entry_name| {
+                    let skill_dir = active_root.join(entry_name);
+                    read_skill_name(&skill_dir.join("SKILL.md")).is_some()
+                        && !read_skill_description(&skill_dir).trim().is_empty()
+                });
+            let preferred_entry_name = active_entry_names
+                .first()
+                .cloned()
+                .unwrap_or_else(|| skill.folder_name.clone());
+            let agent_skills_path = expand_user_home_path(&agent.path);
+            let expected_path = if agent_skills_path.as_os_str().is_empty() {
                 PathBuf::new()
             } else {
-                PathBuf::from(&agent.path).join(&skill.folder_name)
+                agent_skills_path.join(&preferred_entry_name)
             };
             let expected_path_text = if expected_path.as_os_str().is_empty() {
                 String::new()
             } else {
                 expected_path.display().to_string()
             };
-            let installed = !expected_path.as_os_str().is_empty() && expected_path.exists();
-            let target_path = if installed {
-                expected_path
+            let installed_path = if agent_skills_path.as_os_str().is_empty() {
+                None
+            } else {
+                active_entry_names
+                    .iter()
+                    .map(|entry_name| agent_skills_path.join(entry_name))
+                    .find(|path| path.join("SKILL.md").is_file())
+            };
+            let installed = installed_path.is_some();
+            let installed_entry_name = installed_path
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .and_then(|value| value.to_str())
+                .unwrap_or(&preferred_entry_name)
+                .to_string();
+            let routed_via_parent = !skill.is_router_hub
+                && installed
+                && active_entries.iter().any(|entry| {
+                    entry.name.eq_ignore_ascii_case(&installed_entry_name)
+                        && matches!(
+                            &entry.dependency,
+                            Some(GeneratedAgentSkillDependency::Source(source))
+                                if normalize_skill_lookup(source)
+                                    == normalize_skill_lookup(&skill.source)
+                        )
+                });
+            let target_path = if let Some(installed_path) = installed_path {
+                installed_path
                     .canonicalize()
-                    .unwrap_or_else(|_| expected_path.clone())
+                    .unwrap_or_else(|_| installed_path.clone())
                     .display()
                     .to_string()
             } else {
                 String::new()
             };
-            let (status, summary) = if !agent.detected {
+            let (status, summary) = if !skill.enabled {
+                (
+                    "skill-disabled",
+                    format!("{} 已停用，不会发布到 {}。", skill.name, agent.name),
+                )
+            } else if !manifest_eligible {
+                (
+                    "invalid-manifest",
+                    format!(
+                        "{} 的 SKILL.md 缺少有效 name 或 description，已停止发布。",
+                        skill.name
+                    ),
+                )
+            } else if !agent.detected {
                 (
                     "agent-missing",
                     format!("{} 未检测到，暂不能判断此 Skill。", agent.name),
@@ -11309,17 +12248,42 @@ fn derive_agent_skill_statuses(
                     "agent-disabled",
                     format!("{} 已检测但未启用接管。", agent.name),
                 )
+            } else if routed_via_parent {
+                (
+                    "routed-via-parent",
+                    format!(
+                        "{} 已归入父 Skill {}；Agent 调用父入口后会按来源路径加载此子 Skill。",
+                        skill.name, installed_entry_name
+                    ),
+                )
             } else if installed {
                 (
                     "installed",
-                    format!("{} 已能看到 /{}。", agent.name, skill.folder_name),
+                    if agent.id.to_lowercase().contains("codex")
+                        || agent.name.to_lowercase().contains("codex")
+                    {
+                        format!(
+                            "{} 已交付；Codex 用 /skills 或 ${}，ChatGPT 用 @{}。",
+                            agent.name, installed_entry_name, installed_entry_name
+                        )
+                    } else {
+                        format!("{} 已能看到 {}。", agent.name, installed_entry_name)
+                    },
+                )
+            } else if active_entry_names.is_empty() {
+                (
+                    "missing",
+                    format!(
+                        "{} 尚未形成可交付的活动入口；同步后会重新计算路由。",
+                        skill.name
+                    ),
                 )
             } else {
                 (
                     "missing",
                     format!(
-                        "{} 缺少 /{}；点击同步可重建托管链接。",
-                        agent.name, skill.folder_name
+                        "{} 尚未收到 {}；点击同步可重建托管链接。",
+                        agent.name, preferred_entry_name
                     ),
                 )
             };
@@ -11344,6 +12308,29 @@ fn derive_agent_skill_statuses(
     statuses
 }
 
+fn expand_user_home_path(value: &str) -> PathBuf {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return PathBuf::new();
+    }
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_default();
+    if home.is_empty() {
+        return PathBuf::from(trimmed);
+    }
+    if trimmed == "~" {
+        return PathBuf::from(home);
+    }
+    if let Some(relative) = trimmed
+        .strip_prefix("~\\")
+        .or_else(|| trimmed.strip_prefix("~/"))
+    {
+        return PathBuf::from(home).join(relative);
+    }
+    PathBuf::from(trimmed)
+}
+
 fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSafetyCheckCard> {
     let mut checks = Vec::new();
 
@@ -11355,7 +12342,7 @@ fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSaf
             if adapter.id == "claude" && adapter.detected {
                 "已检测到 Claude Desktop 或 Claude Code；只有 Code 能力会接管本地 Skills。"
             } else if adapter.id == "codex" && adapter.detected {
-                "已检测到 ChatGPT Desktop 或 OpenAI Codex；只有 Codex 代码能力会接管本地 Skills。"
+                "已检测到 ChatGPT Desktop 或 OpenAI Codex；本地 Skills 使用官方用户级 .agents/skills 目录。"
             } else if adapter.detected {
                 "本机已检测到该 AI 工具。"
             } else {
@@ -11375,7 +12362,7 @@ fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSaf
             } else if adapter.id == "claude" {
                 "本地目录供 Claude Code/桌面 Code 模式使用；Chat/Cowork 需在 Claude 设置中导入 ZIP。"
             } else if adapter.id == "codex" {
-                "本地目录供 Codex 代码能力使用；仅安装 ChatGPT 桌面版时不会创建假目录。"
+                "ChatGPT Desktop 与 Codex 共用官方用户级 .agents/skills；旧 .codex/skills 仅作兼容。"
             } else {
                 "已声明默认 Skills 目录，仅作为路径提示，不会自动写入。"
             },
@@ -11683,7 +12670,7 @@ fn agent_adapter_catalog() -> Vec<AgentAdapterCard> {
             "codex",
             "ChatGPT Desktop / OpenAI Codex",
             "OpenAI",
-            "~\\.codex\\skills",
+            "~\\.agents\\skills",
             "global",
         ),
         agent_adapter(
@@ -12921,15 +13908,7 @@ fn scan_sources(
                 .filter(|value| !value.is_empty());
             let has_configured_metadata =
                 configured_category.is_some() || configured_note.is_some();
-            let inferred_note = if inferred.usage_guide.trim().is_empty() {
-                inferred.summary.clone()
-            } else {
-                format!(
-                    "{}\n\n使用方法：{}",
-                    inferred.summary.trim(),
-                    inferred.usage_guide.trim()
-                )
-            };
+            let inferred_note = inferred.summary.clone();
 
             sources.push(SourceCard {
                 id: stable_id("source", &folder_name),
@@ -12967,6 +13946,9 @@ fn scan_sources(
                 } else {
                     inferred.confidence
                 },
+                user_folder_id: String::new(),
+                user_folder_name: String::new(),
+                user_folder_color: String::new(),
             });
         }
     }
@@ -13019,6 +14001,7 @@ fn scan_skills(
         let description = diagnostic
             .map(|item| item.description.clone())
             .filter(|value| !value.is_empty())
+            .map(|value| metadata::concise_skill_summary(&value))
             .unwrap_or_else(|| inferred.summary.clone());
 
         let name = diagnostic
@@ -13029,11 +14012,13 @@ fn scan_skills(
         let is_router_hub =
             compute_is_router_hub(&description, &target, &source, &folder_name, &name);
         skills.push(SkillCard {
+            id: stable_id("skill", &folder_name),
+            source_id: String::new(),
             name,
             folder_name: folder_name.clone(),
             category,
             description,
-            note: inferred.usage_guide.clone(),
+            note: String::new(),
             source,
             health: skill_health(&entry.path(), diagnostic),
             enabled: true,
@@ -13044,6 +14029,9 @@ fn scan_skills(
             metadata_origin: inferred.origin,
             metadata_confidence: inferred.confidence,
             is_router_hub,
+            user_folder_id: String::new(),
+            user_folder_name: String::new(),
+            user_folder_color: String::new(),
         });
     }
 
@@ -13125,11 +14113,13 @@ fn scan_source_tree_skills(
 
             known_identity_keys.insert(identity_key);
             skills.push(SkillCard {
+                id: stable_id("skill", &folder_name),
+                source_id: source.id.clone(),
                 name,
                 folder_name,
                 category,
                 description,
-                note: inferred.usage_guide.clone(),
+                note: String::new(),
                 source: source.name.clone(),
                 health: source_tree_skill_health(&skill_dir),
                 enabled: source.enabled,
@@ -13140,6 +14130,9 @@ fn scan_source_tree_skills(
                 metadata_origin: inferred.origin,
                 metadata_confidence: inferred.confidence,
                 is_router_hub,
+                user_folder_id: String::new(),
+                user_folder_name: String::new(),
+                user_folder_color: String::new(),
             });
         }
     }
@@ -13314,14 +14307,24 @@ fn parse_agents(diagnostics: Option<&Value>) -> Vec<AgentCard> {
                         || json_bool(dir, "writable")
                 });
             let detected = raw_detected && !directory_only_detection;
-            let code_capable = !supports_split_detection
-                || !explicit_product_detection
-                || json_bool(agent, "codeDetected");
-            let managed = skills_dirs
-                .iter()
-                .any(|dir| json_bool(dir, "isLink") || json_bool(dir, "writable"))
-                && detected
-                && code_capable;
+            let local_skill_capable = match id.as_str() {
+                // Current ChatGPT Desktop and Codex builds discover standalone
+                // user Skills from $HOME/.agents/skills. A CLI installation is
+                // therefore no longer required for the OpenAI adapter.
+                "codex" => {
+                    !explicit_product_detection
+                        || json_bool(agent, "desktopDetected")
+                        || json_bool(agent, "codeDetected")
+                }
+                "claude" => !explicit_product_detection || json_bool(agent, "codeDetected"),
+                _ => true,
+            };
+            let managed = skills_dirs.iter().any(|dir| {
+                json_bool(dir, "isLink")
+                    || json_bool(dir, "containsSkillMd")
+                    || (dir.get("containsSkillMd").is_none() && json_bool(dir, "writable"))
+            }) && detected
+                && local_skill_capable;
             AgentCard {
                 id,
                 name: json_string(agent, "name"),
@@ -13452,65 +14455,10 @@ fn read_skill_description(path: &Path) -> String {
 /// We must NOT append a global suffix like `-hub`; doing so breaks every prompt that says
 /// "use the /nature-skills collection".
 ///
-/// If a child Skill in the same collection happens to use the bare collection name, that is
-/// reported separately as a `skipped-collision` plan card so the user can decide locally
-/// (rename the child, or accept Claude's load-order resolution). We never silently mutate
-/// the parent's name to dodge the conflict.
+/// A source-root Skill may share this name. That is safe because recipients receive
+/// only the generated parent entry; the original source file remains a child route.
 fn router_hub_skill_name(collection: &str) -> String {
     normalize_skill_lookup(collection)
-}
-
-fn router_hub_alias_skill_names(
-    collection: &str,
-    router_name: &str,
-    children: &[String],
-) -> Vec<String> {
-    if children.len() < 2 {
-        return Vec::new();
-    }
-
-    let normalized_children: Vec<String> = children
-        .iter()
-        .map(|child| normalize_skill_lookup(child))
-        .filter(|child| !child.is_empty())
-        .collect();
-    if normalized_children.len() != children.len() {
-        return Vec::new();
-    }
-
-    let Some(first_child) = normalized_children.first() else {
-        return Vec::new();
-    };
-    let Some(prefix) = first_child.split('-').next() else {
-        return Vec::new();
-    };
-    if prefix.len() < 5 {
-        return Vec::new();
-    }
-    const TOO_GENERIC_PREFIXES: &[&str] = &[
-        "agent", "agents", "paper", "papers", "prompt", "prompts", "skill", "skills",
-    ];
-    if TOO_GENERIC_PREFIXES.contains(&prefix) {
-        return Vec::new();
-    }
-
-    let prefix_with_separator = format!("{}-", prefix);
-    if !normalized_children
-        .iter()
-        .all(|child| child.starts_with(&prefix_with_separator))
-    {
-        return Vec::new();
-    }
-
-    let alias = prefix.to_string();
-    if alias == normalize_skill_lookup(collection) || alias == normalize_skill_lookup(router_name) {
-        return Vec::new();
-    }
-    if normalized_children.iter().any(|child| child == &alias) {
-        return Vec::new();
-    }
-
-    vec![alias]
 }
 
 /// Compose the body of a generated router-hub SKILL.md.
@@ -13518,50 +14466,55 @@ fn build_router_hub_skill_md(
     collection: &str,
     router_name: &str,
     children: &[String],
-    child_links: &BTreeMap<String, (String, String)>,
+    child_links: &BTreeMap<String, (String, String, String)>,
 ) -> String {
     let mut child_lines = String::new();
     for child in children {
         let key = normalize_skill_lookup(child);
-        let relative_path = child_links
+        let (relative_path, summary) = child_links
             .get(&key)
-            .map(|(_, relative)| relative.as_str())
-            .unwrap_or("SKILL.md");
+            .map(|(_, relative, summary)| {
+                (
+                    relative.as_str(),
+                    localized_router_child_summary(child, summary),
+                )
+            })
+            .unwrap_or_else(|| ("SKILL.md", format!("用于处理“{}”相关任务。", child)));
         child_lines.push_str(&format!(
-            "- {} /{} — source-scoped file `../../{}/{}`\n",
-            CHILD_SKILL_MARKER, child, collection, relative_path
+            "- {} `${}` — {} 来源文件：`../../{}/{}`\n",
+            CHILD_SKILL_MARKER, child, summary, collection, relative_path
         ));
     }
     let description = format!(
-        "{} AI SkillHub generated parent router for the local {} skill collection. \
-         Use this when the user names the collection but does not know which focused child skill to choose.",
-        ROUTER_HUB_MARKER, collection
+        "父 Skill · {}；聚合 {} 个来源内子 Skill，按任务自动选择并加载，不跨父 Skill。",
+        collection,
+        children.len()
     );
-    // The description MUST be double-quoted in the YAML frontmatter. An unquoted
-    // string that starts with `[` is parsed as a flow sequence by strict YAML loaders
-    // and the whole Skill is silently dropped — see docs/skill-router-standard.md rule 6.
+    // Keep the machine marker in an HTML comment instead of visible frontmatter.
+    // Agent hosts still identify the generated parent deterministically, while
+    // users see the concise `父 Skill` label in their Skill picker.
     format!(
         "---\n\
         name: {name}\n\
         description: \"{description}\"\n\
         ---\n\n\
-        # {marker} {collection}\n\n\
-        > {marker} This is an AI SkillHub generated parent Skill. It is a collection entry, not a focused child Skill.\n\n\
-        This parent router is generated outside the author's repository, so git pull updates will not overwrite the router marker or routing rules.\n\n\
-        Use this parent Skill when the user names the whole collection, asks which child Skill to use, or gives a broad task that may belong to this collection.\n\n\
-        Marker standard:\n\
-        - {marker} = parent collection entry generated by AI SkillHub.\n\
-        - {child_marker} = focused child Skill from the source repository.\n\n\
-        Rules:\n\
-        - Route only to the source-scoped child files listed below under `../../{collection}`.\n\
-        - Never substitute a same-name Skill from another source or parent collection.\n\
-        - If the user clearly names a specific child Skill, open and follow its listed source-scoped file.\n\
-        - If the user names only this collection, choose the smallest child Skill that fits the task.\n\
-        - If the right child is unclear, explain the top 2-3 choices briefly and ask only when the task cannot be safely routed.\n\n\
-        Available child Skills:\n\
+        <!-- {marker} -->\n\n\
+        # 父 Skill · {collection}\n\n\
+        > 这是 AI SkillHub 生成的稳定父入口。Agent 只需识别这个入口，子 Skill 由父 Skill 在自己的来源目录内选择和加载。\n\n\
+        - 管理来源：`{collection}`\n\n\
+        父路由生成在作者仓库之外，因此 GitHub 更新不会覆盖标记、子 Skill 清单或隔离规则。\n\n\
+        类型：AI SkillHub 管理的父 Skill；下方 {child_marker} 表示来源内的功能型子 Skill。\n\n\
+        路由规则：\n\
+        - 只能打开下方 `../../{collection}` 内明确列出的来源文件。\n\
+        - 即使其它父 Skill 有同名子 Skill，也绝不跨来源替换。\n\
+        - 用户明确指定子 Skill 时，直接打开并完整遵循对应来源文件。\n\
+        - 用户只指定父 Skill 或描述宽泛任务时，自动选择能完成任务的最小子 Skill。\n\
+        - 只有在任务存在实质性歧义或安全风险时才向用户提问。\n\
+        - 使用与用户相同的语言回答；子 Skill 原文为英文时也要给出自然中文说明。\n\n\
+        此父 Skill 包含的子 Skill：\n\
         {children}",
         name = router_name,
-        description = description,
+        description = yaml_double_quoted(&description),
         marker = ROUTER_HUB_MARKER,
         child_marker = CHILD_SKILL_MARKER,
         collection = collection,
@@ -13573,165 +14526,135 @@ fn yaml_double_quoted(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn generated_skill_folder_name(value: &str) -> String {
-    let normalized = normalize_skill_lookup(value);
-    let mut out = String::with_capacity(normalized.len());
-    let mut last_was_dash = false;
-    for ch in normalized.chars() {
-        let next = if ch.is_ascii_alphanumeric() || ch == '.' {
-            ch
-        } else {
-            '-'
-        };
-        if next == '-' {
-            if !last_was_dash {
-                out.push(next);
-            }
-            last_was_dash = true;
-        } else {
-            out.push(next);
-            last_was_dash = false;
-        }
+fn localized_router_child_summary(name: &str, raw: &str) -> String {
+    if raw
+        .chars()
+        .any(|ch| matches!(ch as u32, 0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff))
+    {
+        return raw.trim().to_string();
     }
-    let trimmed = out.trim_matches('-').to_string();
-    if trimmed.is_empty() {
-        "conflict-skill".to_string()
-    } else {
-        trimmed
-    }
-}
 
-fn conflict_candidate_skill_md_link(choice: &SkillConflictChoiceCard) -> String {
-    let relative = choice.relative_path.trim().replace('\\', "/");
-    if relative.is_empty() {
-        return String::new();
-    }
-    let relative = relative.trim_start_matches('/').trim_end_matches('/');
-    if relative.ends_with("/SKILL.md") || relative == "SKILL.md" {
-        format!("../../{}", relative)
-    } else {
-        format!("../../{}/SKILL.md", relative)
-    }
-}
-
-fn build_conflict_dispatcher_skill_md(conflict: &SkillConflictCard) -> Option<String> {
-    let default_choice = conflict
-        .choices
+    let text = format!("{} {}", name, raw).to_lowercase();
+    let summary = if ["figure", "plot", "chart", "diagram", "visualization"]
         .iter()
-        .find(|choice| choice.skill_id == conflict.default_skill_id)?;
-    let skill_name = generated_skill_folder_name(&conflict.conflict_key);
-    let default_link = conflict_candidate_skill_md_link(default_choice);
-    let description = format!(
-        "{} {} AI SkillHub generated dispatcher for duplicate child Skill /{}.",
-        ROUTER_HUB_MARKER, CONFLICT_DISPATCHER_MARKER, conflict.child_name
-    );
-
-    let mut candidate_lines = String::new();
-    for choice in &conflict.choices {
-        let link = conflict_candidate_skill_md_link(choice);
-        let default_marker = if choice.skill_id == conflict.default_skill_id {
-            " default"
-        } else {
-            ""
-        };
-        candidate_lines.push_str(&format!(
-            "-{} `{}` from `{}` -> `{}`\n",
-            default_marker,
-            choice.skill_name,
-            choice.source_name,
-            if link.is_empty() {
-                &choice.relative_path
-            } else {
-                &link
-            }
-        ));
-    }
-
-    Some(format!(
-        "---\n\
-        name: {name}\n\
-        description: \"{description}\"\n\
-        ---\n\n\
-        # {dispatcher_marker} /{name}\n\n\
-        > {router_marker} This AI SkillHub dispatcher is generated from the local SQLite table `skill_conflict_choices`.\n\n\
-        This Skill exists because more than one installed source exposes the same child Skill name. It is generated under `AI-SkillHub-local-routers`, outside every author repository, so GitHub updates do not overwrite the user's local default.\n\n\
-        Default route:\n\
-        - Source: `{default_source}`\n\
-        - Skill: `/{default_skill}`\n\
-        - Skill file: `{default_link}`\n\n\
-        Dispatch rules:\n\
-        - When the user invokes `/{name}` without naming a source, use the default route above.\n\
-        - Open and follow the default Skill file if it is available in this workspace.\n\
-        - If the user explicitly names another source, use that source instead of the default.\n\
-        - If the default file is missing, tell the user to reselect the default in AI SkillHub's same-name Skill conflict selector.\n\n\
-        Available candidates:\n\
-        {candidates}",
-        name = skill_name,
-        description = yaml_double_quoted(&description),
-        dispatcher_marker = CONFLICT_DISPATCHER_MARKER,
-        router_marker = ROUTER_HUB_MARKER,
-        default_source = default_choice.source_name,
-        default_skill = default_choice.skill_name,
-        default_link = default_link,
-        candidates = candidate_lines,
-    ))
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于科研图表的规划、生成、编辑与质量优化。"
+    } else if ["citation", "reference", "verify", "evidence"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于引用、参考文献与证据的核验和整理。"
+    } else if ["review", "reviewer", "rebuttal"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于论文评审、修改建议与审稿回复。"
+    } else if ["paper", "manuscript", "writing", "draft", "academic"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于科研论文的写作、润色与结构优化。"
+    } else if ["literature", "research", "search", "survey"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于文献检索、研究分析与综述整理。"
+    } else if ["security", "secure", "audit", "vulnerability"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于安全检查、风险分析与修复建议。"
+    } else if ["browser", "web", "scrape", "crawl"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于网页浏览、信息提取与浏览器自动化。"
+    } else if ["slide", "presentation", "ppt", "deck"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于演示文稿的规划、制作与视觉优化。"
+    } else if ["database", "data", "dataset", "analysis"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于数据检索、处理、分析与结果解释。"
+    } else if ["image", "photo", "illustration"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于图像生成、编辑与视觉内容制作。"
+    } else if ["design", "ui", "ux", "frontend", "layout"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于界面设计、前端实现与体验优化。"
+    } else if ["code", "debug", "test", "developer"]
+        .iter()
+        .any(|keyword| text.contains(keyword))
+    {
+        "用于代码实现、调试、测试与工程质量改进。"
+    } else {
+        return format!("用于处理“{}”相关任务。", name);
+    };
+    summary.to_string()
 }
 
-fn generated_conflict_alias_name(
-    conflict_key: &str,
-    choice: &SkillConflictChoiceCard,
-    used_aliases: &mut HashSet<String>,
-) -> String {
-    let source = generated_skill_folder_name(&choice.source_name);
-    let child = generated_skill_folder_name(conflict_key);
-    let mut alias = generated_skill_folder_name(&format!("{}-{}", source, child));
-    if alias == child || alias.is_empty() || !used_aliases.insert(alias.clone()) {
-        alias = generated_skill_folder_name(&stable_id(
-            &format!("{}-{}", source, child),
-            &choice.skill_id,
-        ));
-        used_aliases.insert(alias.clone());
+fn write_generated_skill_safely(path: &Path, body: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Generated Skill path has no parent: {}", path.display()))?;
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "Cannot create generated Skill folder {}: {}",
+            parent.display(),
+            error
+        )
+    })?;
+    let temp = parent.join("SKILL.md.skillhub-tmp");
+    let backup = parent.join("SKILL.md.skillhub-previous");
+    fs::write(&temp, body)
+        .map_err(|error| format!("Cannot stage generated Skill {}: {}", temp.display(), error))?;
+    if backup.exists() {
+        fs::remove_file(&backup).map_err(|error| {
+            format!(
+                "Cannot clear previous generated Skill backup {}: {}",
+                backup.display(),
+                error
+            )
+        })?;
     }
-    alias
-}
-
-fn build_conflict_alias_skill_md(
-    conflict: &SkillConflictCard,
-    choice: &SkillConflictChoiceCard,
-    alias_name: &str,
-) -> String {
-    let link = conflict_candidate_skill_md_link(choice);
-    let description = format!(
-        "{} {} AI SkillHub generated namespaced alias /{} for duplicate child Skill /{} from {}.",
-        ROUTER_HUB_MARKER,
-        CONFLICT_DISPATCHER_MARKER,
-        alias_name,
-        conflict.child_name,
-        choice.source_name
-    );
-    format!(
-        "---\n\
-        name: {name}\n\
-        description: \"{description}\"\n\
-        ---\n\n\
-        # {dispatcher_marker} /{name}\n\n\
-        > {router_marker} This AI SkillHub alias is generated from duplicate Skill candidates so every same-name Skill remains directly callable.\n\n\
-        Original duplicate Skill:\n\
-        - Slash name: `/{child_name}`\n\
-        - Source: `{source}`\n\
-        - Skill file: `{link}`\n\n\
-        Dispatch rules:\n\
-        - When the user invokes `/{name}`, open and follow the Skill file above.\n\
-        - This alias does not replace the author's original repository and will not be overwritten by GitHub updates.\n\
-        - If the file is missing, ask the user to sync AI SkillHub again.\n",
-        name = alias_name,
-        description = yaml_double_quoted(&description),
-        dispatcher_marker = CONFLICT_DISPATCHER_MARKER,
-        router_marker = ROUTER_HUB_MARKER,
-        child_name = choice.skill_name,
-        source = choice.source_name,
-        link = link,
-    )
+    if path.exists() {
+        fs::rename(path, &backup).map_err(|error| {
+            format!(
+                "Cannot protect previous generated Skill {}: {}",
+                path.display(),
+                error
+            )
+        })?;
+    }
+    if let Err(error) = fs::rename(&temp, path) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, path);
+        }
+        let _ = fs::remove_file(&temp);
+        return Err(format!(
+            "Cannot activate generated Skill {}: {}",
+            path.display(),
+            error
+        ));
+    }
+    if backup.exists() {
+        fs::remove_file(&backup).map_err(|error| {
+            format!(
+                "Generated Skill updated, but previous copy could not be removed {}: {}",
+                backup.display(),
+                error
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn sync_skill_conflict_dispatchers(
@@ -13745,83 +14668,17 @@ fn sync_skill_conflict_dispatchers(
 
 fn sync_skill_conflict_dispatchers_for_skills(
     legacy_root: &Path,
-    skills: &[SkillCard],
-    saved_choices: &HashMap<String, SkillConflictChoiceState>,
+    _skills: &[SkillCard],
+    _saved_choices: &HashMap<String, SkillConflictChoiceState>,
 ) -> Result<usize, String> {
     let sources_dir = active_sources_dir(legacy_root);
     let routers_root = sources_dir.join(ROUTER_HUB_FOLDER);
-    let conflicts = derive_skill_conflicts(skills, saved_choices);
-    let mut active_dispatchers = HashSet::new();
-    let mut used_aliases = HashSet::new();
     let mut changed = 0usize;
 
-    for conflict in &conflicts {
-        for choice in &conflict.choices {
-            let alias_name =
-                generated_conflict_alias_name(&conflict.conflict_key, choice, &mut used_aliases);
-            active_dispatchers.insert(alias_name.clone());
-            let alias_body = build_conflict_alias_skill_md(conflict, choice, &alias_name);
-            let alias_folder = routers_root.join(&alias_name);
-            let alias_file = alias_folder.join("SKILL.md");
-            fs::create_dir_all(&alias_folder).map_err(|error| {
-                format!(
-                    "Cannot create conflict alias folder {}: {}",
-                    alias_folder.display(),
-                    error
-                )
-            })?;
-            let needs_write = match fs::read_to_string(&alias_file) {
-                Ok(existing) => existing != alias_body,
-                Err(_) => true,
-            };
-            if needs_write {
-                fs::write(&alias_file, alias_body).map_err(|error| {
-                    format!(
-                        "Cannot write conflict alias {}: {}",
-                        alias_file.display(),
-                        error
-                    )
-                })?;
-                changed += 1;
-            }
-        }
-    }
-
-    // Parent routers are source-scoped. Only an explicit advanced-user choice may
-    // create an unqualified global /child dispatcher across sources.
-    for conflict in conflicts.iter().filter(|conflict| {
-        conflict.status == "default-set" && !conflict.default_skill_id.is_empty()
-    }) {
-        let dispatcher_name = generated_skill_folder_name(&conflict.conflict_key);
-        let Some(body) = build_conflict_dispatcher_skill_md(conflict) else {
-            continue;
-        };
-        active_dispatchers.insert(dispatcher_name.clone());
-        let dispatcher_folder = routers_root.join(&dispatcher_name);
-        let dispatcher_file = dispatcher_folder.join("SKILL.md");
-        fs::create_dir_all(&dispatcher_folder).map_err(|error| {
-            format!(
-                "Cannot create conflict dispatcher folder {}: {}",
-                dispatcher_folder.display(),
-                error
-            )
-        })?;
-        let needs_write = match fs::read_to_string(&dispatcher_file) {
-            Ok(existing) => existing != body,
-            Err(_) => true,
-        };
-        if needs_write {
-            fs::write(&dispatcher_file, body).map_err(|error| {
-                format!(
-                    "Cannot write conflict dispatcher {}: {}",
-                    dispatcher_file.display(),
-                    error
-                )
-            })?;
-            changed += 1;
-        }
-    }
-
+    // Duplicate children are no longer published as global dispatchers. Each
+    // generated parent opens only source-scoped child files, so same-name Skills
+    // under other parents cannot shadow one another. Keep saved choices in SQLite
+    // for rollback compatibility, but remove only our generated dispatcher files.
     if routers_root.exists() {
         let entries = fs::read_dir(&routers_root)
             .map_err(|error| format!("Cannot read generated router folder: {}", error))?;
@@ -13830,10 +14687,6 @@ fn sync_skill_conflict_dispatchers_for_skills(
                 continue;
             };
             if !file_type.is_dir() {
-                continue;
-            }
-            let folder_name = entry.file_name().to_string_lossy().to_string();
-            if active_dispatchers.contains(&folder_name) {
                 continue;
             }
             let skill_md = entry.path().join("SKILL.md");
@@ -13915,11 +14768,11 @@ fn check_router_hub_description_quoting(skill_md_path: &Path) -> Option<RouterHu
     None
 }
 
-/// Walk a single source/collection folder and collect callable child Skill names.
-/// A child is a sub-folder that contains a SKILL.md with a non-empty `name:` field.
+/// Walk a source/collection and collect every callable source-scoped Skill,
+/// including a SKILL.md at the source root.
 fn collect_child_skill_links_for_collection(
     collection_dir: &Path,
-) -> BTreeMap<String, (String, String)> {
+) -> BTreeMap<String, (String, String, String)> {
     let mut links = BTreeMap::new();
     let mut pending = vec![collection_dir.to_path_buf()];
     let mut visited_dirs = 0usize;
@@ -13930,24 +14783,23 @@ fn collect_child_skill_links_for_collection(
             break;
         }
 
-        if dir != collection_dir {
-            let skill_md = dir.join("SKILL.md");
-            if skill_md.is_file() {
-                let name = read_skill_name(&skill_md).or_else(|| {
-                    dir.file_name()
-                        .and_then(|value| value.to_str())
-                        .map(str::to_string)
-                });
-                if let Some(name) = name {
-                    let key = normalize_skill_lookup(&name);
-                    if !key.is_empty() {
-                        let relative = skill_md
-                            .strip_prefix(collection_dir)
-                            .unwrap_or(&skill_md)
-                            .to_string_lossy()
-                            .replace('\\', "/");
-                        links.entry(key).or_insert((name, relative));
-                    }
+        let skill_md = dir.join("SKILL.md");
+        if skill_md.is_file() {
+            let name = read_skill_name(&skill_md).or_else(|| {
+                dir.file_name()
+                    .and_then(|value| value.to_str())
+                    .map(str::to_string)
+            });
+            if let Some(name) = name {
+                let key = normalize_skill_lookup(&name);
+                if !key.is_empty() {
+                    let relative = skill_md
+                        .strip_prefix(collection_dir)
+                        .unwrap_or(&skill_md)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    let summary = metadata::analyze_skill(&dir).summary;
+                    links.entry(key).or_insert((name, relative, summary));
                 }
             }
         }
@@ -14002,10 +14854,10 @@ fn read_skill_name(skill_md_path: &Path) -> Option<String> {
 }
 
 /// Plan and (optionally) write parent / router-hub Skills for every collection
-/// under app-next/data/github_sources/. Implements the four standard-document rules:
+/// under the active UserData sources directory. Product rules:
 /// - parent file lives in AI-SkillHub-local-routers/ (outside the author repo)
 /// - description is double-quoted
-/// - router name uses the `-hub` suffix to avoid colliding with a same-named child
+/// - parent keeps the stable collection name, even for a single/root Skill source
 /// - re-runnable on every sync without touching unmodified routers
 fn plan_or_write_router_hubs(
     legacy_root: &Path,
@@ -14019,6 +14871,7 @@ fn plan_or_write_router_hubs(
     let mut written_count = 0usize;
     let mut unchanged_count = 0usize;
     let mut skipped_count = 0usize;
+    let mut active_parent_names = HashSet::new();
 
     let allow_write = commit && real_writes_enabled;
 
@@ -14057,7 +14910,7 @@ fn plan_or_write_router_hubs(
         let child_links = collect_child_skill_links_for_collection(&collection_dir);
         let children = child_links
             .values()
-            .map(|(name, _)| name.clone())
+            .map(|(name, _, _)| name.clone())
             .collect::<Vec<_>>();
 
         // Walk one level of skill md files looking for unquoted [ROUTER-HUB] descriptions.
@@ -14087,47 +14940,11 @@ fn plan_or_write_router_hubs(
             skipped_count += 1;
             continue;
         }
-        if children.len() < 2 {
-            // Per design feedback, single-child collections are skipped to avoid
-            // shadowing the only child. UI still shows the lone Skill normally.
-            plans.push(RouterHubPlanCard {
-                collection_name: collection_name.clone(),
-                router_skill_name: String::new(),
-                router_skill_md_path: String::new(),
-                child_count: children.len(),
-                children: children.clone(),
-                status: "skipped-single-child".to_string(),
-                summary: "only one child Skill — calling /<name> already routes there".to_string(),
-            });
-            skipped_count += 1;
-            continue;
-        }
-
         let router_name = router_hub_skill_name(&collection_name);
-        // Collision guard: a child Skill in this collection already uses the same `name:` as
-        // the parent. Per the standard we DO NOT rename the parent — calling `/<collection>`
-        // must continue to resolve to the parent. Surface the conflict instead so the user
-        // can rename the offending child locally.
-        let normalized_router = normalize_skill_lookup(&router_name);
-        if children
-            .iter()
-            .any(|child| normalize_skill_lookup(child) == normalized_router)
-        {
-            plans.push(RouterHubPlanCard {
-                collection_name: collection_name.clone(),
-                router_skill_name: router_name.clone(),
-                router_skill_md_path: String::new(),
-                child_count: children.len(),
-                children,
-                status: "skipped-collision".to_string(),
-                summary: format!(
-                    "child Skill `/{}` shares the parent name — rename the child or load-order will decide",
-                    router_name
-                ),
-            });
-            skipped_count += 1;
-            continue;
-        }
+        active_parent_names.insert(router_name.clone());
+        // The parent is the only host-visible entry for a managed source, so a
+        // source-root child may safely share its name. The generated parent keeps
+        // the stable invocation name and opens the original source-scoped file.
 
         let router_folder = routers_root.join(&router_name);
         let router_skill_md = router_folder.join("SKILL.md");
@@ -14143,21 +14960,8 @@ fn plan_or_write_router_hubs(
         };
 
         if allow_write {
-            fs::create_dir_all(&router_folder).map_err(|error| {
-                format!(
-                    "Cannot create router folder {}: {}",
-                    router_folder.display(),
-                    error
-                )
-            })?;
             if needs_write {
-                fs::write(&router_skill_md, &body).map_err(|error| {
-                    format!(
-                        "Cannot write router SKILL.md {}: {}",
-                        router_skill_md.display(),
-                        error
-                    )
-                })?;
+                write_generated_skill_safely(&router_skill_md, &body)?;
                 written_count += 1;
             } else {
                 unchanged_count += 1;
@@ -14185,65 +14989,44 @@ fn plan_or_write_router_hubs(
                 "dry-run plan; enable real writes to materialize".to_string()
             },
         });
+    }
 
-        for alias_name in router_hub_alias_skill_names(&collection_name, &router_name, &children) {
-            let alias_folder = routers_root.join(&alias_name);
-            let alias_skill_md = alias_folder.join("SKILL.md");
-            let alias_body =
-                build_router_hub_skill_md(&collection_name, &alias_name, &children, &child_links);
-            let alias_needs_write = if allow_write {
-                match fs::read_to_string(&alias_skill_md) {
-                    Ok(existing) => existing != alias_body,
-                    Err(_) => true,
-                }
-            } else {
-                true
+    if allow_write && routers_root.exists() {
+        let entries = fs::read_dir(&routers_root)
+            .map_err(|error| format!("Cannot inspect stale parent aliases: {}", error))?;
+        for entry in entries.flatten() {
+            let Ok(file_type) = entry.file_type() else {
+                continue;
             };
-
-            if allow_write {
-                fs::create_dir_all(&alias_folder).map_err(|error| {
-                    format!(
-                        "Cannot create router alias folder {}: {}",
-                        alias_folder.display(),
-                        error
-                    )
-                })?;
-                if alias_needs_write {
-                    fs::write(&alias_skill_md, &alias_body).map_err(|error| {
-                        format!(
-                            "Cannot write router alias SKILL.md {}: {}",
-                            alias_skill_md.display(),
-                            error
-                        )
-                    })?;
-                    written_count += 1;
-                } else {
-                    unchanged_count += 1;
-                }
+            if !file_type.is_dir() {
+                continue;
             }
-
-            plans.push(RouterHubPlanCard {
-                collection_name: collection_name.clone(),
-                router_skill_name: alias_name,
-                router_skill_md_path: alias_skill_md.display().to_string(),
-                child_count: children.len(),
-                children: children.clone(),
-                status: if allow_write && !alias_needs_write {
-                    "unchanged".to_string()
-                } else if allow_write {
-                    "written".to_string()
-                } else {
-                    "planned".to_string()
-                },
-                summary: if allow_write && !alias_needs_write {
-                    "short alias router SKILL.md already matched the generated version".to_string()
-                } else if allow_write {
-                    "short alias router SKILL.md regenerated under AI-SkillHub-local-routers"
-                        .to_string()
-                } else {
-                    "dry-run alias plan; enable real writes to materialize".to_string()
-                },
-            });
+            let folder_name = entry.file_name().to_string_lossy().to_string();
+            if active_parent_names.contains(&folder_name) {
+                continue;
+            }
+            let skill_md = entry.path().join("SKILL.md");
+            let Ok(body) = fs::read_to_string(&skill_md) else {
+                continue;
+            };
+            if !body.contains(ROUTER_HUB_MARKER) {
+                continue;
+            }
+            fs::remove_file(&skill_md).map_err(|error| {
+                format!(
+                    "Cannot remove stale generated parent alias {}: {}",
+                    skill_md.display(),
+                    error
+                )
+            })?;
+            if entry
+                .path()
+                .read_dir()
+                .map(|mut items| items.next().is_none())
+                .unwrap_or(false)
+            {
+                let _ = fs::remove_dir(entry.path());
+            }
         }
     }
 
@@ -14499,6 +15282,7 @@ pub fn run() {
             scan_legacy_snapshot,
             reanalyze_library_metadata,
             run_skillhub_sync,
+            ensure_agent_skill_delivery,
             set_source_version_pin,
             refresh_source_version_status,
             rollback_source_to_latest_backup,
@@ -14511,6 +15295,12 @@ pub fn run() {
             set_skill_enabled,
             set_skill_rating,
             set_source_rating,
+            create_skill_folder,
+            update_skill_folder,
+            delete_skill_folder,
+            move_skill_to_folder,
+            move_source_skills_to_folder,
+            move_skill_folder,
             set_source_metadata,
             set_sources_bulk_metadata,
             set_skill_tags,
@@ -14654,6 +15444,8 @@ mod tests {
         is_router_hub: bool,
     ) -> SkillCard {
         SkillCard {
+            id: stable_id("skill", name),
+            source_id: String::new(),
             name: name.to_string(),
             folder_name: name.to_string(),
             category: "test".to_string(),
@@ -14669,6 +15461,9 @@ mod tests {
             metadata_origin: "test".to_string(),
             metadata_confidence: 1.0,
             is_router_hub,
+            user_folder_id: String::new(),
+            user_folder_name: String::new(),
+            user_folder_color: String::new(),
         }
     }
 
@@ -14691,6 +15486,9 @@ mod tests {
             usage_guide: String::new(),
             metadata_origin: "test".to_string(),
             metadata_confidence: 1.0,
+            user_folder_id: String::new(),
+            user_folder_name: String::new(),
+            user_folder_color: String::new(),
         }
     }
 
@@ -14872,6 +15670,7 @@ mod tests {
             source_popularity: Vec::new(),
             source_governance: Vec::new(),
             source_quality_signals: Vec::new(),
+            last_sync_summary: SyncSummaryCard::default(),
             skill_conflicts: Vec::new(),
             operator_consent: OperatorConsentCard {
                 real_writes_enabled: false,
@@ -14880,6 +15679,7 @@ mod tests {
                 summary: "test".to_string(),
             },
             tags: Vec::new(),
+            skill_folders: Vec::new(),
             preset_distributions: Vec::new(),
             operation_runners: Vec::new(),
             write_gates: Vec::new(),
@@ -15014,6 +15814,20 @@ mod tests {
         ));
         let agent_root = root.join("codex-skills");
         fs::create_dir_all(agent_root.join("paper-workflow")).unwrap();
+        fs::write(
+            agent_root.join("paper-workflow").join("SKILL.md"),
+            "---\nname: paper-workflow\ndescription: test\n---\n",
+        )
+        .unwrap();
+        for skill_name in ["paper-workflow", "figure-planner"] {
+            let skill_root = active_skills_dir(&root).join(skill_name);
+            fs::create_dir_all(&skill_root).unwrap();
+            fs::write(
+                skill_root.join("SKILL.md"),
+                format!("---\nname: {skill_name}\ndescription: Host eligibility fixture.\n---\n"),
+            )
+            .unwrap();
+        }
         let skills = vec![
             test_skill_card("paper-workflow", "paper-pack", "paper-workflow", false),
             test_skill_card("figure-planner", "paper-pack", "figure-planner", false),
@@ -15052,6 +15866,196 @@ mod tests {
         }));
         assert!(statuses.iter().any(|status| {
             status.agent_id == "antigravity" && status.status == "agent-missing"
+        }));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_delivery_allowlist_respects_skill_and_source_enabled_state() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-agent-allowlist-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let timestamp = unix_timestamp_string();
+        for (id, enabled) in [("enabled-source", 1), ("disabled-source", 0)] {
+            connection
+                .execute(
+                    "INSERT INTO sources (
+                        id, name, source_type, url, local_path, install_mode,
+                        category_id, note, enabled, created_at, updated_at
+                    ) VALUES (?1, ?1, 'skill', '', '', 'scan', 'test', '', ?2, ?3, ?3)",
+                    params![id, enabled, &timestamp],
+                )
+                .expect("source row should insert");
+        }
+        for (id, source_id, folder_name) in [
+            ("skill-enabled", "enabled-source", "enabled-skill"),
+            ("skill-disabled", "enabled-source", "disabled-skill"),
+            (
+                "skill-source-off",
+                "disabled-source",
+                "source-disabled-skill",
+            ),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO skills (
+                        id, source_id, name, folder_name, description, category_id,
+                        health_status, health_summary, enabled, relative_path,
+                        created_at, updated_at
+                    ) VALUES (?1, ?2, ?3, ?3, 'test', 'test', 'ok', '', 1, ?3, ?4, ?4)",
+                    params![id, source_id, folder_name, &timestamp],
+                )
+                .expect("skill row should insert");
+        }
+        connection
+            .execute(
+                "INSERT INTO skill_overrides (
+                    skill_id, display_name, category_id, description, note,
+                    enabled, rating, updated_at
+                ) VALUES ('skill-disabled', '', '', '', '', 0, 0, ?1)",
+                params![&timestamp],
+            )
+            .expect("disabled override should insert");
+        drop(connection);
+
+        for folder_name in ["enabled-skill", "disabled-skill", "source-disabled-skill"] {
+            let skill_dir = active_skills_dir(&root).join(folder_name);
+            fs::create_dir_all(&skill_dir).expect("active Skill folder should create");
+            fs::write(
+                skill_dir.join("SKILL.md"),
+                format!("---\nname: {folder_name}\ndescription: test Skill\n---\n"),
+            )
+            .expect("active Skill manifest should write");
+        }
+
+        let allowlist_path = write_agent_skill_allowlist(&root).expect("allowlist should write");
+        let enabled: Vec<String> = serde_json::from_str(
+            &fs::read_to_string(&allowlist_path).expect("allowlist should read"),
+        )
+        .expect("allowlist should parse");
+        assert_eq!(enabled, vec!["enabled-skill".to_string()]);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn agent_delivery_allowlist_publishes_parent_and_routes_children_through_it() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-agent-final-entry-allowlist-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let timestamp = unix_timestamp_string();
+        for source_id in ["source-a", "source-b"] {
+            let source_path = active_sources_dir(&root).join(source_id);
+            fs::create_dir_all(&source_path).expect("source folder should create");
+            connection
+                .execute(
+                    "INSERT INTO sources (
+                        id, name, source_type, url, local_path, install_mode,
+                        category_id, note, enabled, created_at, updated_at
+                    ) VALUES (?1, ?1, 'skill', '', ?2, 'scan', 'test', '', 1, ?3, ?3)",
+                    params![source_id, source_path.display().to_string(), &timestamp],
+                )
+                .expect("source row should insert");
+        }
+        for (id, source_id, folder_name) in [
+            ("skill-a", "source-a", "shared"),
+            ("skill-b", "source-b", "source-b__shared"),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO skills (
+                        id, source_id, name, folder_name, description, category_id,
+                        health_status, health_summary, enabled, relative_path,
+                        created_at, updated_at
+                    ) VALUES (?1, ?2, 'shared', ?3, 'test', 'test', 'ok', '', 1, ?3, ?4, ?4)",
+                    params![id, source_id, folder_name, &timestamp],
+                )
+                .expect("skill row should insert");
+        }
+        connection
+            .execute(
+                "INSERT INTO skill_overrides (
+                    skill_id, display_name, category_id, description, note,
+                    enabled, rating, updated_at
+                ) VALUES ('skill-b', '', '', '', '', 0, 0, ?1)",
+                params![&timestamp],
+            )
+            .expect("disabled duplicate override should insert");
+        drop(connection);
+
+        let active_root = active_skills_dir(&root);
+        for (entry_name, body) in [
+            (
+                "source-a-shared",
+                "---\nname: source-a-shared\ndescription: \"[ROUTER-HUB] [CONFLICT-DISPATCHER] alias\"\n---\n\nOriginal duplicate Skill:\n- Skill name: `$shared`\n- Source: `source-a`\n",
+            ),
+            (
+                "source-b-shared",
+                "---\nname: source-b-shared\ndescription: \"[ROUTER-HUB] [CONFLICT-DISPATCHER] alias\"\n---\n\nOriginal duplicate Skill:\n- Skill name: `$shared`\n- Source: `source-b`\n",
+            ),
+            (
+                "research",
+                "---\nname: research\ndescription: \"[ROUTER-HUB] AI SkillHub generated parent router for the local source-a skill collection.\"\n---\n",
+            ),
+            (
+                "disabled-parent",
+                "---\nname: disabled-parent\ndescription: \"[ROUTER-HUB] AI SkillHub generated parent router for the local source-b skill collection.\"\n---\n",
+            ),
+        ] {
+            let entry_dir = active_root.join(entry_name);
+            fs::create_dir_all(&entry_dir).expect("final active entry should create");
+            fs::write(entry_dir.join("SKILL.md"), body)
+                .expect("generated active manifest should write");
+        }
+
+        let allowlist_path = write_agent_skill_allowlist(&root).expect("allowlist should write");
+        let enabled: Vec<String> = serde_json::from_str(
+            &fs::read_to_string(&allowlist_path).expect("allowlist should read"),
+        )
+        .expect("allowlist should parse");
+        assert_eq!(enabled, vec!["research".to_string()]);
+
+        let recipient_root = root.join("recipient-skills");
+        let entry_name = "research";
+        let recipient_entry = recipient_root.join(entry_name);
+        fs::create_dir_all(&recipient_entry).expect("recipient entry should create");
+        fs::copy(
+            active_root.join(entry_name).join("SKILL.md"),
+            recipient_entry.join("SKILL.md"),
+        )
+        .expect("recipient manifest should copy");
+        let mut shared_skill = test_skill_card(
+            "source-a__shared",
+            "source-a",
+            "github_sources\\source-a\\shared",
+            false,
+        );
+        shared_skill.name = "shared".to_string();
+        let parent_skill = test_skill_card("source-a", "source-a", "skills\\source-a", true);
+        let agent = AgentCard {
+            id: "agent-codex-test".to_string(),
+            name: "ChatGPT Desktop / OpenAI Codex".to_string(),
+            path: recipient_root.display().to_string(),
+            detected: true,
+            managed: true,
+            enabled: true,
+            skill_count: 0,
+        };
+        let statuses = derive_agent_skill_statuses(&root, &[shared_skill, parent_skill], &[agent]);
+        assert!(statuses.iter().any(|status| {
+            status.skill_folder_name == "source-a__shared"
+                && status.status == "routed-via-parent"
+                && status.expected_path.ends_with("research")
+        }));
+        assert!(statuses.iter().any(|status| {
+            status.skill_folder_name == "source-a"
+                && status.status == "installed"
+                && status.expected_path.ends_with("research")
         }));
 
         let _ = fs::remove_dir_all(root);
@@ -15180,7 +16184,7 @@ mod tests {
     }
 
     #[test]
-    fn conflict_default_writes_only_explicit_global_dispatcher() {
+    fn parent_isolation_removes_stale_global_conflict_dispatchers() {
         let root = std::env::temp_dir().join(format!(
             "skillhub-conflict-dispatcher-test-{}",
             unix_timestamp_string()
@@ -15209,9 +16213,6 @@ mod tests {
             },
         );
 
-        let changed = sync_skill_conflict_dispatchers_for_skills(&root, &skills, &saved)
-            .expect("conflict dispatcher should sync");
-        assert_eq!(changed, 3);
         let dispatcher = active_sources_dir(&root)
             .join(ROUTER_HUB_FOLDER)
             .join("figure-planner")
@@ -15224,14 +16225,24 @@ mod tests {
             .join(ROUTER_HUB_FOLDER)
             .join("paperspine-figure-planner")
             .join("SKILL.md");
-        let body = fs::read_to_string(&dispatcher).expect("dispatcher should be written");
-        assert!(body.contains(CONFLICT_DISPATCHER_MARKER));
-        assert!(body.contains("Source: `PaperSpine`"));
-        assert!(body.contains("../../PaperSpine/dist/codex/skills/figure-planner/SKILL.md"));
-        let alias_body = fs::read_to_string(&paperspine_alias).expect("alias should be written");
-        assert!(alias_body.contains("name: paperspine-figure-planner"));
-        assert!(alias_body.contains("../../PaperSpine/dist/codex/skills/figure-planner/SKILL.md"));
-        assert!(nature_alias.exists());
+        for file in [&dispatcher, &nature_alias, &paperspine_alias] {
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(
+                file,
+                format!(
+                    "---\nname: stale\ndescription: \"{} stale\"\n---\n",
+                    CONFLICT_DISPATCHER_MARKER
+                ),
+            )
+            .unwrap();
+        }
+
+        let changed = sync_skill_conflict_dispatchers_for_skills(&root, &skills, &saved)
+            .expect("stale conflict dispatchers should be removed");
+        assert_eq!(changed, 3);
+        assert!(!dispatcher.exists());
+        assert!(!nature_alias.exists());
+        assert!(!paperspine_alias.exists());
 
         saved.insert(
             "figure-planner".to_string(),
@@ -15242,14 +16253,8 @@ mod tests {
             },
         );
         let automatic = sync_skill_conflict_dispatchers_for_skills(&root, &skills, &saved)
-            .expect("automatic parent-scoped mode should remove the global dispatcher");
-        assert_eq!(automatic, 1);
-        assert!(
-            !dispatcher.exists(),
-            "automatic mode must not create a cross-source bare-name dispatcher"
-        );
-        assert!(nature_alias.exists());
-        assert!(paperspine_alias.exists());
+            .expect("parent-scoped mode should remain stable");
+        assert_eq!(automatic, 0);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -15333,7 +16338,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_agents_keeps_chatgpt_desktop_visible_without_fake_codex_management() {
+    fn parse_agents_marks_chatgpt_desktop_managed_only_with_delivered_skills() {
         let diagnostics = serde_json::json!({
             "agents": [
                 {
@@ -15345,10 +16350,11 @@ mod tests {
                     "command": "",
                     "skillsDirs": [
                         {
-                            "path": "C:/Users/Test/.codex/skills",
+                            "path": "C:/Users/Test/.agents/skills",
                             "exists": true,
                             "writable": true,
-                            "isLink": false
+                            "isLink": false,
+                            "containsSkillMd": true
                         }
                     ]
                 }
@@ -15358,8 +16364,8 @@ mod tests {
         let agents = parse_agents(Some(&diagnostics));
         let codex = agents.first().expect("ChatGPT Desktop should parse");
         assert!(codex.detected);
-        assert!(!codex.managed);
-        assert!(!codex.enabled);
+        assert!(codex.managed);
+        assert!(codex.enabled);
     }
 
     #[test]
@@ -15371,25 +16377,6 @@ mod tests {
         assert_eq!(
             router_hub_skill_name("research_writing_skill"),
             "research-writing-skill"
-        );
-    }
-
-    #[test]
-    fn router_hub_alias_uses_specific_common_child_prefix() {
-        let litmind_children = vec![
-            "litmind-analyzer".to_string(),
-            "litmind-review".to_string(),
-            "litmind-zotero".to_string(),
-        ];
-        assert_eq!(
-            router_hub_alias_skill_names("Literature-Mind", "literature-mind", &litmind_children),
-            vec!["litmind".to_string()]
-        );
-
-        let generic_children = vec!["paper-reviewer".to_string(), "paper-writer".to_string()];
-        assert!(
-            router_hub_alias_skill_names("paper-pack", "paper-pack", &generic_children).is_empty(),
-            "generic short aliases should not be generated"
         );
     }
 
@@ -15463,6 +16450,9 @@ mod tests {
             usage_guide: String::new(),
             metadata_origin: "test".to_string(),
             metadata_confidence: 1.0,
+            user_folder_id: String::new(),
+            user_folder_name: String::new(),
+            user_folder_color: String::new(),
         };
 
         let scanned = scan_source_tree_skills(&sources_dir, &[source], &HashMap::new(), &[]);
@@ -15534,6 +16524,8 @@ mod tests {
     #[test]
     fn single_root_skill_is_not_reported_as_router_hub() {
         let mut skills = vec![SkillCard {
+            id: stable_id("skill", "VibeSec-Skill"),
+            source_id: String::new(),
             name: "VibeSec-Skill".to_string(),
             folder_name: "VibeSec-Skill".to_string(),
             category: "security".to_string(),
@@ -15549,6 +16541,9 @@ mod tests {
             metadata_origin: "test".to_string(),
             metadata_confidence: 1.0,
             is_router_hub: true,
+            user_folder_id: String::new(),
+            user_folder_name: String::new(),
+            user_folder_color: String::new(),
         }];
 
         demote_single_source_root_skills(&mut skills);
@@ -15566,6 +16561,8 @@ mod tests {
         source_ids.insert("nature-skills".to_string(), "source-nature".to_string());
 
         let skill = SkillCard {
+            id: stable_id("skill", "nature-skills"),
+            source_id: String::new(),
             name: "nature-skills".to_string(),
             folder_name: "nature-skills".to_string(),
             category: "academic-writing".to_string(),
@@ -15582,6 +16579,9 @@ mod tests {
             metadata_origin: "test".to_string(),
             metadata_confidence: 1.0,
             is_router_hub: true,
+            user_folder_id: String::new(),
+            user_folder_name: String::new(),
+            user_folder_color: String::new(),
         };
 
         assert_eq!(
@@ -15656,10 +16656,10 @@ mod tests {
     }
 
     #[test]
-    fn router_hub_collision_skips_without_renaming_parent() {
+    fn router_hub_same_name_child_stays_source_scoped_under_parent() {
         // Collection `nature-skills` contains a child literally named `nature-skills`.
-        // Standard rule 3 forbids us from renaming the parent to dodge the conflict —
-        // we must report `skipped-collision` and leave the file system untouched.
+        // The parent keeps the stable collection name while the same-name source
+        // Skill remains reachable only through its explicit source-scoped file.
         let root = std::env::temp_dir().join(format!(
             "skillhub-router-collision-test-{}",
             unix_timestamp_string()
@@ -15684,21 +16684,21 @@ mod tests {
         .unwrap();
 
         let report = plan_or_write_router_hubs(&root, true, true)
-            .expect("plan should succeed even with collision");
+            .expect("same-name source child should stay routable");
         let plan = report
             .plans
             .iter()
             .find(|plan| plan.collection_name == "nature-skills")
             .expect("nature-skills plan should exist");
-        assert_eq!(plan.status, "skipped-collision");
-        // Parent name is reported as the original collection name, not a `-hub` mutation.
+        assert_eq!(plan.status, "written");
         assert_eq!(plan.router_skill_name, "nature-skills");
-        // No router file got written.
-        assert!(!sources_dir
+        let router = sources_dir
             .join("AI-SkillHub-local-routers")
             .join("nature-skills")
-            .join("SKILL.md")
-            .exists());
+            .join("SKILL.md");
+        let body = fs::read_to_string(router).expect("parent router should be written");
+        assert!(body.contains("../../nature-skills/nature-skills/SKILL.md"));
+        assert!(body.contains("../../nature-skills/nature-figure/SKILL.md"));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -15784,12 +16784,12 @@ mod tests {
         assert!(!alpha.contains("../../beta/"));
         assert!(beta.contains("../../beta/shared-review/SKILL.md"));
         assert!(!beta.contains("../../alpha/"));
-        assert!(alpha.contains("Never substitute a same-name Skill from another source"));
+        assert!(alpha.contains("绝不跨来源替换"));
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn router_hub_writes_specific_short_alias() {
+    fn router_hub_keeps_only_the_canonical_parent_name() {
         let root = std::env::temp_dir().join(format!(
             "skillhub-router-alias-test-{}",
             unix_timestamp_string()
@@ -15805,28 +16805,42 @@ mod tests {
             )
             .unwrap();
         }
+        let stale_alias = sources_dir
+            .join("AI-SkillHub-local-routers")
+            .join("litmind")
+            .join("SKILL.md");
+        fs::create_dir_all(stale_alias.parent().unwrap()).unwrap();
+        fs::write(
+            &stale_alias,
+            "---\nname: litmind\ndescription: \"[ROUTER-HUB] old alias\"\n---\n",
+        )
+        .unwrap();
 
         let report =
             plan_or_write_router_hubs(&root, true, true).expect("router report should build");
         assert_eq!(report.total_collections, 1);
-        assert_eq!(report.written_count, 2);
+        assert_eq!(report.written_count, 1);
         assert!(report
             .plans
             .iter()
             .any(|plan| plan.router_skill_name == "literature-mind"));
-        assert!(report
+        assert!(!report
             .plans
             .iter()
             .any(|plan| plan.router_skill_name == "litmind"));
 
-        let alias = sources_dir
+        let canonical = sources_dir
             .join("AI-SkillHub-local-routers")
-            .join("litmind")
+            .join("literature-mind")
             .join("SKILL.md");
-        assert!(alias.exists(), "short alias router should be written");
-        let body = fs::read_to_string(alias).unwrap();
-        assert!(body.contains("name: litmind"));
-        assert!(body.contains("- [CHILD-SKILL] /litmind-zotero"));
+        assert!(canonical.exists(), "canonical parent should be written");
+        let body = fs::read_to_string(canonical).unwrap();
+        assert!(body.contains("name: literature-mind"));
+        assert!(body.contains("- [CHILD-SKILL] `$litmind-zotero`"));
+        assert!(
+            !stale_alias.exists(),
+            "old short parent alias should be removed"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
@@ -15851,7 +16865,7 @@ mod tests {
     }
 
     #[test]
-    fn router_hub_dry_run_skips_single_child_and_writes_only_on_consent() {
+    fn router_hub_dry_run_includes_single_child_and_writes_only_on_consent() {
         let root = std::env::temp_dir().join(format!(
             "skillhub-router-plan-test-{}",
             unix_timestamp_string()
@@ -15871,7 +16885,7 @@ mod tests {
             "---\nname: figure-planner\ndescription: \"plan figures\"\n---\nbody\n",
         )
         .unwrap();
-        // Collection with only one child → should be skipped.
+        // Collection with only one child still needs a stable parent entry.
         let one_child = sources_dir.join("loner");
         fs::create_dir_all(one_child.join("solo-skill")).unwrap();
         fs::write(
@@ -15899,12 +16913,13 @@ mod tests {
             .iter()
             .find(|plan| plan.collection_name == "loner")
             .expect("loner plan should exist");
-        assert_eq!(lone.status, "skipped-single-child");
+        assert_eq!(lone.status, "planned");
+        assert_eq!(lone.router_skill_name, "loner");
 
         // Commit + consent → router file appears.
         let live = plan_or_write_router_hubs(&root, true, true).expect("commit should succeed");
         assert!(live.committed);
-        assert_eq!(live.written_count, 1, "only paper-pack should be written");
+        assert_eq!(live.written_count, 2, "both sources need parent entries");
         assert_eq!(live.unchanged_count, 0);
         let written = sources_dir
             .join("AI-SkillHub-local-routers")
@@ -15915,19 +16930,24 @@ mod tests {
             "router SKILL.md should exist at the original collection name"
         );
         let body = fs::read_to_string(&written).unwrap();
-        assert!(
-            body.contains("description: \"[ROUTER-HUB]"),
-            "description must be quoted to satisfy YAML"
-        );
+        assert!(body.contains("description: \"父 Skill · paper-pack"));
+        assert!(body.contains("<!-- [ROUTER-HUB] -->"));
+        assert!(!body.contains("# [ROUTER-HUB]"));
         assert!(body.contains("name: paper-pack"));
-        assert!(body.contains("- [CHILD-SKILL] /paper-workflow"));
-        assert!(body.contains("- [CHILD-SKILL] /figure-planner"));
+        assert!(body.contains("- [CHILD-SKILL] `$paper-workflow`"));
+        assert!(body.contains("- [CHILD-SKILL] `$figure-planner`"));
+        let lone_router = sources_dir
+            .join("AI-SkillHub-local-routers")
+            .join("loner")
+            .join("SKILL.md");
+        let lone_body = fs::read_to_string(lone_router).expect("single-child parent should exist");
+        assert!(lone_body.contains("- [CHILD-SKILL] `$solo-skill`"));
 
         let rerun = plan_or_write_router_hubs(&root, true, true)
             .expect("rerun should leave current routers untouched");
         assert!(rerun.committed);
         assert_eq!(rerun.written_count, 0);
-        assert_eq!(rerun.unchanged_count, 1);
+        assert_eq!(rerun.unchanged_count, 2);
         let unchanged = rerun
             .plans
             .iter()
@@ -15959,6 +16979,9 @@ mod tests {
                 usage_guide: String::new(),
                 metadata_origin: "test".to_string(),
                 metadata_confidence: 1.0,
+                user_folder_id: String::new(),
+                user_folder_name: String::new(),
+                user_folder_color: String::new(),
             },
             SourceCard {
                 id: "source-prompt".to_string(),
@@ -15978,6 +17001,9 @@ mod tests {
                 usage_guide: String::new(),
                 metadata_origin: "test".to_string(),
                 metadata_confidence: 1.0,
+                user_folder_id: String::new(),
+                user_folder_name: String::new(),
+                user_folder_color: String::new(),
             },
             SourceCard {
                 id: "source-local".to_string(),
@@ -15997,6 +17023,9 @@ mod tests {
                 usage_guide: String::new(),
                 metadata_origin: "test".to_string(),
                 metadata_confidence: 1.0,
+                user_folder_id: String::new(),
+                user_folder_name: String::new(),
+                user_folder_color: String::new(),
             },
         ];
         let reports = vec![ReleaseReportCard {
@@ -16113,7 +17142,7 @@ mod tests {
             "codex",
             "OpenAI Codex",
             "OpenAI",
-            "~\\.codex\\skills",
+            "~\\.agents\\skills",
             "global",
         );
         adapter.detected = true;
@@ -16137,7 +17166,7 @@ mod tests {
             "codex",
             "OpenAI Codex",
             "OpenAI",
-            "~\\.codex\\skills",
+            "~\\.agents\\skills",
             "global",
         );
         adapter.detected = true;
@@ -16159,7 +17188,7 @@ mod tests {
             "codex",
             "OpenAI Codex",
             "OpenAI",
-            "~\\.codex\\skills",
+            "~\\.agents\\skills",
             "global",
         );
         adapter.detected = true;
@@ -16654,6 +17683,9 @@ mod tests {
             usage_guide: String::new(),
             metadata_origin: "test".to_string(),
             metadata_confidence: 1.0,
+            user_folder_id: String::new(),
+            user_folder_name: String::new(),
+            user_folder_color: String::new(),
         }];
 
         hydrate_source_urls_from_git(&root, &mut sources);
@@ -17633,6 +18665,9 @@ mod tests {
             usage_guide: String::new(),
             metadata_origin: "test".to_string(),
             metadata_confidence: 1.0,
+            user_folder_id: String::new(),
+            user_folder_name: String::new(),
+            user_folder_color: String::new(),
         };
         let popularity = GithubPopularityFetch {
             created_at: "2026-05-01T00:00:00Z".to_string(),
@@ -18251,5 +19286,168 @@ mod tests {
         assert!(!staged_path.exists());
         assert!(formal_path.join("SKILL.md").exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skill_folder_membership_survives_a_full_index_refresh() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-folder-refresh-test-{}",
+            unix_timestamp_string()
+        ));
+        let skill = test_skill_card("paper-writer", "local", "paper-writer", false);
+        let snapshot = test_snapshot(&root, Vec::new(), vec![skill], Vec::new());
+        persist_snapshot(&root, &snapshot).expect("initial index should persist");
+
+        let connection = open_index_database(&root).expect("folder database should open");
+        connection
+            .execute(
+                "INSERT INTO skill_folders
+                (id, name, note, color, sort_order, created_at, updated_at)
+             VALUES ('folder-paper', 'Paper 写作', '论文写作流程', 'violet', 0, '1', '1')",
+                [],
+            )
+            .expect("folder should insert");
+        connection
+            .execute(
+                "INSERT INTO skill_folder_memberships (skill_id, folder_id, sort_order, updated_at)
+             VALUES (?1, 'folder-paper', 0, '1')",
+                params![stable_id("skill", "paper-writer")],
+            )
+            .expect("membership should insert");
+        drop(connection);
+
+        persist_snapshot(&root, &snapshot).expect("refreshed index should persist");
+        let connection = open_index_database(&root).expect("refreshed database should open");
+        let skills = read_indexed_skills(&connection).expect("skills should read");
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].user_folder_id, "folder-paper");
+        assert_eq!(skills[0].user_folder_name, "Paper 写作");
+        assert_eq!(skills[0].user_folder_color, "violet");
+        let folders = read_indexed_skill_folders(&connection).expect("folders should read");
+        assert_eq!(folders[0].skill_count, 1);
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_skills_can_be_filed_together_without_touching_skill_files() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-source-folder-test-{}",
+            unix_timestamp_string()
+        ));
+        let source_dir = active_sources_dir(&root).join("research-pack");
+        fs::create_dir_all(&source_dir).expect("source fixture should create");
+        fs::write(source_dir.join("keep.txt"), b"unchanged").expect("source fixture should write");
+        let source = test_source_card(
+            "source-research-pack",
+            "research-pack",
+            &source_dir,
+            "https://github.com/example/research-pack.git",
+        );
+        let skills = vec![
+            test_skill_card("idea-finder", "research-pack", "idea-finder", false),
+            test_skill_card("paper-writer", "research-pack", "paper-writer", false),
+        ];
+        persist_snapshot(
+            &root,
+            &test_snapshot(&root, vec![source], skills, Vec::new()),
+        )
+        .expect("initial index should persist");
+
+        let connection = open_index_database(&root).expect("folder database should open");
+        connection
+            .execute(
+                "INSERT INTO skill_folders
+                    (id, name, note, color, sort_order, created_at, updated_at)
+                 VALUES ('folder-research', '文献调研', '', 'cyan', 0, '1', '1')",
+                [],
+            )
+            .expect("folder should insert");
+        let indexed_source_id: String = connection
+            .query_row(
+                "SELECT source_id FROM skills WHERE id = ?1",
+                params![stable_id("skill", "idea-finder")],
+                |row| row.get(0),
+            )
+            .expect("indexed source should exist");
+        let changed =
+            update_source_folder_membership(&connection, &indexed_source_id, "folder-research")
+                .expect("source tree should be filed together");
+        assert_eq!(changed, 1);
+        let filed: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM source_folder_memberships WHERE folder_id = 'folder-research'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("memberships should count");
+        assert_eq!(filed, 1);
+        let materialized_children: i64 = connection
+            .query_row("SELECT COUNT(*) FROM skill_folder_memberships", [], |row| {
+                row.get(0)
+            })
+            .expect("legacy child memberships should count");
+        assert_eq!(materialized_children, 0);
+        let indexed = read_indexed_skills(&connection).expect("filed Skills should read");
+        assert_eq!(indexed.len(), 2);
+        assert!(indexed
+            .iter()
+            .all(|skill| skill.user_folder_id == "folder-research"));
+        assert_eq!(
+            fs::read(source_dir.join("keep.txt")).expect("source file should remain"),
+            b"unchanged"
+        );
+        drop(connection);
+
+        let mut refreshed_skills = vec![
+            test_skill_card("idea-finder", "research-pack", "idea-finder", false),
+            test_skill_card("paper-writer", "research-pack", "paper-writer", false),
+            test_skill_card(
+                "citation-checker",
+                "research-pack",
+                "citation-checker",
+                false,
+            ),
+        ];
+        refreshed_skills[2].description = "newly synced child".to_string();
+        let refreshed_source = test_source_card(
+            "source-research-pack",
+            "research-pack",
+            &source_dir,
+            "https://github.com/example/research-pack.git",
+        );
+        persist_snapshot(
+            &root,
+            &test_snapshot(&root, vec![refreshed_source], refreshed_skills, Vec::new()),
+        )
+        .expect("refreshed source tree should persist");
+        let connection = open_index_database(&root).expect("refreshed folder database should open");
+        let indexed = read_indexed_skills(&connection).expect("refreshed Skills should read");
+        assert_eq!(indexed.len(), 3);
+        assert!(indexed
+            .iter()
+            .all(|skill| skill.user_folder_id == "folder-research"));
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn generic_repo_alias_cannot_override_an_exact_source_identity() {
+        let mut source_ids = HashMap::new();
+        insert_source_id_primary(&mut source_ids, "skills", "source-existing-skills");
+        insert_source_id_alias(&mut source_ids, "skills", "source-emilkowalski-skills");
+        assert_eq!(
+            source_ids.get("skills").map(String::as_str),
+            Some("source-existing-skills")
+        );
+        assert_eq!(
+            github_source_storage_name("emilkowalski", "skills"),
+            "emilkowalski--skills"
+        );
+        let root = PathBuf::from("C:\\AI-SkillHub-Test");
+        let plan =
+            build_github_source_import_plan(&root, &[], "https://github.com/emilkowalski/skills")
+                .expect("generic repository plan should build");
+        assert!(normalize_path_for_compare(&plan.target_path).ends_with("\\emilkowalski--skills"));
     }
 }

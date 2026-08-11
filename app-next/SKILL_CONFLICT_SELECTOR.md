@@ -1,76 +1,21 @@
-# AI SkillHub Skill Conflict Selector
+# AI SkillHub Parent Isolation Compatibility Note
 
-This document is the stable product rule for duplicate child Skill names.
+This filename is retained so older documentation links do not break. The manual
+child-conflict selector has been superseded by parent-source isolation.
 
-## Problem
+## Current Rule
 
-Different GitHub sources can legitimately contain child Skills with the same `name`.
-For example:
+- A repository/source is one parent Skill namespace.
+- Every non-empty source receives one canonical `[ROUTER-HUB]` entry, even when it has only one child.
+- The parent lists each `[CHILD-SKILL]` with its exact source-scoped path and selects the child automatically from the user's task.
+- A same-name child in another parent is unrelated and can never replace it.
+- Codex, Claude and Antigravity receive the same parent-first catalog.
+- Author repositories are never edited.
 
-- `Nature-Paper-Skills / figure-planner`
-- `PaperSpine / figure-planner`
+The previous `skill_conflict_choices` table remains readable for migration and
+rollback, but current routing does not ask the user to pick a default and does
+not generate global `[CONFLICT-DISPATCHER]` or source-qualified alias Skills.
+AI SkillHub repair removes only its own stale generated dispatchers; it does not
+delete author files.
 
-This is an exact callable-name collision, not a semantic-similarity judgment.
-AI SkillHub must not delete, rename, or overwrite any candidate.
-
-## Identity Rules
-
-1. Display names may be duplicated.
-2. Internal identities must be unique.
-3. A child Skill identity is based on its normalized `relative_path`; if no relative path exists, AI SkillHub falls back to `source / folder / name`.
-4. Router hub Skills are excluded from child-name conflict detection.
-5. Author repositories are never modified to solve conflicts.
-
-## Router Rules
-
-Parent/router Skills are generated only under:
-
-`%LOCALAPPDATA%\AI SkillHub\UserData\sources\AI-SkillHub-local-routers`
-
-Generated router Skills use:
-
-- `[ROUTER-HUB]` for the parent collection entry
-- `[CHILD-SKILL]` for listed children
-
-GitHub pull/update operations may update original sources, but must not overwrite user conflict choices because those choices are stored in AI SkillHub SQLite metadata.
-
-## Automatic Assignment Rules
-
-When two or more non-router child Skills share the same normalized name, AI
-SkillHub automatically assigns the canonical slash route. Candidates are sorted
-by:
-
-1. enabled state
-2. health status
-3. personal rating
-4. shortest/directest source path
-5. stable source/path ordering as the final tie breaker
-
-Every candidate also receives a source-qualified alias, so automatic assignment
-never makes another source uncallable.
-
-The user can set a manual override or restore automatic assignment. If a manual
-default disappears after an update, the conflict returns to automatic
-assignment instead of becoming unusable.
-
-## Product Behavior
-
-Routing Observatory belongs in the Skill Library management path, not in hidden
-logs. Automatic results must be visible, reversible, and persistent.
-
-Slash-command dispatch reads this table indirectly through generated local
-dispatchers:
-
-`skill_conflict_choices`
-
-AI SkillHub always generates a local dispatcher Skill for an automatic or manual
-default under
-`%LOCALAPPDATA%\AI SkillHub\UserData\sources\AI-SkillHub-local-routers\<conflict-name>\SKILL.md`.
-That generated Skill uses `[CONFLICT-DISPATCHER]`, points to the selected
-source's real `SKILL.md`, and is then synced to the managed Agent skills
-directory.
-
-Therefore `/figure-planner` can route to the user's default, while fully qualified
-source-qualified aliases such as `/nature-paper-skills-figure-planner` and
-`/paperspine-figure-planner` remain callable. Restoring automatic assignment
-regenerates the dispatcher from the current health/rating priority.
+See `../docs/skill-router-standard.md` for the normative product contract.

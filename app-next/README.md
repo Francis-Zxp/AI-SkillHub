@@ -104,17 +104,16 @@ Parent router Skills are generated under:
 %LOCALAPPDATA%\AI SkillHub\UserData\sources\AI-SkillHub-local-routers\
 ```
 
-Generated routers use `[ROUTER-HUB]`; child entries use `[CHILD-SKILL]`.
-Author-owned source repositories are not modified.
+Every non-empty source receives one canonical `[ROUTER-HUB]` parent, including
+single-Skill repositories. Child entries use `[CHILD-SKILL]` and include exact
+source-scoped paths. Author-owned source repositories are not modified.
 
-## Same-Name Child Skill Conflicts
+## Parent-Scoped Child Isolation
 
-AI SkillHub detects exact duplicate non-router child Skill names across sources.
-Each generated parent routes only to explicit child files inside its own source.
-Every candidate keeps a source-qualified alias. Automatic mode does not create
-a cross-source bare-name dispatcher; an advanced user may explicitly choose one
-global default in Routing Observatory. The local SQLite table
-`skill_conflict_choices` stores that optional manual decision, so GitHub updates
-do not modify or erase it.
+Same-name children in different sources are isolated by their parent. AI
+SkillHub does not ask the user to choose a global default and does not publish a
+global child dispatcher. Codex, Claude and Antigravity receive the same curated
+parent-first catalog; each parent automatically selects only children declared
+inside its own source.
 
 See `SKILL_CONFLICT_SELECTOR.md` for the detailed rule.

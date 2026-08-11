@@ -3,6 +3,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
   type CSSProperties,
+  type DragEvent,
   Fragment,
   Suspense,
   type PointerEvent,
@@ -17,6 +18,7 @@ import { createPortal } from "react-dom";
 import { Icon, type IconName } from "./icons";
 import { CountUp, ParticleField, useCardGlow } from "./effects";
 import { LANG_OPTIONS, type Lang, categoryName, getLang, initialLang, setLang, t } from "./i18n";
+import { localizedSkillDescription } from "./localizedDescriptions";
 import { SkillUniverse } from "./SkillUniverse";
 import {
   createPreviewSnapshot,
@@ -41,13 +43,13 @@ import type {
   RouterHubReport,
   SkillCard,
   SkillConflictCard,
+  SkillFolderCard,
   SourceCard,
   SourceImportExecutionCard,
   SourceImportPlanCard,
   SourceImportPromotionCard,
   SourceGovernanceCard,
   SourcePopularityCard,
-  SourceQualitySignalCard,
   WorkspaceCard
 } from "./types";
 
@@ -85,6 +87,7 @@ type ImportWizardDraft = {
   enabled: boolean;
   importKind: "github" | "local" | "zip";
   input: string;
+  folderId: string;
   note: string;
   selectedCategoryIds: string[];
   sourceType: SourceCard["sourceType"];
@@ -97,6 +100,7 @@ const EMPTY_IMPORT_WIZARD_DRAFT: ImportWizardDraft = {
   enabled: true,
   importKind: "github",
   input: "",
+  folderId: "",
   note: "",
   selectedCategoryIds: [],
   sourceType: "skill",
@@ -121,6 +125,7 @@ function loadImportWizardDraft(): ImportWizardDraft {
       enabled: typeof saved.enabled === "boolean" ? saved.enabled : true,
       importKind,
       input: text(saved.input, 10_000),
+      folderId: text(saved.folderId, 200),
       note: text(saved.note, 20_000),
       selectedCategoryIds: Array.isArray(saved.selectedCategoryIds)
         ? saved.selectedCategoryIds.filter(value => typeof value === "string").slice(0, 100)
@@ -136,6 +141,7 @@ function loadImportWizardDraft(): ImportWizardDraft {
 function importWizardDraftHasContent(draft: ImportWizardDraft) {
   return Boolean(
     draft.input.trim() ||
+    draft.folderId.trim() ||
     draft.note.trim() ||
     draft.tags.trim() ||
     draft.customCategory.trim() ||
@@ -269,7 +275,6 @@ const NAV_ITEMS: Array<{ key: NavKey; icon: IconName }> = [
   { key: "dashboard", icon: "dashboard" },
   { key: "library", icon: "library" },
   { key: "workspaces", icon: "workspaces" },
-  { key: "presets", icon: "list" },
   { key: "agents", icon: "agent" },
   { key: "connections", icon: "connections" }
 ];
@@ -347,6 +352,7 @@ export function App() {
   const updateCheckStartedAtRef = useRef(0);
   const updateRetryTimerRef = useRef<number | null>(null);
   const backgroundUpdateRetriesRef = useRef(0);
+  const initialDeliveryCheckStartedRef = useRef(false);
   const runtimeAvailable = hasTauriRuntime();
   const realWritesEnabled = snapshot?.operatorConsent?.realWritesEnabled === true;
 
@@ -752,50 +758,6 @@ export function App() {
     }
   }
 
-  async function updateSourceRating(source: SourceCard, rating: number): Promise<boolean> {
-    const normalizedRating = Math.max(0, Math.min(5, Math.round(rating)));
-    if (!runtimeAvailable) {
-      setSnapshot(previous => {
-        const current = previous ?? createPreviewSnapshot();
-        return {
-          ...current,
-          sources: current.sources.map(item =>
-            item.id === source.id ? { ...item, rating: normalizedRating } : item
-          )
-        };
-      });
-      toastMessage(
-        normalizedRating > 0
-          ? t("toast.skillRated", { n: normalizedRating })
-          : t("toast.skillRatingCleared"),
-        "ok"
-      );
-      return true;
-    }
-    setLoading(true);
-    try {
-      const result = await invoke<LegacySnapshot>("set_source_rating", {
-        sourceId: source.id,
-        rating: normalizedRating
-      });
-      setSnapshot(result);
-      setLoadError("");
-      toastMessage(
-        normalizedRating > 0
-          ? t("toast.skillRated", { n: normalizedRating })
-          : t("toast.skillRatingCleared"),
-        "ok"
-      );
-      return true;
-    } catch (error) {
-      setLoadError(messageFromError(error));
-      toastMessage(t("toast.skillRatingFailed"), "error");
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function setSourceVersionPin(source: SourceCard, pinned: boolean): Promise<boolean> {
     if (!runtimeAvailable) {
       setSnapshot(previous => {
@@ -975,62 +937,6 @@ export function App() {
     }
   }
 
-  async function updateSkillConflictChoice(
-    conflictKey: string,
-    defaultSkillId: string,
-    status: "default-set" | "ignored" | "unresolved"
-  ) {
-    if (!runtimeAvailable) {
-      setSnapshot(current => {
-        if (!current) return current;
-        return {
-          ...current,
-          skillConflicts: current.skillConflicts.map(conflict => {
-            if (conflict.conflictKey !== conflictKey) return conflict;
-            const automatic = conflict.choices[0];
-            const selected =
-              status === "unresolved"
-                ? automatic
-                : conflict.choices.find(choice => choice.skillId === defaultSkillId);
-            const nextStatus = status === "unresolved" ? "auto-set" : status;
-            return {
-              ...conflict,
-              defaultSkillId: nextStatus === "ignored" ? "" : selected?.skillId ?? "",
-              defaultSourceName: nextStatus === "ignored" ? "" : selected?.sourceName ?? "",
-              status: nextStatus,
-              updatedAt: new Date().toISOString()
-            };
-          })
-        };
-      });
-      toastMessage(t("toast.previewConflictSim"), "info");
-      return;
-    }
-    setLoading(true);
-    try {
-      const result = await invoke<LegacySnapshot>("set_skill_conflict_choice", {
-        conflictKey,
-        defaultSkillId,
-        status
-      });
-      setSnapshot(result);
-      setLoadError("");
-      toastMessage(
-        status === "default-set"
-          ? t("conf.toastDefault")
-          : status === "ignored"
-            ? t("conf.toastIgnored")
-            : t("conf.toastReset"),
-        "ok"
-      );
-    } catch (error) {
-      setLoadError(messageFromError(error));
-      toastMessage(t("conf.toastFailed"), "error");
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function runReleaseGateRunner(runnerId: string) {
     setLoading(true);
     try {
@@ -1154,6 +1060,11 @@ export function App() {
     }
     setOperation({ title: t("op.syncTitle"), detail: t("op.step1"), step: 1, total: 3, percent: 28 });
     const refreshed = await loadSnapshot("refresh", { background: true, quiet: true });
+    if (!refreshed) {
+      toastMessage(t("toast.syncFailed"), "error");
+      setOperation(null);
+      return null;
+    }
     if (!runtimeAvailable) {
       setOperation(null);
       return refreshed;
@@ -1166,10 +1077,20 @@ export function App() {
       return refreshed;
     }
     setOperation({ title: t("op.syncTitle"), detail: t("op.step3"), step: 3, total: 3, percent: 100 });
-    toastMessage(
-      `${t("toast.syncDone")} · ${sourcePopularityRefreshMessage(summarizeSourcePopularity(popularity))}`,
-      "ok"
-    );
+    const syncSummary = popularity.lastSyncSummary ?? refreshed.lastSyncSummary;
+    const syncTone = syncSummary?.status === "failed"
+      ? "error"
+      : syncSummary?.status === "partial" || syncSummary?.status === "no-network-update"
+        ? "warn"
+        : "ok";
+    const syncMessage = syncSummary?.status === "partial"
+      ? t("toast.syncPartial", { ok: syncSummary.succeeded, failed: syncSummary.failed, skipped: syncSummary.skipped })
+      : syncSummary?.status === "failed"
+        ? t("toast.syncAllFailed", { failed: syncSummary.failed })
+        : syncSummary?.status === "no-network-update"
+          ? t("toast.syncLocalOnly", { skipped: syncSummary.skipped })
+          : t("toast.syncDone");
+    toastMessage(`${syncMessage} · ${sourcePopularityRefreshMessage(summarizeSourcePopularity(popularity))}`, syncTone);
     window.setTimeout(() => setOperation(null), 900);
     return popularity;
   }
@@ -1287,10 +1208,103 @@ export function App() {
     return result;
   }
 
+  async function updateSourceRating(source: SourceCard, rating: number): Promise<boolean> {
+    const normalizedRating = Math.max(0, Math.min(5, Math.round(rating)));
+    if (!runtimeAvailable) {
+      setSnapshot(previous => {
+        const current = previous ?? createPreviewSnapshot();
+        return {
+          ...current,
+          sources: current.sources.map(item =>
+            item.id === source.id ? { ...item, rating: normalizedRating } : item
+          )
+        };
+      });
+      toastMessage(
+        normalizedRating > 0
+          ? t("toast.sourceRated", { n: normalizedRating })
+          : t("toast.sourceRatingCleared"),
+        "ok"
+      );
+      return true;
+    }
+    setLoading(true);
+    try {
+      const result = await invoke<LegacySnapshot>("set_source_rating", {
+        sourceId: source.id,
+        rating: normalizedRating
+      });
+      setSnapshot(result);
+      setLoadError("");
+      toastMessage(
+        normalizedRating > 0
+          ? t("toast.sourceRated", { n: normalizedRating })
+          : t("toast.sourceRatingCleared"),
+        "ok"
+      );
+      return true;
+    } catch (error) {
+      setLoadError(messageFromError(error));
+      toastMessage(t("toast.sourceRatingFailed"), "error");
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function runSkillFolderCommand(
+    command: string,
+    args: Record<string, unknown>,
+    successMessage: string
+  ): Promise<LegacySnapshot | null> {
+    if (!runtimeAvailable) {
+      toastMessage(t("folders.previewOnly"), "info");
+      return snapshot;
+    }
+    try {
+      const result = await invoke<LegacySnapshot>(command, args);
+      setSnapshot(result);
+      setLoadError("");
+      if (successMessage) toastMessage(successMessage, "ok");
+      return result;
+    } catch (error) {
+      const message = messageFromError(error);
+      setLoadError(message);
+      toastMessage(message, "error");
+      return null;
+    }
+  }
+
   /* ---- lifecycle ---- */
 
   useEffect(() => {
-    void loadSnapshot();
+    if (initialDeliveryCheckStartedRef.current) return;
+    initialDeliveryCheckStartedRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      await loadSnapshot();
+      if (!runtimeAvailable || cancelled) return;
+      try {
+        const detected = await invoke<LegacySnapshot>("refresh_agent_detection");
+        if (cancelled) return;
+        applySnapshot(detected, true);
+        // Always reconcile managed entries after detection. A version upgrade
+        // can change the delivery policy (for example from flat children to a
+        // parent-first catalog) while every old entry still looks "installed".
+        // The recipient script itself remains fail-closed and never creates a
+        // directory for an Agent that was not detected.
+        const shouldReconcileDelivery = detected.skills.length > 0;
+        if (shouldReconcileDelivery) {
+          const delivered = await invoke<LegacySnapshot>("ensure_agent_skill_delivery");
+          if (!cancelled) applySnapshot(delivered, true);
+        }
+      } catch (error) {
+        if (!cancelled) setLoadError(messageFromError(error));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -1583,7 +1597,7 @@ export function App() {
               onOpenAgents={() => setActive("agents")}
               onOpenLibrary={() => setActive("library")}
               onOpenSkill={skill => {
-                setGlobalSearch(`/${skill.name}`);
+                setGlobalSearch(`$${skill.name}`);
                 setActive("library");
               }}
               onOpenSource={source => {
@@ -1603,6 +1617,12 @@ export function App() {
             <Library
               loading={loading}
               onDeleteSource={deleteSource}
+              onCreateFolder={(name, note, color) => runSkillFolderCommand(
+                "create_skill_folder", { name, note, color }, t("folders.created")
+              )}
+              onDeleteFolder={folderId => runSkillFolderCommand(
+                "delete_skill_folder", { folderId }, t("folders.deleted")
+              )}
               onCancelImport={cancelSourceImport}
               onPreviewImport={previewSourceImportCandidate}
               onStageImport={stageSourceImportCandidate}
@@ -1612,11 +1632,22 @@ export function App() {
               onRecordUsage={recordUsage}
               onSaveSkillMetadata={updateSkillMetadata}
               onSaveSourceMetadata={updateSourceMetadata}
-              onSetSkillConflictChoice={updateSkillConflictChoice}
+              onMoveFolder={(folderId, direction) => runSkillFolderCommand(
+                "move_skill_folder", { folderId, direction }, ""
+              )}
+              onMoveSkillToFolder={(skillId, folderId) => runSkillFolderCommand(
+                "move_skill_to_folder", { skillId, folderId }, t("folders.moved")
+              )}
+              onMoveSourceSkillsToFolder={(sourceId, folderId) => runSkillFolderCommand(
+                "move_source_skills_to_folder", { sourceId, folderId }, t("folders.movedSource")
+              )}
               onSetSkillEnabled={updateSkillEnabled}
               onSetSkillRating={updateSkillRating}
               onSetSourceRating={updateSourceRating}
               onSetSourceVersionPin={setSourceVersionPin}
+              onUpdateFolder={(folderId, name, note, color) => runSkillFolderCommand(
+                "update_skill_folder", { folderId, name, note, color }, t("folders.updated")
+              )}
               onRefreshSourceVersion={refreshSourceVersionStatus}
               onRollbackSourceVersion={rollbackSourceVersion}
               atlasMode={atlasMode}
@@ -1628,18 +1659,10 @@ export function App() {
           {active === "workspaces" && (
             <Workspaces disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />
           )}
-          {active === "presets" && (
-            <Presets
-              disabled={loading}
-              onToggle={updateEnabled}
-              snapshot={snapshot}
-            />
-          )}
           {active === "agents" && (
             <Agents
               disabled={loading}
               onRefreshAgents={() => void refreshLocalAgents()}
-              onToggle={updateEnabled}
               runtimeAvailable={runtimeAvailable}
               snapshot={snapshot}
             />
@@ -1879,7 +1902,7 @@ function GlobalSearchResults({
             skills.map(skill => (
               <div className="search-result-item search-result-skill" key={skill.folderName}>
                 <button className="search-result-main" onClick={onOpenLibrary} type="button">
-                  <strong>/{skill.name}</strong>
+                  <strong>{skill.name}</strong>
                   <span>{displayCategoryName(skill.category)} · {skill.source || "local"}</span>
                 </button>
                 <button className="search-result-copy" onClick={() => onCopySkill(skill)} type="button">
@@ -2640,7 +2663,9 @@ type LibraryProps = {
   atlasMode: boolean;
   loading: boolean;
   onCancelImport: (operationId: string) => Promise<boolean>;
+  onCreateFolder: (name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
   onDeleteSource: (source: SourceCard) => Promise<"failed" | "preview" | "deleted">;
+  onDeleteFolder: (folderId: string) => Promise<LegacySnapshot | null>;
   onPreviewImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportPlanCard>;
   onPromoteImport: (
     importKind: string,
@@ -2655,19 +2680,18 @@ type LibraryProps = {
     sourceName: string,
     eventType: string
   ) => Promise<void>;
+  onMoveFolder: (folderId: string, direction: "up" | "down") => Promise<LegacySnapshot | null>;
+  onMoveSkillToFolder: (skillId: string, folderId: string) => Promise<LegacySnapshot | null>;
+  onMoveSourceSkillsToFolder: (sourceId: string, folderId: string) => Promise<LegacySnapshot | null>;
   onReanalyzeMetadata: () => Promise<LegacySnapshot | null>;
   onRefreshIndex: () => Promise<LegacySnapshot | null>;
   onSaveSkillMetadata: (skill: SkillCard, draft: SkillDraft) => Promise<"failed" | "preview" | "saved">;
   onSaveSourceMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
-  onSetSkillConflictChoice: (
-    conflictKey: string,
-    defaultSkillId: string,
-    status: "default-set" | "ignored" | "unresolved"
-  ) => Promise<void>;
   onSetSkillEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
   onSetSkillRating: (skill: SkillCard, rating: number) => Promise<boolean>;
   onSetSourceRating: (source: SourceCard, rating: number) => Promise<boolean>;
   onSetSourceVersionPin: (source: SourceCard, pinned: boolean) => Promise<boolean>;
+  onUpdateFolder: (folderId: string, name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
   onRefreshSourceVersion: (source: SourceCard) => Promise<boolean>;
   onRollbackSourceVersion: (source: SourceCard) => Promise<boolean>;
   onStageImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
@@ -2681,19 +2705,24 @@ function Library(props: LibraryProps) {
     atlasMode,
     loading,
     onCancelImport,
+    onCreateFolder,
     onDeleteSource,
+    onDeleteFolder,
     onPreviewImport,
     onPromoteImport,
     onRecordUsage,
+    onMoveFolder,
+    onMoveSkillToFolder,
+    onMoveSourceSkillsToFolder,
     onReanalyzeMetadata,
     onRefreshIndex,
     onSaveSkillMetadata,
     onSaveSourceMetadata,
-    onSetSkillConflictChoice,
     onSetSkillEnabled,
     onSetSkillRating,
     onSetSourceRating,
     onSetSourceVersionPin,
+    onUpdateFolder,
     onRefreshSourceVersion,
     onRollbackSourceVersion,
     onStageImport,
@@ -2703,6 +2732,7 @@ function Library(props: LibraryProps) {
   } = props;
   const sources = snapshot?.sources ?? [];
   const skills = snapshot?.skills ?? [];
+  const skillFolders = snapshot?.skillFolders ?? [];
   const skillConflicts = snapshot?.skillConflicts ?? [];
   const [sortKey, setSortKey] = useState<SourceSortKey>("recent");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -2712,13 +2742,25 @@ function Library(props: LibraryProps) {
   const [showMaintenance, setShowMaintenance] = useState(false);
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
   const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
+  const [selectedFolderId, setSelectedFolderId] = useState("all");
+  const [childLimits, setChildLimits] = useState<Record<string, number>>({});
+
+  const skillsBySourceId = useMemo(() => {
+    const grouped = new Map<string, SkillCard[]>();
+    for (const skill of skills) {
+      const sourceId = skill.sourceId || sources.find(source => skillBelongsToSource(skill, source))?.id;
+      if (!sourceId) continue;
+      grouped.set(sourceId, [...(grouped.get(sourceId) ?? []), skill]);
+    }
+    return grouped;
+  }, [skills, sources]);
 
   useEffect(() => {
     if (!searchQuery.trim()) return;
     const matchingSourceIds = sources
       .filter(source =>
         sourceMatchesSearch(source, searchQuery) ||
-        skills.some(skill => skillBelongsToSource(skill, source) && skillMatchesSearch(skill, searchQuery))
+        (skillsBySourceId.get(source.id) ?? []).some(skill => skillMatchesSearch(skill, searchQuery))
       )
       .map(source => source.id);
     if (!matchingSourceIds.length) return;
@@ -2727,7 +2769,7 @@ function Library(props: LibraryProps) {
       matchingSourceIds.forEach(sourceId => next.add(sourceId));
       return next;
     });
-  }, [searchQuery, skills, sources]);
+  }, [searchQuery, skillsBySourceId, sources]);
 
   const popularityById = useMemo(
     () => new Map((snapshot?.sourcePopularity ?? []).map(item => [item.sourceId, item])),
@@ -2736,10 +2778,6 @@ function Library(props: LibraryProps) {
   const governanceById = useMemo(
     () => new Map((snapshot?.sourceGovernance ?? []).map(item => [item.sourceId, item])),
     [snapshot?.sourceGovernance]
-  );
-  const qualityById = useMemo(
-    () => new Map((snapshot?.sourceQualitySignals ?? []).map(item => [item.sourceId, item])),
-    [snapshot?.sourceQualitySignals]
   );
   const agentStatusesBySkill = useMemo(() => {
     const groups = new Map<string, AgentSkillStatusCard[]>();
@@ -2751,29 +2789,31 @@ function Library(props: LibraryProps) {
 
   const visibleSources = useMemo(() => {
     const drafted = sources.map(source => applySourceDraft(source, sourceDrafts[source.id]));
+    const folderFiltered = selectedFolderId === "all"
+      ? drafted
+      : drafted.filter(source => sourceMatchesUserFolder(source, selectedFolderId));
     const filtered = searchQuery.trim()
-      ? drafted.filter(
+      ? folderFiltered.filter(
           source =>
             sourceMatchesSearch(source, searchQuery) ||
-            skills.some(
-              skill => skillBelongsToSource(skill, source) && skillMatchesSearch(skill, searchQuery)
-            )
+            (skillsBySourceId.get(source.id) ?? []).some(skill => skillMatchesSearch(skill, searchQuery))
         )
-      : drafted;
+      : folderFiltered;
     return sortSources(filtered, sortKey, popularityById, skills);
-  }, [popularityById, skills, sources, sourceDrafts, sortKey, searchQuery]);
+  }, [popularityById, selectedFolderId, skills, skillsBySourceId, sources, sourceDrafts, sortKey, searchQuery]);
 
   const localSkills = useMemo(() => {
     const filtered = skills
       .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
       .filter(skill => {
-        if (sources.some(source => skillBelongsToSource(skill, source))) {
+        if (skill.sourceId) {
           return false;
         }
+        if (!skillMatchesUserFolder(skill, selectedFolderId)) return false;
         return searchQuery.trim() ? skillMatchesSearch(skill, searchQuery) : true;
       });
     return sortSkills(filtered, sortKey);
-  }, [skillDrafts, skills, sources, searchQuery, sortKey]);
+  }, [skillDrafts, skills, selectedFolderId, searchQuery, sortKey]);
 
   const totalMatches =
     visibleSources.length +
@@ -2906,31 +2946,40 @@ function Library(props: LibraryProps) {
           onPreview={onPreviewImport}
           onPromote={onPromoteImport}
           onRefreshIndex={onRefreshIndex}
+          onMoveSourceSkillsToFolder={onMoveSourceSkillsToFolder}
           onSaveSourceMetadata={onSaveSourceMetadata}
           onStage={onStageImport}
           sources={sources}
+          skillFolders={skillFolders}
         />
       )}
 
       {showMaintenance && (
         <div className="library-maintenance">
           {atlasMode && skillConflicts.length > 0 && (
-            <SkillConflictPanel
-              conflicts={skillConflicts}
-              disabled={loading}
-              onResolve={onSetSkillConflictChoice}
-            />
+            <ParentIsolationPanel conflicts={skillConflicts} />
           )}
           <RouterHubPanel disabled={loading} realWritesEnabled={realWritesEnabled} />
           {!atlasMode && skillConflicts.length > 0 && (
-            <SkillConflictPanel
-              conflicts={skillConflicts}
-              disabled={loading}
-              onResolve={onSetSkillConflictChoice}
-            />
+            <ParentIsolationPanel conflicts={skillConflicts} />
           )}
         </div>
       )}
+
+      <SkillFolderShelf
+        disabled={loading}
+        folders={skillFolders}
+        onCreate={onCreateFolder}
+        onDelete={onDeleteFolder}
+        onDropSkill={(skillId, folderId) => onMoveSkillToFolder(skillId, folderId)}
+        onDropSource={(sourceId, folderId) => onMoveSourceSkillsToFolder(sourceId, folderId)}
+        onMove={onMoveFolder}
+        onSelect={setSelectedFolderId}
+        onUpdate={onUpdateFolder}
+        selectedId={selectedFolderId}
+        skills={skills}
+        sources={sources}
+      />
 
       <div className={atlasMode ? "library-stage atlas-library-stage" : "library-stage"}>
         {atlasMode && (
@@ -2958,20 +3007,17 @@ function Library(props: LibraryProps) {
         {visibleSources.map(source => {
           const isExpanded = expanded.has(source.id) || Boolean(searchQuery.trim());
           const sourceSkills = sortSkills(
-            skills
+            (skillsBySourceId.get(source.id) ?? [])
               .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
-              .filter(skill => skillBelongsToSource(skill, source)),
+              .filter(skill => !searchQuery.trim() || skillMatchesSearch(skill, searchQuery) || sourceMatchesSearch(source, searchQuery)),
             sortKey
           );
           const totalSkillCount = Math.max(source.skillCount ?? 0, sourceSkills.length);
           const singleRootSkill = sourceSkills.length === 1;
           const parentSkills = singleRootSkill ? [] : sourceSkills.filter(isRouterHubSkill);
           const childSkills = singleRootSkill ? sourceSkills : sourceSkills.filter(skill => !isRouterHubSkill(skill));
-          const parentSkill = sourceParentSkill(source, sourceSkills);
-          const popularity = popularityById.get(source.id);
-          const governance = governanceById.get(source.id);
-          const quality = qualityById.get(source.id);
-          const ratingSummary = skillRatingSummary(sourceSkills.filter(skill => skill !== parentSkill));
+          const childLimit = childLimits[source.id] ?? 36;
+          const visibleChildSkills = childSkills.slice(0, childLimit);
           const matchesQuery = searchQuery.trim()
             ? sourceSkills.some(skill => skillMatchesSearch(skill, searchQuery))
             : true;
@@ -2998,7 +3044,7 @@ function Library(props: LibraryProps) {
                     <Icon name={source.url ? sourceTypeIcon(source.sourceType) : "sources"} />
                   </span>
                   <div className="source-group-title">
-                    <strong>{source.name}</strong>
+                    <strong title={source.name}>{source.name}</strong>
                     <span>
                       {displayCategoryName(source.categoryId)} · {sourceTypeLabel(source.sourceType)} ·{" "}
                       {skillCountText}
@@ -3006,21 +3052,42 @@ function Library(props: LibraryProps) {
                   </div>
                 </button>
                 <div className="source-group-meta">
-                  <PopularityChip popularity={popularity} source={source} />
-                  <SourceQualityChip quality={quality} />
-                  <SourceVersionChip governance={governance} />
-                  {source.sourceType !== "prompt" && totalSkillCount > 0 && (
-                    <div className="source-parent-rating">
-                      <span>{t("rating.parent")}</span>
-                      <SkillRating
-                        disabled={loading}
-                        onChange={rating => void onSetSourceRating(source, rating)}
-                        rating={source.rating ?? parentSkill?.rating ?? 0}
-                        skillName={parentSkill?.name ?? source.name}
-                      />
-                    </div>
-                  )}
-                  {ratingSummary.count > 0 && <SourceRatingChip summary={ratingSummary} />}
+                  <span
+                    aria-label={t("folders.dragSource", { name: source.name })}
+                    className="source-folder-drag-handle"
+                    draggable
+                    onDragStart={event => {
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("application/x-ai-skillhub-source-id", source.id);
+                      event.dataTransfer.setData("text/plain", source.id);
+                    }}
+                    title={t("folders.dragSource", { name: source.name })}
+                    role="img"
+                  >
+                    <Icon name="grip" />
+                    <small>{t("folders.dragShort")}</small>
+                  </span>
+                  <label className="skill-folder-select source-folder-select" title={t("folders.chooseSource") }>
+                    <Icon name="folder" />
+                    <select
+                      aria-label={t("folders.chooseSource")}
+                      disabled={loading}
+                      onChange={event => void onMoveSourceSkillsToFolder(source.id, event.target.value)}
+                      value={source.userFolderId ?? ""}
+                    >
+                      <option value="">{t("folders.unfiled")}</option>
+                      {skillFolders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                    </select>
+                  </label>
+                  <span className="source-parent-rating">
+                    <span>{t("lib.parentRating")}</span>
+                    <SkillRating
+                      disabled={loading}
+                      onChange={rating => void onSetSourceRating(source, rating)}
+                      rating={source.rating ?? 0}
+                      skillName={source.name}
+                    />
+                  </span>
                   <span className={`status-badge ${source.health}`}>
                     <span className={`status-dot ${statusDotClass(source.health)}`} />
                     {skillStatusLabel(source.health)}
@@ -3050,24 +3117,7 @@ function Library(props: LibraryProps) {
                   </button>
                 </div>
               </header>
-              {source.note && <p className="source-note">{t("lib.note")}：{source.note}</p>}
-              {source.usageGuide && !source.note.includes(source.usageGuide) && (
-                <p className="source-usage-guide">
-                  <strong>{t("metadata.usage")}：</strong>
-                  {source.usageGuide}
-                  {typeof source.metadataConfidence === "number" && source.metadataConfidence > 0 && (
-                    <span
-                      className="metadata-evidence"
-                      title={t("metadata.evidenceTip", {
-                        origin: source.metadataOrigin || "offline",
-                        value: Math.round(source.metadataConfidence * 100)
-                      })}
-                    >
-                      {t("metadata.auto")} {Math.round(source.metadataConfidence * 100)}%
-                    </span>
-                  )}
-                </p>
-              )}
+              {source.note && <p className="source-note">{source.note}</p>}
               {isExpanded && (
                 <div className="source-children">
                   {parentSkills.length > 0 && (
@@ -3078,8 +3128,10 @@ function Library(props: LibraryProps) {
                           isParent
                           key={skill.folderName}
                           loading={loading}
+                          folders={skillFolders}
                           onCopy={() => void copySkillPrompt(skill, onRecordUsage)}
                           onEdit={() => setEditingSkillId(skill.folderName)}
+                          onMoveFolder={folderId => void onMoveSkillToFolder(skill.id ?? stableSkillClientId(skill), folderId)}
                           onRate={rating => void onSetSkillRating(skill, rating)}
                           onToggleEnabled={() => void onSetSkillEnabled(skill, !skill.enabled)}
                           skill={skill}
@@ -3093,19 +3145,30 @@ function Library(props: LibraryProps) {
                     </p>
                   ) : (
                     <div className="child-skills">
-                      {childSkills.map(skill => (
+                      {visibleChildSkills.map(skill => (
                         <SkillRow
                           agentStatuses={agentStatusesBySkill.get(skill.folderName) ?? []}
                           isParent={false}
                           key={skill.folderName}
                           loading={loading}
+                          folders={skillFolders}
                           onCopy={() => void copySkillPrompt(skill, onRecordUsage)}
                           onEdit={() => setEditingSkillId(skill.folderName)}
+                          onMoveFolder={folderId => void onMoveSkillToFolder(skill.id ?? stableSkillClientId(skill), folderId)}
                           onRate={rating => void onSetSkillRating(skill, rating)}
                           onToggleEnabled={() => void onSetSkillEnabled(skill, !skill.enabled)}
                           skill={skill}
                         />
                       ))}
+                      {childSkills.length > visibleChildSkills.length && (
+                        <button
+                          className="source-children-more"
+                          onClick={() => setChildLimits(previous => ({ ...previous, [source.id]: childLimit + 36 }))}
+                          type="button"
+                        >
+                          {t("lib.showMoreChildren", { n: childSkills.length - visibleChildSkills.length })}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -3135,8 +3198,10 @@ function Library(props: LibraryProps) {
                     isParent={isRouterHubSkill(skill)}
                     key={skill.folderName}
                     loading={loading}
+                    folders={skillFolders}
                     onCopy={() => void copySkillPrompt(skill, onRecordUsage)}
                     onEdit={() => setEditingSkillId(skill.folderName)}
+                    onMoveFolder={folderId => void onMoveSkillToFolder(skill.id ?? stableSkillClientId(skill), folderId)}
                     onRate={rating => void onSetSkillRating(skill, rating)}
                     onToggleEnabled={() => void onSetSkillEnabled(skill, !skill.enabled)}
                     skill={skill}
@@ -3162,8 +3227,8 @@ function Library(props: LibraryProps) {
               <>
                 <div className="atlas-inspector-glyph" aria-hidden="true"><Icon name="sparkle" /></div>
                 <span>{t("atlas.topRated")}</span>
-                <h3>/{topRatedSkill.name}</h3>
-                <p>{cleanSkillDescription(topRatedSkill.description) || displayCategoryName(topRatedSkill.category)}</p>
+                <h3>{topRatedSkill.name}</h3>
+                <p>{localizedSkillDescription(topRatedSkill, getLang()) || displayCategoryName(topRatedSkill.category)}</p>
                 <dl>
                   <div><dt>{t("atlas.rating")}</dt><dd>{topRatedSkill.rating.toFixed(1)} / 5</dd></div>
                   <div><dt>{t("atlas.source")}</dt><dd>{topRatedSkill.source || t("lib.localGroup")}</dd></div>
@@ -3183,7 +3248,11 @@ function Library(props: LibraryProps) {
       {editingSkill && (
         <SkillEditPanel
           draft={skillDrafts[editingSkill.folderName]}
+          folders={skillFolders}
           onClose={() => setEditingSkillId("")}
+          onMoveFolder={folderId => editingSkill.sourceId
+            ? onMoveSourceSkillsToFolder(editingSkill.sourceId, folderId)
+            : onMoveSkillToFolder(editingSkill.id ?? stableSkillClientId(editingSkill), folderId)}
           onSave={draft => void saveSkillDraft(editingSkill, draft)}
           skill={editingSkill}
         />
@@ -3194,6 +3263,7 @@ function Library(props: LibraryProps) {
           onClose={() => setEditingSourceId("")}
           onDelete={() => void deleteSourceFromPanel(editingSource)}
           onOpenChildren={() => expandSource(editingSource.id)}
+          onMoveFolder={folderId => onMoveSourceSkillsToFolder(editingSource.id, folderId)}
           onRefreshVersion={() => void onRefreshSourceVersion(editingSource)}
           onRollbackVersion={() => {
             const governance = governanceById.get(editingSource.id);
@@ -3213,42 +3283,241 @@ function Library(props: LibraryProps) {
           onSetPinned={pinned => void onSetSourceVersionPin(editingSource, pinned)}
           governance={governanceById.get(editingSource.id)}
           popularity={popularityById.get(editingSource.id)}
-          quality={qualityById.get(editingSource.id)}
           source={editingSource}
-          sourceSkills={skills.filter(skill => skillBelongsToSource(skill, editingSource))}
+          sourceSkills={skillsBySourceId.get(editingSource.id) ?? []}
+          folders={skillFolders}
         />
       )}
     </div>
   );
 }
 
+const SKILL_FOLDER_COLOR_OPTIONS = ["cyan", "violet", "magenta", "amber", "emerald", "blue", "coral", "slate"];
+const SKILL_FOLDER_COLOR_HEX: Record<string, string> = {
+  cyan: "#16b8c4",
+  violet: "#7c6ee6",
+  magenta: "#cf4fa7",
+  amber: "#c88720",
+  emerald: "#20a874",
+  blue: "#338bd4",
+  coral: "#d85f4d",
+  slate: "#6f7f96"
+};
+
+function SkillFolderShelf({
+  disabled,
+  folders,
+  onCreate,
+  onDelete,
+  onDropSkill,
+  onDropSource,
+  onMove,
+  onSelect,
+  onUpdate,
+  selectedId,
+  skills,
+  sources
+}: {
+  disabled: boolean;
+  folders: SkillFolderCard[];
+  onCreate: (name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
+  onDelete: (folderId: string) => Promise<LegacySnapshot | null>;
+  onDropSkill: (skillId: string, folderId: string) => Promise<LegacySnapshot | null>;
+  onDropSource: (sourceId: string, folderId: string) => Promise<LegacySnapshot | null>;
+  onMove: (folderId: string, direction: "up" | "down") => Promise<LegacySnapshot | null>;
+  onSelect: (folderId: string) => void;
+  onUpdate: (folderId: string, name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
+  selectedId: string;
+  skills: SkillCard[];
+  sources: SourceCard[];
+}) {
+  const [editingId, setEditingId] = useState("");
+  const [showEditor, setShowEditor] = useState(false);
+  const [name, setName] = useState("");
+  const [note, setNote] = useState("");
+  const [color, setColor] = useState("cyan");
+  const [dropTarget, setDropTarget] = useState("");
+  const unfiledSourceIds = new Set(sources.filter(source => !source.userFolderId).map(source => source.id));
+  const unfiledCount = skills.filter(skill => skill.sourceId
+    ? unfiledSourceIds.has(skill.sourceId)
+    : !skill.userFolderId).length;
+
+  function openCreate() {
+    setEditingId("");
+    setName("");
+    setNote("");
+    setColor("cyan");
+    setShowEditor(true);
+  }
+
+  function openEdit(folder: SkillFolderCard) {
+    setEditingId(folder.id);
+    setName(folder.name);
+    setNote(folder.note);
+    setColor(folder.color);
+    setShowEditor(true);
+  }
+
+  async function submitFolder() {
+    if (!name.trim()) return;
+    const result = editingId
+      ? await onUpdate(editingId, name, note, color)
+      : await onCreate(name, note, color);
+    if (result) setShowEditor(false);
+  }
+
+  function acceptDrop(event: DragEvent<HTMLElement>, folderId: string) {
+    event.preventDefault();
+    setDropTarget("");
+    const sourceId = event.dataTransfer.getData("application/x-ai-skillhub-source-id");
+    if (sourceId.trim()) {
+      void onDropSource(sourceId.trim(), folderId);
+      return;
+    }
+    const skillId = event.dataTransfer.getData("application/x-ai-skillhub-skill-id") ||
+      event.dataTransfer.getData("text/plain");
+    if (skillId.trim()) void onDropSkill(skillId.trim(), folderId);
+  }
+
+  const renderTarget = (id: string, label: string, count: number, tone: string, noteText = "") => (
+    <button
+      aria-pressed={selectedId === id}
+      className={`skill-folder-target tone-${tone}${selectedId === id ? " active" : ""}${dropTarget === id ? " drop-ready" : ""}`}
+      key={id}
+      onClick={() => onSelect(id)}
+      onDragEnter={event => { event.preventDefault(); setDropTarget(id); }}
+      onDragOver={event => event.preventDefault()}
+      onDragLeave={() => setDropTarget(current => current === id ? "" : current)}
+      onDrop={event => acceptDrop(event, id === "unfiled" ? "" : id)}
+      title={noteText || label}
+      type="button"
+    >
+      <Icon name="folder" />
+      <span><strong>{label}</strong>{noteText && <small>{noteText}</small>}</span>
+      <b>{count}</b>
+    </button>
+  );
+
+  return (
+    <section className="skill-folder-shelf glow-card" aria-label={t("folders.aria")}>
+      <header>
+        <div>
+          <span className="eyebrow"><Icon name="folder" /> {t("folders.eyebrow")}</span>
+          <p>{t("folders.subtitle")}</p>
+        </div>
+        <button className="ghost-action" disabled={disabled} onClick={openCreate} type="button">
+          <Icon name="add" /> {t("folders.new")}
+        </button>
+      </header>
+      <div className="skill-folder-strip">
+        {renderTarget("all", t("folders.all"), skills.length, "slate")}
+        {folders.map((folder, index) => (
+          <div className="skill-folder-item" key={folder.id}>
+            {renderTarget(folder.id, folder.name, folder.skillCount, folder.color, folder.note)}
+            <div className="skill-folder-item-actions">
+              <button disabled={disabled || index === 0} onClick={() => void onMove(folder.id, "up")} title={t("folders.moveUp")} type="button">↑</button>
+              <button disabled={disabled || index === folders.length - 1} onClick={() => void onMove(folder.id, "down")} title={t("folders.moveDown")} type="button">↓</button>
+              <button disabled={disabled} onClick={() => openEdit(folder)} title={t("folders.edit")} type="button"><Icon name="edit" /></button>
+              <button
+                className="folder-delete-action"
+                disabled={disabled}
+                onClick={() => {
+                  if (window.confirm(t("folders.confirmDelete", { name: folder.name }))) void onDelete(folder.id);
+                }}
+                title={t("folders.delete")}
+                type="button"
+              ><Icon name="trash" /></button>
+            </div>
+          </div>
+        ))}
+        {renderTarget("unfiled", t("folders.unfiled"), unfiledCount, "slate")}
+      </div>
+      {showEditor && (
+        <div className="skill-folder-editor">
+          <label><span>{t("folders.name")}</span><input maxLength={48} onChange={event => setName(event.target.value)} value={name} /></label>
+          <label className="grow"><span>{t("folders.note")}</span><input maxLength={500} onChange={event => setNote(event.target.value)} value={note} /></label>
+          <fieldset>
+            <legend>{t("folders.color")}</legend>
+            {SKILL_FOLDER_COLOR_OPTIONS.map(value => (
+              <button
+                aria-label={t(`folders.color.${value}`)}
+                aria-pressed={color === value}
+                className={`folder-color-dot tone-${value}`}
+                key={value}
+                onClick={() => setColor(value)}
+                style={{ "--folder-tone": SKILL_FOLDER_COLOR_HEX[value] } as CSSProperties}
+                type="button"
+              />
+            ))}
+          </fieldset>
+          <div className="skill-folder-editor-actions">
+            {editingId && (
+              <button
+                className="danger-action"
+                disabled={disabled}
+                onClick={() => {
+                  if (window.confirm(t("folders.confirmDelete", { name }))) {
+                    void onDelete(editingId).then(result => { if (result) setShowEditor(false); });
+                  }
+                }}
+                type="button"
+              >
+                <Icon name="trash" /> {t("folders.delete")}
+              </button>
+            )}
+            <button className="ghost-action" onClick={() => setShowEditor(false)} type="button">{t("common.cancel")}</button>
+            <button className="primary-action" disabled={disabled || !name.trim()} onClick={() => void submitFolder()} type="button">{t("common.save")}</button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function SkillRow({
   agentStatuses,
+  folders,
   isParent,
   loading,
   onCopy,
   onEdit,
+  onMoveFolder,
   onRate,
   onToggleEnabled,
   skill
 }: {
   agentStatuses: AgentSkillStatusCard[];
+  folders: SkillFolderCard[];
   isParent: boolean;
   loading: boolean;
   onCopy: () => void;
   onEdit: () => void;
+  onMoveFolder: (folderId: string) => void;
   onRate: (rating: number) => void;
   onToggleEnabled: () => void;
   skill: SkillCard;
 }) {
   return (
-    <article className={`skill-row glow-card ${skill.health}${isParent ? " is-parent" : ""}`}>
+    <article
+      className={`skill-row glow-card ${skill.health}${isParent ? " is-parent" : ""}`}
+      draggable={Boolean(skill.id && !skill.sourceId)}
+      onDragStart={event => {
+        if (skill.sourceId) {
+          event.preventDefault();
+          return;
+        }
+        const id = skill.id ?? stableSkillClientId(skill);
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("application/x-ai-skillhub-skill-id", id);
+        event.dataTransfer.setData("text/plain", id);
+      }}
+    >
       <div className={`skill-row-icon tone-${skillTone(skill.category)}`}>
         <Icon name={skillIcon(skill.category)} />
       </div>
       <div className="skill-row-main">
         <header>
-          <strong>/{skill.name}</strong>
+          <strong>{skill.name}</strong>
           <span
             className={`kind-chip ${isParent ? "router" : "child"}`}
             title={isParent ? t("lib.parentTip") : t("lib.childTip")}
@@ -3260,7 +3529,7 @@ function SkillRow({
             {skillStatusLabel(skill.health)}
           </span>
         </header>
-        <p>{cleanSkillDescription(skill.description)}</p>
+        <p>{localizedSkillDescription(skill, getLang())}</p>
         <div className="skill-row-tags">
           <span>{displayCategoryName(skill.category) || t("conf.uncategorized")}</span>
           {(skill.tags ?? []).slice(0, 4).map(tag => (
@@ -3278,13 +3547,26 @@ function SkillRow({
           ))}
         </div>
         {skill.note && <small className="skill-row-note">{t("lib.note")}：{skill.note}</small>}
-        {skill.usageGuide && !skill.note.includes(skill.usageGuide) && (
-          <small className="skill-row-usage">
-            <strong>{t("metadata.usage")}：</strong>{skill.usageGuide}
-          </small>
-        )}
       </div>
       <div className="skill-row-actions">
+        {skill.sourceId ? (
+          <span className="inherited-folder-chip" title={t("folders.inheritedTip")}>
+            <Icon name="folder" /> {skill.userFolderName || t("folders.unfiled")}
+          </span>
+        ) : (
+          <label className="skill-folder-select" title={t("folders.choose")}>
+            <Icon name="folder" />
+            <select
+              aria-label={t("folders.choose")}
+              disabled={loading}
+              onChange={event => onMoveFolder(event.target.value)}
+              value={skill.userFolderId ?? ""}
+            >
+              <option value="">{t("folders.unfiled")}</option>
+              {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+            </select>
+          </label>
+        )}
         <SkillRating disabled={loading} onChange={onRate} rating={skill.rating ?? 0} skillName={skill.name} />
         <ToggleSwitch
           disabled={loading}
@@ -3340,78 +3622,18 @@ function SkillRating({
   );
 }
 
-function SourceRatingChip({ summary }: { summary: SkillRatingSummary }) {
-  return (
-    <span
-      className="source-rating-summary"
-      title={t("rating.sourceTip", { average: summary.average.toFixed(1), n: summary.count })}
-    >
-      ★ {summary.average.toFixed(1)}
-      <small>{summary.count}</small>
-    </span>
-  );
-}
-
-function PopularityChip({
-  popularity,
-  source
-}: {
-  popularity?: SourcePopularityCard;
-  source: SourceCard;
-}) {
-  const info = sourcePopularityInfo(source, popularity);
-  return (
-    <span className={`source-popularity ${info.tone}`} title={info.title}>
-      {info.label}
-    </span>
-  );
-}
-
-function SourceQualityChip({ quality }: { quality?: SourceQualitySignalCard }) {
-  if (!quality) return null;
-  const score = quality.score;
-  return (
-    <span
-      className={`source-quality-chip tone-${quality.status}`}
-      title={t("quality.chipTip", {
-        evidence: quality.evidenceCount,
-        total: quality.evidenceTotal
-      })}
-    >
-      <Icon name="shield" />
-      {score == null ? t("quality.pending") : t("quality.scoreShort", { n: score })}
-    </span>
-  );
-}
-
-function SourceVersionChip({ governance }: { governance?: SourceGovernanceCard }) {
-  if (!governance || governance.supportStatus !== "git") return null;
-  const label = governance.pinned
-    ? t("governance.pinnedShort")
-    : governance.relation === "update-available"
-      ? t("governance.behindShort", { n: governance.behindCount })
-      : governance.relation === "up-to-date"
-        ? t("governance.currentShort")
-        : t("governance.versionShort");
-  return (
-    <span
-      className={`source-version-chip relation-${governance.pinned ? "pinned" : governance.relation}`}
-      title={governance.message || t("governance.versionTip")}
-    >
-      <Icon name={governance.pinned ? "shield" : "refresh"} />
-      {label}
-    </span>
-  );
-}
-
 function SkillEditPanel({
   draft,
+  folders,
   onClose,
+  onMoveFolder,
   onSave,
   skill
 }: {
   draft?: SkillDraft;
+  folders: SkillFolderCard[];
   onClose: () => void;
+  onMoveFolder: (folderId: string) => Promise<LegacySnapshot | null>;
   onSave: (draft: SkillDraft) => void;
   skill: SkillCard;
 }) {
@@ -3431,6 +3653,17 @@ function SkillEditPanel({
 
   return (
     <Drawer onClose={onClose} eyebrow={t("skillEditor.eyebrow")} title={skill.name}>
+      <label>
+        {skill.sourceId ? t("folders.sourceTreeFolder") : t("folders.choose")}
+        <select
+          onChange={event => void onMoveFolder(event.target.value)}
+          value={skill.userFolderId ?? ""}
+        >
+          <option value="">{t("folders.unfiled")}</option>
+          {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+        </select>
+        {skill.sourceId && <small className="drawer-field-hint">{t("folders.inheritedTip")}</small>}
+      </label>
       <label>
         {t("skillEditor.name")}
         <input onChange={event => setName(event.target.value)} value={name} />
@@ -3476,30 +3709,32 @@ function SkillEditPanel({
 
 function SourceEditPanel({
   draft,
+  folders,
   governance,
   onClose,
   onDelete,
   onOpenChildren,
+  onMoveFolder,
   onRefreshVersion,
   onRollbackVersion,
   onSave,
   onSetPinned,
   popularity,
-  quality,
   source,
   sourceSkills
 }: {
   draft?: SourceDraft;
+  folders: SkillFolderCard[];
   governance?: SourceGovernanceCard;
   onClose: () => void;
   onDelete: () => void;
   onOpenChildren: () => void;
+  onMoveFolder: (folderId: string) => Promise<LegacySnapshot | null>;
   onRefreshVersion: () => void;
   onRollbackVersion: () => void;
   onSave: (draft: SourceDraft) => void;
   onSetPinned: (pinned: boolean) => void;
   popularity?: SourcePopularityCard;
-  quality?: SourceQualitySignalCard;
   source: SourceCard;
   sourceSkills: SkillCard[];
 }) {
@@ -3527,6 +3762,14 @@ function SourceEditPanel({
 
   return (
     <Drawer onClose={onClose} eyebrow={t("srcEditor.eyebrow")} title={source.name} wide>
+      <label className="source-folder-drawer-field">
+        {t("folders.sourceTreeFolder")}
+        <select onChange={event => void onMoveFolder(event.target.value)} value={source.userFolderId ?? ""}>
+          <option value="">{t("folders.unfiled")}</option>
+          {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+        </select>
+        <small className="drawer-field-hint">{t("folders.sourceTreeHint")}</small>
+      </label>
       <div className="source-detail-address">
         <span>{t("srcEditor.address")}</span>
         <code title={projectAddress}>{projectAddress}</code>
@@ -3545,41 +3788,6 @@ function SourceEditPanel({
           <small>{t("srcEditor.calls")}</small>
         </span>
       </div>
-      <section className="source-quality-panel" aria-label={t("quality.title")}>
-        <header>
-          <div>
-            <span>{t("quality.eyebrow")}</span>
-            <strong>
-              {quality?.score == null
-                ? t("quality.noScore")
-                : t("quality.score", { n: quality.score })}
-            </strong>
-          </div>
-          <em>
-            {t("quality.evidence", {
-              n: quality?.evidenceCount ?? 0,
-              total: quality?.evidenceTotal ?? 4
-            })}
-          </em>
-        </header>
-        <p>{t("quality.explainer")}</p>
-        <div className="source-quality-factors">
-          {(quality?.factors ?? []).map(factor => (
-            <span
-              className={factor.status === "available" ? "available" : "missing"}
-              key={factor.key}
-              title={factor.detail}
-            >
-              <b>{qualityFactorLabel(factor.key, factor.label)}</b>
-              <small>
-                {factor.score == null
-                  ? t("quality.excluded")
-                  : t("quality.factorScore", { n: factor.score, weight: factor.weight })}
-              </small>
-            </span>
-          ))}
-        </div>
-      </section>
       <section className="source-governance-panel" aria-label={t("governance.title")}>
         <header>
           <div>
@@ -3670,7 +3878,7 @@ function SourceEditPanel({
         {mapSkills.slice(0, 10).map(skill => (
           <article className="source-detail-child" key={skill.folderName}>
             <strong>{skill.name}</strong>
-            <span>{cleanSkillDescription(skill.description) || displayCategoryName(skill.category)}</span>
+            <span>{localizedSkillDescription(skill, getLang()) || displayCategoryName(skill.category)}</span>
           </article>
         ))}
       </div>
@@ -3885,211 +4093,20 @@ function RouterHubPanel({
   );
 }
 
-function SkillConflictPanel({
-  conflicts,
-  disabled,
-  onResolve
-}: {
-  conflicts: SkillConflictCard[];
-  disabled: boolean;
-  onResolve: (
-    conflictKey: string,
-    defaultSkillId: string,
-    status: "default-set" | "ignored" | "unresolved"
-  ) => Promise<void>;
-}) {
-  const automatic = conflicts.filter(conflict => conflict.status === "auto-set" || conflict.status === "unresolved").length;
-  const resolved = conflicts.filter(conflict => conflict.status === "default-set").length;
-  const ignored = conflicts.filter(conflict => conflict.status === "ignored").length;
-  const aliasCount = conflicts.reduce((total, conflict) => total + conflict.choices.length, 0);
-  const [activeKey, setActiveKey] = useState(conflicts[0]?.conflictKey ?? "");
-  const [query, setQuery] = useState("");
-  const [scope, setScope] = useState<"attention" | "resolved" | "all">("attention");
-  const visibleConflicts = useMemo(() => {
-    const normalizedQuery = normalizeSearch(query);
-    return conflicts.filter(conflict => {
-      const scopeMatches =
-        scope === "all" ||
-        (scope === "attention" && (conflict.status === "auto-set" || conflict.status === "unresolved")) ||
-        (scope === "resolved" && conflict.status === "default-set");
-      if (!scopeMatches) return false;
-      if (!normalizedQuery) return true;
-      return normalizeSearch(
-        `${conflict.childName} ${conflict.conflictKey} ${conflict.choices.map(choice => choice.sourceName).join(" ")}`
-      ).includes(normalizedQuery);
-    });
-  }, [conflicts, query, scope]);
-  const selected =
-    visibleConflicts.find(conflict => conflict.conflictKey === activeKey) ??
-    visibleConflicts[0] ??
-    conflicts.find(conflict => conflict.conflictKey === activeKey) ??
-    conflicts[0];
-
-  useEffect(() => {
-    if (selected && selected.conflictKey !== activeKey) setActiveKey(selected.conflictKey);
-  }, [activeKey, selected]);
-
-  if (!selected) return null;
-
+function ParentIsolationPanel({ conflicts }: { conflicts: SkillConflictCard[] }) {
+  const sourceCount = new Set(
+    conflicts.flatMap(conflict => conflict.choices.map(choice => choice.sourceName))
+  ).size;
   return (
-    <section className="conflict-panel routing-observatory glow-card">
-      <header className="routing-head">
-        <div className="routing-heading">
-          <span className="eyebrow"><Icon name="workspaces" /> {t("conf.observatoryEyebrow")}</span>
-          <h3>{t("conf.observatoryTitle")}</h3>
-          <p>{t("conf.observatorySubtitle")}</p>
-        </div>
-        <div className="routing-coordinate" aria-hidden="true">
-          <span>ROUTE / 03</span>
-          <strong>{conflicts.length.toString().padStart(3, "0")}</strong>
-        </div>
-      </header>
-
-      <div className="routing-summary" aria-label={t("conf.routeSummary")}>
-        <span className="tone-auto"><b>{automatic}</b>{t("conf.needsReview")}</span>
-        <span className="tone-routed"><b>{resolved}</b>{t("conf.routed")}</span>
-        <span><b>{aliasCount}</b>{t("conf.aliasesAlive")}</span>
-        <span><b>{ignored}</b>{t("conf.deferred")}</span>
+    <section className="parent-isolation-panel glow-card">
+      <span className="parent-isolation-icon" aria-hidden="true"><Icon name="shield" /></span>
+      <div>
+        <h3>{t("conf.parentIsolationTitle")}</h3>
+        <p>{t("conf.parentIsolationBody", { conflicts: conflicts.length, sources: sourceCount })}</p>
       </div>
-
-      <div className="routing-toolbar">
-        <label className="routing-search">
-          <Icon name="search" />
-          <input
-            aria-label={t("conf.search")}
-            onChange={event => setQuery(event.target.value)}
-            placeholder={t("conf.searchPlaceholder")}
-            value={query}
-          />
-        </label>
-        <div className="routing-scopes" role="group" aria-label={t("conf.filter")}>
-          {(["attention", "resolved", "all"] as const).map(value => (
-            <button
-              className={scope === value ? "active" : ""}
-              key={value}
-              onClick={() => setScope(value)}
-              type="button"
-            >
-              {t(`conf.filter.${value}`)}
-            </button>
-          ))}
-        </div>
-        <button className="routing-safe-action" disabled type="button" title={t("conf.safePendingBackend")}>
-          <Icon name="sparkle" /> {t("conf.acceptSafe")}
-        </button>
-      </div>
-
-      <div className="routing-layout">
-        <nav className="routing-queue" aria-label={t("conf.groups", { n: visibleConflicts.length })}>
-          <div className="routing-queue-label">
-            <span>{t("conf.queue")}</span>
-            <b>{visibleConflicts.length.toString().padStart(2, "0")}</b>
-          </div>
-          <ul>
-            {visibleConflicts.map((conflict, index) => (
-              <li key={conflict.conflictKey}>
-              <button
-                className={conflict.conflictKey === selected.conflictKey ? "active" : ""}
-                onClick={() => setActiveKey(conflict.conflictKey)}
-                type="button"
-              >
-                <span>{String(index + 1).padStart(2, "0")}</span>
-                <div>
-                  <strong>/{conflict.childName}</strong>
-                  <small>
-                    {conflict.status === "default-set" && conflict.defaultSourceName
-                      ? conflict.defaultSourceName
-                      : conflictStatusLabel(conflict.status)}
-                  </small>
-                </div>
-                <em>{conflict.choices.length}</em>
-              </button>
-              </li>
-            ))}
-          </ul>
-          {visibleConflicts.length === 0 && <p>{t("conf.noFilterResults")}</p>}
-        </nav>
-
-        <div className="routing-stage">
-          <header className="routing-stage-head">
-            <div>
-              <span>{t("conf.canonicalRoute")}</span>
-              <h4>/{selected.childName}</h4>
-              <p>{t("conf.detailHint", { name: selected.childName })}</p>
-            </div>
-            <span className={`routing-status status-${selected.status}`}>
-              {conflictStatusLabel(selected.status)}
-            </span>
-          </header>
-
-          <div className="routing-comparison" role="table" aria-label={t("conf.compareCandidates")}>
-            <div className="routing-comparison-head" role="row">
-              <span role="columnheader">{t("conf.source")}</span>
-              <span role="columnheader">{t("conf.capability")}</span>
-              <span role="columnheader">{t("conf.callRoute")}</span>
-              <span role="columnheader">{t("conf.decision")}</span>
-            </div>
-            {selected.choices.map(choice => {
-              const isDefault =
-                selected.status === "default-set" && choice.skillId === selected.defaultSkillId;
-              const alias = conflictAliasName(choice.sourceName, selected.childName);
-              return (
-                <article className={`routing-candidate${isDefault ? " selected" : ""}`} key={choice.skillId} role="row">
-                  <div className="routing-source-cell" role="cell">
-                    <i aria-hidden="true" />
-                    <span>
-                      <strong>{choice.sourceName}</strong>
-                      <small>{displayCategoryName(choice.category) || t("conf.uncategorized")}</small>
-                    </span>
-                  </div>
-                  <p role="cell">{choice.description || t("conf.noDescription")}</p>
-                  <button
-                    className="routing-alias"
-                    onClick={() => void copyTextToClipboard(`/${alias}`, t("conf.aliasCopied"))}
-                    title={choice.relativePath}
-                    type="button"
-                    role="cell"
-                  >
-                    <code>/{alias}</code><Icon name="copy" />
-                  </button>
-                  <div className="routing-decision-cell" role="cell">
-                    <button
-                      className={isDefault ? "routing-default is-default" : "routing-default"}
-                      disabled={disabled || isDefault}
-                      onClick={() => void onResolve(selected.conflictKey, choice.skillId, "default-set")}
-                      type="button"
-                    >
-                      {isDefault ? t("conf.isDefault") : t("conf.setDefault")}
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-
-          <footer className="routing-stage-foot">
-            <span><Icon name="info" /> {t("conf.aliasGuarantee")}</span>
-            <div>
-            <button
-                className="routing-text-action"
-              disabled={disabled}
-              onClick={() => void onResolve(selected.conflictKey, "", "unresolved")}
-              type="button"
-            >
-              {t("conf.reset")}
-            </button>
-            <button
-                className="routing-text-action"
-              disabled={disabled}
-              onClick={() => void onResolve(selected.conflictKey, "", "ignored")}
-              type="button"
-            >
-              {t("conf.ignore")}
-            </button>
-            </div>
-          </footer>
-          </div>
-      </div>
+      <span className="parent-isolation-status">
+        <Icon name="shield" /> {t("conf.parentIsolationActive")}
+      </span>
     </section>
   );
 }
@@ -4104,9 +4121,11 @@ function ImportWizard({
   onPreview,
   onPromote,
   onRefreshIndex,
+  onMoveSourceSkillsToFolder,
   onSaveSourceMetadata,
   onStage,
-  sources
+  sources,
+  skillFolders
 }: {
   disabled: boolean;
   onCancel: (operationId: string) => Promise<boolean>;
@@ -4118,13 +4137,16 @@ function ImportWizard({
     options?: ImportFeedbackOptions
   ) => Promise<SourceImportPromotionCard>;
   onRefreshIndex: () => Promise<LegacySnapshot | null>;
+  onMoveSourceSkillsToFolder: (sourceId: string, folderId: string) => Promise<LegacySnapshot | null>;
   onSaveSourceMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
   onStage: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
   sources: SourceCard[];
+  skillFolders: SkillFolderCard[];
 }) {
   const [initialDraft] = useState(loadImportWizardDraft);
   const [importKind, setImportKind] = useState<ImportWizardDraft["importKind"]>(initialDraft.importKind);
   const [input, setInput] = useState(initialDraft.input);
+  const [folderId, setFolderId] = useState(initialDraft.folderId);
   const [sourceType, setSourceType] = useState<SourceCard["sourceType"]>(initialDraft.sourceType);
   const [note, setNote] = useState(initialDraft.note);
   const [tags, setTags] = useState(initialDraft.tags);
@@ -4150,17 +4172,19 @@ function ImportWizard({
       enabled,
       importKind,
       input,
+      folderId,
       note,
       selectedCategoryIds,
       sourceType,
       tags
     });
-  }, [customCategory, enabled, importKind, input, note, selectedCategoryIds, sourceType, tags]);
+  }, [customCategory, enabled, folderId, importKind, input, note, selectedCategoryIds, sourceType, tags]);
 
   function resetImportDraft() {
     clearImportWizardDraft();
     setImportKind(EMPTY_IMPORT_WIZARD_DRAFT.importKind);
     setInput(EMPTY_IMPORT_WIZARD_DRAFT.input);
+    setFolderId(EMPTY_IMPORT_WIZARD_DRAFT.folderId);
     setSourceType(EMPTY_IMPORT_WIZARD_DRAFT.sourceType);
     setNote(EMPTY_IMPORT_WIZARD_DRAFT.note);
     setTags(EMPTY_IMPORT_WIZARD_DRAFT.tags);
@@ -4279,6 +4303,9 @@ function ImportWizard({
         };
         setProgress({ detail: t("qa.statusRefreshing"), percent: 96, step: 5, total: 5 });
         await onSaveSourceMetadata(promotedSource, draft);
+        if (folderId) {
+          await onMoveSourceSkillsToFolder(promotedSource.id, folderId);
+        }
       }
       setProgress({ detail: t("qa.statusAddedTitle"), percent: 100, step: 5, total: 5 });
       resetImportDraft();
@@ -4468,6 +4495,13 @@ function ImportWizard({
             <option value="mixed">{t("qa.typeMixed")}</option>
           </select>
         </label>
+        <label className="import-field import-folder-field">
+          <span className="field-label">{t("folders.importTo")}</span>
+          <select disabled={isBusy} onChange={event => setFolderId(event.target.value)} value={folderId}>
+            <option value="">{t("folders.chooseLater")}</option>
+            {skillFolders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+          </select>
+        </label>
       </div>
 
       <div className="import-field">
@@ -4618,6 +4652,7 @@ function ImportWizard({
             enabled,
             importKind,
             input,
+            folderId,
             note,
             selectedCategoryIds,
             sourceType,
@@ -4832,65 +4867,14 @@ function WorkspaceDetailPanel({
   );
 }
 
-function Presets({
-  disabled,
-  onToggle,
-  snapshot
-}: {
-  disabled: boolean;
-  onToggle: (command: string, id: string, enabled: boolean) => Promise<void>;
-  snapshot: LegacySnapshot | null;
-}) {
-  const presets = snapshot?.presets ?? [];
-  return (
-    <div className="view presets-view">
-      <section className="page-header glow-card">
-        <div>
-          <span className="eyebrow"><Icon name="list" /> {t("nav.presets")}</span>
-          <h2>{t("preset.title")}</h2>
-          <p>{t("preset.subtitle")}</p>
-        </div>
-      </section>
-
-      <div className="preset-grid">
-        {presets.map(preset => (
-          <article className={`preset-card glow-card ${preset.color}`} key={preset.id}>
-            <header>
-              <strong>{preset.name}</strong>
-              <span className="preset-count">{preset.skillCount}</span>
-            </header>
-            <p>{preset.description}</p>
-            <div className="preset-meta">
-              <span>{t("preset.skills", { n: preset.skillCount })}</span>
-              <span>{t("preset.workspaces", { n: preset.workspaceCount })}</span>
-            </div>
-            <footer>
-              <ToggleSwitch
-                disabled={disabled}
-                enabled={preset.enabled}
-                label={preset.enabled ? t("common.enabled") : t("common.disabled")}
-                onClick={() => onToggle("set_preset_enabled", preset.id, !preset.enabled)}
-              />
-            </footer>
-          </article>
-        ))}
-        {presets.length === 0 && <p className="empty-state">{t("preset.empty")}</p>}
-      </div>
-
-    </div>
-  );
-}
-
 function Agents({
   disabled,
   onRefreshAgents,
-  onToggle,
   runtimeAvailable,
   snapshot
 }: {
   disabled: boolean;
   onRefreshAgents: () => void;
-  onToggle: (command: string, id: string, enabled: boolean) => Promise<void>;
   runtimeAvailable: boolean;
   snapshot: LegacySnapshot | null;
 }) {
@@ -4898,6 +4882,7 @@ function Agents({
   const doctors = snapshot?.agentDoctors ?? [];
   const capabilities = snapshot?.adapterCapabilities ?? [];
   const safetyChecks = snapshot?.adapterSafetyChecks ?? [];
+  const enabledSkillCount = snapshot?.skills.filter(skill => skill.enabled).length ?? 0;
   return (
     <div className="view agents-view">
       <section className="page-header glow-card">
@@ -4926,6 +4911,9 @@ function Agents({
             <p>{t("agents.registryBody")}</p>
           </div>
         </header>
+        {enabledSkillCount > 200 && (
+          <p className="agent-catalog-warning"><Icon name="info" /> {t("agents.largeCatalog", { n: enabledSkillCount })}</p>
+        )}
       </section>
 
       <Suspense fallback={<DeferredSurface label={t("pluginDoctor.scanning")} />}>
@@ -4994,12 +4982,9 @@ function Agents({
             <footer>
               <span>{adapter.vendor}</span>
               <span>{adapter.detected ? t("agents.detectedFlag") : t("agents.notDetectedFlag")}</span>
-              <ToggleSwitch
-                disabled={disabled || !adapter.detected}
-                enabled={adapter.enabled}
-                label={!adapter.detected ? t("agents.notDetectedFlag") : adapter.enabled ? t("common.enabled") : t("common.disabled")}
-                onClick={() => onToggle("set_agent_adapter_enabled", adapter.id, !adapter.enabled)}
-              />
+              <span className={`readonly-badge ${adapter.managed ? "is-managed" : ""}`}>
+                {adapter.managed ? t("agents.managed") : adapter.detected ? t("agents.pendingSync") : t("agents.notDetectedFlag")}
+              </span>
             </footer>
           </article>
           );
@@ -5278,6 +5263,11 @@ function Settings({
             </div>
           </div>
         )}
+      </section>
+
+      <section className="preset-concept-strip glow-card">
+        <article><Icon name="folder" /><div><strong>{t("preset.folderTitle")}</strong><span>{t("preset.folderBody")}</span></div></article>
+        <article><Icon name="search" /><div><strong>{t("preset.tagTitle")}</strong><span>{t("preset.tagBody")}</span></div></article>
       </section>
 
       {cleanupCandidates.length > 0 && (
@@ -5626,7 +5616,6 @@ function isNavKey(value: string | null): value is NavKey {
     value === "dashboard" ||
     value === "library" ||
     value === "workspaces" ||
-    value === "presets" ||
     value === "sources" ||
     value === "agents" ||
     value === "connections" ||
@@ -5743,15 +5732,15 @@ function mergeTagInputs(...values: string[]): string {
 }
 
 function queryLooksLikeSkillCommand(query: string) {
-  return query.trim().startsWith("/");
+  return /^[\/@$]/.test(query.trim());
 }
 
 function normalizeSearch(value: string) {
-  return value.toLowerCase().replace(/^\/+/, "").replace(/[_/\\.-]+/g, " ").replace(/\s+/g, " ").trim();
+  return value.toLowerCase().replace(/^[\/@$]+/, "").replace(/[_/\\.-]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function compactSearch(value: string) {
-  return value.toLowerCase().replace(/^\/+/, "").replace(/[^a-z0-9一-鿿]+/g, "");
+  return value.toLowerCase().replace(/^[\/@$]+/, "").replace(/[^a-z0-9一-鿿]+/g, "");
 }
 
 function textMatchesSearch(query: string, values: Array<string | string[] | undefined>) {
@@ -5973,28 +5962,16 @@ function normalizeSourcePath(path: string) {
 }
 
 function skillBelongsToSource(skill: SkillCard, source: SourceCard): boolean {
+  if (skill.sourceId) return skill.sourceId === source.id;
   const sourceKey = normalizeLookup(source.name);
   const skillSource = normalizeLookup(skill.source);
   if (sourceKey && skillSource === sourceKey) return true;
-  const sourcePath = normalizeSourcePath(source.localPath);
-  const skillPath = normalizeSourcePath(skill.relativePath);
-  const skillPathSegments = skillPath.split("/").filter(Boolean);
-  const sourceFolder = sourcePath.split("/").filter(Boolean).pop() ?? "";
-  if (sourceFolder && skillPathSegments.includes(sourceFolder)) return true;
   const sourceUrlName = normalizeLookup((source.url.split("/").pop() ?? "").replace(/\.git$/i, ""));
-  return Boolean(sourceUrlName && (skillSource === sourceUrlName || skillPathSegments.includes(sourceUrlName)));
+  return Boolean(sourceUrlName && skillSource === sourceUrlName);
 }
 
 function normalizeLookup(value: string) {
   return value.trim().toLowerCase().replace(/[_\s]+/g, "-");
-}
-
-function conflictAliasName(sourceName: string, childName: string) {
-  const normalized = normalizeLookup(`${sourceName}-${childName}`)
-    .replace(/[^a-z0-9.]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  return normalized || "conflict-skill";
 }
 
 function clampNumber(value: number, min: number, max: number) {
@@ -6013,9 +5990,20 @@ function isRouterHubSkill(skill: SkillCard): boolean {
   return false;
 }
 
-function cleanSkillDescription(value: string | undefined | null) {
-  if (!value) return "";
-  return String(value).replace(/^\s*\[(?:ROUTER-HUB|CHILD-SKILL)\]\s*/i, "").trim();
+function skillMatchesUserFolder(skill: SkillCard, selectedFolderId: string) {
+  if (selectedFolderId === "all") return true;
+  if (selectedFolderId === "unfiled") return !skill.userFolderId;
+  return skill.userFolderId === selectedFolderId;
+}
+
+function sourceMatchesUserFolder(source: SourceCard, selectedFolderId: string) {
+  if (selectedFolderId === "all") return true;
+  if (selectedFolderId === "unfiled") return !source.userFolderId;
+  return source.userFolderId === selectedFolderId;
+}
+
+function stableSkillClientId(skill: SkillCard) {
+  return skill.id || `preview-skill-${skill.folderName}`;
 }
 
 function skillVisualCategory(skill: SkillCard) {
@@ -6106,7 +6094,7 @@ function buildSkillGraphData(skills: SkillCard[], sources: SourceCard[]): SkillG
         itemCount: group.skills.length,
         itemIndex,
         kind: "skill",
-        label: `/${skill.name}`,
+        label: skill.name,
         parentIndex: sourceIndex,
         router: isRouterHubSkill(skill),
         seed: stableSkillHash(`${skill.folderName}:${skill.relativePath}:${itemIndex}`),
@@ -6293,7 +6281,7 @@ function drawGraphTooltip(
 ) {
   const title = node.label;
   const subtitle = node.skill
-    ? cleanSkillDescription(node.skill.description) || displayCategoryName(node.category)
+    ? localizedSkillDescription(node.skill, getLang()) || displayCategoryName(node.category)
     : t("lib.skillsTotal", { n: node.itemCount });
   context.save();
   context.font = "800 12px Inter, system-ui, sans-serif";
@@ -6492,16 +6480,17 @@ function skillStatusLabel(health: string) {
 }
 
 function agentSkillStatusTone(status: string) {
-  if (status === "installed") return "ok";
-  if (status === "missing") return "danger";
-  if (status === "agent-disabled") return "warn";
+  if (["installed", "routed-via-parent"].includes(status)) return "ok";
+  if (["missing", "agent-disabled", "skill-disabled", "invalid-manifest"].includes(status)) return "warn";
   return "info";
 }
 
 function agentSkillStatusLabel(status: string) {
   if (status === "installed") return t("agentSkill.installed");
+  if (status === "routed-via-parent") return t("agentSkill.routedViaParent");
   if (status === "missing") return t("agentSkill.missing");
-  if (status === "agent-disabled") return t("agentSkill.disabled");
+  if (["agent-disabled", "skill-disabled"].includes(status)) return t("agentSkill.disabled");
+  if (status === "invalid-manifest") return t("agentSkill.invalid");
   if (status === "agent-missing") return t("agentSkill.notDetected");
   return status;
 }
@@ -6672,12 +6661,6 @@ function shortRevision(value?: string) {
   return (value ?? "").trim().slice(0, 8);
 }
 
-function qualityFactorLabel(key: string, fallback: string) {
-  const translationKey = `quality.factor.${key}`;
-  const translated = t(translationKey);
-  return translated === translationKey ? fallback : translated;
-}
-
 function formatFileSize(value: number) {
   const bytes = Math.max(0, Number.isFinite(value) ? value : 0);
   if (bytes < 1024) return `${Math.round(bytes)} B`;
@@ -6773,13 +6756,6 @@ function operationRunnerStatusLabel(status: string, locked: boolean) {
   return t("runner.ready");
 }
 
-function conflictStatusLabel(status: string) {
-  if (status === "default-set") return t("conf.statusDefault");
-  if (status === "auto-set") return t("conf.statusAuto");
-  if (status === "ignored") return t("conf.statusIgnored");
-  return t("conf.statusPending");
-}
-
 function qaStatusClass(status: string) {
   if (status === "passed") return "done";
   if (status === "failed") return "blocked";
@@ -6857,7 +6833,7 @@ async function copySkillPrompt(
     eventType: string
   ) => Promise<void>
 ) {
-  const context = cleanSkillDescription(skill.description) || displayCategoryName(skill.category) || t("copy.fallbackContext");
+  const context = localizedSkillDescription(skill, getLang()) || displayCategoryName(skill.category) || t("copy.fallbackContext");
   const text = t("copy.template", { name: skill.name, context });
   try {
     await navigator.clipboard.writeText(text);
