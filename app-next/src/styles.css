@@ -2837,10 +2837,10 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   justify-content: center;
   gap: 4px;
   min-width: 28px;
-  height: 28px;
+  min-height: 36px;
   padding: 0 7px;
   color: var(--text-muted);
-  cursor: grab;
+  cursor: pointer;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
@@ -2885,9 +2885,9 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .skill-folder-editor .folder-color-dot,
 .theme-family-atlas .skill-folder-editor .folder-color-dot,
 .theme-nocturne .skill-folder-editor .folder-color-dot {
-  width: 24px;
-  height: 24px;
-  min-width: 24px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
   padding: 0;
   border: 2px solid color-mix(in srgb, var(--folder-tone) 72%, var(--text));
   border-radius: 50%;
@@ -2918,6 +2918,8 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 
 /* User folders: local organization, independent from tags and task bundles. */
 .skill-folder-shelf {
+  container-name: skill-folder-shelf;
+  container-type: inline-size;
   display: grid;
   gap: 12px;
   padding: 14px 16px;
@@ -2944,7 +2946,9 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   scroll-snap-type: x proximity;
 }
 .skill-folder-item {
-  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  gap: 6px;
   flex: 0 0 auto;
   scroll-snap-align: start;
 }
@@ -2956,7 +2960,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   gap: 9px;
   min-width: 164px;
   max-width: 230px;
-  height: 58px;
+  min-height: 64px;
   padding: 9px 12px;
   color: var(--text);
   text-align: left;
@@ -2982,10 +2986,16 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
-.skill-folder-target strong { font-size: calc(12.5px * var(--ui-text-scale, 1)); font-weight: 650; }
-.skill-folder-target small { margin-top: 2px; color: var(--text-muted); font-size: calc(10px * var(--ui-text-scale, 1)); }
+.skill-folder-target strong {
+  display: -webkit-box;
+  font-size: calc(12.5px * var(--ui-text-scale, 1));
+  font-weight: 650;
+  line-height: 1.25;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.skill-folder-target small { margin-top: 3px; color: var(--text-muted); font-size: calc(10px * var(--ui-text-scale, 1)); white-space: nowrap; }
 .skill-folder-target > b { color: var(--folder-tone); font: 600 calc(11px * var(--ui-text-scale, 1))/1 var(--ui-mono); }
 .tone-cyan { --folder-tone: #28c6d1; }
 .tone-violet { --folder-tone: #8c7cf4; }
@@ -2995,34 +3005,23 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .tone-blue { --folder-tone: #4f9ee8; }
 .tone-coral { --folder-tone: #e57563; }
 .tone-slate { --folder-tone: #8290a5; }
-.skill-folder-item-actions {
-  position: absolute;
-  top: 3px;
-  right: 3px;
-  display: flex;
-  gap: 1px;
-  opacity: 1;
-  transform: none;
-  transition: opacity 160ms var(--ease), transform 160ms var(--ease);
-}
-.skill-folder-item:hover .skill-folder-item-actions,
-.skill-folder-item:focus-within .skill-folder-item-actions { opacity: 1; transform: none; }
-.skill-folder-item-actions button {
+.skill-folder-manage {
   display: grid;
   place-items: center;
-  width: 23px;
-  height: 23px;
+  width: 44px;
+  min-height: 64px;
   padding: 0;
   color: var(--text-soft);
-  background: var(--surface);
+  background: var(--surface-soft);
   border: 1px solid var(--border);
-  border-radius: 7px;
-  font-size: 11px;
+  border-radius: var(--radius-md);
 }
-.skill-folder-item-actions .ui-icon { width: 12px; height: 12px; }
+.skill-folder-manage:hover,
+.skill-folder-manage:focus-visible { color: var(--brand); border-color: var(--border-strong); background: var(--surface); }
+.skill-folder-manage .ui-icon { width: 16px; height: 16px; }
 .skill-folder-editor {
   display: grid;
-  grid-template-columns: minmax(150px, .65fr) minmax(220px, 1.35fr) auto auto;
+  grid-template-columns: minmax(150px, .65fr) minmax(220px, 1.35fr);
   gap: 10px;
   align-items: end;
   padding-top: 12px;
@@ -3032,11 +3031,11 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .skill-folder-editor label > span,
 .skill-folder-editor legend { color: var(--text-muted); font-size: calc(10.5px * var(--ui-text-scale, 1)); }
 .skill-folder-editor input { width: 100%; }
-.skill-folder-editor fieldset { display: flex; gap: 5px; padding: 0; border: 0; }
+.skill-folder-editor fieldset { display: flex; flex-wrap: wrap; gap: 7px; min-width: 0; padding: 0; border: 0; }
 .folder-color-dot {
   --folder-tone: var(--brand);
-  width: 22px;
-  height: 22px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   background: var(--folder-tone);
   border: 2px solid var(--surface);
@@ -3044,7 +3043,12 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   box-shadow: 0 0 0 1px var(--border);
 }
 .folder-color-dot[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--folder-tone); }
-.skill-folder-editor-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+.skill-folder-editor-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; }
+
+@container skill-folder-shelf (max-width: 680px) {
+  .skill-folder-editor { grid-template-columns: minmax(0, 1fr); }
+  .skill-folder-editor-actions { justify-content: flex-start; }
+}
 .skill-folder-select {
   display: inline-flex;
   align-items: center;

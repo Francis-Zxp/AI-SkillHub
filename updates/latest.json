@@ -1,11 +1,11 @@
 {
-  "version": "3.1.9",
-  "notes": "AI SkillHub v3.1.9: signed stable update with preserved local user data.",
-  "pub_date": "2026-08-11T09:08:12Z",
+  "version": "3.1.10",
+  "notes": "AI SkillHub v3.1.10: signed stable update with preserved local user data.",
+  "pub_date": "2026-08-11T11:41:19Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcWRLV3ZkMVJkMjNLVjNSbDFRNHdXN0laQTBseHNabHpGaHJXdEt6WkZySVJuN2FiTFVqU2YxbTYrdnZ3ZnBFNmNqWEhncXNvNWRXYTdMMzdzZ2ltNUE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NDM5MjkxCWZpbGU6QUkgU2tpbGxIdWJfMy4xLjlfeDY0LXNldHVwLmV4ZQp6NnBPamhiVGhiOU43M09hb0JETGtFcjdJbUs3dkI0cllZeUp0M0NZU3dxZy9uVWVtTnhhNW5DTzQxNkpxZHlZNDF5SFlVU3dPZEwwZlVMTTlUWGhDdz09Cg==",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.1.9/AI-SkillHub-3.1.9-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVV5OHlTWEh5SlByeE9hVFVOR1R0TjZxRWZoUWIvd2tKMG1mYkRSeVJ3enN2NEFydHI5UDIvTWdXNkFpMEgzWHoxWmUzekpQRTBweE5oWG5YSkRRR2dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NDQ4MzIyCWZpbGU6QUkgU2tpbGxIdWJfMy4xLjEwX3g2NC1zZXR1cC5leGUKTklUU2MzRUF3OTdWdVg1b0ZodUtlQUE2OW1GaDB3UTJzWHVaRmdpWXBsN1FtWWlYQmlESllpT3kwVkZyNnpFQ1dSdUR3TnRkdnkwdHFDdzZhOCtCQlE9PQo=",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.1.10/AI-SkillHub-3.1.10-setup.exe"
     }
   }
 }

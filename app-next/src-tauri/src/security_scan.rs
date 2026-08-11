@@ -293,7 +293,7 @@ pub fn scan_source_tree_with_limits(
             let text = String::from_utf8_lossy(&bytes);
             let relative_path = relative_display(&canonical_root, &path);
             for rule in RULES {
-                if let Some((line, evidence)) = find_rule_match(&text, rule.needles) {
+                if let Some((line, evidence)) = find_rule_match(&text, rule) {
                     let review_only_example = rule.severity == "high"
                         && is_review_only_non_runtime_context(&relative_path);
                     findings.push(SourceSecurityFinding {
@@ -423,6 +423,8 @@ fn is_review_only_non_runtime_context(relative_path: &str) -> bool {
                 | "test"
                 | "fixtures"
                 | "fixture"
+                | "references"
+                | "reference"
                 | "__tests__"
         )
     });
@@ -449,14 +451,66 @@ fn is_review_only_non_runtime_context(relative_path: &str) -> bool {
     github_workflow || in_example_directory || documentation_file || test_file
 }
 
-fn find_rule_match(text: &str, needles: &[&str]) -> Option<(usize, String)> {
+fn find_rule_match(text: &str, rule: &Rule) -> Option<(usize, String)> {
     text.lines()
         .enumerate()
         .find(|(_, line)| {
+            if rule.id == "broad-recursive-delete-unix" {
+                return contains_broad_recursive_delete_unix(line);
+            }
             let normalized = line.to_ascii_lowercase();
-            needles.iter().all(|needle| normalized.contains(needle))
+            rule.needles
+                .iter()
+                .all(|needle| normalized.contains(needle))
         })
         .map(|(index, line)| (index + 1, line.trim().to_string()))
+}
+
+fn contains_broad_recursive_delete_unix(line: &str) -> bool {
+    let tokens = line
+        .split_whitespace()
+        .map(|token| {
+            token.trim_matches(|character: char| {
+                matches!(
+                    character,
+                    '\'' | '"' | '`' | ';' | ',' | '.' | ':' | '(' | ')' | '[' | ']'
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for (index, token) in tokens.iter().enumerate() {
+        let command = token.to_ascii_lowercase();
+        if command != "rm" && !command.ends_with("/rm") {
+            continue;
+        }
+        let mut recursive = false;
+        let mut force = false;
+        for target in tokens.iter().skip(index + 1) {
+            let normalized = target.to_ascii_lowercase();
+            if normalized.starts_with('-') {
+                recursive |=
+                    normalized == "--recursive" || normalized.trim_start_matches('-').contains('r');
+                force |=
+                    normalized == "--force" || normalized.trim_start_matches('-').contains('f');
+                continue;
+            }
+            if !(recursive && force) {
+                break;
+            }
+            let target = normalized.trim_matches(|character: char| {
+                matches!(
+                    character,
+                    '\'' | '"' | '`' | ';' | ',' | '.' | ':' | ')' | ']'
+                )
+            });
+            return matches!(
+                target,
+                "/" | "/*" | "~" | "~/" | "$home" | "$home/" | "${home}" | "${home}/"
+            );
+        }
+    }
+    false
 }
 
 fn redact_evidence(value: &str) -> String {
@@ -604,6 +658,62 @@ mod tests {
         assert!(report.safe_to_promote());
         assert!(report.findings.iter().any(|finding| {
             finding.id.starts_with("broad-recursive-delete-unix") && finding.severity == "medium"
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn dangerous_reference_example_requires_review_without_blocking() {
+        let root = temp_dir("reference-example");
+        let references = root
+            .join("skills")
+            .join("hook-development")
+            .join("references");
+        fs::create_dir_all(&references).unwrap();
+        fs::write(
+            references.join("advanced.md"),
+            "The guard test must reject `rm -rf /` before execution.\n",
+        )
+        .unwrap();
+
+        let report = scan_source_tree(&root).unwrap();
+
+        assert_eq!(report.status, "review");
+        assert!(report.safe_to_promote());
+        assert!(report.findings.iter().any(|finding| {
+            finding.id.starts_with("broad-recursive-delete-unix") && finding.severity == "medium"
+        }));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fixed_tmp_cleanup_is_not_a_broad_root_delete() {
+        let root = temp_dir("fixed-tmp-cleanup");
+        fs::write(
+            root.join("SKILL.md"),
+            "Clean the generated cache with `rm -rf /tmp/latex-template-temp`.\n",
+        )
+        .unwrap();
+
+        let report = scan_source_tree(&root).unwrap();
+
+        assert!(!report
+            .findings
+            .iter()
+            .any(|finding| finding.id.starts_with("broad-recursive-delete-unix")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn broad_root_delete_in_skill_remains_blocked() {
+        let root = temp_dir("broad-root-delete");
+        fs::write(root.join("SKILL.md"), "Never run `rm -rf /`.\n").unwrap();
+
+        let report = scan_source_tree(&root).unwrap();
+
+        assert_eq!(report.status, "blocked");
+        assert!(report.findings.iter().any(|finding| {
+            finding.id.starts_with("broad-recursive-delete-unix") && finding.severity == "high"
         }));
         fs::remove_dir_all(root).unwrap();
     }

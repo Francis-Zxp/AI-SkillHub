@@ -94,6 +94,76 @@ type ImportWizardDraft = {
   tags: string;
 };
 
+function applySkillFolderCommandResult(
+  snapshot: LegacySnapshot,
+  command: string,
+  args: Record<string, unknown>,
+  folders: SkillFolderCard[]
+): LegacySnapshot {
+  const folderId = String(args.folderId ?? "");
+  const targetFolder = folders.find(folder => folder.id === folderId);
+  const folderFields = targetFolder
+    ? {
+        userFolderId: targetFolder.id,
+        userFolderName: targetFolder.name,
+        userFolderColor: targetFolder.color
+      }
+    : { userFolderId: "", userFolderName: "", userFolderColor: "" };
+
+  if (command === "delete_skill_folder") {
+    return {
+      ...snapshot,
+      skillFolders: folders,
+      sources: snapshot.sources.map(source => source.userFolderId === folderId
+        ? { ...source, userFolderId: "", userFolderName: "", userFolderColor: "" }
+        : source),
+      skills: snapshot.skills.map(skill => skill.userFolderId === folderId
+        ? { ...skill, userFolderId: "", userFolderName: "", userFolderColor: "" }
+        : skill)
+    };
+  }
+
+  if (command === "move_source_skills_to_folder") {
+    const sourceId = String(args.sourceId ?? "");
+    return {
+      ...snapshot,
+      skillFolders: folders,
+      sources: snapshot.sources.map(source => source.id === sourceId
+        ? { ...source, ...folderFields }
+        : source),
+      skills: snapshot.skills.map(skill => skill.sourceId === sourceId
+        ? { ...skill, ...folderFields }
+        : skill)
+    };
+  }
+
+  if (command === "move_skill_to_folder") {
+    const skillId = String(args.skillId ?? "");
+    const selected = snapshot.skills.find(skill => (skill.id ?? stableSkillClientId(skill)) === skillId);
+    if (selected?.sourceId) {
+      return {
+        ...snapshot,
+        skillFolders: folders,
+        sources: snapshot.sources.map(source => source.id === selected.sourceId
+          ? { ...source, ...folderFields }
+          : source),
+        skills: snapshot.skills.map(skill => skill.sourceId === selected.sourceId
+          ? { ...skill, ...folderFields }
+          : skill)
+      };
+    }
+    return {
+      ...snapshot,
+      skillFolders: folders,
+      skills: snapshot.skills.map(skill => (skill.id ?? stableSkillClientId(skill)) === skillId
+        ? { ...skill, ...folderFields }
+        : skill)
+    };
+  }
+
+  return { ...snapshot, skillFolders: folders };
+}
+
 const IMPORT_WIZARD_DRAFT_STORAGE_KEY = "ai-skillhub-source-import-draft-v1";
 const EMPTY_IMPORT_WIZARD_DRAFT: ImportWizardDraft = {
   customCategory: "",
@@ -607,7 +677,7 @@ export function App() {
   /* ---- backend bridges ---- */
 
   async function loadSnapshot(
-    mode: "indexed" | "refresh" = "indexed",
+    mode: "indexed" | "refresh" | "scan" = "indexed",
     options: { background?: boolean; quiet?: boolean } = {}
   ): Promise<LegacySnapshot | null> {
     if (!options.background) setLoading(true);
@@ -618,11 +688,15 @@ export function App() {
         setLoadError("");
         return preview;
       }
-      const command = mode === "refresh" ? "run_skillhub_sync" : "load_indexed_snapshot";
+      const command = mode === "refresh"
+        ? "run_skillhub_sync"
+        : mode === "scan"
+          ? "scan_legacy_snapshot"
+          : "load_indexed_snapshot";
       const result = await invoke<LegacySnapshot>(command);
       applySnapshot(result, Boolean(options.background));
       setLoadError("");
-      if (mode === "refresh" && !options.quiet) toastMessage(t("toast.refreshDone"), "ok");
+      if (mode !== "indexed" && !options.quiet) toastMessage(t("toast.refreshDone"), "ok");
       return result;
     } catch (error) {
       setLoadError(messageFromError(error));
@@ -1262,7 +1336,13 @@ export function App() {
       return snapshot;
     }
     try {
-      const result = await invoke<LegacySnapshot>(command, args);
+      const folders = await invoke<SkillFolderCard[]>(command, args);
+      const result = applySkillFolderCommandResult(
+        snapshot ?? createPreviewSnapshot(),
+        command,
+        args,
+        folders
+      );
       setSnapshot(result);
       setLoadError("");
       if (successMessage) toastMessage(successMessage, "ok");
@@ -1628,7 +1708,9 @@ export function App() {
               onStageImport={stageSourceImportCandidate}
               onPromoteImport={promoteStagedSourceImport}
               onReanalyzeMetadata={reanalyzeLibraryMetadata}
-              onRefreshIndex={() => syncAndRefreshAll()}
+              onRefreshIndex={localOnly => localOnly
+                ? loadSnapshot("scan", { background: true, quiet: true })
+                : syncAndRefreshAll()}
               onRecordUsage={recordUsage}
               onSaveSkillMetadata={updateSkillMetadata}
               onSaveSourceMetadata={updateSourceMetadata}
@@ -2684,7 +2766,7 @@ type LibraryProps = {
   onMoveSkillToFolder: (skillId: string, folderId: string) => Promise<LegacySnapshot | null>;
   onMoveSourceSkillsToFolder: (sourceId: string, folderId: string) => Promise<LegacySnapshot | null>;
   onReanalyzeMetadata: () => Promise<LegacySnapshot | null>;
-  onRefreshIndex: () => Promise<LegacySnapshot | null>;
+  onRefreshIndex: (localOnly?: boolean) => Promise<LegacySnapshot | null>;
   onSaveSkillMetadata: (skill: SkillCard, draft: SkillDraft) => Promise<"failed" | "preview" | "saved">;
   onSaveSourceMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
   onSetSkillEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
@@ -3056,13 +3138,26 @@ function Library(props: LibraryProps) {
                     aria-label={t("folders.dragSource", { name: source.name })}
                     className="source-folder-drag-handle"
                     draggable
+                    onClick={() => {
+                      const select = document.getElementById(`source-folder-${source.id}`) as
+                        | (HTMLSelectElement & { showPicker?: () => void })
+                        | null;
+                      select?.focus();
+                      try { select?.showPicker?.(); } catch { /* focus remains as the fallback */ }
+                    }}
                     onDragStart={event => {
                       event.dataTransfer.effectAllowed = "move";
                       event.dataTransfer.setData("application/x-ai-skillhub-source-id", source.id);
                       event.dataTransfer.setData("text/plain", source.id);
                     }}
+                    onKeyDown={event => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      event.currentTarget.click();
+                    }}
                     title={t("folders.dragSource", { name: source.name })}
-                    role="img"
+                    role="button"
+                    tabIndex={0}
                   >
                     <Icon name="grip" />
                     <small>{t("folders.dragShort")}</small>
@@ -3072,6 +3167,7 @@ function Library(props: LibraryProps) {
                     <select
                       aria-label={t("folders.chooseSource")}
                       disabled={loading}
+                      id={`source-folder-${source.id}`}
                       onChange={event => void onMoveSourceSkillsToFolder(source.id, event.target.value)}
                       value={source.userFolderId ?? ""}
                     >
@@ -3337,10 +3433,15 @@ function SkillFolderShelf({
   const [note, setNote] = useState("");
   const [color, setColor] = useState("cyan");
   const [dropTarget, setDropTarget] = useState("");
-  const unfiledSourceIds = new Set(sources.filter(source => !source.userFolderId).map(source => source.id));
-  const unfiledCount = skills.filter(skill => skill.sourceId
-    ? unfiledSourceIds.has(skill.sourceId)
-    : !skill.userFolderId).length;
+  const unfiledCount = useMemo(() => {
+    const unfiledSourceIds = new Set(
+      sources.filter(source => !source.userFolderId).map(source => source.id)
+    );
+    return skills.filter(skill => skill.sourceId
+      ? unfiledSourceIds.has(skill.sourceId)
+      : !skill.userFolderId).length;
+  }, [skills, sources]);
+  const editingIndex = folders.findIndex(folder => folder.id === editingId);
 
   function openCreate() {
     setEditingId("");
@@ -3411,23 +3512,17 @@ function SkillFolderShelf({
       </header>
       <div className="skill-folder-strip">
         {renderTarget("all", t("folders.all"), skills.length, "slate")}
-        {folders.map((folder, index) => (
+        {folders.map(folder => (
           <div className="skill-folder-item" key={folder.id}>
             {renderTarget(folder.id, folder.name, folder.skillCount, folder.color, folder.note)}
-            <div className="skill-folder-item-actions">
-              <button disabled={disabled || index === 0} onClick={() => void onMove(folder.id, "up")} title={t("folders.moveUp")} type="button">↑</button>
-              <button disabled={disabled || index === folders.length - 1} onClick={() => void onMove(folder.id, "down")} title={t("folders.moveDown")} type="button">↓</button>
-              <button disabled={disabled} onClick={() => openEdit(folder)} title={t("folders.edit")} type="button"><Icon name="edit" /></button>
-              <button
-                className="folder-delete-action"
-                disabled={disabled}
-                onClick={() => {
-                  if (window.confirm(t("folders.confirmDelete", { name: folder.name }))) void onDelete(folder.id);
-                }}
-                title={t("folders.delete")}
-                type="button"
-              ><Icon name="trash" /></button>
-            </div>
+            <button
+              aria-label={t("folders.manage", { name: folder.name })}
+              className="skill-folder-manage"
+              disabled={disabled}
+              onClick={() => openEdit(folder)}
+              title={t("folders.manage", { name: folder.name })}
+              type="button"
+            ><Icon name="edit" /></button>
           </div>
         ))}
         {renderTarget("unfiled", t("folders.unfiled"), unfiledCount, "slate")}
@@ -3452,18 +3547,32 @@ function SkillFolderShelf({
           </fieldset>
           <div className="skill-folder-editor-actions">
             {editingId && (
-              <button
-                className="danger-action"
-                disabled={disabled}
-                onClick={() => {
-                  if (window.confirm(t("folders.confirmDelete", { name }))) {
-                    void onDelete(editingId).then(result => { if (result) setShowEditor(false); });
-                  }
-                }}
-                type="button"
-              >
-                <Icon name="trash" /> {t("folders.delete")}
-              </button>
+              <>
+                <button
+                  className="ghost-action"
+                  disabled={disabled || editingIndex <= 0}
+                  onClick={() => void onMove(editingId, "up")}
+                  type="button"
+                >↑ {t("folders.moveUp")}</button>
+                <button
+                  className="ghost-action"
+                  disabled={disabled || editingIndex < 0 || editingIndex >= folders.length - 1}
+                  onClick={() => void onMove(editingId, "down")}
+                  type="button"
+                >↓ {t("folders.moveDown")}</button>
+                <button
+                  className="danger-action"
+                  disabled={disabled}
+                  onClick={() => {
+                    if (window.confirm(t("folders.confirmDelete", { name }))) {
+                      void onDelete(editingId).then(result => { if (result) setShowEditor(false); });
+                    }
+                  }}
+                  type="button"
+                >
+                  <Icon name="trash" /> {t("folders.delete")}
+                </button>
+              </>
             )}
             <button className="ghost-action" onClick={() => setShowEditor(false)} type="button">{t("common.cancel")}</button>
             <button className="primary-action" disabled={disabled || !name.trim()} onClick={() => void submitFolder()} type="button">{t("common.save")}</button>
@@ -4136,7 +4245,7 @@ function ImportWizard({
     sourceName: string,
     options?: ImportFeedbackOptions
   ) => Promise<SourceImportPromotionCard>;
-  onRefreshIndex: () => Promise<LegacySnapshot | null>;
+  onRefreshIndex: (localOnly?: boolean) => Promise<LegacySnapshot | null>;
   onMoveSourceSkillsToFolder: (sourceId: string, folderId: string) => Promise<LegacySnapshot | null>;
   onSaveSourceMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
   onStage: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
@@ -4201,8 +4310,8 @@ function ImportWizard({
     showUiToast(t("qa.draftCleared"), "info");
   }
 
-  function requiresSecurityReview(status: string) {
-    return status === "review" || status === "warn";
+  function requiresSecurityReview(status: string, findingCount = 0) {
+    return status === "review" || status === "warn" || (status === "blocked" && findingCount > 0);
   }
 
   function applyBackendProgress(event: SourceImportProgressEvent) {
@@ -4242,7 +4351,7 @@ function ImportWizard({
       );
       if (
         promotion.status === "blocked" &&
-        requiresSecurityReview(promotion.securityStatus) &&
+        requiresSecurityReview(promotion.securityStatus, promotion.securityFindings.length) &&
         !securityReviewConfirmed
       ) {
         setProgress({ detail: t("qa.securityReviewTitle"), percent: 70, step: 3, total: 5 });
@@ -4277,7 +4386,8 @@ function ImportWizard({
       setSecurityReview(null);
       setProgress({ detail: t("qa.statusRefreshing"), percent: 88, step: 4, total: 5 });
       setStatus({ tone: "info", title: t("qa.statusRefreshing"), body: t("qa.statusRefreshingBody") });
-      const refreshed = await onRefreshIndex();
+      const reviewedLocalOnly = securityReviewConfirmed && promotion.securityStatus !== "passed";
+      const refreshed = await onRefreshIndex(reviewedLocalOnly);
       const promotedSource = refreshed?.sources.find(
         item => normalizeSourcePath(item.localPath) === normalizeSourcePath(promotion.targetPath)
       );
@@ -4295,7 +4405,7 @@ function ImportWizard({
         const extraTags = effectiveCategoryIds.slice(customCategoryLabel ? 0 : 1).map(displayCategoryName).join(", ");
         const draft: SourceDraft = {
           category: primaryCategory,
-          enabled,
+          enabled: reviewedLocalOnly ? false : enabled,
           name: promotedSource.name,
           note,
           sourceType: detectedSourceType,
@@ -4315,9 +4425,11 @@ function ImportWizard({
         body:
           execution.skillCount === 0 && execution.promptCount > 0
             ? t("qa.statusAddedPrompt")
-            : t("qa.statusAddedSynced")
+            : reviewedLocalOnly
+              ? t("qa.statusAddedLocalReview")
+              : t("qa.statusAddedSynced")
       });
-      showUiToast(t("qa.toastSynced"), "ok");
+      showUiToast(t(reviewedLocalOnly ? "qa.toastAddedLocalReview" : "qa.toastSynced"), "ok");
       return true;
   }
 
@@ -4358,6 +4470,21 @@ function ImportWizard({
         step: Math.max(current?.step ?? 2, 2),
         total: 5
       }));
+      if (requiresSecurityReview(execution.securityStatus, execution.securityFindings.length)) {
+        setEnabled(false);
+        setProgress({ detail: t("qa.securityReviewTitle"), percent: 70, step: 3, total: 5 });
+        setSecurityReview({ execution, plan });
+        setStatus({
+          tone: "warn",
+          title: t("qa.securityReviewTitle"),
+          body: t("qa.securityReviewBody", {
+            files: execution.securityScannedFiles,
+            findings: execution.securityFindings.length
+          })
+        });
+        showUiToast(t("qa.securityReviewToast"), "warn");
+        return;
+      }
       if (execution.status !== "staged" && execution.status !== "warn") {
         const detail = execution.blockingChecks
           .filter(check => check.trim())
@@ -4370,20 +4497,6 @@ function ImportWizard({
         });
         setProgress(null);
         showUiToast(t("qa.toastStagingStop"), "warn");
-        return;
-      }
-      if (requiresSecurityReview(execution.securityStatus)) {
-        setProgress({ detail: t("qa.securityReviewTitle"), percent: 70, step: 3, total: 5 });
-        setSecurityReview({ execution, plan });
-        setStatus({
-          tone: "warn",
-          title: t("qa.securityReviewTitle"),
-          body: t("qa.securityReviewBody", {
-            files: execution.securityScannedFiles,
-            findings: execution.securityFindings.length
-          })
-        });
-        showUiToast(t("qa.securityReviewToast"), "warn");
         return;
       }
       await promoteAndFinalize(plan, execution, false);
@@ -4559,10 +4672,10 @@ function ImportWizard({
       <div className="import-toggle-row">
         <div>
           <strong>{t("qa.enableAfter")}</strong>
-          <span>{t("qa.enableAfterHint")}</span>
+          <span>{t(securityReview ? "qa.enableAfterReviewHint" : "qa.enableAfterHint")}</span>
         </div>
         <ToggleSwitch
-          disabled={isBusy}
+          disabled={isBusy || Boolean(securityReview)}
           enabled={enabled}
           label={enabled ? t("common.enabled") : t("common.disabled")}
           onClick={() => setEnabled(value => !value)}
