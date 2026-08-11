@@ -7,7 +7,8 @@ import {
   useState
 } from "react";
 import { Icon } from "./icons";
-import { categoryName, t } from "./i18n";
+import { categoryName, getLang, t } from "./i18n";
+import { localizedSkillDescription } from "./localizedDescriptions";
 import type { LegacySnapshot, SkillCard, SourceCard, SourcePopularityCard } from "./types";
 
 export type SkillUniverseMode = "relations" | "sources" | "categories";
@@ -718,7 +719,7 @@ function createSkillNode(
   return {
     category,
     childCount: 0,
-    description: cleanDescription(skill.description),
+    description: localizedSkillDescription(skill, getLang()),
     enabled: skill.enabled,
     health: skill.health,
     hue: clusterHue(category, source.id),
@@ -1364,14 +1365,17 @@ function findHit(runtime: UniverseRuntime, x: number, y: number) {
 }
 
 function resolveSource(skill: SkillCard, lookup: Map<string, SourceCard>, sources: SourceCard[]) {
+  if (skill.sourceId) {
+    const exact = sources.find(source => source.id === skill.sourceId);
+    if (exact) return exact;
+  }
   if (isRouter(skill)) {
     const byRouterName = lookup.get(normalize(skill.name)) ?? lookup.get(normalize(skill.folderName));
     if (byRouterName) return byRouterName;
   }
   const direct = lookup.get(normalize(skill.source));
   if (direct) return direct;
-  const path = normalize(skill.relativePath);
-  return sources.find(source => path.startsWith(`${normalize(source.name)}/`) || path.includes(`/${normalize(source.name)}/`));
+  return undefined;
 }
 
 function popularityLookup(items: SourcePopularityCard[]) {
@@ -1396,21 +1400,16 @@ function dominantSkillCategory(skills: SkillCard[], fallback: string) {
 }
 
 function skillCategory(skill: SkillCard) {
-  const haystack = normalize([skill.name, skill.source, skill.description, ...skill.tags].join(" "));
-  const match = CATEGORY_RULES.find(rule => rule.keywords.some(keyword => haystack.includes(keyword)));
-  if (match && SPECIALIZED_CATEGORIES.has(match.category)) return match.category;
-  const explicit = normalize(skill.category);
-  if (explicit && !["auto", "local", "other"].includes(explicit)) return explicit;
-  return match?.category ?? "general";
+  if (skill.userFolderName) {
+    const safeName = skill.userFolderName.replace(/:/g, "·");
+    return `folder:${skill.userFolderColor || "slate"}:${safeName}`;
+  }
+  return `folder:slate:${t("folders.unfiled")}`;
 }
 
 function isRouter(skill: SkillCard) {
   if (typeof skill.isRouterHub === "boolean") return skill.isRouterHub;
   return skill.description.includes("[ROUTER-HUB]") || skill.relativePath.includes("AI-SkillHub-local-routers");
-}
-
-function cleanDescription(value: string) {
-  return value.replace(/^\s*\[(?:ROUTER-HUB|CHILD-SKILL)\]\s*/i, "").trim();
 }
 
 function nodeKindLabel(kind: UniverseNodeKind) {
@@ -1420,16 +1419,22 @@ function nodeKindLabel(kind: UniverseNodeKind) {
 }
 
 function displayCategory(category: string) {
+  if (category.startsWith("folder:")) return category.split(":").slice(2).join(":") || t("folders.unfiled");
   return categoryName(category) ?? category;
 }
 
 function categoryHue(category: string) {
+  if (category.startsWith("folder:")) {
+    const color = category.split(":")[1] || "slate";
+    return ({ cyan: 184, violet: 258, magenta: 319, amber: 39, emerald: 153, blue: 211, coral: 9, slate: 218 } as Record<string, number>)[color] ?? 218;
+  }
   return CATEGORY_HUES[normalize(category)] ?? (stableHash(category) * 47 + 162) % 360;
 }
 
 function clusterHue(category: string, sourceId: string) {
   const normalizedCategory = normalize(category);
   const hash = stableHash(`${normalizedCategory}:${sourceId}`);
+  if (category.startsWith("folder:")) return categoryHue(category);
   if (normalizedCategory === "general") return GENERAL_CLUSTER_HUES[hash % GENERAL_CLUSTER_HUES.length];
   const offset = CLUSTER_HUE_OFFSETS[hash % CLUSTER_HUE_OFFSETS.length];
   return (categoryHue(normalizedCategory) + offset + 360) % 360;
@@ -1631,35 +1636,6 @@ function wrapAngle(value: number) {
   const fullTurn = Math.PI * 2;
   return ((value + Math.PI) % fullTurn + fullTurn) % fullTurn - Math.PI;
 }
-
-const CATEGORY_RULES = [
-  { category: "life-sciences", keywords: ["bioinformatics", "genomics", "protein", "molecular", "alphafold", "生物", "基因", "蛋白"] },
-  { category: "clinical-medical", keywords: ["clinical", "medical", "drug", "fda", "clinvar", "医学", "临床", "药物"] },
-  { category: "finance-economics", keywords: ["finance", "financial", "economic", "stock", "edgar", "金融", "经济"] },
-  { category: "document-tools", keywords: ["document", "pdf", "docx", "spreadsheet", "文档", "表格"] },
-  { category: "browser-automation", keywords: ["browser", "playwright", "chrome", "automation", "浏览器", "自动化"] },
-  { category: "image-generation", keywords: ["image", "diffusion", "imagegen", "图像生成"] },
-  { category: "academic-writing", keywords: ["paper", "academic", "writing", "论文", "学术"] },
-  { category: "literature-research", keywords: ["literature", "citation", "pubmed", "文献"] },
-  { category: "scientific-figures", keywords: ["figure", "plot", "chart", "绘图", "图表"] },
-  { category: "ui-design", keywords: ["ui", "ux", "design", "frontend", "设计"] },
-  { category: "security-audit", keywords: ["security", "audit", "vulnerability", "安全"] },
-  { category: "knowledge-retrieval", keywords: ["retrieval", "search", "database", "检索"] },
-  { category: "presentations", keywords: ["presentation", "slides", "ppt", "汇报"] },
-  { category: "prompt-polishing", keywords: ["prompt", "polish", "提示词"] },
-  { category: "data-analysis", keywords: ["analysis", "rnaseq", "pandas", "数据"] },
-  { category: "development", keywords: ["code", "engineering", "react", "rust", "开发"] },
-  { category: "agent-tools", keywords: ["agent", "claude", "codex", "tool", "智能体"] }
-];
-
-const SPECIALIZED_CATEGORIES = new Set([
-  "life-sciences",
-  "clinical-medical",
-  "finance-economics",
-  "document-tools",
-  "browser-automation",
-  "image-generation"
-]);
 
 const CATEGORY_HUES: Record<string, number> = {
   "academic-writing": 216,

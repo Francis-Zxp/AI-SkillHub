@@ -10,8 +10,10 @@ export type IconName =
   | "edit"
   | "exitFullscreen"
   | "fullscreen"
+  | "folder"
   | "github"
   | "globe"
+  | "grip"
   | "info"
   | "library"
   | "list"
@@ -63,6 +65,8 @@ export function Icon({ className = "", name }: { className?: string; name: IconN
       return <svg {...props}><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" /></svg>;
     case "fullscreen":
       return <svg {...props}><path d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4" /></svg>;
+    case "folder":
+      return <svg {...props}><path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V6.5Z" /><path d="M3.5 10h17" /></svg>;
     case "github":
       return (
         <svg {...props} fill="currentColor" stroke="none">
@@ -71,6 +75,8 @@ export function Icon({ className = "", name }: { className?: string; name: IconN
       );
     case "globe":
       return <svg {...props}><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a13.4 13.4 0 0 1 0 18a13.4 13.4 0 0 1 0-18Z" /></svg>;
+    case "grip":
+      return <svg {...props}><circle cx="7" cy="6" r="1" fill="currentColor" stroke="none" /><circle cx="17" cy="6" r="1" fill="currentColor" stroke="none" /><circle cx="7" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="17" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="7" cy="18" r="1" fill="currentColor" stroke="none" /><circle cx="17" cy="18" r="1" fill="currentColor" stroke="none" /></svg>;
     case "info":
       return <svg {...props}><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></svg>;
     case "library":

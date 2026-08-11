@@ -1407,6 +1407,17 @@ fn upsert_local_revision(
              ON CONFLICT(source_id) DO UPDATE SET
                 source_folder = excluded.source_folder,
                 current_revision = excluded.current_revision,
+                relation = CASE
+                    WHEN source_governance.remote_revision = excluded.current_revision
+                         AND source_governance.remote_revision <> '' THEN 'up-to-date'
+                    ELSE 'unknown'
+                END,
+                ahead_count = 0,
+                behind_count = 0,
+                changed_files = 0,
+                additions = 0,
+                deletions = 0,
+                diff_source = 'none',
                 status = CASE WHEN source_governance.pinned = 1 THEN 'pinned' ELSE excluded.status END,
                 updated_at = excluded.updated_at",
             params![source_id, folder, revision, status, timestamp],
@@ -1781,6 +1792,9 @@ mod tests {
             usage_guide: "Use it".to_string(),
             metadata_origin: "README+SKILL".to_string(),
             metadata_confidence: 0.8,
+            user_folder_id: String::new(),
+            user_folder_name: String::new(),
+            user_folder_color: String::new(),
         };
         let card = read_quality_signals(&connection, &[source])
             .expect("quality should calculate")

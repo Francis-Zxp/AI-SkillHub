@@ -16,8 +16,10 @@ const MAX_SOURCE_SKILLS: usize = 320;
 const MAX_SCAN_ENTRIES: usize = 4_000;
 const MAX_SCAN_DEPTH: usize = 10;
 const MAX_TAGS: usize = 12;
+const MAX_SKILL_SUMMARY_CHARS: usize = 220;
+const MAX_SOURCE_SUMMARY_CHARS: usize = 260;
 
-pub(crate) const ANALYZER_VERSION: &str = "offline-v304-1";
+pub(crate) const ANALYZER_VERSION: &str = "offline-compact-v2";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct MetadataAnalysis {
@@ -67,7 +69,10 @@ pub(crate) fn analyze_skill(skill_dir: &Path) -> MetadataAnalysis {
     let explicit_usage = clean_usage(&frontmatter.usage);
     let skill_usage = extract_usage_section(&skill_text);
     let readme_usage = extract_usage_section(&readme_text);
-    let usage_guide = first_nonempty(&[explicit_usage, skill_usage, readme_usage]);
+    // Usage sections remain useful as local classification evidence, but they are no
+    // longer copied into a second, often repetitive "usage guide" field. The library
+    // should present one concise description instead of duplicating SKILL.md content.
+    let usage_evidence = first_nonempty(&[explicit_usage, skill_usage, readme_usage]);
 
     let mut tags = frontmatter.tags.clone();
     tags.extend(extract_explicit_tags(&skill_text));
@@ -82,7 +87,7 @@ pub(crate) fn analyze_skill(skill_dir: &Path) -> MetadataAnalysis {
         frontmatter.name,
         folder_name,
         summary,
-        usage_guide,
+        usage_evidence,
         tags.join(" ")
     );
     let category = if is_meaningful_category(&frontmatter.category) {
@@ -116,7 +121,7 @@ pub(crate) fn analyze_skill(skill_dir: &Path) -> MetadataAnalysis {
     } else if !summary.is_empty() {
         confidence += 0.24;
     }
-    if !usage_guide.is_empty() {
+    if !usage_evidence.is_empty() {
         confidence += 0.16;
     }
     if !category.is_empty() {
@@ -137,16 +142,11 @@ pub(crate) fn analyze_skill(skill_dir: &Path) -> MetadataAnalysis {
                 }
             )
         } else {
-            truncate_chars(&summary, 600)
+            compact_description(&summary, MAX_SKILL_SUMMARY_CHARS, 2)
         },
-        usage_guide: if usage_guide.is_empty() && !summary.is_empty() {
-            truncate_chars(
-                &format!("适用于：{}。", trim_terminal_punctuation(&summary)),
-                900,
-            )
-        } else {
-            truncate_chars(&usage_guide, 900)
-        },
+        // Kept in the serialized/database model for backwards compatibility. New
+        // analyses deliberately leave it empty; the concise summary is authoritative.
+        usage_guide: String::new(),
         category: if category.is_empty() {
             "auto".to_string()
         } else {
@@ -190,7 +190,7 @@ pub(crate) fn analyze_source(source_dir: &Path) -> MetadataAnalysis {
         } else {
             parsed.name
         };
-        if !name.is_empty() && child_names.len() < 6 {
+        if !name.is_empty() && child_names.len() < 5 {
             child_names.push(name);
         }
         child_tags.extend(parsed.tags);
@@ -208,10 +208,10 @@ pub(crate) fn analyze_source(source_dir: &Path) -> MetadataAnalysis {
     let generated_summary = if skill_files.is_empty() {
         String::new()
     } else if child_names.is_empty() {
-        format!("包含 {} 个可调用 Skill。", skill_files.len())
+        format!("包含 {} 个子 Skill。", skill_files.len())
     } else {
         format!(
-            "包含 {} 个可调用 Skill，主要包括 {}{}。",
+            "包含 {} 个子 Skill：{}{}。",
             skill_files.len(),
             child_names.join("、"),
             if skill_files.len() > child_names.len() {
@@ -221,19 +221,31 @@ pub(crate) fn analyze_source(source_dir: &Path) -> MetadataAnalysis {
             }
         )
     };
-    let summary = first_nonempty(&[
+    let purpose = first_nonempty(&[
         clean_summary(&descriptor.summary),
         readme_summary,
         root_summary,
-        generated_summary,
     ]);
+    let summary = if generated_summary.is_empty() {
+        compact_description(&purpose, MAX_SOURCE_SUMMARY_CHARS, 2)
+    } else if purpose.trim().is_empty() {
+        compact_description(&generated_summary, MAX_SOURCE_SUMMARY_CHARS, 1)
+    } else {
+        let purpose = compact_description(&purpose, 150, 1);
+        compact_description(
+            &format!("{} {}", ensure_sentence_end(&purpose), generated_summary),
+            MAX_SOURCE_SUMMARY_CHARS,
+            2,
+        )
+    };
 
     let readme_usage = extract_usage_section(&readme_text);
     let root_usage = root_skill
         .as_ref()
         .map(|analysis| analysis.usage_guide.clone())
         .unwrap_or_default();
-    let usage_guide = first_nonempty(&[clean_usage(&descriptor.usage), readme_usage, root_usage]);
+    let usage_evidence =
+        first_nonempty(&[clean_usage(&descriptor.usage), readme_usage, root_usage]);
 
     let mut tags = descriptor.tags.clone();
     tags.extend(extract_explicit_tags(&readme_text));
@@ -250,7 +262,7 @@ pub(crate) fn analyze_source(source_dir: &Path) -> MetadataAnalysis {
         "{} {} {} {} {} {}",
         folder_name,
         summary,
-        usage_guide,
+        usage_evidence,
         descriptor.category,
         child_category_text,
         tags.join(" ")
@@ -295,7 +307,7 @@ pub(crate) fn analyze_source(source_dir: &Path) -> MetadataAnalysis {
     } else if !skill_files.is_empty() {
         confidence += 0.24;
     }
-    if !usage_guide.is_empty() {
+    if !usage_evidence.is_empty() {
         confidence += 0.12;
     }
     if !category.is_empty() {
@@ -314,11 +326,7 @@ pub(crate) fn analyze_source(source_dir: &Path) -> MetadataAnalysis {
         } else {
             truncate_chars(&summary, 600)
         },
-        usage_guide: if usage_guide.is_empty() && !skill_files.is_empty() {
-            "展开来源后按用途选择子 Skill，或直接调用对应的父 Skill 进行能力路由。".to_string()
-        } else {
-            truncate_chars(&usage_guide, 900)
-        },
+        usage_guide: String::new(),
         category: if category.is_empty() {
             "auto".to_string()
         } else {
@@ -1112,6 +1120,78 @@ fn clean_usage(value: &str) -> String {
     truncate_chars(&compact_whitespace(&markdown_to_plain(value)), 900)
 }
 
+/// Keeps automatically inferred copy scannable in the library. This is deliberately
+/// sentence-aware instead of a CSS-only clamp so exported/indexed metadata is concise
+/// on every client, including freshly installed machines.
+pub(crate) fn concise_skill_summary(value: &str) -> String {
+    compact_description(value, MAX_SKILL_SUMMARY_CHARS, 2)
+}
+
+fn compact_description(value: &str, max_chars: usize, max_sentences: usize) -> String {
+    let cleaned = clean_summary(value);
+    if cleaned.is_empty() || max_chars == 0 || max_sentences == 0 {
+        return String::new();
+    }
+
+    let chars = cleaned.chars().collect::<Vec<_>>();
+    let hard_end = chars.len().min(max_chars);
+    let mut end = hard_end;
+    let mut sentence_count = 0usize;
+    let mut ended_on_sentence = false;
+
+    for index in 0..hard_end {
+        let current = chars[index];
+        let next = chars.get(index + 1).copied();
+        let boundary = matches!(current, '。' | '！' | '？' | '!' | '?')
+            || (current == '.' && next.map(|value| value.is_whitespace()).unwrap_or(true));
+        if boundary {
+            sentence_count += 1;
+            if sentence_count >= max_sentences {
+                end = index + 1;
+                ended_on_sentence = true;
+                break;
+            }
+        }
+    }
+
+    let was_truncated = end < chars.len();
+    if was_truncated && !ended_on_sentence && end == hard_end {
+        // Avoid splitting an English word when a nearby natural boundary exists.
+        let search_floor = hard_end.saturating_sub(40);
+        if let Some(index) = (search_floor..hard_end).rev().find(|index| {
+            chars[*index].is_whitespace() || matches!(chars[*index], '，' | ',' | '；' | ';' | '、')
+        }) {
+            end = index;
+        }
+    }
+
+    let mut result = chars[..end].iter().collect::<String>();
+    result = result
+        .trim()
+        .trim_end_matches(['，', ',', '；', ';', '、'])
+        .trim()
+        .to_string();
+    if was_truncated
+        && !ended_on_sentence
+        && !result.ends_with(['。', '.', '！', '!', '？', '?', '…'])
+    {
+        result.push('…');
+    }
+    result
+}
+
+fn ensure_sentence_end(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() || value.ends_with(['。', '.', '！', '!', '？', '?', '…']) {
+        return value.to_string();
+    }
+    if !value.is_ascii() {
+        format!("{value}。")
+    } else {
+        format!("{value}.")
+    }
+}
+
 fn clean_label(value: &str, limit: usize) -> String {
     truncate_chars(
         value
@@ -1152,10 +1232,6 @@ fn markdown_to_plain(value: &str) -> String {
     output
 }
 
-fn trim_terminal_punctuation(value: &str) -> &str {
-    value.trim_end_matches(['。', '.', '！', '!', '？', '?', ';', '；'])
-}
-
 fn truncate_chars(value: &str, limit: usize) -> String {
     if value.chars().count() <= limit {
         value.to_string()
@@ -1180,7 +1256,7 @@ mod tests {
     }
 
     #[test]
-    fn analyzes_chinese_readme_and_skill_usage() {
+    fn analyzes_chinese_metadata_as_compact_description() {
         let root = temp_dir("zh");
         fs::write(
             root.join("README.zh.md"),
@@ -1198,9 +1274,13 @@ mod tests {
         let source = analyze_source(&root);
         let child = analyze_skill(&skill);
         assert!(source.summary.contains("空间转录组"));
-        assert!(source.usage_guide.contains("聚类空间表达数据"));
+        assert!(source
+            .summary
+            .contains("包含 1 个子 Skill：spatial-analysis"));
+        assert!(source.usage_guide.is_empty());
         assert_eq!(source.category, "生命科学");
-        assert!(child.usage_guide.contains("表达矩阵"));
+        assert_eq!(child.summary, "分析空间转录组数据并解释细胞聚类。");
+        assert!(child.usage_guide.is_empty());
         assert!(child.tags.contains(&"custom-lab-tag".to_string()));
 
         let _ = fs::remove_dir_all(root);
@@ -1223,13 +1303,25 @@ mod tests {
         let source = analyze_source(&root);
         let skill = analyze_skill(&root);
         assert!(source.summary.contains("literature retrieval"));
-        assert!(source.usage_guide.contains("submitting a manuscript"));
+        assert!(source.summary.contains("包含 1 个子 Skill：citation-lab"));
+        assert!(source.usage_guide.is_empty());
         assert_eq!(skill.category, "Evidence Engineering");
         assert!(skill.tags.contains(&"evidence-graph".to_string()));
         assert!(skill.tags.contains(&"DOI-check".to_string()));
         assert!(skill.origin.contains("skill-frontmatter"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn limits_inferred_copy_to_two_short_sentences() {
+        let long = "This Skill creates publication-ready scientific figures for papers, slides, and reports. It supports bars, trends, scatter plots, heatmaps, and multi-panel layouts. It also contains a long implementation discussion that should not be copied into the library card because users need a concise overview rather than the complete manual.";
+        let compact = concise_skill_summary(long);
+
+        assert!(compact.contains("publication-ready scientific figures"));
+        assert!(compact.contains("multi-panel layouts"));
+        assert!(!compact.contains("implementation discussion"));
+        assert!(compact.chars().count() <= MAX_SKILL_SUMMARY_CHARS);
     }
 
     #[test]

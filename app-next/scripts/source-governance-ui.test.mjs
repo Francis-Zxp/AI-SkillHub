@@ -28,10 +28,10 @@ test("snapshot contract and browser preview carry governance and local evidence"
   assert.doesNotMatch(preview, /key:\s*"metadata"/);
 });
 
-test("quality UI stays distinct from GitHub popularity and explains missing evidence", () => {
-  assert.match(app, /<PopularityChip popularity=/);
-  assert.match(app, /<SourceQualityChip quality=/);
-  assert.match(app, /quality\.excluded/);
+test("quality evidence stays diagnostic-only and does not clutter the Skill Library", () => {
+  assert.doesNotMatch(app, /<PopularityChip popularity=/);
+  assert.doesNotMatch(app, /<SourceQualityChip quality=/);
+  assert.doesNotMatch(app, /source-quality-panel/);
   assert.match(messages, /GitHub stars and missing evidence never inflate this score/);
   assert.match(messages, /GitHub 星标与缺失证据都不会抬高分数/);
 });

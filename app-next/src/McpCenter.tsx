@@ -86,6 +86,7 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
   const [selectedBindingId, setSelectedBindingId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [copiedPath, setCopiedPath] = useState(false);
 
   async function scan() {
     if (!runtimeAvailable) {
@@ -98,7 +99,11 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
       const next = await invoke<McpInventory>("scan_mcp_connections");
       setInventory(next);
       if (next.bindings.length > 0) {
-        setSelectedBindingId(current => current || next.bindings[0].id);
+        setSelectedBindingId(current =>
+          next.bindings.some(item => item.id === current) ? current : next.bindings[0].id
+        );
+      } else {
+        setSelectedBindingId("");
       }
     } catch (reason) {
       setError(friendlyMessage(reason));
@@ -125,8 +130,23 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
     ? inventory?.secretRequirements.filter(item => item.bindingId === selectedBinding.id) ?? []
     : [];
   const selectedFindings = selectedBinding
-    ? inventory?.findings.filter(item => item.configLocationId === selectedBinding.configLocationId) ?? []
+    ? inventory?.findings.filter(item =>
+        item.configLocationId === selectedBinding.configLocationId ||
+        (!item.configLocationId && item.hostId === selectedBinding.hostId)
+      ) ?? []
     : [];
+
+  async function copyConfigPath() {
+    const value = selectedLocation?.pathDisplay;
+    if (!value || value === "—") return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedPath(true);
+      window.setTimeout(() => setCopiedPath(false), 1800);
+    } catch {
+      setError(t("mcp.copyFailed"));
+    }
+  }
   const summary = useMemo(() => {
     const hosts = inventory?.hosts.filter(item => item.detected).length ?? 0;
     const servers = inventory?.servers.length ?? 0;
@@ -136,7 +156,7 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
   }, [inventory]);
 
   return (
-    <div className="view mcp-view">
+    <div aria-busy={loading} className="view mcp-view">
       <section className="page-header glow-card mcp-page-header">
         <div>
           <span className="eyebrow"><Icon name="connections" /> {t("mcp.eyebrow")}</span>
@@ -233,7 +253,13 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
                 <Detail label={t("mcp.transport")} value={selectedServer.transport || "—"} />
                 <Detail label={t("mcp.capability")} value={t("mcp.unprobed")} />
               </dl>
-              <div className="mcp-config-path"><span>{t("mcp.configSource")}</span><code>{selectedLocation?.pathDisplay ?? "—"}</code></div>
+              <div className="mcp-config-path">
+                <span>{t("mcp.configSource")}</span>
+                <code>{selectedLocation?.pathDisplay ?? "—"}</code>
+                <button className="ghost-action small" disabled={!selectedLocation?.pathDisplay} onClick={() => void copyConfigPath()} type="button">
+                  <Icon name="copy" /> {copiedPath ? t("mcp.copied") : t("mcp.copyPath")}
+                </button>
+              </div>
               <section className="mcp-secret-section">
                 <span className="eyebrow">{t("mcp.credentials")}</span>
                 {selectedSecrets.length === 0 ? (

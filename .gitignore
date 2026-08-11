@@ -9,6 +9,7 @@
 /app-next/reports/
 /app-next/runtime/skillhub.config.json
 /app-next/src-tauri/target/
+/app-next/.cargo-target-*/
 /app-next/node_modules/
 /app-next/dist/
 # Local config/state generated on each computer

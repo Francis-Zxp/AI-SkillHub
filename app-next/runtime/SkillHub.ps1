@@ -37,7 +37,19 @@ function Write-Utf8Bom([string]$Path, [string]$Text) {
 function Write-Utf8NoBom([string]$Path, [string]$Text) {
   $parent = Split-Path -Parent $Path
   New-Item -ItemType Directory -Force -Path $parent | Out-Null
-  [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($false))
+  $temp = $Path + '.skillhub-tmp'
+  $backup = $Path + '.skillhub-previous'
+  [System.IO.File]::WriteAllText($temp, $Text, [System.Text.UTF8Encoding]::new($false))
+  if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force }
+  if (Test-Path -LiteralPath $Path) { Move-Item -LiteralPath $Path -Destination $backup }
+  try {
+    Move-Item -LiteralPath $temp -Destination $Path
+    if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force }
+  } catch {
+    if (Test-Path -LiteralPath $backup) { Move-Item -LiteralPath $backup -Destination $Path -Force }
+    if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force }
+    throw
+  }
 }
 
 function Read-Utf8Text([string]$Path) {
@@ -530,6 +542,27 @@ function Normalize-SkillLookupName([string]$Value) {
   return ($Value.Trim().ToLowerInvariant() -replace '[_\s]+', '-')
 }
 
+function Get-LocalizedRouterChildSummary([string]$SkillName, [string]$Description) {
+  $descriptionText = if ($null -eq $Description) { '' } else { $Description.Trim() }
+  if ($descriptionText -match '[\u3400-\u9fff]') {
+    return $descriptionText.TrimEnd('。', '；', ';', '.')
+  }
+  $searchText = (($SkillName + ' ' + $descriptionText).ToLowerInvariant())
+  if ($searchText -match 'figure|plot|chart|diagram|visual') { return '用于科研图表的规划、生成、编辑与质量优化' }
+  if ($searchText -match 'citation|reference|verify|evidence|doi') { return '用于引用、参考文献与证据的核验和整理' }
+  if ($searchText -match 'review|reviewer|rebuttal|peer-review') { return '用于论文评审、修改建议与审稿回复' }
+  if ($searchText -match 'paper|manuscript|writing|draft|academic') { return '用于科研论文的写作、润色与结构优化' }
+  if ($searchText -match 'literature|research|search|survey|arxiv') { return '用于文献检索、研究分析与综述整理' }
+  if ($searchText -match 'security|secure|audit|vulnerability|threat') { return '用于安全检查、风险分析与修复建议' }
+  if ($searchText -match 'browser|web|scrape|crawl|playwright') { return '用于网页浏览、信息提取与浏览器自动化' }
+  if ($searchText -match 'slide|presentation|ppt|deck') { return '用于演示文稿的规划、制作与视觉优化' }
+  if ($searchText -match 'database|dataset|analysis|statistics|omics') { return '用于数据检索、处理、分析与结果解释' }
+  if ($searchText -match 'image|photo|illustration|render') { return '用于图像生成、编辑与视觉内容制作' }
+  if ($searchText -match 'design|ui|ux|frontend|layout') { return '用于界面设计、前端实现与体验优化' }
+  if ($searchText -match 'code|debug|test|developer|android|ios') { return '用于代码实现、调试、测试与工程质量改进' }
+  return ('用于处理“{0}”相关任务' -f $SkillName)
+}
+
 function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates) {
   if ([string]::IsNullOrWhiteSpace($RepoName)) { return }
   if ($RepoName -eq 'AI-SkillHub-local-routers') { return }
@@ -541,11 +574,9 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
     } | Sort-Object Priority, TieBreaker, Source | Select-Object -First 1
   )
   $childSkills = @(
-    $RepoCandidates | Where-Object {
-      (Normalize-SkillLookupName ([string]$_.Skill)) -ne $repoKey
-    } | Sort-Object Skill -Unique
+    $RepoCandidates | Sort-Object Skill, Source -Unique
   )
-  if ($childSkills.Count -lt 2) { return }
+  if ($childSkills.Count -lt 1) { return }
 
   $safeRouterName = Get-SafeSkillName $RepoName $RepoName
   $routerRoot = Join-Path $SourceRoot 'AI-SkillHub-local-routers'
@@ -554,7 +585,12 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
     throw "Router target escaped source root: $routerFolder"
   }
 
-  $childLines = @($childSkills | Sort-Object Skill | Select-Object -ExpandProperty Skill | ForEach-Object { "- [CHILD-SKILL] /$_" })
+  $childLines = @($childSkills | Sort-Object Skill | ForEach-Object {
+    $childSkillMd = Join-Path ([string]$_.Source) 'SKILL.md'
+    $relativeChild = Convert-ToRelativePath -Root $SourceRoot -Path $childSkillMd
+    $childDescription = Get-LocalizedRouterChildSummary ([string]$_.Skill) ([string]$_.Description)
+    '- [CHILD-SKILL] `${0}` — {1}；来源文件：`../../{2}`' -f ([string]$_.Skill), $childDescription, ($relativeChild -replace '\\', '/')
+  })
   $originalParentSection = @()
   if ($parentCandidate.Count -gt 0) {
     $parentSkillMd = Join-Path ([string]$parentCandidate[0].Source) 'SKILL.md'
@@ -577,27 +613,30 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
   $routerText = @(
     '---'
     "name: $safeRouterName"
-    "description: `"[ROUTER-HUB] AI SkillHub generated parent router for the local $RepoName skill collection. Use this when the user names the collection but does not know which focused child skill to choose.`""
+    "description: `"父 Skill · $RepoName；聚合 $($childSkills.Count) 个来源内子 Skill，按任务自动选择并加载，不跨父 Skill。`""
     '---'
     ''
-    "# [ROUTER-HUB] $RepoName"
+    '<!-- [ROUTER-HUB] -->'
     ''
-    "> [ROUTER-HUB] This is an AI SkillHub generated parent Skill. It is a collection entry, not a focused child Skill."
+    "# 父 Skill · $RepoName"
     ''
-    "This parent router is generated outside the author's repository, so git pull updates will not overwrite the router marker or routing rules."
+    '> 这是 AI SkillHub 生成的稳定父入口。Agent 只需识别这个入口，子 Skill 由父 Skill 在自己的来源目录内选择和加载。'
     ''
-    'Use this parent Skill when the user names the whole collection, asks which child Skill to use, or gives a broad task that may belong to this collection.'
+    "- 管理来源：``$RepoName``"
     ''
-    'Marker standard:'
-    '- [ROUTER-HUB] = parent collection entry generated by AI SkillHub.'
-    '- [CHILD-SKILL] = focused child Skill from the source repository.'
+    '父路由生成在作者仓库之外，因此 GitHub 更新不会覆盖标记、子 Skill 清单或隔离规则。'
     ''
-    'Rules:'
-    '- If the user clearly names a specific child Skill, use that child directly.'
-    '- If the user names only this collection, choose the smallest child Skill that fits the task.'
-    '- If the right child is unclear, explain the top 2-3 choices briefly and ask only when the task cannot be safely routed.'
+    '类型：AI SkillHub 管理的父 Skill；下方 [CHILD-SKILL] 表示来源内的功能型子 Skill。'
     ''
-    'Available child Skills:'
+    '路由规则：'
+    "- 只能打开下方属于 $RepoName 的明确来源文件。"
+    '- 即使其它父 Skill 有同名子 Skill，也绝不跨来源替换。'
+    '- 用户明确指定子 Skill 时，直接打开并完整遵循对应来源文件。'
+    '- 用户只指定父 Skill 或描述宽泛任务时，自动选择能完成任务的最小子 Skill。'
+    '- 只有在任务存在实质性歧义或安全风险时才向用户提问。'
+    '- 使用与用户相同的语言回答；子 Skill 原文为英文时也要给出自然中文说明。'
+    ''
+    '此父 Skill 包含的子 Skill：'
     ($childLines -join [Environment]::NewLine)
     ($originalParentSection -join [Environment]::NewLine)
   ) -join [Environment]::NewLine
@@ -808,6 +847,7 @@ $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $ArchiveRoot = Join-Path $ArchivesRoot "replaced_active_skill_copies_$Stamp"
 $StatePath = Join-Path $StateRoot 'managed-links.json'
 $ReportPath = Join-Path $ReportsRoot 'last-sync.md'
+$ReportJsonPath = Join-Path $ReportsRoot 'last-sync.json'
 $AgentLinkScript = Join-Path $AppRoot 'Manage-AgentSkillLinks.ps1'
 $GovernancePath = Join-Path $StateBase 'source-governance.json'
 $PinnedSourceRevisions = @{}
@@ -908,6 +948,17 @@ foreach ($repo in $Config.repositories) {
 
   if (Test-Path -LiteralPath (Join-Path $target '.git')) {
     if (-not $NoPull) {
+      $dirtyResult = Invoke-GitCommandWithTimeout @('-C', $target, 'status', '--porcelain', '--untracked-files=normal') ([string]$repo.name) 12
+      if ($dirtyResult.ExitCode -ne 0) {
+        Write-Warning "Cannot verify working tree safety for $($repo.name); update skipped."
+        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'safety-check-failed' $dirtyResult.Stderr
+        continue
+      }
+      if (-not [string]::IsNullOrWhiteSpace($dirtyResult.Stdout)) {
+        Write-Warning "$($repo.name) has local changes; update skipped so uncommitted files are preserved."
+        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'dirty-blocked' 'Local modified or untracked files detected; update skipped.'
+        continue
+      }
       if (-not (Test-GitUpdateBudget)) {
         Write-Warning "Git update budget exhausted. Skipping $($repo.name)."
         Add-RepoUpdateLog ([string]$repo.name) 'pull' 'skipped' 'Git update budget exhausted.'
@@ -975,6 +1026,17 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
       continue
     }
     Write-Host "Pulling manual repository $($manualRepo.Name)..."
+    $dirtyResult = Invoke-GitCommandWithTimeout @('-C', $manualRepo.FullName, 'status', '--porcelain', '--untracked-files=normal') $manualRepo.Name 12
+    if ($dirtyResult.ExitCode -ne 0) {
+      Write-Warning "Cannot verify working tree safety for manual repository $($manualRepo.Name); update skipped."
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'safety-check-failed' $dirtyResult.Stderr
+      continue
+    }
+    if (-not [string]::IsNullOrWhiteSpace($dirtyResult.Stdout)) {
+      Write-Warning "$($manualRepo.Name) has local changes; update skipped so uncommitted files are preserved."
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'dirty-blocked' 'Local modified or untracked files detected; update skipped.'
+      continue
+    }
     $gitResult = Invoke-GitCommandWithTimeout @('-C', $manualRepo.FullName, 'pull', '--ff-only') $manualRepo.Name $GitCommandTimeoutSeconds
     if ($gitResult.ExitCode -eq 0) {
       Add-RepoUpdateLog $manualRepo.Name 'pull' 'ok' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
@@ -1084,29 +1146,27 @@ foreach ($repoGroup in ($candidates | Group-Object Repo)) {
 }
 
 $selected = New-Object System.Collections.Generic.List[object]
-$conflicts = New-Object System.Collections.Generic.List[object]
+$routerSourcePrefix = (Convert-ToFullPath (Join-Path $SourceRoot 'AI-SkillHub-local-routers')).TrimEnd('\') + '\'
 
 foreach ($group in ($candidates | Group-Object Skill)) {
-  $ordered = @($group.Group | Sort-Object Priority, TieBreaker, Source)
-  $bestPriority = $ordered[0].Priority
-  $bestTieBreaker = $ordered[0].TieBreaker
-  $best = @($ordered | Where-Object { $_.Priority -eq $bestPriority -and $_.TieBreaker -eq $bestTieBreaker })
-  if ($best.Count -eq 1) {
-    $selected.Add($best[0]) | Out-Null
-  } else {
-    $conflicts.Add([PSCustomObject]@{
-      Skill = $group.Name
-      Message = 'Multiple equally preferred sources found. Add an explicit skillPaths rule.'
-      Sources = (($best | Select-Object -ExpandProperty Source) -join '; ')
-    }) | Out-Null
-  }
+  $ordered = @(
+    $group.Group |
+      Where-Object {
+        ([string]$_.Repo) -ne 'AI-SkillHub-local-routers' -and
+        (Convert-ToFullPath ([string]$_.Source)).StartsWith($routerSourcePrefix, [StringComparison]::OrdinalIgnoreCase)
+      } |
+      Sort-Object Priority, TieBreaker, Source
+  )
+  if ($ordered.Count -eq 0) { continue }
+  # The managed shared catalog publishes one canonical parent per source.
+  # Children remain in author repositories and are loaded by their parent via
+  # exact source-scoped paths. Real user-owned folders in SkillsRoot are not
+  # part of managed state and remain untouched.
+  $selected.Add($ordered[0]) | Out-Null
 }
 
 Write-Host "Discovered $($candidates.Count) candidate skill folders."
 Write-Host "Selected $($selected.Count) active GitHub/manual skills."
-if ($conflicts.Count -gt 0) {
-  Write-Warning "$($conflicts.Count) conflicts need manual config."
-}
 Add-SyncTiming 'skill discovery'
 
 $previousManaged = @()
@@ -1255,16 +1315,6 @@ $report.Add('|---|---|---|---|---|') | Out-Null
 foreach ($skill in ($selected | Sort-Object Skill)) {
   $report.Add("| $($skill.Skill) | $($skill.CategoryId) | $($skill.Repo) | $($skill.Note) | $($skill.Source) |") | Out-Null
 }
-if ($conflicts.Count -gt 0) {
-  $report.Add('') | Out-Null
-  $report.Add('## 需要人工处理的冲突') | Out-Null
-  $report.Add('') | Out-Null
-  $report.Add('| Skill | Message | Sources |') | Out-Null
-  $report.Add('|---|---|---|') | Out-Null
-  foreach ($conflict in $conflicts) {
-    $report.Add("| $($conflict.Skill) | $($conflict.Message) | $($conflict.Sources) |") | Out-Null
-  }
-}
 $report.Add('') | Out-Null
 $report.Add('## 仅作为 Prompt 来源保存') | Out-Null
 $report.Add('') | Out-Null
@@ -1275,6 +1325,30 @@ foreach ($repo in ($Config.repositories | Where-Object { $_.type -eq 'prompt' })
 }
 
 Write-Utf8Bom $ReportPath ($report -join [Environment]::NewLine)
+$failedUpdates = @($RepoUpdateLog | Where-Object { $_.Status -in @('failed', 'timeout', 'governance-blocked', 'pinned-missing', 'safety-check-failed') })
+$successfulUpdates = @($RepoUpdateLog | Where-Object { $_.Status -eq 'ok' })
+$skippedUpdates = @($RepoUpdateLog | Where-Object { $_.Status -in @('skipped', 'pinned', 'dirty-blocked') })
+$syncStatus = if ($RepoUpdateLog.Count -eq 0 -or $successfulUpdates.Count -eq 0) {
+  if ($failedUpdates.Count -gt 0) { 'failed' } else { 'no-network-update' }
+} elseif ($failedUpdates.Count -gt 0 -or $skippedUpdates.Count -gt 0) {
+  'partial'
+} else {
+  'ok'
+}
+Write-JsonUtf8 $ReportJsonPath ([PSCustomObject]@{
+  schemaVersion = 1
+  generatedAt = (Get-Date).ToUniversalTime().ToString('o')
+  status = $syncStatus
+  total = $RepoUpdateLog.Count
+  succeeded = $successfulUpdates.Count
+  failed = $failedUpdates.Count
+  skipped = $skippedUpdates.Count
+  activeSkills = $selected.Count
+  # Windows PowerShell 5.1 can throw "Argument types do not match" when a
+  # generic List[object] is wrapped directly with @(...). Materialize a plain
+  # object array before ConvertTo-Json so partial syncs still finish normally.
+  repositories = @($RepoUpdateLog.ToArray())
+}) 8
 Add-SyncTiming 'report written'
 
 Write-Host ''
@@ -1283,3 +1357,4 @@ Write-Host "Managed state: $StatePath"
 Write-Host ''
 Write-Host "Active managed skills: $($selected.Count)"
 Write-Host 'See the sync report for the full skill list.'
+exit 0

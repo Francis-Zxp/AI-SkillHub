@@ -212,6 +212,8 @@ export function createPreviewSnapshot(): LegacySnapshot {
     },
     skills: [
       {
+        id: "preview-skill-paper-workflow",
+        sourceId: "source-nature-paper-skills",
         name: "paper-workflow",
         folderName: "paper-workflow",
         category: "academic-writing",
@@ -222,9 +224,14 @@ export function createPreviewSnapshot(): LegacySnapshot {
         enabled: true,
         rating: 5,
         relativePath: "skills/core/paper-workflow",
-        tags: ["论文科研", "写作", "常用"]
+        tags: ["论文科研", "写作", "常用"],
+        userFolderId: "folder-paper",
+        userFolderName: "Paper 写作",
+        userFolderColor: "violet"
       },
       {
+        id: "preview-skill-figure-planner",
+        sourceId: "source-nature-paper-skills",
         name: "figure-planner",
         folderName: "figure-planner",
         category: "scientific-figures",
@@ -235,9 +242,14 @@ export function createPreviewSnapshot(): LegacySnapshot {
         enabled: true,
         rating: 5,
         relativePath: "skills/core/figure-planner",
-        tags: ["科研图表", "论文科研"]
+        tags: ["科研图表", "论文科研"],
+        userFolderId: "folder-paper",
+        userFolderName: "Paper 写作",
+        userFolderColor: "violet"
       },
       {
+        id: "preview-skill-nature-writing",
+        sourceId: "source-nature-paper-skills",
         name: "nature-writing",
         folderName: "nature-writing",
         category: "academic-writing",
@@ -248,9 +260,13 @@ export function createPreviewSnapshot(): LegacySnapshot {
         enabled: true,
         rating: 4,
         relativePath: "skills/core/nature-writing",
-        tags: ["论文科研"]
+        tags: ["论文科研"],
+        userFolderId: "folder-paper",
+        userFolderName: "Paper 写作",
+        userFolderColor: "violet"
       },
       {
+        sourceId: "source-nature-paper-skills",
         name: "Nature-Paper-Skills",
         folderName: "Nature-Paper-Skills",
         category: "academic-writing",
@@ -262,9 +278,14 @@ export function createPreviewSnapshot(): LegacySnapshot {
         rating: 0,
         relativePath: "AI-SkillHub-local-routers/Nature-Paper-Skills",
         tags: [],
-        isRouterHub: true
+        isRouterHub: true,
+        userFolderId: "folder-paper",
+        userFolderName: "Paper 写作",
+        userFolderColor: "violet"
       },
       {
+        id: "preview-skill-impeccable",
+        sourceId: "source-impeccable",
         name: "impeccable",
         folderName: "impeccable",
         category: "ui-design",
@@ -275,9 +296,13 @@ export function createPreviewSnapshot(): LegacySnapshot {
         enabled: true,
         rating: 4,
         relativePath: ".claude/skills/impeccable",
-        tags: ["界面设计", "UI"]
+        tags: ["界面设计", "UI"],
+        userFolderId: "folder-development",
+        userFolderName: "软件与 UI",
+        userFolderColor: "coral"
       },
       {
+        sourceId: "source-vibesec",
         name: "VibeSec-Skill",
         folderName: "VibeSec-Skill",
         category: "security-audit",
@@ -291,6 +316,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         tags: ["安全"]
       },
       {
+        sourceId: "source-gstack",
         name: "gstack",
         folderName: "gstack",
         category: "agent-tools",
@@ -304,6 +330,8 @@ export function createPreviewSnapshot(): LegacySnapshot {
         tags: ["产品规划"]
       },
       {
+        id: "preview-skill-karpathy",
+        sourceId: "source-karpathy",
         name: "karpathy-guidelines",
         folderName: "karpathy-guidelines",
         category: "development",
@@ -314,7 +342,52 @@ export function createPreviewSnapshot(): LegacySnapshot {
         enabled: true,
         rating: 4,
         relativePath: "skills/karpathy-guidelines",
-        tags: ["工程质量"]
+        tags: ["工程质量"],
+        userFolderId: "folder-development",
+        userFolderName: "软件与 UI",
+        userFolderColor: "coral"
+      }
+    ],
+    skillFolders: [
+      {
+        id: "folder-research",
+        name: "文献调研 / Idea",
+        note: "检索文献、梳理证据和形成研究问题。",
+        color: "cyan",
+        sortOrder: 0,
+        skillCount: 0,
+        createdAt: "2026-08-09T00:00:00Z",
+        updatedAt: "2026-08-09T00:00:00Z"
+      },
+      {
+        id: "folder-paper",
+        name: "Paper 写作",
+        note: "论文结构、段落和投稿写作流程。",
+        color: "violet",
+        sortOrder: 10,
+        skillCount: 4,
+        createdAt: "2026-08-09T00:00:00Z",
+        updatedAt: "2026-08-09T00:00:00Z"
+      },
+      {
+        id: "folder-figures",
+        name: "图片绘制",
+        note: "科研图表、配图和视觉表达。",
+        color: "magenta",
+        sortOrder: 20,
+        skillCount: 0,
+        createdAt: "2026-08-09T00:00:00Z",
+        updatedAt: "2026-08-09T00:00:00Z"
+      },
+      {
+        id: "folder-development",
+        name: "软件与 UI",
+        note: "工程开发、前端设计和界面审查。",
+        color: "coral",
+        sortOrder: 30,
+        skillCount: 2,
+        createdAt: "2026-08-09T00:00:00Z",
+        updatedAt: "2026-08-09T00:00:00Z"
       }
     ],
     sources: [
@@ -331,7 +404,10 @@ export function createPreviewSnapshot(): LegacySnapshot {
         note: "论文科研工作流。",
         localPath: "../app-next/data/github_sources/Nature-Paper-Skills",
         enabled: true,
-        tags: ["GitHub", "论文科研", "常用"]
+        tags: ["GitHub", "论文科研", "常用"],
+        userFolderId: "folder-paper",
+        userFolderName: "Paper 写作",
+        userFolderColor: "violet"
       },
       {
         id: "source-impeccable",
@@ -346,7 +422,10 @@ export function createPreviewSnapshot(): LegacySnapshot {
         note: "UI 审美检查来源。",
         localPath: "../app-next/data/github_sources/impeccable",
         enabled: true,
-        tags: ["GitHub", "界面设计"]
+        tags: ["GitHub", "界面设计"],
+        userFolderId: "folder-development",
+        userFolderName: "软件与 UI",
+        userFolderColor: "coral"
       },
       {
         id: "source-vibesec",
@@ -391,7 +470,10 @@ export function createPreviewSnapshot(): LegacySnapshot {
         note: "工程开发守则与实践资料。",
         localPath: "../app-next/data/github_sources/andrej-karpathy-skills",
         enabled: true,
-        tags: ["GitHub", "工程质量"]
+        tags: ["GitHub", "工程质量"],
+        userFolderId: "folder-development",
+        userFolderName: "软件与 UI",
+        userFolderColor: "coral"
       },
       {
         id: "source-awesome-ai-research-writing",
@@ -422,7 +504,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
       {
         id: "codex",
         name: "ChatGPT Desktop / OpenAI Codex",
-        path: "~\\.codex\\skills",
+        path: "~\\.agents\\skills",
         detected: true,
         managed: false,
         enabled: false,
@@ -457,7 +539,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         skillName: "paper-workflow",
         skillFolderName: "paper-workflow",
         status: "agent-disabled",
-        expectedPath: "~\\.codex\\skills\\paper-workflow",
+        expectedPath: "~\\.agents\\skills\\paper-workflow",
         targetPath: "",
         summary: "Codex 已检测但未启用接管。"
       },
@@ -492,7 +574,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         id: "codex",
         name: "ChatGPT Desktop / OpenAI Codex",
         vendor: "OpenAI",
-        skillsPathHint: "~\\.codex\\skills",
+        skillsPathHint: "~\\.agents\\skills",
         detectionKind: "directory",
         installScope: "global",
         capabilityLevel: "full",
@@ -552,7 +634,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         adapterId: "codex",
         adapterName: "ChatGPT Desktop / OpenAI Codex",
         detectionKind: "directory",
-        pathHint: "~\\.codex\\skills",
+        pathHint: "~\\.agents\\skills",
         verdict: "desktop-only",
         summary: "ChatGPT Desktop 已安装，但未发现 Codex CLI/代码能力；两者不能视为同一个安装。",
         desktopStatus: "installed",
@@ -574,7 +656,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
             path: ""
           }
         ],
-        checkedPaths: ["~\\.codex\\skills"],
+        checkedPaths: ["~\\.agents\\skills"],
         nextSteps: ["本地 Skills 接管必须另外确认 Codex CLI/代码能力。"],
         safeFixAvailable: false
       },
@@ -750,7 +832,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         adapterId: "codex",
         agentName: "OpenAI Codex",
         action: "block-backup",
-        targetPath: "~\\.codex\\skills",
+        targetPath: "~\\.agents\\skills",
         backupPath: "../app-next/.skillhub-next/backups/codex/skills",
         status: "blocked",
         riskLevel: "high",
@@ -807,7 +889,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         reportType: "diagnostics",
         status: "ok",
         generatedAt: new Date().toISOString(),
-        version: "v3.1.4",
+        version: "v3.1.9",
         ok: true,
         total: 9,
         passed: 6,
@@ -821,7 +903,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         reportType: "release-preflight",
         status: "ok",
         generatedAt: new Date().toISOString(),
-        version: "v3.1.4",
+        version: "v3.1.9",
         ok: true,
         total: 12,
         passed: 12,
@@ -835,7 +917,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         reportType: "share-recipient-test",
         status: "ok",
         generatedAt: new Date().toISOString(),
-        version: "v3.1.4",
+        version: "v3.1.9",
         ok: true,
         total: 8,
         passed: 8,
@@ -1222,7 +1304,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
     ],
     diagnostics: {
       available: false,
-      appVersion: "3.1.4 preview",
+      appVersion: "3.1.9 preview",
       generatedAt: new Date().toISOString(),
       overallStatus: "preview",
       ok: 6,

@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Version = '',
+  [string]$ReleaseNotes = '',
   [switch]$SkipBuild
 )
 
@@ -11,6 +12,7 @@ $AppRoot = Split-Path -Parent $PSScriptRoot
 $ProjectRoot = Split-Path -Parent $AppRoot
 $TauriRoot = Join-Path $AppRoot 'src-tauri'
 $ReleaseRoot = Join-Path $ProjectRoot 'release'
+$UpdatesRoot = Join-Path $ProjectRoot 'updates'
 $ConfigPath = Join-Path $TauriRoot 'tauri.conf.json'
 $PackagePath = Join-Path $AppRoot 'package.json'
 $CargoPath = Join-Path $TauriRoot 'Cargo.toml'
@@ -77,6 +79,9 @@ function Assert-BinaryOmitsLocalPaths([string]$BinaryPath, [string[]]$Paths) {
 
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = Get-ConfiguredVersion }
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Release version must use x.y.z: $Version" }
+if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) {
+  $ReleaseNotes = "AI SkillHub v${Version}: signed stable update with preserved local user data."
+}
 
 $packageVersion = [string](Get-Content -LiteralPath $PackagePath -Raw -Encoding UTF8 | ConvertFrom-Json).version
 $configuredVersion = Get-ConfiguredVersion
@@ -169,9 +174,10 @@ if (-not $? -or $global:LASTEXITCODE -ne 0) {
 
 $SignatureText = (Get-Content -LiteralPath $ReleaseSignature -Raw -Encoding UTF8).Trim()
 $LatestJsonPath = Join-Path $ReleaseRoot 'latest.json'
+$FallbackLatestJsonPath = Join-Path $UpdatesRoot 'latest.json'
 $LatestPayload = [ordered]@{
   version = $Version
-  notes = "AI SkillHub v${Version}: redundant signed update channels, bounded retry and reconnect checks, safe failure diagnostics, longer installer downloads, and preserved local user data."
+  notes = $ReleaseNotes
   pub_date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
   platforms = [ordered]@{
     'windows-x86_64' = [ordered]@{
@@ -185,11 +191,18 @@ $LatestPayload = [ordered]@{
   ($LatestPayload | ConvertTo-Json -Depth 8),
   [System.Text.UTF8Encoding]::new($false)
 )
+New-Item -ItemType Directory -Force -Path $UpdatesRoot | Out-Null
+[System.IO.File]::WriteAllText(
+  $FallbackLatestJsonPath,
+  ($LatestPayload | ConvertTo-Json -Depth 8),
+  [System.Text.UTF8Encoding]::new($false)
+)
 
 foreach ($artifact in @(
   $ReleaseInstaller,
   $ReleaseSignature,
   $LatestJsonPath,
+  $FallbackLatestJsonPath,
   (Join-Path $ReleaseRoot "AI-SkillHub-$Version.zip")
 )) {
   if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) { throw "Missing release artifact: $artifact" }
@@ -205,4 +218,5 @@ $installerHash = (Get-FileHash -LiteralPath $ReleaseInstaller -Algorithm SHA256)
 Write-Host "AI SkillHub v$Version release artifacts are ready."
 Write-Host "Installer: $ReleaseInstaller"
 Write-Host "Updater manifest: $LatestJsonPath"
+Write-Host "Fallback updater manifest: $FallbackLatestJsonPath"
 Write-Host "Developer entry: $(Join-Path $ProjectRoot 'AI SkillHub.exe')"
