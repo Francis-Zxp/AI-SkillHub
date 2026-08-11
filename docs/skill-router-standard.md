@@ -22,7 +22,9 @@ canonical parent entry and writes the child capability list into that parent's
 Markers remain ASCII-only to survive Windows PowerShell, Git, YAML parsers and
 cross-machine copies. `[ROUTER-HUB]` lives in an HTML comment so Agent parsers can
 identify the parent without showing a technical token to users. The visible
-frontmatter description and heading use the concise localized label `父 Skill`.
+frontmatter description uses `◈ 父 · N 个子项 · 最多 5 个能力` and the heading
+uses `◈ 父 Skill`; the Unicode symbol is display-only and never replaces the
+ASCII machine marker.
 
 ## Generation Rules
 
@@ -31,7 +33,7 @@ frontmatter description and heading use the concise localized label `父 Skill`.
 3. Generate exactly one canonical parent for every enabled, non-empty source.
 4. Keep the parent callable by the normalized original source name, such as `/figures4papers`.
 5. Keep the visible frontmatter description machine-safe and concise; it must not begin with a bracket token.
-6. Include `[ROUTER-HUB]` once in an HTML comment and use `父 Skill` in the visible description and heading.
+6. Include `[ROUTER-HUB]` once in an HTML comment; use `◈ 父` plus the child count and at most five deduplicated capability labels in the visible description.
 7. List every child as `[CHILD-SKILL]`, with its exact source-scoped `SKILL.md` path and a concise localized function summary.
 8. The parent may load children only from its declared source. It must never substitute a same-name child from another source.
 9. Rebuild parents after startup repair, adding a source, manual sync and automatic update.

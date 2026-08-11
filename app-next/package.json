@@ -1,6 +1,6 @@
 {
   "name": "ai-skillhub-next",
-  "version": "3.1.9",
+  "version": "3.1.10",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.2.2",
@@ -20,7 +20,7 @@
     "test:skill-folders": "node --test ./scripts/skill-folders-ui.test.mjs",
     "test:compact-metadata": "node --test ./scripts/compact-metadata-ui.test.mjs",
     "test:codex-delivery": "node --test ./scripts/codex-delivery-contract.test.mjs",
-    "test:v3.1.9-update-sync": "node --test ./scripts/v3.1.6-update-sync-contract.test.mjs",
+    "test:v3.1.10-update-sync": "node --test ./scripts/v3.1.6-update-sync-contract.test.mjs",
     "test:parent-routing": "node --test ./scripts/parent-routing-contract.test.mjs",
     "test:visual-v3.1": "node ./scripts/v3.1-readonly-visual-qa.cjs",
     "test:visual-v3.1.2-draft": "node ./scripts/v3.1.2-draft-visual-qa.cjs",

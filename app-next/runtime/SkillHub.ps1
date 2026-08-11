@@ -563,6 +563,25 @@ function Get-LocalizedRouterChildSummary([string]$SkillName, [string]$Descriptio
   return ('用于处理“{0}”相关任务' -f $SkillName)
 }
 
+function Get-RouterCapabilityLabel([string]$SkillName, [string]$Description) {
+  $text = (($SkillName + ' ' + $Description).ToLowerInvariant())
+  if ($text -match 'figure|plot|chart|diagram|visualization|科研图|绘图|图表|可视化') { return '科研绘图' }
+  if ($text -match 'citation|reference|bibliography|doi|参考文献|引用') { return '参考文献' }
+  if ($text -match 'review|reviewer|rebuttal|peer-review|审稿|评审|审查') { return '论文审查' }
+  if ($text -match 'paper|manuscript|writing|draft|academic|润色|论文写作|科研论文') { return '论文撰写与润色' }
+  if ($text -match 'literature|research|search|survey|arxiv|文献检索|综述') { return '文献检索与综述' }
+  if ($text -match 'security|secure|audit|vulnerability|threat|安全检查|风险分析') { return '安全审计' }
+  if ($text -match 'browser|web|scrape|crawl|playwright|网页浏览|浏览器自动化') { return '网页与浏览器自动化' }
+  if ($text -match 'slide|presentation|ppt|deck|演示文稿') { return '演示文稿' }
+  if ($text -match 'database|dataset|analysis|statistics|omics|数据分析|统计') { return '数据分析' }
+  if ($text -match 'image|photo|illustration|render|图像生成|视觉内容') { return '图像设计' }
+  if ($text -match 'design|ui|ux|frontend|layout|界面设计|前端实现') { return '界面设计' }
+  if ($text -match 'code|debug|test|developer|android|ios|代码实现|调试') { return '代码工程' }
+  $fallback = ($SkillName -replace '[-_]+', ' ').Trim()
+  if ($fallback.Length -gt 16) { return $fallback.Substring(0, 16) + '…' }
+  return $fallback
+}
+
 function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates) {
   if ([string]::IsNullOrWhiteSpace($RepoName)) { return }
   if ($RepoName -eq 'AI-SkillHub-local-routers') { return }
@@ -591,6 +610,15 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
     $childDescription = Get-LocalizedRouterChildSummary ([string]$_.Skill) ([string]$_.Description)
     '- [CHILD-SKILL] `${0}` — {1}；来源文件：`../../{2}`' -f ([string]$_.Skill), $childDescription, ($relativeChild -replace '\\', '/')
   })
+  $capabilityLabels = [System.Collections.Generic.List[string]]::new()
+  foreach ($child in ($childSkills | Sort-Object Skill)) {
+    $label = Get-RouterCapabilityLabel ([string]$child.Skill) ([string]$child.Description)
+    if (-not [string]::IsNullOrWhiteSpace($label) -and -not $capabilityLabels.Contains($label)) {
+      $capabilityLabels.Add($label) | Out-Null
+    }
+    if ($capabilityLabels.Count -ge 5) { break }
+  }
+  $capabilitySummary = if ($capabilityLabels.Count -gt 0) { $capabilityLabels -join '、' } else { '自动选择能力' }
   $originalParentSection = @()
   if ($parentCandidate.Count -gt 0) {
     $parentSkillMd = Join-Path ([string]$parentCandidate[0].Source) 'SKILL.md'
@@ -613,12 +641,12 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
   $routerText = @(
     '---'
     "name: $safeRouterName"
-    "description: `"父 Skill · $RepoName；聚合 $($childSkills.Count) 个来源内子 Skill，按任务自动选择并加载，不跨父 Skill。`""
+    "description: `"◈ 父 · $($childSkills.Count) 个子项 · $capabilitySummary`""
     '---'
     ''
     '<!-- [ROUTER-HUB] -->'
     ''
-    "# 父 Skill · $RepoName"
+    "# ◈ 父 Skill · $RepoName"
     ''
     '> 这是 AI SkillHub 生成的稳定父入口。Agent 只需识别这个入口，子 Skill 由父 Skill 在自己的来源目录内选择和加载。'
     ''

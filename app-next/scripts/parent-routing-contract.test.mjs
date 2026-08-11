@@ -16,13 +16,14 @@ test("every non-empty source receives a stable source-scoped parent", () => {
   assert.match(rust, /including a SKILL\.md at the source root/);
   assert.doesNotMatch(rust, /"skipped-single-child"\.to_string\(\)/);
   assert.doesNotMatch(rust, /"skipped-collision"\.to_string\(\)/);
-  assert.match(rust, /父 Skill · \{collection\}/);
+  assert.match(rust, /# ◈ 父 Skill · \{collection\}/);
+  assert.match(rust, /◈ 父 · \{\} 个子项 · \{\}/);
   assert.match(rust, /<!-- \{marker\} -->/);
   assert.doesNotMatch(rust, /description:.*ROUTER_HUB_MARKER/);
   assert.match(rust, /只能打开下方/);
   assert.match(rust, /绝不跨来源替换/);
   assert.match(sync, /if \(\$childSkills\.Count -lt 1\) \{ return \}/);
-  assert.match(sync, /聚合 \$\(\$childSkills\.Count\) 个来源内子 Skill/);
+  assert.match(sync, /◈ 父 · \$\(\$childSkills\.Count\) 个子项 · \$capabilitySummary/);
   assert.match(sync, /managed shared catalog publishes one canonical parent per source/);
   assert.match(sync, /\(\[string\]\$_.Repo\) -ne 'AI-SkillHub-local-routers'/);
   assert.match(sync, /Where-Object \{[\s\S]*?routerSourcePrefix/);

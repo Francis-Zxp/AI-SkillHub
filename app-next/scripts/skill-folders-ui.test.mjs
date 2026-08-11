@@ -24,14 +24,18 @@ test("library supports drag, accessible select fallback and safe unfiling", () =
   assert.match(app, /source-folder-drag-handle/);
   assert.match(app, /<Icon name="grip"/);
   assert.match(app, /folders\.dragShort/);
+  assert.match(app, /showPicker/);
+  assert.match(app, /role="button"/);
   assert.match(app, /<select[\s\S]*folders\.choose/);
   assert.match(app, /skillMatchesUserFolder/);
   assert.match(app, /delete_skill_folder/);
   assert.match(i18n, /Skill 不会删除，只会回到/);
-  assert.match(app, /folder-delete-action/);
+  assert.match(app, /skill-folder-manage/);
+  assert.doesNotMatch(app, /skill-folder-item-actions/);
   assert.match(app, /SKILL_FOLDER_COLOR_HEX/);
   assert.match(styles, /background: var\(--folder-tone\) !important/);
-  assert.match(styles, /\.skill-folder-item-actions \{[\s\S]*?opacity: 1/);
+  assert.match(styles, /\.skill-folder-item \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) 44px/);
+  assert.match(styles, /\.skill-folder-manage \{[\s\S]*?width: 44px/);
   assert.match(styles, /source-group-title strong[\s\S]*?-webkit-line-clamp: 2/);
 });
 
@@ -66,4 +70,8 @@ test("large source trees render incrementally and folder edits keep whole-tree s
   assert.match(app, /folders\.sourceTreeFolder/);
   assert.match(app, /inherited-folder-chip/);
   assert.match(backend, /future children inherit without materialized rows/);
+  assert.match(backend, /fn create_skill_folder\([\s\S]*?Result<Vec<SkillFolderCard>, String>/);
+  assert.match(app, /invoke<SkillFolderCard\[\]>/);
+  assert.match(app, /applySkillFolderCommandResult/);
+  assert.match(app, /const unfiledCount = useMemo/);
 });

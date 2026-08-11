@@ -57,8 +57,13 @@ try {
     throw 'Single-child source did not receive a figures4papers parent router.'
   }
   $parent = [IO.File]::ReadAllText($parentPath, [Text.UTF8Encoding]::new($false))
+  $visibleParentMarker = [string][char]0x25C8
+  $descriptionLine = @($parent -split "`r?`n" | Where-Object { $_ -like 'description:*' } | Select-Object -First 1)
   if ($parent -notmatch 'name: figures4papers') { throw 'Parent invocation name is missing.' }
   if ($parent -notmatch '\[ROUTER-HUB\]') { throw 'Parent marker is missing.' }
+  if ($descriptionLine.Count -ne 1 -or -not $descriptionLine[0].StartsWith('description: "' + $visibleParentMarker)) { throw 'Compact parent summary is missing.' }
+  if ($descriptionLine[0] -notmatch '1') { throw 'Compact parent child count is missing.' }
+  if ($parent -notmatch ('# ' + [regex]::Escape($visibleParentMarker))) { throw 'Visible parent marker is missing.' }
   if ($parent -notmatch '\[CHILD-SKILL\].*scientific-figure-making') { throw 'Child capability is not grouped under parent.' }
   if ($parent -match 'description: "\[ROUTER-HUB\]') { throw 'Machine marker leaked into the visible description.' }
   if ($parent -notmatch '<!-- \[ROUTER-HUB\] -->') { throw 'Hidden machine marker is missing.' }
