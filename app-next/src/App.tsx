@@ -44,6 +44,7 @@ import type {
   SkillCard,
   SkillConflictCard,
   SkillFolderCard,
+  PromptInvocationCard,
   SourceCard,
   SourceImportExecutionCard,
   SourceImportPlanCard,
@@ -2826,6 +2827,8 @@ function Library(props: LibraryProps) {
   const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
   const [selectedFolderId, setSelectedFolderId] = useState("all");
   const [childLimits, setChildLimits] = useState<Record<string, number>>({});
+  const [promptInvocation, setPromptInvocation] = useState<PromptInvocationCard | null>(null);
+  const [promptInvocationPending, setPromptInvocationPending] = useState("");
 
   const skillsBySourceId = useMemo(() => {
     const grouped = new Map<string, SkillCard[]>();
@@ -2936,6 +2939,29 @@ function Library(props: LibraryProps) {
     if (!confirmed) return;
     const result = await onDeleteSource(source);
     if (result !== "failed") setEditingSourceId("");
+  }
+
+  async function preparePromptInvocation(source: SourceCard) {
+    if (!hasTauriRuntime()) {
+      showUiToast(t("lib.promptLoadFailed", { message: t("router.browserBlocked") }), "warn");
+      return;
+    }
+    setPromptInvocationPending(source.id);
+    try {
+      const card = await invoke<PromptInvocationCard>("load_prompt_invocation", {
+        sourceId: source.id
+      });
+      setPromptInvocation(card);
+    } catch (error) {
+      showUiToast(
+        t("lib.promptLoadFailed", {
+          message: error instanceof Error ? error.message : String(error)
+        }),
+        "error"
+      );
+    } finally {
+      setPromptInvocationPending("");
+    }
   }
 
   const githubSources = sources.filter(source => source.url).length;
@@ -3136,6 +3162,8 @@ function Library(props: LibraryProps) {
                 <div className="source-group-meta">
                   <span
                     aria-label={t("folders.dragSource", { name: source.name })}
+                    aria-controls={`source-folder-${source.id}`}
+                    aria-haspopup="listbox"
                     className="source-folder-drag-handle"
                     draggable
                     onClick={() => {
@@ -3143,7 +3171,12 @@ function Library(props: LibraryProps) {
                         | (HTMLSelectElement & { showPicker?: () => void })
                         | null;
                       select?.focus();
-                      try { select?.showPicker?.(); } catch { /* focus remains as the fallback */ }
+                      try {
+                        if (select?.showPicker) select.showPicker();
+                        else select?.click();
+                      } catch {
+                        select?.click();
+                      }
                     }}
                     onDragStart={event => {
                       event.dataTransfer.effectAllowed = "move";
@@ -3236,9 +3269,27 @@ function Library(props: LibraryProps) {
                     </div>
                   )}
                   {childSkills.length === 0 && parentSkills.length === 0 ? (
-                    <p className="source-children-empty">
-                      {source.sourceType === "prompt" ? t("lib.promptOnly") : t("lib.noChildren")}
-                    </p>
+                    source.sourceType === "prompt" ? (
+                      <div className="source-children-empty prompt-source-callout">
+                        <div>
+                          <strong>{t("lib.promptOnly")}</strong>
+                          <span>{t("lib.promptMethodBody")}</span>
+                        </div>
+                        <button
+                          className="primary-action small"
+                          disabled={promptInvocationPending === source.id}
+                          onClick={() => void preparePromptInvocation(source)}
+                          type="button"
+                        >
+                          <Icon name="copy" />
+                          {promptInvocationPending === source.id
+                            ? t("lib.promptPreparing")
+                            : t("lib.promptPrepare")}
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="source-children-empty">{t("lib.noChildren")}</p>
+                    )
                   ) : (
                     <div className="child-skills">
                       {visibleChildSkills.map(skill => (
@@ -3353,6 +3404,13 @@ function Library(props: LibraryProps) {
           skill={editingSkill}
         />
       )}
+      {promptInvocation && (
+        <PromptInvocationPanel
+          card={promptInvocation}
+          onClose={() => setPromptInvocation(null)}
+          onRecordUsage={onRecordUsage}
+        />
+      )}
       {editingSource && (
         <SourceEditPanel
           draft={sourceDrafts[editingSource.id]}
@@ -3385,6 +3443,109 @@ function Library(props: LibraryProps) {
         />
       )}
     </div>
+  );
+}
+
+function PromptInvocationPanel({
+  card,
+  onClose,
+  onRecordUsage
+}: {
+  card: PromptInvocationCard;
+  onClose: () => void;
+  onRecordUsage: LibraryProps["onRecordUsage"];
+}) {
+  async function copyInvocation() {
+    await copyTextToClipboard(card.copyText, t("lib.promptCopied"));
+    await onRecordUsage("prompt", card.sourceId, card.sourceName, card.sourceName, "copy_prompt");
+  }
+
+  async function openSourceFolder() {
+    try {
+      await invoke("open_prompt_source_folder", { sourceId: card.sourceId });
+      showUiToast(t("lib.promptOpened"), "ok");
+    } catch (error) {
+      showUiToast(
+        t("lib.promptOpenFailed", {
+          message: error instanceof Error ? error.message : String(error)
+        }),
+        "error"
+      );
+    }
+  }
+
+  return (
+    <Drawer eyebrow={t("lib.promptDrawerEyebrow")} onClose={onClose} title={card.sourceName} wide>
+      <section className="prompt-invocation-identity">
+        <Icon name="info" />
+        <div>
+          <strong>{t("lib.promptNotSkill")}</strong>
+          <span>{t("lib.promptMethodBody")}</span>
+        </div>
+      </section>
+
+      <section className={`prompt-workspace-status ${card.workspaceComplete ? "complete" : "incomplete"}`}>
+        <Icon name={card.workspaceComplete ? "shield" : "alert"} />
+        <div>
+          <strong>
+            {card.workspaceComplete
+              ? t("lib.promptWorkspaceComplete")
+              : t("lib.promptWorkspaceIncomplete")}
+          </strong>
+          {!card.workspaceComplete && <span>{t("lib.promptReadd")}</span>}
+        </div>
+      </section>
+
+      <section className="prompt-invocation-section">
+        <h3>{t("lib.promptHosts")}</h3>
+        <div className="prompt-host-list">
+          {card.hosts.map(host => (
+            <article key={host.id}>
+              <span className={`status-dot ${host.deliveryStatus === "copy-paste-ready" ? "ok" : "warn"}`} />
+              <div>
+                <strong>{host.name}</strong>
+                <small>
+                  {host.deliveryStatus === "copy-paste-ready"
+                    ? t("lib.promptHostReady")
+                    : t("lib.promptHostNotReady")}
+                </small>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="prompt-invocation-section">
+        <h3>{t("lib.promptAssets")}</h3>
+        <div className="prompt-asset-list">
+          {card.assets.map(asset => (
+            <article key={asset.relativePath}>
+              <div>
+                <strong>{asset.name}</strong>
+                <small>{formatFileSize(asset.bytes)}</small>
+              </div>
+              <span>{asset.included ? t("lib.promptIncluded") : t("lib.promptReference")}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      {card.warnings.length > 0 && (
+        <ul className="prompt-warning-list">
+          {card.warnings.map(warning => <li key={warning}>{warning}</li>)}
+        </ul>
+      )}
+
+      <footer>
+        <button className="secondary-action" onClick={() => void openSourceFolder()} type="button">
+          <Icon name="folder" /> {t("lib.promptOpenFolder")}
+        </button>
+        <span className="footer-spacer" />
+        <button className="primary-action" onClick={() => void copyInvocation()} type="button">
+          <Icon name="copy" /> {t("lib.promptCopy")}
+        </button>
+      </footer>
+    </Drawer>
   );
 }
 
@@ -3480,24 +3641,27 @@ function SkillFolderShelf({
     if (skillId.trim()) void onDropSkill(skillId.trim(), folderId);
   }
 
-  const renderTarget = (id: string, label: string, count: number, tone: string, noteText = "") => (
-    <button
-      aria-pressed={selectedId === id}
-      className={`skill-folder-target tone-${tone}${selectedId === id ? " active" : ""}${dropTarget === id ? " drop-ready" : ""}`}
-      key={id}
-      onClick={() => onSelect(id)}
-      onDragEnter={event => { event.preventDefault(); setDropTarget(id); }}
-      onDragOver={event => event.preventDefault()}
-      onDragLeave={() => setDropTarget(current => current === id ? "" : current)}
-      onDrop={event => acceptDrop(event, id === "unfiled" ? "" : id)}
-      title={noteText || label}
-      type="button"
-    >
-      <Icon name="folder" />
-      <span><strong>{label}</strong>{noteText && <small>{noteText}</small>}</span>
-      <b>{count}</b>
-    </button>
-  );
+  const renderTarget = (id: string, label: string, count: number, tone: string, noteText = "") => {
+    const acceptsDrop = id !== "all";
+    return (
+      <button
+        aria-pressed={selectedId === id}
+        className={`skill-folder-target tone-${tone}${selectedId === id ? " active" : ""}${dropTarget === id ? " drop-ready" : ""}`}
+        key={id}
+        onClick={() => onSelect(id)}
+        onDragEnter={acceptsDrop ? event => { event.preventDefault(); setDropTarget(id); } : undefined}
+        onDragOver={acceptsDrop ? event => event.preventDefault() : undefined}
+        onDragLeave={acceptsDrop ? () => setDropTarget(current => current === id ? "" : current) : undefined}
+        onDrop={acceptsDrop ? event => acceptDrop(event, id === "unfiled" ? "" : id) : undefined}
+        title={noteText || label}
+        type="button"
+      >
+        <Icon name="folder" />
+        <span><strong>{label}</strong>{noteText && <small>{noteText}</small>}</span>
+        <b>{count}</b>
+      </button>
+    );
+  };
 
   return (
     <section className="skill-folder-shelf glow-card" aria-label={t("folders.aria")}>

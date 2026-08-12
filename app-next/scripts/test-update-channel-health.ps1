@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$ExpectedVersion = '',
+  [string]$InstalledVersion = '',
   [switch]$RequireEveryChannel
 )
 
@@ -12,19 +13,23 @@ $ConfigPath = Join-Path $AppRoot 'src-tauri\tauri.conf.json'
 $Config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 if ([string]::IsNullOrWhiteSpace($ExpectedVersion)) { $ExpectedVersion = [string]$Config.version }
 if ($ExpectedVersion -notmatch '^\d+\.\d+\.\d+$') { throw "ExpectedVersion must use x.y.z: $ExpectedVersion" }
+if ([string]::IsNullOrWhiteSpace($InstalledVersion)) { $InstalledVersion = $ExpectedVersion }
+if ($InstalledVersion -notmatch '^\d+\.\d+\.\d+$') { throw "InstalledVersion must use x.y.z: $InstalledVersion" }
 
-$Channels = @(
-  [PSCustomObject]@{ Name = 'GitHub Release'; Uri = 'https://github.com/Francis-Zxp/AI-SkillHub/releases/latest/download/latest.json' },
-  [PSCustomObject]@{ Name = 'Raw GitHub mirror'; Uri = 'https://raw.githubusercontent.com/Francis-Zxp/AI-SkillHub/main/updates/latest.json' },
-  [PSCustomObject]@{ Name = 'jsDelivr mirror'; Uri = 'https://cdn.jsdelivr.net/gh/Francis-Zxp/AI-SkillHub@main/updates/latest.json' }
-)
+$ChannelNames = @('GitHub Release', 'Raw GitHub mirror', 'jsDelivr mirror')
+$Channels = for ($index = 0; $index -lt @($Config.plugins.updater.endpoints).Count; $index++) {
+  $endpoint = [string]$Config.plugins.updater.endpoints[$index]
+  $uri = $endpoint.Replace('{{current_version}}', $InstalledVersion).Replace('{{target}}', 'windows-x86_64')
+  [PSCustomObject]@{ Name = if ($index -lt $ChannelNames.Count) { $ChannelNames[$index] } else { "Updater channel $($index + 1)" }; Uri = $uri }
+}
+if ($Channels.Count -eq 0) { throw 'No updater endpoints are configured.' }
 
 $Results = foreach ($Channel in $Channels) {
   try {
-    $nonce = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    $separator = if ($Channel.Uri.Contains('?')) { '&' } else { '?' }
     $request = @{
-      Uri = "$($Channel.Uri)$separator`installed=$ExpectedVersion&channel=stable&probe=$nonce"
+      # This is the exact old-client URL from tauri.conf.json. Do not add a nonce:
+      # cache-busting could hide a stale CDN response that real users still receive.
+      Uri = $Channel.Uri
       Headers = @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' }
       MaximumRedirection = 8
       TimeoutSec = 35
@@ -68,4 +73,4 @@ if ($RequireEveryChannel -and $healthyCount -ne $Channels.Count) {
 if ($healthyCount -lt 2) {
   throw "Only $healthyCount/$($Channels.Count) update channels are healthy; at least two are required."
 }
-Write-Output "Update channel health passed: $healthyCount/$($Channels.Count) signed manifests serve v$ExpectedVersion."
+Write-Output "Update channel health passed: $healthyCount/$($Channels.Count) signed manifests serve v$ExpectedVersion to installed v$InstalledVersion clients."

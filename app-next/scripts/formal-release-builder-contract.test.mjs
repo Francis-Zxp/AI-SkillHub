@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+
+const appRoot = path.resolve(import.meta.dirname, "..");
+const projectRoot = path.resolve(appRoot, "..");
+const read = (...parts) => fs.readFileSync(path.join(...parts), "utf8");
+const packageJson = JSON.parse(read(appRoot, "package.json"));
+const tauriConfig = JSON.parse(read(appRoot, "src-tauri", "tauri.conf.json"));
+const version = packageJson.version;
+const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const builder = read(appRoot, "scripts", "build-formal-release.ps1");
+
+test("formal release version surfaces agree before signing", () => {
+  assert.equal(tauriConfig.version, version);
+  assert.match(read(appRoot, "src-tauri", "Cargo.toml"), new RegExp(`^version\\s*=\\s*"${escapedVersion}"`, "m"));
+  assert.match(
+    read(appRoot, "src-tauri", "Cargo.lock"),
+    new RegExp(`\\[\\[package\\]\\]\\s*name\\s*=\\s*"ai-skillhub-next"\\s*version\\s*=\\s*"${escapedVersion}"`, "s"),
+  );
+  assert.match(read(projectRoot, "CHANGELOG.md"), new RegExp(`^##\\s+${escapedVersion}(?:\\s|$)`, "m"));
+  assert.match(
+    read(projectRoot, "docs", "release-notes", `v${version}.md`),
+    new RegExp(`^#\\s+AI SkillHub v${escapedVersion}\\s*$`, "m"),
+  );
+  assert.match(read(appRoot, "src", "preview.ts"), new RegExp(`appVersion:\\s*"${escapedVersion} preview"`));
+  assert.match(read(appRoot, "src", "i18n.ts"), new RegExp(`"atlas\\.releaseTag":\\s*"${escapedVersion}\\s+·`));
+  assert.match(
+    read(appRoot, "scripts", "test-nsis-install-upgrade.ps1"),
+    new RegExp(`\\[string\\]\\$ExpectedVersion\\s*=\\s*'${escapedVersion}'`),
+  );
+});
+
+test("formal builder selects one signed installer by ProductVersion", () => {
+  assert.match(builder, /Get-NormalizedProductVersion/);
+  assert.match(builder, /\$signedVersionCandidates\.Count -ne 1/);
+  assert.match(builder, /Assert-SignedInstaller \$Installer\.FullName \$Version/);
+  assert.match(builder, /LastWriteTimeUtc -lt \$buildStartedAtUtc/);
+  assert.doesNotMatch(builder, /Sort-Object LastWriteTime -Descending\s*\|\s*Select-Object -First 1/);
+});
+
+test("SkipBuild is explicit, versioned, and SHA-256 pinned", () => {
+  assert.match(builder, /SkipBuild requires -ExistingInstallerPath/);
+  assert.match(builder, /SkipBuild requires a 64-character -ExpectedInstallerSha256/);
+  assert.match(builder, /Assert-PathInside \$explicitInstaller \$NsisRoot/);
+  assert.match(builder, /Get-FileHash -LiteralPath \$Installer\.FullName -Algorithm SHA256/);
+  assert.match(builder, /The explicit installer is not the unique signed v\$Version candidate/);
+});
+
+test("future fallback manifest is opt-in after public verification", () => {
+  assert.match(builder, /\[switch\]\$PublishFallbackManifest/);
+  assert.match(builder, /if \(\$PublishFallbackManifest\) \{\s*New-Item[\s\S]*?WriteAllText\(\s*\$FallbackLatestJsonPath/);
+  assert.match(builder, /Fallback updater manifest unchanged; publish it only after the public release assets pass verification/);
+  const unconditionalWrites = [...builder.matchAll(/WriteAllText\(\s*\$FallbackLatestJsonPath/g)];
+  assert.equal(unconditionalWrites.length, 1, "fallback manifest should have only the guarded write site");
+});

@@ -5,6 +5,8 @@ import test from "node:test";
 const files = {
   app: await readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
   mcpUi: await readFile(new URL("../src/McpCenter.tsx", import.meta.url), "utf8"),
+  i18n: await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8"),
+  styles: await readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
   doctorUi: await readFile(new URL("../src/CodexPluginDoctorPanel.tsx", import.meta.url), "utf8"),
   capabilities: await readFile(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"),
   backend: await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8"),
@@ -53,6 +55,24 @@ test("MCP center is read-only, secret-safe and never probes live capabilities", 
   assert.match(files.mcpUi, /mcp\.copyPath/);
 });
 
+test("MCP read and parse failures remain visible even when no binding can be created", () => {
+  assert.match(files.mcpUi, /const globalDiagnosticGroups = useMemo/);
+  assert.match(files.mcpUi, /locationId && inventory\.bindings\.some\(binding => binding\.configLocationId === locationId\)/);
+  assert.match(files.mcpUi, /!locationId && inventory\.bindings\.some\(binding => binding\.hostId === finding\.hostId\)/);
+  assert.match(files.mcpUi, /location\?\.pathDisplay \?\? finding\.pathDisplay \?\? ""/);
+  assert.match(files.mcpUi, /location\.parseStatus === "ok"/);
+  assert.match(files.mcpUi, /className="mcp-global-diagnostics"/);
+  assert.match(files.mcpUi, /copyConfigPath\(group\.pathDisplay, group\.key\)/);
+  assert.match(files.mcpUi, /copyConfigPath\(selectedLocation\?\.pathDisplay, "selected-binding"\)/);
+  assert.doesNotMatch(files.mcpUi, /copyConfigPath\([^)]*\.configPath/);
+
+  assert.match(files.mcpUi, /finding\.configLocationId === binding\.configLocationId/);
+  assert.match(files.mcpUi, /finding\.hostId === binding\.hostId/);
+  assert.match(files.i18n, /"mcp\.diagnosticsBody"/);
+  assert.match(files.i18n, /界面中的路径均已脱敏/);
+  assert.match(files.styles, /\.mcp-diagnostic-findings li \{[\s\S]*border: 1px solid var\(--border\)/);
+});
+
 test("Codex doctor guarantees zero writes and does not execute the standalone repair path", () => {
   assert.match(files.doctor, /mutation_count: 0/);
   assert.match(files.doctor, /repair_available: false/);
@@ -61,6 +81,37 @@ test("Codex doctor guarantees zero writes and does not execute the standalone re
   assert.doesNotMatch(files.doctorUi, /AutoRepair|ExecutionPolicy|setup\.ps1.*invoke/);
   assert.match(files.doctorUi, /showAllEvidence/);
   assert.match(files.doctorUi, /pluginDoctor\.copy/);
+});
+
+test("Codex doctor copy exports every bounded, redacted diagnostic section", () => {
+  const copyStart = files.doctorUi.indexOf("async function copyReport()");
+  const copyEnd = files.doctorUi.indexOf("  useEffect", copyStart);
+  assert.ok(copyStart >= 0 && copyEnd > copyStart, "copyReport body should be discoverable");
+  const copyReport = files.doctorUi.slice(copyStart, copyEnd);
+  for (const field of [
+    "report.summary",
+    "report.platform",
+    "report.versionState",
+    "report.mutationCount",
+    "report.inventory",
+    "report.guarantees",
+    "report.findings",
+    "report.evidence"
+  ]) {
+    assert.ok(copyReport.includes(field), `${field} should be copied`);
+  }
+  assert.match(copyReport, /report\.guarantees\.map/);
+  assert.match(copyReport, /report\.findings\.flatMap/);
+  assert.match(copyReport, /report\.evidence\.flatMap/);
+  assert.match(copyReport, /safeDiagnosticPath\(item\.redactedPath\)/);
+  assert.doesNotMatch(copyReport, /report\.evidence\.slice/);
+  assert.doesNotMatch(copyReport, /sha256|byteSize/);
+  assert.match(files.doctorUi, /DIAGNOSTIC_FIELD_LIMIT = 600/);
+  assert.match(files.doctorUi, /DIAGNOSTIC_PATH_LIMIT = 500/);
+  assert.match(files.doctorUi, /absolute path|copyPathRedacted|\[a-z\]:/i);
+  assert.ok(files.doctorUi.includes("authorization|password|secret|token"));
+  assert.equal([...files.i18n.matchAll(/"pluginDoctor\.copyEvidence":/g)].length, 3);
+  assert.equal([...files.i18n.matchAll(/"pluginDoctor\.copyPathRedacted":/g)].length, 3);
 });
 
 test("new capability surfaces are lazy-loaded instead of expanding the initial bundle", () => {

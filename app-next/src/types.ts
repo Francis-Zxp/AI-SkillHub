@@ -219,6 +219,41 @@ export type SourceCard = {
   userFolderColor?: string;
 };
 
+export type PromptInvocationAssetCard = {
+  name: string;
+  relativePath: string;
+  role: "instructions" | "context" | "reference" | string;
+  bytes: number;
+  included: boolean;
+};
+
+export type PromptInvocationHostCard = {
+  id: string;
+  name: string;
+  detected: boolean;
+  managed: boolean;
+  enabled: boolean;
+  autoDelivered: false;
+  deliveryStatus: "copy-paste-ready" | "host-not-ready" | string;
+  invocationSteps: string[];
+};
+
+export type PromptInvocationCard = {
+  sourceId: string;
+  sourceName: string;
+  sourceType: "prompt";
+  sourceUrl: string;
+  invocationKind: "copy-paste";
+  invocationName: "";
+  copyReady: boolean;
+  autoDelivered: false;
+  workspaceComplete: boolean;
+  copyText: string;
+  assets: PromptInvocationAssetCard[];
+  hosts: PromptInvocationHostCard[];
+  warnings: string[];
+};
+
 export type SourceGovernanceCard = {
   sourceId: string;
   sourceName: string;
