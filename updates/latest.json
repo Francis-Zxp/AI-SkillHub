@@ -1,11 +1,11 @@
 {
-  "version": "3.1.10",
-  "notes": "AI SkillHub v3.1.10: signed stable update with preserved local user data.",
-  "pub_date": "2026-08-11T11:41:19Z",
+  "version": "3.1.11",
+  "notes": "AI SkillHub v3.1.11：修复同步空状态与父路由交付，优化文件夹布局，并为 Prompt 提供真实调用工作流。",
+  "pub_date": "2026-08-12T18:21:21Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVV5OHlTWEh5SlByeE9hVFVOR1R0TjZxRWZoUWIvd2tKMG1mYkRSeVJ3enN2NEFydHI5UDIvTWdXNkFpMEgzWHoxWmUzekpQRTBweE5oWG5YSkRRR2dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NDQ4MzIyCWZpbGU6QUkgU2tpbGxIdWJfMy4xLjEwX3g2NC1zZXR1cC5leGUKTklUU2MzRUF3OTdWdVg1b0ZodUtlQUE2OW1GaDB3UTJzWHVaRmdpWXBsN1FtWWlYQmlESllpT3kwVkZyNnpFQ1dSdUR3TnRkdnkwdHFDdzZhOCtCQlE9PQo=",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.1.10/AI-SkillHub-3.1.10-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVExd0VqREtqVjU3eUY3TEI1aTZ3aytZc1JaQzJ5Q1dpNkZZK1hoVVhrL2lJdXlmQ1dLdm05MEdYNkhOKzNTQWZqb08zRTVWaDdCZUZOK0wrRktEWGd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NTU4ODgwCWZpbGU6QUkgU2tpbGxIdWJfMy4xLjExX3g2NC1zZXR1cC5leGUKc3FJcjdKY0J1WWFuZUdYRzhoZ2MrN0xHYW9UVXpMT0c2bXNUc25aNXVManBZbmhvc005VUxBTkRRSkJIMHVRUVRlT2VldVVuMEN2WmZFdlFNeFp4QWc9PQo=",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.1.11/AI-SkillHub-3.1.11-setup.exe"
     }
   }
 }
