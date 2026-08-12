@@ -10398,10 +10398,8 @@ fn parse_github_repo(input: &str) -> Option<(String, String)> {
         rest.to_string()
     } else if let Some(rest) = value.strip_prefix("https://github.com/") {
         rest.to_string()
-    } else if let Some(rest) = value.strip_prefix("http://github.com/") {
-        rest.to_string()
     } else {
-        return None;
+        value.strip_prefix("http://github.com/")?.to_string()
     };
 
     let mut parts = path.split('/').filter(|part| !part.is_empty());
