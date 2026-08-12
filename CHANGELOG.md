@@ -25,7 +25,7 @@ All notable changes to AI SkillHub are documented here.
 
 ### Verification
 
-- Frontend production build and 58 behavior contracts pass.
+- Frontend production build and 59 behavior contracts pass.
 - Rust: 140 library tests, 12 Codex doctor tests, and 8 MCP tests pass; five
   explicit network gates and one formal-artifact gate remain ignored by design.
 - PowerShell 5.1 and 7 isolated sync tests cover two consecutive empty syncs,

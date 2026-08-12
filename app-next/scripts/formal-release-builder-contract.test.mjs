@@ -11,6 +11,7 @@ const tauriConfig = JSON.parse(read(appRoot, "src-tauri", "tauri.conf.json"));
 const version = packageJson.version;
 const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const builder = read(appRoot, "scripts", "build-formal-release.ps1");
+const nsisQa = read(appRoot, "scripts", "test-nsis-install-upgrade.ps1");
 
 test("formal release version surfaces agree before signing", () => {
   assert.equal(tauriConfig.version, version);
@@ -54,4 +55,19 @@ test("future fallback manifest is opt-in after public verification", () => {
   assert.match(builder, /Fallback updater manifest unchanged; publish it only after the public release assets pass verification/);
   const unconditionalWrites = [...builder.matchAll(/WriteAllText\(\s*\$FallbackLatestJsonPath/g)];
   assert.equal(unconditionalWrites.length, 1, "fallback manifest should have only the guarded write site");
+});
+
+test("NSIS QA retries only its bounded TEMP sandbox cleanup", () => {
+  assert.match(nsisQa, /function Remove-QaSandboxWithRetry/);
+  assert.match(nsisQa, /function Assert-ExactQaRoot/);
+  assert.match(nsisQa, /QA cleanup target is not this run's exact GUID sandbox/);
+  assert.match(nsisQa, /QA cleanup refuses a reparse-point root/);
+  assert.match(nsisQa, /\[DateTime\]::UtcNow\.AddSeconds\(\$TimeoutSeconds\)/);
+  assert.match(nsisQa, /Bounded QA sandbox cleanup/);
+  assert.match(nsisQa, /function Invoke-BoundedSqlite/);
+  assert.doesNotMatch(nsisQa, /& \$sqlite\.Source/);
+  assert.match(nsisQa, /Remove-QaSandboxWithRetry -Path \$QaRoot/);
+  assert.match(nsisQa, /if \(\$registryRestoreFailed\)/);
+  assert.match(nsisQa, /Registry recovery evidence preserved/);
+  assert.match(nsisQa, /recovery files preserved at \$QaRoot/);
 });
