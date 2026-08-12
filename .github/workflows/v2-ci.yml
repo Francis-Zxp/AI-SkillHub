@@ -1,19 +1,25 @@
 name: AI SkillHub CI
 
 # Minimum gate before merging AI SkillHub changes: Rust tests, TypeScript types, frontend build.
-# Does NOT run `pnpm tauri build` here — that needs platform-specific bundling assets
-# and is run from the release workflow on tagged commits.
+# Does NOT run the signed NSIS build here — the private updater key stays on the
+# release workstation and formal assets are published only after this CI passes.
 
 on:
   push:
     branches: [main, "codex/v3.1-*"]
     paths:
       - "app-next/**"
+      - "updates/**"
+      - "docs/release-notes/**"
+      - "CHANGELOG.md"
       - ".github/workflows/v2-ci.yml"
   pull_request:
     branches: [main]
     paths:
       - "app-next/**"
+      - "updates/**"
+      - "docs/release-notes/**"
+      - "CHANGELOG.md"
       - ".github/workflows/v2-ci.yml"
   workflow_dispatch:
 
@@ -47,6 +53,9 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
+      - name: cargo clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
@@ -55,6 +64,18 @@ jobs:
 
       - name: Codex doctor read-only integration contract
         run: cargo test --manifest-path src-tauri/Cargo.toml --test codex_plugin_doctor_read_only
+
+      - name: PowerShell 5.1/7 sync resilience contracts
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-sync-runtime-resilience.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-diagnostics-index-integrity.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-parent-router-powershell.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-codex-skill-delivery.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real Imbad0202 codeload recipient gate
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib tests::github_codeload_imports_real_academic_research_skills_codex_without_security_noise -- --ignored --exact
@@ -89,11 +110,7 @@ jobs:
         run: pnpm exec tsc --noEmit -p .
 
       - name: Frontend behavior contracts
-        run: |
-          pnpm test:source-governance-ui
-          pnpm test:security-review-gate
-          pnpm test:ui-v3.0.7
-          pnpm test:v3.1-foundation
+        run: node --test ./scripts/*.test.mjs
 
       - name: Vite production build
         run: pnpm exec vite build

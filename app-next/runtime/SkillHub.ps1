@@ -31,7 +31,27 @@ function Resolve-AppPath([string]$Path) {
 function Write-Utf8Bom([string]$Path, [string]$Text) {
   $parent = Split-Path -Parent $Path
   New-Item -ItemType Directory -Force -Path $parent | Out-Null
-  [System.IO.File]::WriteAllText($Path, $Text, [System.Text.UTF8Encoding]::new($true))
+  $temp = $Path + '.skillhub-tmp'
+  $backup = $Path + '.skillhub-previous'
+  if (-not (Test-Path -LiteralPath $Path) -and (Test-Path -LiteralPath $backup -PathType Leaf)) {
+    Move-Item -LiteralPath $backup -Destination $Path -Force
+  }
+  [System.IO.File]::WriteAllText($temp, $Text, [System.Text.UTF8Encoding]::new($true))
+  try {
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+      if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force }
+      [System.IO.File]::Replace($temp, $Path, $backup, $true)
+      Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+    } else {
+      Move-Item -LiteralPath $temp -Destination $Path
+    }
+  } catch {
+    if (-not (Test-Path -LiteralPath $Path) -and (Test-Path -LiteralPath $backup -PathType Leaf)) {
+      Move-Item -LiteralPath $backup -Destination $Path -Force
+    }
+    if (Test-Path -LiteralPath $temp -PathType Leaf) { Remove-Item -LiteralPath $temp -Force }
+    throw
+  }
 }
 
 function Write-Utf8NoBom([string]$Path, [string]$Text) {
@@ -67,7 +87,16 @@ function Convert-ToRelativePath([string]$Root, [string]$Path) {
 }
 
 function Write-JsonUtf8([string]$Path, $Object, [int]$Depth = 8) {
-  Write-Utf8Bom $Path ($Object | ConvertTo-Json -Depth $Depth)
+  # `@() | ConvertTo-Json` emits no output in Windows PowerShell 5.1. That
+  # previously created a zero-byte managed-links.json on an empty library; the
+  # next sync then called `.Trim()` on `$null` and failed with
+  # FullyQualifiedErrorId=InvokeMethodOnNull. -InputObject preserves [] as JSON.
+  $json = if ($null -eq $Object) {
+    'null'
+  } else {
+    ConvertTo-Json -InputObject $Object -Depth $Depth
+  }
+  Write-Utf8Bom $Path ([string]$json)
 }
 
 $ScanSkipDirectoryNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -149,6 +178,8 @@ function Stop-ProcessTreeQuietly([System.Diagnostics.Process]$Process) {
 
 function Invoke-GitCommandWithTimeout([string[]]$Arguments, [string]$Label, [int]$TimeoutSeconds) {
   $process = $null
+  $stdoutTask = $null
+  $stderrTask = $null
   try {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = 'git'
@@ -160,26 +191,56 @@ function Invoke-GitCommandWithTimeout([string[]]$Arguments, [string]$Label, [int
     $startInfo.StandardOutputEncoding = $Utf8NoBom
     $startInfo.StandardErrorEncoding = $Utf8NoBom
     $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) {
+      return [PSCustomObject]@{
+        Label = $Label
+        ExitCode = 1
+        TimedOut = $false
+        Stdout = ''
+        Stderr = 'Git process could not be started.'
+      }
+    }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
 
     if (-not $process.WaitForExit([Math]::Max(1, $TimeoutSeconds) * 1000)) {
       Stop-ProcessTreeQuietly $process
+      $timeoutStdout = ''
+      $timeoutStderr = "Timed out after $TimeoutSeconds seconds."
+      if ($null -ne $stdoutTask) {
+        try { $timeoutStdout = [string]$stdoutTask.Result } catch {}
+      }
+      if ($null -ne $stderrTask) {
+        try {
+          $capturedTimeoutError = [string]$stderrTask.Result
+          if (-not [string]::IsNullOrWhiteSpace($capturedTimeoutError)) {
+            $timeoutStderr = $capturedTimeoutError
+          }
+        } catch {}
+      }
       return [PSCustomObject]@{
         Label = $Label
         ExitCode = 124
         TimedOut = $true
-        Stdout = ''
-        Stderr = "Timed out after $TimeoutSeconds seconds."
+        Stdout = $timeoutStdout
+        Stderr = $timeoutStderr
       }
     }
 
+    $stdoutText = ''
+    $stderrText = ''
+    if ($null -ne $stdoutTask) {
+      try { $stdoutText = [string]$stdoutTask.Result } catch {}
+    }
+    if ($null -ne $stderrTask) {
+      try { $stderrText = [string]$stderrTask.Result } catch {}
+    }
     [PSCustomObject]@{
       Label = $Label
       ExitCode = $process.ExitCode
       TimedOut = $false
-      Stdout = $stdoutTask.Result
-      Stderr = $stderrTask.Result
+      Stdout = $stdoutText
+      Stderr = $stderrText
     }
   } catch {
     [PSCustomObject]@{
@@ -1085,7 +1146,7 @@ Write-Host 'Discovering skills...'
 
 $log = New-Object System.Collections.Generic.List[object]
 $candidates = New-Object System.Collections.Generic.List[object]
-$sourceRepos = Get-ChildItem -LiteralPath $SourceRoot -Force -Directory -ErrorAction SilentlyContinue
+$sourceRepos = @(Get-ChildItem -LiteralPath $SourceRoot -Force -Directory -ErrorAction SilentlyContinue)
 
 foreach ($repoDir in $sourceRepos) {
   $repoScanStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
@@ -1199,8 +1260,20 @@ Add-SyncTiming 'skill discovery'
 
 $previousManaged = @()
 if (Test-Path -LiteralPath $StatePath) {
-  $previousRaw = Get-Content -LiteralPath $StatePath -Raw
-  if ($previousRaw.Trim()) { $previousManaged = @($previousRaw | ConvertFrom-Json) }
+  # v3.1.10 and earlier could leave this file empty when no source was selected.
+  # Treat an empty legacy state as an empty array, never as a fatal sync error.
+  $previousRaw = [string](Get-Content -LiteralPath $StatePath -Raw -ErrorAction SilentlyContinue)
+  if (-not [string]::IsNullOrWhiteSpace($previousRaw)) {
+    try {
+      $previousManaged = @($previousRaw | ConvertFrom-Json)
+    } catch {
+      # A truncated state file must not make repository updates or local content
+      # disappear. Rebuild from current discovery and avoid stale-link deletion
+      # based on unreadable historical data.
+      Write-Warning "Managed link state is unreadable; current sources will be re-indexed without historical cleanup: $($_.Exception.Message)"
+      $previousManaged = @()
+    }
+  }
 }
 
 $selectedByName = @{}
@@ -1229,10 +1302,13 @@ if (-not $ReportOnly) {
   Get-ChildItem -LiteralPath $SkillsRoot -Force -Directory -ErrorAction SilentlyContinue |
     Where-Object { Get-IsReparsePoint $_ } |
     ForEach-Object {
-      $target = [string]$_.Target
+      $target = if ($_.Target -is [array]) { [string]$_.Target[0] } else { [string]$_.Target }
       $isUnderSources = $target -and ((Convert-ToFullPath $target).StartsWith((Convert-ToFullPath $SourceRoot), [System.StringComparison]::OrdinalIgnoreCase))
-      if ($isUnderSources -and -not $selectedByName.ContainsKey($_.Name)) {
-        Remove-ManagedReparsePoint $_.FullName $SkillsRoot $_.Name 'Removed unselected GitHub-source link' $target | Out-Null
+      $targetSkillMd = if ($target) { Join-Path $target 'SKILL.md' } else { '' }
+      $isBrokenManagedLink = $isUnderSources -and (-not (Test-Path -LiteralPath $targetSkillMd -PathType Leaf))
+      if ($isUnderSources -and (-not $selectedByName.ContainsKey($_.Name) -or $isBrokenManagedLink)) {
+        $cleanupReason = if ($isBrokenManagedLink) { 'Removed broken managed source link' } else { 'Removed unselected GitHub-source link' }
+        Remove-ManagedReparsePoint $_.FullName $SkillsRoot $_.Name $cleanupReason $target | Out-Null
       }
     }
 
@@ -1243,6 +1319,13 @@ if (-not $ReportOnly) {
     $dest = Join-Path $SkillsRoot $skill.Skill
     $src = $skill.Source
     $action = 'OK'
+
+    if (-not (Test-Path -LiteralPath $src -PathType Container) -or
+        -not (Test-Path -LiteralPath (Join-Path $src 'SKILL.md') -PathType Leaf)) {
+      Write-Warning "Skipping invalid managed Skill target for $($skill.Skill): $src"
+      $actions.Add([PSCustomObject]@{ Skill = $skill.Skill; Action = 'Skipped invalid target'; Target = $src }) | Out-Null
+      continue
+    }
 
     if (Test-Path -LiteralPath $dest) {
       $item = Get-Item -LiteralPath $dest -Force
@@ -1275,7 +1358,7 @@ if (-not $ReportOnly) {
     Write-Host ("{0}: {1}" -f $group.Name, $group.Count)
   }
 
-  $managedState = $selected | Sort-Object Skill | ForEach-Object {
+  $managedState = @($selected | Sort-Object Skill | ForEach-Object {
     [PSCustomObject]@{
       Skill = $_.Skill
       Repo = $_.Repo
@@ -1284,7 +1367,7 @@ if (-not $ReportOnly) {
       Description = $_.Description
       Target = $_.Source
     }
-  }
+  })
   Write-JsonUtf8 $StatePath $managedState 5
   Add-SyncTiming 'active links'
 

@@ -12,10 +12,10 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
 const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const cargoToml = await readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
 
-test("software updater sees one consistent v3.1.10 installed version", () => {
-  assert.equal(packageJson.version, "3.1.10");
+test("software updater sees one consistent v3.1.11 installed version", () => {
+  assert.equal(packageJson.version, "3.1.11");
   assert.equal(tauriConfig.version, packageJson.version);
-  assert.match(cargoToml, /^version = "3\.1\.10"$/m);
+  assert.match(cargoToml, /^version = "3\.1\.11"$/m);
   assert.equal(tauriConfig.bundle.createUpdaterArtifacts, true);
   assert.equal(tauriConfig.plugins.updater.endpoints.length, 3);
   assert.ok(tauriConfig.plugins.updater.endpoints.every(endpoint => endpoint.includes("{{current_version}}")));
@@ -34,9 +34,30 @@ test("Skill source sync reports partial failures instead of claiming universal s
   assert.match(app, /syncSummary\?\.status === "partial"/);
   assert.match(app, /toast\.syncPartial/);
   assert.match(runtime, /repositories = @\(\$RepoUpdateLog\.ToArray\(\)\)/);
+  assert.match(runtime, /ConvertTo-Json -InputObject \$Object/);
+  assert.match(runtime, /IsNullOrWhiteSpace\(\$previousRaw\)/);
+  assert.match(runtime, /Removed broken managed source link/);
+  assert.match(runtime, /Skipping invalid managed Skill target/);
   assert.match(runtime, /'dirty-blocked'\) \}\)/);
   assert.match(runtime, /exit 0\s*$/);
   assert.doesNotMatch(backend, /SkillHub 同步脚本执行失败：\{detail\}/);
+});
+
+test("router generation finishes before the final active-catalog publish", () => {
+  const fullStart = backend.indexOf("fn run_skillhub_sync_blocking()");
+  const fullEnd = backend.indexOf("fn ensure_agent_skill_delivery_blocking", fullStart);
+  const localStart = backend.indexOf("fn sync_local_sources_to_agents(");
+  const localEnd = backend.indexOf("fn run_skillhub_script(", localStart);
+  const fullSync = backend.slice(fullStart, fullEnd);
+  const localSync = backend.slice(localStart, localEnd);
+  assert.ok(fullStart >= 0 && fullEnd > fullStart);
+  assert.ok(localStart >= 0 && localEnd > localStart);
+  assert.ok(fullSync.indexOf("plan_or_write_router_hubs") < fullSync.lastIndexOf("run_skillhub_script_no_pull"));
+  assert.ok(localSync.indexOf("plan_or_write_router_hubs") < localSync.indexOf("run_skillhub_script_no_pull"));
+  assert.match(fullSync, /let report = plan_or_write_router_hubs\(&root, true, true\)\?;/);
+  assert.match(localSync, /let report = plan_or_write_router_hubs\(root, true, true\)\?;/);
+  assert.doesNotMatch(fullSync, /if let Ok\(report\) = plan_or_write_router_hubs/);
+  assert.doesNotMatch(localSync, /if let Ok\(report\) = plan_or_write_router_hubs/);
 });
 
 test("source updates preserve dirty work and clear stale version comparisons", () => {

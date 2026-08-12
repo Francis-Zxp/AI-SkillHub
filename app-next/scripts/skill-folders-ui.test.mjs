@@ -25,6 +25,8 @@ test("library supports drag, accessible select fallback and safe unfiling", () =
   assert.match(app, /<Icon name="grip"/);
   assert.match(app, /folders\.dragShort/);
   assert.match(app, /showPicker/);
+  assert.match(app, /else select\?\.click\(\)/);
+  assert.match(app, /aria-haspopup="listbox"/);
   assert.match(app, /role="button"/);
   assert.match(app, /<select[\s\S]*folders\.choose/);
   assert.match(app, /skillMatchesUserFolder/);
@@ -32,11 +34,25 @@ test("library supports drag, accessible select fallback and safe unfiling", () =
   assert.match(i18n, /Skill 不会删除，只会回到/);
   assert.match(app, /skill-folder-manage/);
   assert.doesNotMatch(app, /skill-folder-item-actions/);
+  assert.match(app, /className="skill-folder-manage"[\s\S]*?onClick=\{\(\) => openEdit\(folder\)\}[\s\S]*?type="button"/);
+  assert.match(app, /onMove\(editingId, "up"\)/);
+  assert.match(app, /onMove\(editingId, "down"\)/);
   assert.match(app, /SKILL_FOLDER_COLOR_HEX/);
   assert.match(styles, /background: var\(--folder-tone\) !important/);
-  assert.match(styles, /\.skill-folder-item \{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) 44px/);
-  assert.match(styles, /\.skill-folder-manage \{[\s\S]*?width: 44px/);
+  assert.match(styles, /\.skill-folder-strip \{[\s\S]*?grid-template-columns: repeat\(auto-fit/);
+  const folderStripStyles = styles.match(/\.skill-folder-strip \{([^}]*)\}/)?.[1] ?? "";
+  assert.doesNotMatch(folderStripStyles, /overflow-x:\s*auto/);
+  assert.match(styles, /\.skill-folder-item \{[\s\S]*?position: relative/);
+  assert.match(styles, /\.skill-folder-item > \.skill-folder-target \{[\s\S]*?padding-right: calc\(44px/);
+  assert.match(styles, /\.skill-folder-manage \{[\s\S]*?position: absolute[\s\S]*?top: var\(--space-2\)[\s\S]*?right: var\(--space-2\)[\s\S]*?width: 44px[\s\S]*?height: 44px/);
+  assert.match(styles, /\.source-folder-drag-handle \{[\s\S]*?min-width: 44px[\s\S]*?min-height: 44px/);
+  assert.match(styles, /\.skill-folder-editor \.folder-color-dot,[\s\S]*?width: 44px[\s\S]*?height: 44px/);
   assert.match(styles, /source-group-title strong[\s\S]*?-webkit-line-clamp: 2/);
+});
+
+test("the All filter cannot accept a classification drop", () => {
+  assert.match(app, /const acceptsDrop = id !== "all"/);
+  assert.match(app, /onDrop=\{acceptsDrop \? event => acceptDrop/);
 });
 
 test("import draft retains the selected folder and files the promoted source", () => {

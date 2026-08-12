@@ -29,6 +29,7 @@ $Checks = New-Object System.Collections.Generic.List[object]
 $Agents = New-Object System.Collections.Generic.List[object]
 $RiskFindings = New-Object System.Collections.Generic.List[object]
 $SkillRows = New-Object System.Collections.Generic.List[object]
+$InvalidSkillRows = New-Object System.Collections.Generic.List[object]
 $HealthWarnings = New-Object System.Collections.Generic.List[object]
 $UnicodeWarnings = New-Object System.Collections.Generic.List[object]
 
@@ -454,19 +455,71 @@ try {
 }
 
 $invalidUrls = @()
-$repoCount = 0
+$configuredRepoCount = 0
 $promptCount = 0
 if ($config -and $config.repositories) {
   foreach ($repo in $config.repositories) {
-    $repoCount++
+    $configuredRepoCount++
     if ($repo.type -eq 'prompt') { $promptCount++ }
     if (-not (Test-GitHubRepoUrl ([string]$repo.url))) {
       $invalidUrls += [PSCustomObject]@{ name = $repo.name; url = Protect-Text $repo.url }
     }
   }
 }
+$sourceDirs = @()
+if (Test-Path -LiteralPath $SourcesRoot -PathType Container) {
+  $sourceDirs = @(Get-ChildItem -LiteralPath $SourcesRoot -Force -Directory -ErrorAction SilentlyContinue |
+    Where-Object { -not $_.Name.StartsWith('.') -and $_.Name -ne 'AI-SkillHub-local-routers' })
+}
+function Test-SourceHasSkillManifest([string]$SourcePath) {
+  $pending = New-Object 'System.Collections.Generic.Stack[string]'
+  $pending.Push($SourcePath)
+  $visited = 0
+  $skipDirectories = @('.git', '.hg', '.svn', 'node_modules', 'target', 'build', '.next', '.nuxt', '.venv', '__pycache__')
+  while ($pending.Count -gt 0) {
+    $directory = $pending.Pop()
+    foreach ($entry in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction SilentlyContinue)) {
+      $visited++
+      if ($visited -gt 20000) {
+        # A bounded diagnostic must never mislabel an unusually large Skill source as Prompt.
+        return $true
+      }
+      if (-not $entry.PSIsContainer -and $entry.Name -ieq 'SKILL.md') { return $true }
+      if ($entry.PSIsContainer -and
+          -not ($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and
+          $skipDirectories -notcontains $entry.Name.ToLowerInvariant()) {
+        $pending.Push($entry.FullName)
+      }
+    }
+  }
+  return $false
+}
+$promptCountFromIndex = 0
+foreach ($sourceDir in $sourceDirs) {
+  $sourceMetadataPath = Join-Path $sourceDir.FullName '.skillhub-source.json'
+  if (Test-Path -LiteralPath $sourceMetadataPath -PathType Leaf) {
+    try {
+      $sourceMetadata = Get-Content -LiteralPath $sourceMetadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
+      $indexedType = [string]$sourceMetadata.sourceType
+      if ([string]::IsNullOrWhiteSpace($indexedType)) { $indexedType = [string]$sourceMetadata.type }
+      if ($indexedType -eq 'prompt') {
+        $promptCountFromIndex++
+        continue
+      }
+    } catch {
+      $HealthWarnings.Add([PSCustomObject]@{ source=$sourceDir.Name; issue='invalid .skillhub-source.json' }) | Out-Null
+    }
+  }
+  $rootPromptDocs = @(Get-ChildItem -LiteralPath $sourceDir.FullName -File -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -ieq '.md' })
+  if ($rootPromptDocs.Count -gt 0 -and -not (Test-SourceHasSkillManifest $sourceDir.FullName)) {
+    $promptCountFromIndex++
+  }
+}
+$promptCount = [Math]::Max($promptCount, $promptCountFromIndex)
+$repoCount = if ($sourceDirs.Count -gt 0) { $sourceDirs.Count } else { $configuredRepoCount }
 $githubUrlStatus = if ($invalidUrls.Count -eq 0) { 'ok' } else { 'warn' }
-Add-Check 'config.githubUrls' 'GitHub 来源地址' $githubUrlStatus "已检查 $repoCount 个来源，其中 Prompt 来源 $promptCount 个。" (($invalidUrls | ConvertTo-Json -Depth 4)) '请使用 https://github.com/作者/仓库.git 这种普通 GitHub 仓库地址。'
+Add-Check 'config.githubUrls' '来源目录与 GitHub 地址' $githubUrlStatus "已发现 $repoCount 个本地来源；配置中记录 $configuredRepoCount 个旧式来源，其中 Prompt 来源 $promptCount 个。" (($invalidUrls | ConvertTo-Json -Depth 4)) '请使用 https://github.com/作者/仓库.git 这种普通 GitHub 仓库地址。'
 
 $skillDirs = @()
 if (Test-Path -LiteralPath $SkillsRoot -PathType Container) {
@@ -491,9 +544,13 @@ foreach ($dir in $skillDirs) {
     target = Protect-Text $target
     path = Convert-ToRelativePath $dir.FullName
   }
-  $SkillRows.Add($row) | Out-Null
-  if (-not $hasSkill) { $HealthWarnings.Add([PSCustomObject]@{ skill=$dir.Name; issue='missing SKILL.md' }) | Out-Null }
-  elseif (-not $meta.description) { $HealthWarnings.Add([PSCustomObject]@{ skill=$dir.Name; issue='missing description' }) | Out-Null }
+  if (-not $hasSkill) {
+    $InvalidSkillRows.Add($row) | Out-Null
+    $HealthWarnings.Add([PSCustomObject]@{ skill=$dir.Name; issue='missing SKILL.md' }) | Out-Null
+  } else {
+    $SkillRows.Add($row) | Out-Null
+    if (-not $meta.description) { $HealthWarnings.Add([PSCustomObject]@{ skill=$dir.Name; issue='missing description' }) | Out-Null }
+  }
   if ($meta.hasHiddenUnicode -or $meta.hasControlChars) {
     $UnicodeWarnings.Add([PSCustomObject]@{ skill=$dir.Name; hiddenUnicode=$meta.hasHiddenUnicode; controlChars=$meta.hasControlChars }) | Out-Null
   }
@@ -718,6 +775,7 @@ $payload = [PSCustomObject]@{
   checks = $Checks
   agents = $Agents
   skills = $SkillRows
+  invalidSkillEntries = $InvalidSkillRows
   duplicates = [PSCustomObject]@{
     byMetaName = $duplicatesByMetaName
     byTarget = $duplicatesByTarget

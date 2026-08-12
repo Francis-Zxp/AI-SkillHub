@@ -54,6 +54,7 @@ export type McpFindingCard = {
   message: string;
   hostId: string;
   configLocationId?: string | null;
+  pathDisplay?: string | null;
 };
 
 export type McpConfigLocation = {
@@ -81,12 +82,21 @@ type McpCenterProps = {
   runtimeAvailable: boolean;
 };
 
+type McpDiagnosticGroup = {
+  key: string;
+  hostId: string;
+  nativeScope: string;
+  parseStatus: string;
+  pathDisplay: string;
+  findings: McpFindingCard[];
+};
+
 export function McpCenter({ runtimeAvailable }: McpCenterProps) {
   const [inventory, setInventory] = useState<McpInventory | null>(null);
   const [selectedBindingId, setSelectedBindingId] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [copiedPath, setCopiedPath] = useState(false);
+  const [copiedPathKey, setCopiedPathKey] = useState("");
 
   async function scan() {
     if (!runtimeAvailable) {
@@ -130,19 +140,77 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
     ? inventory?.secretRequirements.filter(item => item.bindingId === selectedBinding.id) ?? []
     : [];
   const selectedFindings = selectedBinding
-    ? inventory?.findings.filter(item =>
-        item.configLocationId === selectedBinding.configLocationId ||
-        (!item.configLocationId && item.hostId === selectedBinding.hostId)
-      ) ?? []
+    ? inventory?.findings.filter(item => findingMatchesBinding(item, selectedBinding)) ?? []
     : [];
 
-  async function copyConfigPath() {
-    const value = selectedLocation?.pathDisplay;
+  const globalDiagnosticGroups = useMemo(() => {
+    if (!inventory) return [];
+
+    const locationsById = new Map(inventory.configLocations.map(location => [location.id, location]));
+    const groups = new Map<string, McpDiagnosticGroup>();
+    const ensureGroup = (
+      key: string,
+      hostId: string,
+      nativeScope: string,
+      parseStatus: string,
+      pathDisplay: string
+    ) => {
+      const current = groups.get(key);
+      if (current) {
+        if (!current.pathDisplay && pathDisplay) current.pathDisplay = pathDisplay;
+        if (current.parseStatus === "ok" && parseStatus !== "ok") current.parseStatus = parseStatus;
+        return current;
+      }
+      const next: McpDiagnosticGroup = {
+        key,
+        hostId,
+        nativeScope,
+        parseStatus,
+        pathDisplay,
+        findings: []
+      };
+      groups.set(key, next);
+      return next;
+    };
+
+    for (const finding of inventory.findings) {
+      const locationId = finding.configLocationId?.trim() ?? "";
+      if (locationId && inventory.bindings.some(binding => binding.configLocationId === locationId)) continue;
+      if (!locationId && inventory.bindings.some(binding => binding.hostId === finding.hostId)) continue;
+      const location = locationId ? locationsById.get(locationId) : undefined;
+      const group = ensureGroup(
+        locationId ? `location:${locationId}` : `host:${finding.hostId}`,
+        location?.hostId ?? finding.hostId,
+        location?.nativeScope ?? "",
+        location?.parseStatus ?? "unknown",
+        location?.pathDisplay ?? finding.pathDisplay ?? ""
+      );
+      group.findings.push(finding);
+    }
+
+    for (const location of inventory.configLocations) {
+      if (location.parseStatus === "ok") continue;
+      if (inventory.bindings.some(binding => binding.configLocationId === location.id)) continue;
+      ensureGroup(
+        `location:${location.id}`,
+        location.hostId,
+        location.nativeScope,
+        location.parseStatus,
+        location.pathDisplay
+      );
+    }
+
+    return Array.from(groups.values());
+  }, [inventory]);
+
+  async function copyConfigPath(value: string | null | undefined, key: string) {
     if (!value || value === "—") return;
     try {
       await navigator.clipboard.writeText(value);
-      setCopiedPath(true);
-      window.setTimeout(() => setCopiedPath(false), 1800);
+      setCopiedPathKey(key);
+      window.setTimeout(() => {
+        setCopiedPathKey(current => current === key ? "" : current);
+      }, 1800);
     } catch {
       setError(t("mcp.copyFailed"));
     }
@@ -203,6 +271,65 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
         </div>
       </section>
 
+      {globalDiagnosticGroups.length > 0 && (
+        <section aria-labelledby="mcp-config-diagnostics-title" className="mcp-global-diagnostics">
+          <header>
+            <div>
+              <span className="eyebrow"><Icon name="alert" /> {t("mcp.diagnosticsEyebrow")}</span>
+              <h3 id="mcp-config-diagnostics-title">{t("mcp.diagnosticsTitle", { n: globalDiagnosticGroups.length })}</h3>
+              <p>{t("mcp.diagnosticsBody")}</p>
+            </div>
+            <span className="readonly-badge"><Icon name="shield" /> {t("mcp.readOnly")}</span>
+          </header>
+          <div className="mcp-diagnostic-grid">
+            {globalDiagnosticGroups.map(group => {
+              const host = inventory?.hosts.find(item => item.id === group.hostId);
+              const tone = diagnosticSeverity(group);
+              return (
+                <article className={`mcp-diagnostic-card glow-card ${tone}`} key={group.key}>
+                  <header>
+                    <span className="mcp-diagnostic-icon"><Icon name="alert" /></span>
+                    <div>
+                      <strong>{host?.displayName ?? t("mcp.unknownHost")}</strong>
+                      <small>{group.nativeScope ? scopeLabel(group.nativeScope) : t("mcp.hostFindingScope")}</small>
+                    </div>
+                    <em className={`mcp-diagnostic-badge ${tone}`}>{diagnosticSeverityLabel(tone)}</em>
+                  </header>
+                  {group.pathDisplay && (
+                    <div className="mcp-config-path mcp-diagnostic-path">
+                      <span>{t("mcp.configSource")}</span>
+                      <code>{group.pathDisplay}</code>
+                      <button
+                        className="ghost-action small"
+                        onClick={() => void copyConfigPath(group.pathDisplay, group.key)}
+                        type="button"
+                      >
+                        <Icon name="copy" /> {copiedPathKey === group.key ? t("mcp.copied") : t("mcp.copyPath")}
+                      </button>
+                    </div>
+                  )}
+                  <ul className="mcp-diagnostic-findings">
+                    {group.findings.map(item => (
+                      <li className={`finding-${findingSeverityClass(item.severity)}`} key={item.id}>
+                        <strong>{item.title}</strong>
+                        <span>{item.message}</span>
+                      </li>
+                    ))}
+                    {group.findings.length === 0 && (
+                      <li className="finding-error">
+                        <strong>{t("mcp.parseFailed")}</strong>
+                        <span>{t("mcp.parseFailedFallback", { status: group.parseStatus })}</span>
+                      </li>
+                    )}
+                  </ul>
+                </article>
+              );
+            })}
+          </div>
+          <p className="mcp-diagnostics-note"><Icon name="info" /> {t("mcp.diagnosticsReadOnly")}</p>
+        </section>
+      )}
+
       <section className="mcp-browser">
         <div className="mcp-server-list">
           {(inventory?.servers ?? []).map(server => {
@@ -238,7 +365,7 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
             <div className="mcp-empty glow-card">
               <Icon name="connections" />
               <strong>{t("mcp.emptyTitle")}</strong>
-              <p>{t("mcp.emptyBody")}</p>
+              <p>{t(globalDiagnosticGroups.length > 0 ? "mcp.emptyWithDiagnosticsBody" : "mcp.emptyBody")}</p>
             </div>
           )}
         </div>
@@ -256,8 +383,8 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
               <div className="mcp-config-path">
                 <span>{t("mcp.configSource")}</span>
                 <code>{selectedLocation?.pathDisplay ?? "—"}</code>
-                <button className="ghost-action small" disabled={!selectedLocation?.pathDisplay} onClick={() => void copyConfigPath()} type="button">
-                  <Icon name="copy" /> {copiedPath ? t("mcp.copied") : t("mcp.copyPath")}
+                <button className="ghost-action small" disabled={!selectedLocation?.pathDisplay} onClick={() => void copyConfigPath(selectedLocation?.pathDisplay, "selected-binding")} type="button">
+                  <Icon name="copy" /> {copiedPathKey === "selected-binding" ? t("mcp.copied") : t("mcp.copyPath")}
                 </button>
               </div>
               <section className="mcp-secret-section">
@@ -321,6 +448,24 @@ function findingSeverityClass(severity: string) {
   if (severity === "warning") return "warn";
   if (severity === "error" || severity === "warn") return severity;
   return "info";
+}
+
+function findingMatchesBinding(finding: McpFindingCard, binding: McpBindingCard) {
+  return finding.configLocationId
+    ? finding.configLocationId === binding.configLocationId
+    : finding.hostId === binding.hostId;
+}
+
+function diagnosticSeverity(group: McpDiagnosticGroup): "error" | "warn" | "info" {
+  if (group.parseStatus === "error" || group.findings.some(item => item.severity === "error")) return "error";
+  if (group.findings.some(item => item.severity === "warn" || item.severity === "warning")) return "warn";
+  return "info";
+}
+
+function diagnosticSeverityLabel(tone: "error" | "warn" | "info") {
+  if (tone === "error") return t("mcp.severityError");
+  if (tone === "warn") return t("mcp.severityWarning");
+  return t("mcp.severityInfo");
 }
 
 function friendlyMessage(reason: unknown) {

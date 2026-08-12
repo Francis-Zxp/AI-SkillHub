@@ -4,6 +4,7 @@ mod legacy_cleanup;
 mod mcp_center;
 mod metadata;
 mod migration_v4;
+mod prompt_library;
 mod security_scan;
 mod source_governance;
 
@@ -1559,15 +1560,17 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     source_governance::prepare_sync_backups(&root, &connection)?;
     run_skillhub_script(&root)?;
     source_governance::refresh_local_revisions(&root, &connection)?;
-    // After the PowerShell sync rebuilds links, regenerate router-hub Skills so any
-    // newly-added collections automatically get their parent entry. Failures are
-    // recorded but not fatal because the source sync already succeeded at this point.
-    if let Ok(report) = plan_or_write_router_hubs(&root, true, true) {
-        let _ = record_router_hub_audit(&connection, &report);
-    }
-    if sync_skill_conflict_dispatchers(&root, &connection).unwrap_or(0) > 0 {
-        run_skillhub_script_no_pull(&root)?;
-    }
+    // A repository update can add/remove children, so regenerate parent routers
+    // before the final no-pull publish. The second PowerShell pass atomically
+    // reconciles the active catalog with the regenerated router tree and removes
+    // broken managed links left by older versions.
+    // A source is callable only after its parent router exists. Do not publish a
+    // partially regenerated catalog when router creation fails: keep the current
+    // active links intact and surface the bounded error to the user instead.
+    let report = plan_or_write_router_hubs(&root, true, true)?;
+    let _ = record_router_hub_audit(&connection, &report);
+    let _ = sync_skill_conflict_dispatchers(&root, &connection);
+    run_skillhub_script_no_pull(&root)?;
     run_agent_link_script(&root)?;
     run_diagnostics_export_script(&root)?;
     scan_legacy_snapshot_blocking()
@@ -1638,11 +1641,13 @@ fn refresh_agent_detection_blocking() -> Result<LegacySnapshot, String> {
 }
 
 fn sync_local_sources_to_agents(root: &Path, connection: &Connection) -> Result<(), String> {
+    // Build every generated parent first, then publish one coherent active
+    // catalog. Publishing before router generation can leave stale junctions
+    // pointing at a router directory that was removed and recreated.
+    let report = plan_or_write_router_hubs(root, true, true)?;
+    let _ = record_router_hub_audit(connection, &report);
     sync_skill_conflict_dispatchers(root, connection)?;
     run_skillhub_script_no_pull(root)?;
-    if let Ok(report) = plan_or_write_router_hubs(root, true, true) {
-        let _ = record_router_hub_audit(connection, &report);
-    }
     run_agent_link_script(root)?;
     run_diagnostics_export_script(root)
 }
@@ -2871,6 +2876,91 @@ fn cancel_source_import(operation_id: String) -> Result<bool, String> {
     };
     cancellation.store(true, Ordering::SeqCst);
     Ok(true)
+}
+
+#[tauri::command]
+fn load_prompt_invocation(
+    source_id: String,
+) -> Result<prompt_library::PromptInvocationCard, String> {
+    let normalized_source_id = compact_note(&source_id);
+    if normalized_source_id.is_empty() {
+        return Err("请先选择一个 Prompt 来源。".to_string());
+    }
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let source = read_prompt_source_record(&connection, &normalized_source_id)?;
+
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id, name, detected, managed, enabled
+            FROM agent_adapters
+            WHERE lower(id) IN ('codex', 'claude')
+            ORDER BY CASE lower(id) WHEN 'codex' THEN 0 ELSE 1 END
+            "#,
+        )
+        .map_err(|error| format!("无法读取 Codex / Claude 状态：{}", error))?;
+    let hosts = statement
+        .query_map([], |row| {
+            Ok(prompt_library::PromptHostStatus {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                detected: row.get::<_, i64>(2)? != 0,
+                managed: row.get::<_, i64>(3)? != 0,
+                enabled: row.get::<_, i64>(4)? != 0,
+            })
+        })
+        .map_err(|error| format!("无法读取 Codex / Claude 状态：{}", error))?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+
+    prompt_library::build_prompt_invocation(&managed_sources_dir(&root), source, hosts)
+}
+
+fn read_prompt_source_record(
+    connection: &Connection,
+    source_id: &str,
+) -> Result<prompt_library::PromptSourceRecord, String> {
+    connection
+        .query_row(
+            r#"
+            SELECT sources.id,
+                   COALESCE(NULLIF(source_overrides.display_name, ''), sources.name),
+                   COALESCE(NULLIF(source_overrides.source_type, ''), sources.source_type),
+                   COALESCE(sources.url, ''),
+                   COALESCE(sources.local_path, '')
+            FROM sources
+            LEFT JOIN source_overrides ON source_overrides.source_id = sources.id
+            WHERE sources.id = ?1
+            "#,
+            params![source_id],
+            |row| {
+                Ok(prompt_library::PromptSourceRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    source_type: row.get(2)?,
+                    url: row.get(3)?,
+                    local_path: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|error| format!("无法读取 Prompt 来源索引：{}", error))?
+        .ok_or_else(|| "未找到该 Prompt 来源；请先刷新技能库。".to_string())
+}
+
+#[tauri::command]
+fn open_prompt_source_folder(source_id: String) -> Result<(), String> {
+    let normalized_source_id = compact_note(&source_id);
+    if normalized_source_id.is_empty() {
+        return Err("请先选择一个 Prompt 来源。".to_string());
+    }
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+    let source = read_prompt_source_record(&connection, &normalized_source_id)?;
+    let source_path =
+        prompt_library::managed_prompt_source_path(&managed_sources_dir(&root), &source)?;
+    open_path_with_system(&source_path)
 }
 
 #[tauri::command]
@@ -7557,7 +7647,7 @@ fn stage_github_source_import_with_git_program_and_control(
         control.emit(
             "git",
             "progress",
-            "仓库目录已读取，正在只下载可安装的 Skill 文件。",
+            "仓库目录已读取，正在下载可安装的 Skill 文件或完整 Prompt 工作区。",
             1,
             3,
         );
@@ -7693,7 +7783,7 @@ fn stage_github_source_import_with_git_program_and_control(
                 "系统 Git 不可用或克隆失败，已自动切换到内置 GitHub 下载器（引用：{}）。",
                 downloaded_ref
             ),
-            "内置下载器只保留可安装的 Skill 目录；若仓库没有 SKILL.md，则只保留根目录 Prompt/说明文档。"
+            "内置下载器只保留可安装的 Skill 目录；若仓库没有 SKILL.md，则在文件数、单文件与总容量上限内保留完整 Prompt 项目工作区。"
                 .to_string(),
         ];
         if !skipped_symlinks.is_empty() {
@@ -7792,10 +7882,15 @@ fn complete_sparse_skill_checkout(
     let root_skill = skill_roots.iter().any(|root| root.is_empty());
     if !root_skill {
         let mut sparse_command = Command::new(git_program);
-        sparse_command.arg("-C").arg(staged_path);
+        configure_safe_git_materialization(&mut sparse_command, staged_path);
         if skill_roots.is_empty() {
-            // Prompt repositories without SKILL.md only need their root Markdown.
-            sparse_command.args(["sparse-checkout", "set", "--no-cone", "/*.md"]);
+            // Prompt repositories are not installed as Skills, but their instructions may
+            // depend on project files such as train.py or prepare.py. Disable sparse mode so
+            // the isolated, bounded source workspace remains runnable and inspectable.
+            // Validate the committed tree before materializing any blob: a post-check alone
+            // cannot prevent a hostile upstream from exhausting disk during checkout.
+            validate_prompt_git_tree_before_checkout(git_program, staged_path, control)?;
+            sparse_command.args(["sparse-checkout", "disable"]);
         } else {
             sparse_command.args(["sparse-checkout", "set", "--cone", "--"]);
             for root in &skill_roots {
@@ -7816,17 +7911,183 @@ fn complete_sparse_skill_checkout(
     control.ensure_active()?;
     control.emit("git", "progress", "正在完成 Skill 文件校验。", 2, 3);
     let mut checkout_command = Command::new(git_program);
-    checkout_command
-        .arg("-C")
-        .arg(staged_path)
-        .args(["checkout", "--force", "HEAD"]);
+    configure_safe_git_materialization(&mut checkout_command, staged_path);
+    checkout_command.args(["checkout", "--force", "HEAD"]);
     let checkout_output = command_output_with_timeout_and_cancel(
         &mut checkout_command,
         Duration::from_secs(180),
         "Skill 文件检出超过 180 秒，已自动停止。请检查网络后重试。",
         Some(control.cancelled.as_ref()),
     )?;
+    if checkout_output.status.success() {
+        validate_staged_repository_bounds(staged_path)?;
+    }
     Ok(checkout_output)
+}
+
+fn configure_safe_git_materialization(command: &mut Command, staged_path: &Path) {
+    let empty_global_config = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    command
+        // Never let a repository's .gitattributes turn a bounded Git blob into
+        // an unbounded LFS download or invoke a machine-global smudge filter.
+        .env("GIT_LFS_SKIP_SMUDGE", "1")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", empty_global_config)
+        .arg("-C")
+        .arg(staged_path)
+        .args(["-c", "filter.lfs.smudge="])
+        .args(["-c", "filter.lfs.required=false"])
+        .args(["-c", "core.hooksPath=.git/skillhub-disabled-hooks"]);
+}
+
+fn validate_prompt_git_tree_before_checkout(
+    git_program: &str,
+    staged_path: &Path,
+    control: &SourceImportControl,
+) -> Result<(), String> {
+    control.ensure_active()?;
+    let mut tree_command = Command::new(git_program);
+    tree_command.arg("-C").arg(staged_path).args([
+        "-c",
+        "core.quotepath=false",
+        "ls-tree",
+        "-rlz",
+        "HEAD",
+    ]);
+    let output = command_output_with_timeout_and_cancel(
+        &mut tree_command,
+        Duration::from_secs(45),
+        "Prompt 仓库大小预检超过 45 秒，已自动停止。",
+        Some(control.cancelled.as_ref()),
+    )?;
+    if !output.status.success() {
+        let detail = compact_note(&String::from_utf8_lossy(&output.stderr));
+        return Err(if detail.is_empty() {
+            "无法在下载 Prompt 文件前读取 Git tree 大小。".to_string()
+        } else {
+            format!("无法在下载 Prompt 文件前读取 Git tree 大小：{detail}")
+        });
+    }
+
+    let mut file_count = 0usize;
+    let mut byte_count = 0u64;
+    for raw_entry in output.stdout.split(|byte| *byte == 0) {
+        if raw_entry.is_empty() {
+            continue;
+        }
+        let entry = std::str::from_utf8(raw_entry)
+            .map_err(|_| "Prompt Git tree 含不可解析的文件路径，已停止下载。".to_string())?;
+        let (metadata, path) = entry
+            .split_once('\t')
+            .ok_or_else(|| "Prompt Git tree 响应格式异常，已停止下载。".to_string())?;
+        let fields = metadata.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 4 || fields[1] != "blob" {
+            continue;
+        }
+        let relative = safe_relative_github_path(path)
+            .ok_or_else(|| format!("Prompt Git tree 含不安全路径：{}", compact_note(path)))?;
+        if relative.components().count() > 11 {
+            return Err(format!(
+                "Prompt Git tree 目录深度超过安全上限（10 层）：{}",
+                relative.display()
+            ));
+        }
+        if fields[0] == "120000" {
+            // Symlink blobs carry only link metadata. Later traversal uses
+            // symlink_metadata and never follows them outside staging.
+            continue;
+        }
+        let size = fields[3].parse::<u64>().map_err(|_| {
+            format!(
+                "Prompt Git tree 未提供可验证的文件大小：{}",
+                relative.display()
+            )
+        })?;
+        if size > GITHUB_FALLBACK_MAX_FILE_BYTES {
+            return Err(format!(
+                "Prompt Git tree 包含超过 16 MB 的单个文件：{}",
+                relative.display()
+            ));
+        }
+        file_count += 1;
+        byte_count = byte_count.saturating_add(size);
+        if file_count > GITHUB_FALLBACK_MAX_FILES {
+            return Err(format!(
+                "Prompt Git tree 文件数超过安全上限（{} > {}）。",
+                file_count, GITHUB_FALLBACK_MAX_FILES
+            ));
+        }
+        if byte_count > GITHUB_FALLBACK_MAX_BYTES {
+            return Err(format!(
+                "Prompt Git tree 超过 80 MB 安全上限（{} bytes）。",
+                byte_count
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_staged_repository_bounds(staged_path: &Path) -> Result<(), String> {
+    let mut stack = vec![(staged_path.to_path_buf(), 0usize)];
+    let mut file_count = 0usize;
+    let mut byte_count = 0u64;
+    while let Some((directory, depth)) = stack.pop() {
+        if depth > 10 {
+            return Err(format!(
+                "Git 隔离工作区目录深度超过安全上限（10 层）：{}",
+                directory.display()
+            ));
+        }
+        let entries = fs::read_dir(&directory).map_err(|error| {
+            format!("无法检查 Git 隔离工作区 {}：{}", directory.display(), error)
+        })?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                // The checkout already consumed disk space. Count every tracked directory,
+                // including node_modules/target/build, and exclude only Git's own metadata.
+                if !name.eq_ignore_ascii_case(".git") {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let size = entry
+                .metadata()
+                .map(|metadata| metadata.len())
+                .unwrap_or_default();
+            if size > GITHUB_FALLBACK_MAX_FILE_BYTES {
+                return Err(format!(
+                    "Git 隔离工作区包含超过 16 MB 的单个文件：{}",
+                    path.display()
+                ));
+            }
+            file_count += 1;
+            byte_count = byte_count.saturating_add(size);
+            if file_count > GITHUB_FALLBACK_MAX_FILES {
+                return Err(format!(
+                    "Git 隔离工作区文件数超过安全上限（{} > {}）。",
+                    file_count, GITHUB_FALLBACK_MAX_FILES
+                ));
+            }
+            if byte_count > GITHUB_FALLBACK_MAX_BYTES {
+                return Err(format!(
+                    "Git 隔离工作区超过 80 MB 安全上限（{} bytes）。",
+                    byte_count
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn stage_github_source_import_via_api(
@@ -7861,7 +8122,7 @@ fn stage_github_source_import_via_api(
     }
     let selected_files = select_github_repository_files(&tree_payload)?;
     if selected_files.is_empty() {
-        return Err("仓库没有 SKILL.md，也没有根目录 Markdown 资料。".to_string());
+        return Err("仓库没有可安全下载的文件。".to_string());
     }
     let planned_bytes = selected_files
         .iter()
@@ -8323,17 +8584,6 @@ fn stage_github_source_import_via_codeload_with_control(
 
     let mut selected = if skill_roots.is_empty() {
         files
-            .into_iter()
-            .filter(|file| {
-                file.path.components().count() == 1
-                    && file
-                        .path
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        .map(|extension| extension.eq_ignore_ascii_case("md"))
-                        .unwrap_or(false)
-            })
-            .collect::<Vec<_>>()
     } else {
         files
             .into_iter()
@@ -8347,7 +8597,7 @@ fn stage_github_source_import_via_codeload_with_control(
     selected.sort_by(|left, right| left.path.cmp(&right.path));
     selected.dedup_by(|left, right| left.path == right.path);
     if selected.is_empty() {
-        return Err("仓库没有 SKILL.md，也没有根目录 Markdown 资料。".to_string());
+        return Err("仓库没有可安全解压的文件。".to_string());
     }
     if selected.len() > GITHUB_FALLBACK_MAX_FILES {
         return Err(format!(
@@ -8562,17 +8812,6 @@ fn select_github_repository_files(
 
     let mut selected = if skill_roots.is_empty() {
         blobs
-            .into_iter()
-            .filter(|file| {
-                let path = Path::new(&file.path);
-                path.components().count() == 1
-                    && path
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        .map(|extension| extension.eq_ignore_ascii_case("md"))
-                        .unwrap_or(false)
-            })
-            .collect::<Vec<_>>()
     } else {
         blobs
             .into_iter()
@@ -10159,10 +10398,8 @@ fn parse_github_repo(input: &str) -> Option<(String, String)> {
         rest.to_string()
     } else if let Some(rest) = value.strip_prefix("https://github.com/") {
         rest.to_string()
-    } else if let Some(rest) = value.strip_prefix("http://github.com/") {
-        rest.to_string()
     } else {
-        return None;
+        value.strip_prefix("http://github.com/")?.to_string()
     };
 
     let mut parts = path.split('/').filter(|part| !part.is_empty());
@@ -13896,6 +14133,16 @@ fn merge_managed_link_skills(root: &Path, diagnostics: &mut HashMap<String, Skil
             continue;
         }
 
+        let target = json_string(item, "Target");
+        let target_path = PathBuf::from(target.trim());
+        if target.is_empty() || !target_path.is_dir() || !target_path.join("SKILL.md").is_file() {
+            // Managed state is historical input, not proof that a Skill still
+            // exists. Older releases could leave a junction after regenerating
+            // its router directory; do not resurrect that stale entry as a
+            // healthy diagnostic Skill.
+            continue;
+        }
+
         let diagnostic = diagnostics.entry(folder.to_lowercase()).or_default();
         if diagnostic.name.is_empty() {
             diagnostic.name = folder.clone();
@@ -13908,10 +14155,7 @@ fn merge_managed_link_skills(root: &Path, diagnostics: &mut HashMap<String, Skil
         if !repo.is_empty() {
             diagnostic.repo = repo;
         }
-        let target = json_string(item, "Target");
-        if !target.is_empty() {
-            diagnostic.target = target;
-        }
+        diagnostic.target = target;
         diagnostic.has_skill_md = true;
         diagnostic.has_front_matter = !diagnostic.description.is_empty();
     }
@@ -15533,6 +15777,8 @@ pub fn run() {
             preview_source_import_candidate,
             stage_source_import_candidate,
             cancel_source_import,
+            load_prompt_invocation,
+            open_prompt_source_folder,
             promote_staged_source_import,
             record_usage_event,
             refresh_source_popularity,
@@ -16874,6 +17120,36 @@ mod tests {
     }
 
     #[test]
+    fn router_hub_generation_fails_closed_when_output_root_is_invalid() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-router-fail-closed-test-{}",
+            unix_timestamp_string()
+        ));
+        let sources_dir = active_sources_dir(&root);
+        let child = sources_dir.join("research-suite").join("paper-review");
+        fs::create_dir_all(&child).expect("test child should be created");
+        fs::write(
+            child.join("SKILL.md"),
+            "---\nname: paper-review\ndescription: \"review\"\n---\nbody\n",
+        )
+        .expect("test Skill should be written");
+
+        // A file at the reserved router directory makes parent creation fail.
+        // Sync callers use `?`, so this error prevents the later catalog publish.
+        fs::write(sources_dir.join(ROUTER_HUB_FOLDER), "not a directory")
+            .expect("invalid router root fixture should be written");
+        let error = match plan_or_write_router_hubs(&root, true, true) {
+            Ok(_) => panic!("router generation must fail instead of publishing partially"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("Failed to create") || error.contains("Cannot"),
+            "unexpected bounded error: {error}"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn router_hub_same_name_child_stays_source_scoped_under_parent() {
         // Collection `nature-skills` contains a child literally named `nature-skills`.
         // The parent keeps the stable collection name while the same-name source
@@ -18020,7 +18296,7 @@ mod tests {
     }
 
     #[test]
-    fn github_api_selection_keeps_skill_folders_or_root_prompt_docs() {
+    fn github_api_selection_keeps_skill_folders_or_complete_prompt_workspace() {
         let skill_tree = serde_json::json!({
             "tree": [
                 { "path": "assets/large.png", "type": "blob", "mode": "100644", "size": 9000 },
@@ -18040,13 +18316,159 @@ mod tests {
             "tree": [
                 { "path": "images/demo.png", "type": "blob", "mode": "100644", "size": 9000 },
                 { "path": "README.md", "type": "blob", "mode": "100644", "size": 1000 },
-                { "path": "guide.md", "type": "blob", "mode": "100644", "size": 600 }
+                { "path": "program.md", "type": "blob", "mode": "100644", "size": 600 },
+                { "path": "train.py", "type": "blob", "mode": "100644", "size": 500 },
+                { "path": "prepare.py", "type": "blob", "mode": "100644", "size": 500 }
             ]
         });
         let selected =
             select_github_repository_files(&prompt_tree).expect("prompt tree should select");
-        assert_eq!(selected.len(), 2);
-        assert!(selected.iter().all(|file| file.path.ends_with(".md")));
+        assert_eq!(selected.len(), 5);
+        assert!(selected.iter().any(|file| file.path == "train.py"));
+        assert!(selected.iter().any(|file| file.path == "prepare.py"));
+        assert!(selected.iter().any(|file| file.path == "images/demo.png"));
+    }
+
+    #[test]
+    fn git_prompt_checkout_disables_markdown_only_sparse_mode() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-prompt-git-checkout-{}",
+            unix_timestamp_string()
+        ));
+        let staged = root.join("staged");
+        fs::create_dir_all(&staged).expect("staged fixture should create");
+
+        let run_git = |cwd: &Path, args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .output()
+                .expect("fixture git command should start");
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run_git(&staged, &["init"]);
+        run_git(
+            &staged,
+            &["config", "user.email", "fixture@example.invalid"],
+        );
+        run_git(&staged, &["config", "user.name", "AI SkillHub Fixture"]);
+        fs::write(staged.join("README.md"), "Prompt context").expect("README should write");
+        fs::write(staged.join("program.md"), "Run train.py").expect("program should write");
+        fs::write(staged.join("train.py"), "print('train')").expect("train should write");
+        fs::write(staged.join("prepare.py"), "print('prepare')").expect("prepare should write");
+        run_git(&staged, &["add", "."]);
+        run_git(&staged, &["commit", "-m", "fixture"]);
+        run_git(&staged, &["sparse-checkout", "set", "--no-cone", "/*.md"]);
+        run_git(&staged, &["checkout", "--force", "HEAD"]);
+        assert!(!staged.join("train.py").exists());
+
+        let control = SourceImportControl::detached("prompt-full-checkout-test");
+        let output = complete_sparse_skill_checkout("git", &staged, &control)
+            .expect("Prompt checkout should complete");
+        assert!(
+            output.status.success(),
+            "Prompt checkout failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(staged.join("program.md").is_file());
+        assert!(staged.join("train.py").is_file());
+        assert!(staged.join("prepare.py").is_file());
+        let security = security_scan::scan_source_tree(&staged)
+            .expect("complete Prompt workspace should pass through the full-tree scanner");
+        assert_eq!(security.scanned_files, 4);
+        assert_eq!(security.executable_files, 2);
+
+        fs::remove_dir_all(root).expect("fixture should clean");
+    }
+
+    #[test]
+    fn prompt_git_tree_preflight_blocks_oversized_blob_before_checkout() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-prompt-git-tree-limit-{}",
+            unix_timestamp_string()
+        ));
+        let repo = root.join("repo");
+        fs::create_dir_all(&repo).expect("fixture repo should create");
+        let run_git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .expect("fixture git command should start");
+            assert!(output.status.success(), "git {:?} failed", args);
+        };
+        run_git(&["init"]);
+        run_git(&["config", "user.email", "fixture@example.invalid"]);
+        run_git(&["config", "user.name", "AI SkillHub Fixture"]);
+        fs::write(repo.join("program.md"), "Prompt").expect("program should write");
+        let oversized = repo.join("oversized.bin");
+        let file = fs::File::create(&oversized).expect("oversized fixture should create");
+        file.set_len(GITHUB_FALLBACK_MAX_FILE_BYTES + 1)
+            .expect("oversized fixture should resize");
+        drop(file);
+        run_git(&["add", "."]);
+        run_git(&["commit", "-m", "oversized fixture"]);
+
+        let control = SourceImportControl::detached("prompt-tree-preflight-test");
+        let error = validate_prompt_git_tree_before_checkout("git", &repo, &control)
+            .expect_err("oversized committed blob must fail before checkout");
+        assert!(error.contains("超过 16 MB"));
+
+        fs::remove_dir_all(root).expect("fixture should clean");
+    }
+
+    #[test]
+    fn staged_repository_bounds_fail_closed_above_depth_limit() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-prompt-depth-limit-{}",
+            unix_timestamp_string()
+        ));
+        let mut nested = root.clone();
+        for index in 0..12 {
+            nested = nested.join(format!("level-{index}"));
+        }
+        fs::create_dir_all(&nested).expect("deep fixture should create");
+        fs::write(nested.join("program.md"), "too deep").expect("fixture should write");
+
+        let error = validate_staged_repository_bounds(&root)
+            .expect_err("deep repositories must fail closed");
+        assert!(error.contains("目录深度超过安全上限"));
+
+        fs::remove_dir_all(root).expect("fixture should clean");
+    }
+
+    #[test]
+    fn staged_repository_bounds_count_tracked_generated_directories() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-prompt-generated-dir-limit-{}",
+            unix_timestamp_string()
+        ));
+        let generated = root.join("node_modules").join("fixture");
+        fs::create_dir_all(&generated).expect("generated fixture should create");
+        let oversized = generated.join("payload.bin");
+        let file = fs::File::create(&oversized).expect("fixture file should create");
+        file.set_len(GITHUB_FALLBACK_MAX_FILE_BYTES + 1)
+            .expect("sparse fixture should resize");
+        drop(file);
+
+        let error = validate_staged_repository_bounds(&root)
+            .expect_err("tracked generated directories must count toward limits");
+        assert!(error.contains("超过 16 MB"));
+
+        fs::remove_dir_all(root).expect("fixture should clean");
     }
 
     #[test]
@@ -19682,5 +20104,62 @@ mod tests {
             build_github_source_import_plan(&root, &[], "https://github.com/emilkowalski/skills")
                 .expect("generic repository plan should build");
         assert!(normalize_path_for_compare(&plan.target_path).ends_with("\\emilkowalski--skills"));
+    }
+
+    #[test]
+    fn managed_link_diagnostics_ignore_missing_targets_and_keep_valid_skills() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-managed-link-diagnostic-test-{}",
+            unix_timestamp_string()
+        ));
+        let valid_target = root.join("sources").join("valid-parent");
+        let missing_target = root.join("sources").join("removed-parent");
+        fs::create_dir_all(&valid_target).expect("valid target should be created");
+        fs::write(
+            valid_target.join("SKILL.md"),
+            "---\nname: valid-parent\ndescription: Valid parent.\n---\n",
+        )
+        .expect("valid manifest should be written");
+
+        let state_dir = private_state_dir(&root).join("sync-state");
+        fs::create_dir_all(&state_dir).expect("state directory should be created");
+        fs::write(
+            state_dir.join("managed-links.json"),
+            serde_json::to_vec_pretty(&serde_json::json!([
+                {
+                    "Skill": "valid-parent",
+                    "Repo": "valid-source",
+                    "Description": "Valid parent.",
+                    "Target": valid_target.to_string_lossy()
+                },
+                {
+                    "Skill": "removed-parent",
+                    "Repo": "removed-source",
+                    "Description": "Must not become a ghost Skill.",
+                    "Target": missing_target.to_string_lossy()
+                },
+                {
+                    "Skill": "blank-target",
+                    "Repo": "blank-source",
+                    "Target": ""
+                }
+            ]))
+            .expect("managed link state should serialize"),
+        )
+        .expect("managed link state should be written");
+
+        let mut diagnostics = HashMap::new();
+        merge_managed_link_skills(&root, &mut diagnostics);
+
+        let valid = diagnostics
+            .get("valid-parent")
+            .expect("valid managed Skill should remain in diagnostics");
+        assert!(valid.has_skill_md);
+        assert_eq!(valid.repo, "valid-source");
+        assert_eq!(PathBuf::from(&valid.target), valid_target);
+        assert!(!diagnostics.contains_key("removed-parent"));
+        assert!(!diagnostics.contains_key("blank-target"));
+
+        let _ = fs::remove_dir_all(root);
     }
 }

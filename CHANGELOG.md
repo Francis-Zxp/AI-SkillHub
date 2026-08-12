@@ -2,6 +2,50 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.1.11 - Reliable sync, responsive folders, and callable Prompts
+
+### Fixed
+
+- Repairs the Windows PowerShell 5.1 empty-array serialization path that could
+  create a zero-byte managed-link state and fail the next sync with
+  `InvokeMethodOnNull`.
+- Generates parent routers before the final active-catalog publish, removes
+  broken managed junctions, and excludes invalid historical targets from the
+  callable Skill index.
+- Moves each folder edit action into its card, uses a responsive no-scroll grid,
+  preserves 44 px interaction targets, and keeps folder colors theme-visible.
+- Adds a copy-and-paste invocation panel for Prompt repositories while preserving
+  the rule that only directories with `SKILL.md` are installable Skills.
+- Preserves complete bounded Prompt project workspaces on new imports and scans
+  all retained project content before promotion.
+- Validates Prompt Git trees before checkout and disables LFS/external smudge
+  filters, so size limits apply before project blobs are materialized.
+- Shows MCP configuration failures even when parsing produced no binding and
+  includes all bounded redacted evidence in copied Codex Plugin Doctor reports.
+
+### Verification
+
+- Frontend production build and 58 behavior contracts pass.
+- Rust: 140 library tests, 12 Codex doctor tests, and 8 MCP tests pass; five
+  explicit network gates and one formal-artifact gate remain ignored by design.
+- PowerShell 5.1 and 7 isolated sync tests cover two consecutive empty syncs,
+  dirty work, pull failure, timeout, broken links, and failed atomic writes.
+- Default 1280×820 and minimum 1040×680 browser simulations have no horizontal
+  overflow, hidden folder names, button overlap, or theme-covered colors.
+
+## 3.1.10 - Reviewed imports, parent folders, and compact routing
+
+### Fixed
+
+- Allows an explicitly reviewed source to enter local management in a forced-disabled
+  state without delivering it to Codex, Claude, or another AI tool.
+- Keeps documentation and test examples visible for review without treating every
+  reference-only command as executable Skill instructions.
+- Moves complete parent/source trees into user folders, restores parent ratings, and
+  exposes rename, color, ordering, and metadata-only folder deletion.
+- Replaces the visible `[ROUTER-HUB]` prefix with the compact
+  `◈ 父 · N 个子项 · 能力…` summary while retaining a hidden machine marker.
+
 ## 3.1.9 - Parent ratings and actionable diagnostics
 
 ### Fixed
