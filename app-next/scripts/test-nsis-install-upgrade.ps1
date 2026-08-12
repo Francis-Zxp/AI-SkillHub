@@ -43,6 +43,24 @@ function Assert-PathInsideTemp([string]$Path) {
   }
 }
 
+function Assert-ExactQaRoot([string]$Path) {
+  Assert-PathInsideTemp $Path
+  $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+  $expected = [IO.Path]::GetFullPath($script:QaRoot).TrimEnd('\')
+  $expectedLeaf = "AI-SkillHub-Installer-QA-$script:QaId"
+  if (-not $full.Equals($expected, [StringComparison]::OrdinalIgnoreCase) -or
+      (Split-Path -Leaf $full) -cne $expectedLeaf) {
+    throw "QA cleanup target is not this run's exact GUID sandbox: $full"
+  }
+  if (Test-Path -LiteralPath $full) {
+    $item = Get-Item -LiteralPath $full -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      throw "QA cleanup refuses a reparse-point root: $full"
+    }
+  }
+  return $full
+}
+
 function ConvertTo-NativeRegistryPath([string]$Path) {
   if ($Path.StartsWith('HKCU:\', [StringComparison]::OrdinalIgnoreCase)) {
     return 'HKCU\' + $Path.Substring(6)
@@ -70,8 +88,12 @@ function New-RegistrySnapshot {
 
   $reg = Get-Command reg.exe -ErrorAction Stop
   $nativePath = ConvertTo-NativeRegistryPath $Path
-  & $reg.Source export $nativePath $BackupFile /y | Out-Null
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $BackupFile -PathType Leaf)) {
+  $exitCode = Invoke-BoundedProcess `
+    -FilePath $reg.Source `
+    -ArgumentList @('export', $nativePath, $BackupFile, '/y') `
+    -Label "Registry export $nativePath" `
+    -TimeoutSeconds 30
+  if ($exitCode -ne 0 -or -not (Test-Path -LiteralPath $BackupFile -PathType Leaf)) {
     throw "Could not back up registry key: $nativePath"
   }
   return $snapshot
@@ -83,8 +105,17 @@ function Restore-RegistrySnapshot {
     [psobject]$Snapshot
   )
 
+  $reg = Get-Command reg.exe -ErrorAction Stop
+  $nativePath = ConvertTo-NativeRegistryPath $Snapshot.Path
   if (Test-Path -LiteralPath $Snapshot.Path) {
-    Remove-Item -LiteralPath $Snapshot.Path -Recurse -Force
+    $deleteExit = Invoke-BoundedProcess `
+      -FilePath $reg.Source `
+      -ArgumentList @('delete', $nativePath, '/f') `
+      -Label "Registry reset $nativePath" `
+      -TimeoutSeconds 30
+    if ($deleteExit -ne 0) {
+      throw "Could not reset registry key before restore: $nativePath"
+    }
   }
   if (-not $Snapshot.Existed) {
     return
@@ -93,11 +124,21 @@ function Restore-RegistrySnapshot {
     throw "Registry snapshot is missing: $($Snapshot.BackupFile)"
   }
 
-  $reg = Get-Command reg.exe -ErrorAction Stop
-  & $reg.Source import $Snapshot.BackupFile | Out-Null
-  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $Snapshot.Path)) {
+  $importExit = Invoke-BoundedProcess `
+    -FilePath $reg.Source `
+    -ArgumentList @('import', $Snapshot.BackupFile) `
+    -Label "Registry restore $nativePath" `
+    -TimeoutSeconds 30
+  if ($importExit -ne 0 -or -not (Test-Path -LiteralPath $Snapshot.Path)) {
     throw "Could not restore registry key: $($Snapshot.Path)"
   }
+}
+
+function ConvertTo-ProcessArgument([string]$Value) {
+  if ($Value -notmatch '[\s"]') {
+    return $Value
+  }
+  return '"' + $Value.Replace('"', '\"') + '"'
 }
 
 function Stop-TestProcess {
@@ -129,7 +170,8 @@ function Invoke-BoundedProcess {
     [int]$TimeoutSeconds
   )
 
-  $process = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList `
+  $safeArguments = @($ArgumentList | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) })
+  $process = Start-Process -FilePath $FilePath -ArgumentList $safeArguments `
     -PassThru -WindowStyle Hidden
   if ($null -eq $process) {
     throw "$Label could not be started."
@@ -143,6 +185,105 @@ function Invoke-BoundedProcess {
   } finally {
     $process.Dispose()
   }
+}
+
+function Invoke-BoundedSqlite {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$FilePath,
+    [Parameter(Mandatory = $true)]
+    [string]$DatabasePath,
+    [Parameter(Mandatory = $true)]
+    [string]$Sql,
+    [Parameter(Mandatory = $true)]
+    [string]$Label,
+    [ValidateRange(1, 120)]
+    [int]$TimeoutSeconds = 30
+  )
+
+  $psi = New-Object Diagnostics.ProcessStartInfo
+  $psi.FileName = $FilePath
+  $psi.Arguments = ConvertTo-ProcessArgument $DatabasePath
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardInput = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $process = [Diagnostics.Process]::Start($psi)
+  if ($null -eq $process) {
+    throw "$Label could not be started."
+  }
+  try {
+    $process.StandardInput.WriteLine($Sql)
+    $process.StandardInput.Close()
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+      Stop-TestProcess -Process $process -Label $Label
+      throw "$Label timed out after $TimeoutSeconds seconds."
+    }
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    return [pscustomobject]@{
+      ExitCode = [int]$process.ExitCode
+      StdOut = [string]$stdout
+      StdErr = [string]$stderr
+    }
+  } finally {
+    $process.Dispose()
+  }
+}
+
+function Remove-QaSandboxWithRetry {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path,
+    [ValidateRange(1, 60)]
+    [int]$TimeoutSeconds = 20
+  )
+
+  $exactPath = Assert-ExactQaRoot $Path
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  $lastError = $null
+  do {
+    try {
+      $exactPath = Assert-ExactQaRoot $exactPath
+      if (-not (Test-Path -LiteralPath $exactPath)) {
+        return
+      }
+      $escapedPath = $exactPath.Replace("'", "''")
+      $cleanupCommand = @"
+`$ErrorActionPreference = 'Stop'
+try {
+  `$target = '$escapedPath'
+  `$item = Get-Item -LiteralPath `$target -Force
+  if ((`$item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { exit 3 }
+  Remove-Item -LiteralPath `$target -Recurse -Force -ErrorAction Stop
+  exit 0
+} catch { exit 2 }
+"@
+      $encodedCommand = [Convert]::ToBase64String(
+        [Text.Encoding]::Unicode.GetBytes($cleanupCommand)
+      )
+      $powershell = Get-Command powershell.exe -ErrorAction Stop
+      $remainingSeconds = [Math]::Max(
+        1,
+        [Math]::Min(3, [Math]::Ceiling(($deadline - [DateTime]::UtcNow).TotalSeconds))
+      )
+      $exitCode = Invoke-BoundedProcess `
+        -FilePath $powershell.Source `
+        -ArgumentList @('-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedCommand) `
+        -Label 'Bounded QA sandbox cleanup' `
+        -TimeoutSeconds ([int]$remainingSeconds)
+      if ($exitCode -eq 0 -and -not (Test-Path -LiteralPath $exactPath)) {
+        return
+      }
+      $lastError = "cleanup process exited $exitCode"
+    } catch {
+      $lastError = $_.Exception.Message
+    }
+    Start-Sleep -Milliseconds 400
+  } while ([DateTime]::UtcNow -lt $deadline)
+
+  throw "QA sandbox remained busy for $TimeoutSeconds seconds: $lastError"
 }
 
 function Test-AppStartup {
@@ -206,6 +347,7 @@ foreach ($path in @($QaRoot, $InstallRoot, $DataRoot, $RegistryBackupRoot)) {
 $ProductKeySnapshot = $null
 $UninstallKeySnapshot = $null
 $testFailure = $null
+$registryRestoreFailed = $false
 $cleanupFailures = New-Object 'System.Collections.Generic.List[string]'
 
 try {
@@ -264,7 +406,7 @@ try {
     $sqlite = Get-Command sqlite3 -ErrorAction SilentlyContinue
     if (-not $sqlite) { throw 'sqlite3 is required for the cross-version data gate.' }
     $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
-    & $sqlite.Source $database @"
+    $seedSql = @"
 INSERT OR REPLACE INTO sources (
   id, name, source_type, url, local_path, install_mode,
   category_id, note, enabled, created_at, updated_at
@@ -279,7 +421,14 @@ INSERT OR REPLACE INTO source_overrides (
   'qa-upgrade-source', '', '', '', 'upgrade sentinel', NULL, 5, '$stamp'
 );
 "@
-    if ($LASTEXITCODE -ne 0) { throw 'Could not seed previous-version user data.' }
+    $seedResult = Invoke-BoundedSqlite `
+      -FilePath $sqlite.Source `
+      -DatabasePath $database `
+      -Sql $seedSql `
+      -Label 'Seed previous-version SQLite data'
+    if ($seedResult.ExitCode -ne 0) {
+      throw "Could not seed previous-version user data: $($seedResult.StdErr.Trim())"
+    }
   }
 
   $sentinel = Join-Path $DataRoot 'update-preserves-user-data.txt'
@@ -312,10 +461,15 @@ INSERT OR REPLACE INTO source_overrides (
   if (-not [string]::IsNullOrWhiteSpace($PreviousInstallerPath) -and $databaseCreated) {
     $sqlite = Get-Command sqlite3 -ErrorAction SilentlyContinue
     if (-not $sqlite) { throw 'sqlite3 is required for the cross-version data gate.' }
-    $preservedParentRating = [int](
-      & $sqlite.Source $database `
-        "SELECT rating FROM source_overrides WHERE source_id='qa-upgrade-source';"
-    )
+    $ratingResult = Invoke-BoundedSqlite `
+      -FilePath $sqlite.Source `
+      -DatabasePath $database `
+      -Sql "SELECT rating FROM source_overrides WHERE source_id='qa-upgrade-source';" `
+      -Label 'Read preserved parent rating'
+    if ($ratingResult.ExitCode -ne 0) {
+      throw "Could not read preserved parent rating: $($ratingResult.StdErr.Trim())"
+    }
+    $preservedParentRating = [int]$ratingResult.StdOut.Trim()
   }
 
   $result = [pscustomobject]@{
@@ -374,14 +528,18 @@ INSERT OR REPLACE INTO source_overrides (
     try {
       Restore-RegistrySnapshot -Snapshot $snapshot
     } catch {
-      $cleanupFailures.Add($_.Exception.Message)
+      $registryRestoreFailed = $true
+      $cleanupFailures.Add(
+        "Registry restore failed for $($snapshot.Path); recovery files preserved at $QaRoot`: $($_.Exception.Message)"
+      )
     }
   }
 
   try {
-    if (-not $KeepSandbox -and (Test-Path -LiteralPath $QaRoot)) {
-      Assert-PathInsideTemp $QaRoot
-      Remove-Item -LiteralPath $QaRoot -Recurse -Force
+    if ($registryRestoreFailed) {
+      Write-Warning "Registry recovery evidence preserved: $QaRoot"
+    } elseif (-not $KeepSandbox -and (Test-Path -LiteralPath $QaRoot)) {
+      Remove-QaSandboxWithRetry -Path $QaRoot
       Write-Host "Installer QA sandbox removed: $QaRoot"
     }
   } catch {
