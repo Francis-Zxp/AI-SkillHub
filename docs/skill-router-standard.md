@@ -34,10 +34,39 @@ ASCII machine marker.
 4. Keep the parent callable by the normalized original source name, such as `/figures4papers`.
 5. Keep the visible frontmatter description machine-safe and concise; it must not begin with a bracket token.
 6. Include `[ROUTER-HUB]` once in an HTML comment; use `◈ 父` plus the child count and at most five deduplicated capability labels in the visible description.
-7. List every child as `[CHILD-SKILL]`, with its exact source-scoped `SKILL.md` path and a concise localized function summary.
+7. List every child as `[CHILD-SKILL]`, with its **absolute** source-scoped `SKILL.md` path (forward slashes) and a concise localized function summary. Relative paths are forbidden — see *Child Path Contract*.
 8. The parent may load children only from its declared source. It must never substitute a same-name child from another source.
-9. Rebuild parents after startup repair, adding a source, manual sync and automatic update.
+9. Rebuild parents after startup repair, adding a source, manual sync, automatic update, and any change to the sources root (a moved root changes every absolute child path).
 10. Generated writes are recoverable: write a temporary file, preserve the previous generated file, then activate the replacement.
+11. Never drop a child because another child shares its `name:`. Keep every declared child and disambiguate it with its path inside the source.
+
+## Child Path Contract
+
+A recipient Agent never opens the router at its physical location. It opens the
+copy delivered into its own home (`~/.claude/skills/<Source>/SKILL.md`,
+`~/.codex/skills/...`, `~/.agents/skills/...`), and each of those is a Windows
+directory junction pointing at the active catalog, which is itself a junction
+pointing at the generated router folder.
+
+A relative path such as `../../<Source>/child/SKILL.md` therefore resolves
+differently depending on the consumer:
+
+- A shell resolves **physically** after `cd`, following each junction, and finds the file.
+- Node `path.resolve`, Rust `Path::join`, .NET `Path.GetFullPath` and an LLM doing
+  its own path arithmetic all resolve **lexically** against the delivered entry,
+  and land outside the sources tree.
+
+Lexical resolution is what every real recipient does, so relative child paths are
+unopenable in practice, and they also walk outside the published Skill directory,
+which sandbox and permission layers may refuse regardless of resolution.
+
+Rules:
+
+1. Every declared child path is absolute and contains no `..` segment.
+2. Paths use forward slashes and carry no `\\?\` extended-length prefix.
+3. The router text instructs the Agent to use each path verbatim: no joining, no relativizing, no resolving against the router's own directory.
+4. Because paths are absolute, moving the sources root changes every router body; the resulting body diff is what triggers the rebuild, so no extra invalidation state is needed.
+5. `app-next/scripts/verify-live-router-children.mjs` is the acceptance check: every declared child must open from every published recipient entry.
 
 ## Same-Name Children
 
@@ -50,6 +79,14 @@ PaperSpine.
 AI SkillHub no longer generates global `[CONFLICT-DISPATCHER]` Skills or asks the
 user to select a default child. Existing generated dispatchers are removed during
 repair. Historical SQLite choices are retained only for rollback compatibility.
+
+Same-name children **inside one source** are also kept in full. A repository that
+ships the same Skill at several paths (`src/skill`, `dist/claude/skills/...`,
+`dist/codex/skills/...`) has several real installed Skills, and dropping any of
+them removes a capability the user can ask for. Each such child is listed with its
+path inside the source in full-width parentheses after the name — for example
+`` `$paper-spine` （dist/claude/skills/paper-spine） `` — and the router text tells
+the Agent to pick by user intent.
 
 ## Agent Delivery Contract
 

@@ -25,6 +25,18 @@ try {
     [Text.UTF8Encoding]::new($false)
   )
 
+  # A source that ships the same `name:` at several paths. None of them may be
+  # dropped, because each is a real installed Skill a user can ask for.
+  foreach ($location in @('src\skill', 'dist\claude\skills\paper-spine', 'dist\codex\skills\paper-spine')) {
+    $sameName = Join-Path $sources (Join-Path 'PaperSpine' $location)
+    New-Item -ItemType Directory -Force -Path $sameName | Out-Null
+    [IO.File]::WriteAllText(
+      (Join-Path $sameName 'SKILL.md'),
+      "---`nname: paper-spine`ndescription: Review a paper end to end.`n---`n`n# PaperSpine`n",
+      [Text.UTF8Encoding]::new($false)
+    )
+  }
+
   $configPath = Join-Path $fixture 'skillhub.config.json'
   $config = [ordered]@{
     version = 3
@@ -74,6 +86,85 @@ try {
   if (Test-Path -LiteralPath (Join-Path $active 'scientific-figure-making')) {
     throw 'Child Skill leaked into the parent-first active catalog.'
   }
+
+  # This file has no UTF-8 BOM, so Windows PowerShell 5.1 reads it as ANSI.
+  # Build every non-ASCII literal from code points, the same way the visible
+  # parent marker below is built, so the parser never sees mojibake.
+  $sourceFileLabel = -join ([char]0x6765, [char]0x6E90, [char]0x6587, [char]0x4EF6, [char]0xFF1A)
+  $openParen = [string][char]0xFF08
+  $closeParen = [string][char]0xFF09
+
+  # Read every declared child path the way a recipient Agent does: take the
+  # string between the backticks and use it verbatim, with no relative-path
+  # arithmetic and no knowledge of where the router file lives.
+  function Get-DeclaredChildPath([string]$RouterBody, [string]$Label) {
+    return @(
+      [regex]::Matches($RouterBody, ('\[CHILD-SKILL\][^\r\n]*?' + [regex]::Escape($Label) + '`([^`]+)`')) |
+        ForEach-Object { $_.Groups[1].Value }
+    )
+  }
+
+  function Assert-DeclaredChildrenOpen([string]$RouterBody, [string]$Context, [string]$Label) {
+    $declared = Get-DeclaredChildPath $RouterBody $Label
+    if ($declared.Count -eq 0) { throw "$Context declared no children." }
+    foreach ($path in $declared) {
+      if (-not [IO.Path]::IsPathRooted($path)) {
+        throw "$Context child path is not absolute and cannot survive the delivery junction chain: $path"
+      }
+      if ($path -match '\.\.') { throw "$Context child path contains a relative segment: $path" }
+      if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "$Context declared child path did not open: $path"
+      }
+    }
+    return $declared.Count
+  }
+
+  Assert-DeclaredChildrenOpen $parent 'figures4papers router' $sourceFileLabel | Out-Null
+
+  $spinePath = Join-Path $sources 'AI-SkillHub-local-routers\PaperSpine\SKILL.md'
+  if (-not (Test-Path -LiteralPath $spinePath -PathType Leaf)) {
+    throw 'Same-name source did not receive a PaperSpine parent router.'
+  }
+  $spine = [IO.File]::ReadAllText($spinePath, [Text.UTF8Encoding]::new($false))
+  $spineChildren = Assert-DeclaredChildrenOpen $spine 'PaperSpine router' $sourceFileLabel
+  if ($spineChildren -ne 3) {
+    throw "Same-name children must never be dropped; expected 3 declared children, got $spineChildren."
+  }
+  foreach ($location in @('src/skill', 'dist/claude/skills/paper-spine', 'dist/codex/skills/paper-spine')) {
+    $marker = $openParen + $location + $closeParen
+    if (-not $spine.Contains($marker)) {
+      throw "Same-name child is not disambiguated by its in-source location: $location"
+    }
+  }
+
+  # The defect this scheme exists to prevent: a recipient opens the router
+  # through a junction chain, never at its physical location. Reproduce that
+  # chain and confirm each declared child is still reachable from it.
+  $deliveryRoot = Join-Path $fixture 'agent-home\skills'
+  New-Item -ItemType Directory -Force -Path $deliveryRoot | Out-Null
+  $deliveredEntry = Join-Path $deliveryRoot 'PaperSpine'
+  $activeEntry = Join-Path $active 'PaperSpine'
+  if (Test-Path -LiteralPath $activeEntry) {
+    cmd /C mklink /J "$deliveredEntry" "$activeEntry" | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+      $delivered = [IO.File]::ReadAllText((Join-Path $deliveredEntry 'SKILL.md'), [Text.UTF8Encoding]::new($false))
+      Assert-DeclaredChildrenOpen $delivered 'delivered PaperSpine router' $sourceFileLabel | Out-Null
+      foreach ($path in (Get-DeclaredChildPath $delivered $sourceFileLabel)) {
+        # Resolve the way a host actually does it: join the declared path onto
+        # the delivered entry. Path.Combine matches Rust's Path::join and Node's
+        # path.resolve -- an absolute path wins and is returned unchanged, while
+        # a '../..' path would be walked out of the published Skill directory.
+        $resolved = [IO.Path]::GetFullPath([IO.Path]::Combine($deliveredEntry, $path))
+        if (-not (Test-Path -LiteralPath $resolved)) {
+          throw "Child unreachable from the delivered agent entry: $path"
+        }
+      }
+      Write-Host 'PASS: declared children open through the agent delivery junction chain.'
+    } else {
+      Write-Warning 'Junction creation unavailable; delivery-chain assertion skipped.'
+    }
+  }
+
   Write-Host 'PASS: Windows PowerShell generates and activates a single-child figures4papers parent.'
 } finally {
   if (Test-Path -LiteralPath $fixture) {

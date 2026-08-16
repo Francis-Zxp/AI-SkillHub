@@ -69,6 +69,19 @@ test("source updates preserve dirty work and clear stale version comparisons", (
   assert.match(governance, /changed_files = 0/);
 });
 
+test("the app's own bookkeeping never blocks a source from tracking GitHub", () => {
+  // .skillhub-source.json and .skillhub-extracted are written by AI SkillHub
+  // itself. Counting them as local work made every touched source stop updating.
+  assert.match(runtime, /\$SelfAuthoredRepoArtifacts = @\('\.skillhub-source\.json', '\.skillhub-extracted'\)/);
+  assert.match(runtime, /function Test-PorcelainEntryIsSelfAuthored/);
+  assert.match(runtime, /function Get-BlockingWorkingTreeChanges/);
+  // Only untracked entries may be ignored; a tracked change still blocks.
+  assert.match(runtime, /if \(\$Line\.Substring\(0, 2\) -ne '\?\?'\) \{ return \$false \}/);
+  // Both the configured-repo and the auto-discovered-repo paths must filter.
+  assert.equal(runtime.match(/Get-BlockingWorkingTreeChanges \$dirtyResult\.Stdout/g)?.length, 2);
+  assert.doesNotMatch(runtime, /if \(-not \[string\]::IsNullOrWhiteSpace\(\$dirtyResult\.Stdout\)\) \{\s*Write-Warning/);
+});
+
 test("default desktop width reserves readable source titles before wrapping metadata", () => {
   assert.match(styles, /grid-template-columns: minmax\(220px, \.72fr\) minmax\(0, 2fr\)/);
   assert.match(styles, /\.source-group-meta \{[^}]*min-width: 0;[^}]*flex-wrap: wrap;/);

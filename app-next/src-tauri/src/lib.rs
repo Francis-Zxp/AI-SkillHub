@@ -14776,39 +14776,53 @@ fn router_hub_skill_name(collection: &str) -> String {
 }
 
 /// Compose the body of a generated router-hub SKILL.md.
+///
+/// Child references are absolute paths. See [`RouterChildLink`] for why a
+/// relative path cannot work across the delivery junction chain.
 fn build_router_hub_skill_md(
     collection: &str,
     router_name: &str,
-    children: &[String],
-    child_links: &BTreeMap<String, (String, String, String)>,
+    children: &[RouterChildLink],
 ) -> String {
+    // A source may ship two children declaring the same `name:` (for example a
+    // `src/` copy plus per-host build outputs). Both stay listed — dropping one
+    // would make it uncallable — so qualify the repeated ones with their
+    // in-source location, otherwise the Agent sees N identical options.
+    let mut name_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for child in children {
+        *name_counts
+            .entry(normalize_skill_lookup(&child.name))
+            .or_insert(0) += 1;
+    }
+
     let mut child_lines = String::new();
     for child in children {
-        let key = normalize_skill_lookup(child);
-        let (relative_path, summary) = child_links
-            .get(&key)
-            .map(|(_, relative, summary)| {
-                (
-                    relative.as_str(),
-                    localized_router_child_summary(child, summary),
-                )
-            })
-            .unwrap_or_else(|| ("SKILL.md", format!("用于处理“{}”相关任务。", child)));
+        let summary = localized_router_child_summary(&child.name, &child.summary);
+        let ambiguous = name_counts
+            .get(&normalize_skill_lookup(&child.name))
+            .copied()
+            .unwrap_or(0)
+            > 1;
+        let label = if ambiguous {
+            let location = child
+                .relative_path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .unwrap_or(".");
+            format!("`${}` （{}）", child.name, location)
+        } else {
+            format!("`${}`", child.name)
+        };
         child_lines.push_str(&format!(
-            "- {} `${}` — {} 来源文件：`../../{}/{}`\n",
-            CHILD_SKILL_MARKER, child, summary, collection, relative_path
+            "- {} {} — {} 来源文件：`{}`\n",
+            CHILD_SKILL_MARKER, label, summary, child.absolute_path
         ));
     }
     let mut seen_capabilities = BTreeSet::new();
     let capabilities = children
         .iter()
         .filter_map(|child| {
-            let key = normalize_skill_lookup(child);
-            let summary = child_links
-                .get(&key)
-                .map(|(_, _, summary)| summary.as_str())
-                .unwrap_or_default();
-            let capability = router_capability_label(child, summary);
+            let capability = router_capability_label(&child.name, &child.summary);
             if seen_capabilities.insert(capability.clone()) {
                 Some(capability)
             } else {
@@ -14838,8 +14852,11 @@ fn build_router_hub_skill_md(
         父路由生成在作者仓库之外，因此 GitHub 更新不会覆盖标记、子 Skill 清单或隔离规则。\n\n\
         类型：AI SkillHub 管理的父 Skill；下方 {child_marker} 表示来源内的功能型子 Skill。\n\n\
         路由规则：\n\
-        - 只能打开下方 `../../{collection}` 内明确列出的来源文件。\n\
+        - 下方每个子 Skill 都给出完整绝对路径。执行前必须先用文件读取工具打开该路径的全文，不要凭名称或摘要推测其内容。\n\
+        - 路径请原样使用，不要拼接、不要相对化、不要基于本文件所在目录再做解析。\n\
+        - 只能打开下方明确列出的、属于来源 `{collection}` 的文件。\n\
         - 即使其它父 Skill 有同名子 Skill，也绝不跨来源替换。\n\
+        - 同名子项后面括号内是它在来源中的位置，用于区分；按用户意图选择其一。\n\
         - 用户明确指定子 Skill 时，直接打开并完整遵循对应来源文件。\n\
         - 用户只指定父 Skill 或描述宽泛任务时，自动选择能完成任务的最小子 Skill。\n\
         - 只有在任务存在实质性歧义或安全风险时才向用户提问。\n\
@@ -15230,12 +15247,57 @@ fn check_router_hub_description_quoting(skill_md_path: &Path) -> Option<RouterHu
     None
 }
 
+/// One callable child Skill inside a managed source.
+///
+/// `absolute_path` is the only field a recipient Agent ever resolves. It is a
+/// fully qualified, forward-slash path to the child's `SKILL.md`. Router files
+/// are machine-local generated artifacts under `%LOCALAPPDATA%`, regenerated on
+/// every sync, so they never need portable relative paths — and a relative path
+/// is actively wrong here, because the recipient opens the router through a
+/// junction chain (`~/.claude/skills/X` → `UserData/skills/X` → router folder).
+/// Any `../..` in the file is resolved lexically against the *delivered* path by
+/// Node/Rust/`path.resolve` and by the model itself, which lands outside the
+/// published Skill directory instead of in the source tree.
+#[derive(Debug, Clone)]
+struct RouterChildLink {
+    name: String,
+    absolute_path: String,
+    relative_path: String,
+    summary: String,
+}
+
+/// Render a child's absolute `SKILL.md` path for a generated router file.
+///
+/// Forward slashes are used on every platform: Windows accepts them in every
+/// filesystem API, and they avoid `\U`-style escape damage when the path is
+/// copied through Markdown, JSON or a shell.
+fn router_child_absolute_path(skill_md: &Path) -> String {
+    let absolute = fs::canonicalize(skill_md)
+        .map(|value| strip_extended_length_prefix(&value.to_string_lossy()))
+        .unwrap_or_else(|_| skill_md.to_string_lossy().to_string());
+    absolute.replace('\\', "/")
+}
+
+/// Drop the Windows `\\?\` extended-length prefix that `canonicalize` adds.
+/// Agents copy these paths verbatim; the prefix breaks several of them.
+fn strip_extended_length_prefix(value: &str) -> String {
+    value
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{}", rest))
+        .or_else(|| value.strip_prefix(r"\\?\").map(str::to_string))
+        .unwrap_or_else(|| value.to_string())
+}
+
 /// Walk a source/collection and collect every callable source-scoped Skill,
 /// including a SKILL.md at the source root.
-fn collect_child_skill_links_for_collection(
-    collection_dir: &Path,
-) -> BTreeMap<String, (String, String, String)> {
-    let mut links = BTreeMap::new();
+///
+/// Every discovered child is kept. Two children in one source may legitimately
+/// declare the same `name:` (a repository that ships `src/` plus per-host build
+/// outputs, or two genuinely different Skills that collide). Dropping one would
+/// silently make it uncallable, so same-name children are disambiguated at
+/// render time by [`build_router_hub_skill_md`] instead of being discarded.
+fn collect_child_skill_links_for_collection(collection_dir: &Path) -> Vec<RouterChildLink> {
+    let mut links: Vec<RouterChildLink> = Vec::new();
     let mut pending = vec![collection_dir.to_path_buf()];
     let mut visited_dirs = 0usize;
 
@@ -15261,7 +15323,12 @@ fn collect_child_skill_links_for_collection(
                         .to_string_lossy()
                         .replace('\\', "/");
                     let summary = metadata::analyze_skill(&dir).summary;
-                    links.entry(key).or_insert((name, relative, summary));
+                    links.push(RouterChildLink {
+                        name,
+                        absolute_path: router_child_absolute_path(&skill_md),
+                        relative_path: relative,
+                        summary,
+                    });
                 }
             }
         }
@@ -15296,6 +15363,17 @@ fn collect_child_skill_links_for_collection(
         }
     }
 
+    // Deterministic order so an unchanged tree regenerates a byte-identical
+    // router and the `existing != body` short-circuit keeps holding.
+    links.sort_by(|left, right| {
+        normalize_skill_lookup(&left.name)
+            .cmp(&normalize_skill_lookup(&right.name))
+            .then_with(|| {
+                left.relative_path
+                    .to_lowercase()
+                    .cmp(&right.relative_path.to_lowercase())
+            })
+    });
     links
 }
 
@@ -15371,8 +15449,8 @@ fn plan_or_write_router_hubs(
         let collection_dir = entry.path();
         let child_links = collect_child_skill_links_for_collection(&collection_dir);
         let children = child_links
-            .values()
-            .map(|(name, _, _)| name.clone())
+            .iter()
+            .map(|link| link.name.clone())
             .collect::<Vec<_>>();
 
         // Walk one level of skill md files looking for unquoted [ROUTER-HUB] descriptions.
@@ -15410,8 +15488,7 @@ fn plan_or_write_router_hubs(
 
         let router_folder = routers_root.join(&router_name);
         let router_skill_md = router_folder.join("SKILL.md");
-        let body =
-            build_router_hub_skill_md(&collection_name, &router_name, &children, &child_links);
+        let body = build_router_hub_skill_md(&collection_name, &router_name, &child_links);
         let needs_write = if allow_write {
             match fs::read_to_string(&router_skill_md) {
                 Ok(existing) => existing != body,
@@ -17191,9 +17268,255 @@ mod tests {
             .join("nature-skills")
             .join("SKILL.md");
         let body = fs::read_to_string(router).expect("parent router should be written");
-        assert!(body.contains("../../nature-skills/nature-skills/SKILL.md"));
-        assert!(body.contains("../../nature-skills/nature-figure/SKILL.md"));
+        // Both children stay declared, and both must actually open from the
+        // exact string the router publishes.
+        let opened = assert_every_declared_child_opens(&body, "nature-skills router");
+        assert_eq!(opened, 2, "no child may be dropped from the parent");
+        assert!(body.contains("/nature-skills/nature-skills/SKILL.md"));
+        assert!(body.contains("/nature-skills/nature-figure/SKILL.md"));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Parse the `[CHILD-SKILL]` declarations out of a generated router file
+    /// exactly the way a recipient Agent reads them: take the path between the
+    /// backticks after `来源文件：` and use it verbatim.
+    fn declared_child_paths(router_body: &str) -> Vec<String> {
+        router_body
+            .lines()
+            .filter(|line| line.contains(CHILD_SKILL_MARKER))
+            .filter_map(|line| {
+                let tail = line.split("来源文件：").nth(1)?;
+                let start = tail.find('`')? + 1;
+                let end = tail[start..].find('`')? + start;
+                Some(tail[start..end].to_string())
+            })
+            .collect()
+    }
+
+    /// The contract this whole router scheme exists for: every declared child
+    /// path must open, used verbatim, with no relative-path arithmetic and no
+    /// knowledge of where the router file itself lives. A recipient reaches the
+    /// router through a junction chain, so a path that only resolves relative to
+    /// the router's physical location is not reachable in practice.
+    fn assert_every_declared_child_opens(router_body: &str, context: &str) -> usize {
+        let declared = declared_child_paths(router_body);
+        assert!(
+            !declared.is_empty(),
+            "{context}: router declared no children"
+        );
+        for path in &declared {
+            let candidate = Path::new(path);
+            assert!(
+                candidate.is_absolute(),
+                "{context}: child path is not absolute and cannot survive the \
+                 delivery junction chain: {path}"
+            );
+            assert!(
+                !path.contains(".."),
+                "{context}: child path contains a relative segment: {path}"
+            );
+            fs::read_to_string(candidate).unwrap_or_else(|error| {
+                panic!("{context}: declared child path did not open: {path} ({error})")
+            });
+        }
+        declared.len()
+    }
+
+    #[test]
+    fn router_hub_keeps_every_same_name_child_inside_one_source() {
+        // A source may ship the same `name:` at several paths (a `src/` copy
+        // plus per-host build outputs). Dropping any of them silently makes a
+        // real, installed Skill uncallable, so all of them stay listed and each
+        // repeated one is qualified with its in-source location.
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-router-samename-test-{}",
+            unix_timestamp_string()
+        ));
+        let sources_dir = active_sources_dir(&root);
+        let collection = sources_dir.join("PaperSpine");
+        for location in &[
+            "src/skill",
+            "dist/claude/skills/paper-spine",
+            "dist/codex/skills/paper-spine",
+        ] {
+            let folder = collection.join(location);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(
+                folder.join("SKILL.md"),
+                "---\nname: paper-spine\ndescription: \"review a paper\"\n---\nbody\n",
+            )
+            .unwrap();
+        }
+        let other = collection.join("figure-planner");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(
+            other.join("SKILL.md"),
+            "---\nname: figure-planner\ndescription: \"plan a figure\"\n---\nbody\n",
+        )
+        .unwrap();
+
+        let report = plan_or_write_router_hubs(&root, true, true).expect("routers should build");
+        let plan = report
+            .plans
+            .iter()
+            .find(|plan| plan.collection_name == "PaperSpine")
+            .expect("PaperSpine plan should exist");
+        assert_eq!(
+            plan.child_count, 4,
+            "every same-name child must survive generation"
+        );
+
+        let body = fs::read_to_string(
+            sources_dir
+                .join(ROUTER_HUB_FOLDER)
+                .join(&plan.router_skill_name)
+                .join("SKILL.md"),
+        )
+        .expect("router should be written");
+        let opened = assert_every_declared_child_opens(&body, "PaperSpine router");
+        assert_eq!(opened, 4);
+
+        // The three same-name children must be told apart by their location;
+        // the unique child stays unqualified.
+        assert!(body.contains("`$paper-spine` （src/skill）"));
+        assert!(body.contains("`$paper-spine` （dist/claude/skills/paper-spine）"));
+        assert!(body.contains("`$paper-spine` （dist/codex/skills/paper-spine）"));
+        assert!(body.contains("`$figure-planner` —"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// End-to-end reachability through the real delivery topology.
+    ///
+    /// A recipient never opens the router at its physical location. It opens
+    /// `<agent>/skills/<name>/SKILL.md`, which is a junction to the active
+    /// skills folder, which is itself a junction to the router folder. This is
+    /// the exact chain that made every `../../` child reference unreachable, so
+    /// it is the chain the test has to reproduce.
+    #[cfg(windows)]
+    #[test]
+    fn declared_children_open_through_the_agent_delivery_junction_chain() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-router-delivery-test-{}",
+            unix_timestamp_string()
+        ));
+        let sources_dir = active_sources_dir(&root);
+        let collection = sources_dir.join("nature-skills");
+        for child in &["nature-academic-search", "nature-figure"] {
+            let folder = collection.join(child);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(
+                folder.join("SKILL.md"),
+                format!("---\nname: {child}\ndescription: \"child\"\n---\nbody\n"),
+            )
+            .unwrap();
+        }
+        plan_or_write_router_hubs(&root, true, true).expect("routers should build");
+
+        let router_folder = sources_dir.join(ROUTER_HUB_FOLDER).join("nature-skills");
+        let active_skills = root.join("UserData").join("skills");
+        let agent_skills = root.join("agent-home").join("skills");
+        fs::create_dir_all(&active_skills).unwrap();
+        fs::create_dir_all(&agent_skills).unwrap();
+
+        // Hop 1: active catalog -> router folder. Hop 2: agent -> active catalog.
+        let hop_one = active_skills.join("nature-skills");
+        let hop_two = agent_skills.join("nature-skills");
+        if !make_directory_junction(&router_folder, &hop_one)
+            || !make_directory_junction(&hop_one, &hop_two)
+        {
+            // Junction creation can be unavailable on a restricted CI volume.
+            // Skip rather than fail on an environment limitation.
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+
+        let delivered = hop_two.join("SKILL.md");
+        let body = fs::read_to_string(&delivered)
+            .expect("router should be readable through the delivery chain");
+        assert_every_declared_child_opens(&body, "delivered nature-skills router");
+
+        // Guard the original defect directly: resolving a declared child the way
+        // a host actually does it (lexically, against the delivered path) must
+        // still land on a real file.
+        for path in declared_child_paths(&body) {
+            let resolved = hop_two.join(&path);
+            assert!(
+                resolved.exists(),
+                "child unreachable from the delivered entry: {path}"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Create a directory junction, returning false when the platform refuses.
+    #[cfg(windows)]
+    fn make_directory_junction(target: &Path, link: &Path) -> bool {
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn relocating_the_sources_root_rewrites_absolute_child_paths() {
+        // Absolute child paths bake the sources root into the router body. That
+        // is only safe because a relocated root produces a different body, so
+        // the `existing != body` short-circuit regenerates instead of leaving a
+        // router pointing at a directory the user moved away from.
+        let stamp = unix_timestamp_string();
+        let first = std::env::temp_dir().join(format!("skillhub-router-root-a-{stamp}"));
+        let second = std::env::temp_dir().join(format!("skillhub-router-root-b-{stamp}"));
+
+        let build = |root: &Path| -> String {
+            let sources_dir = active_sources_dir(root);
+            for child in &["alpha-one", "alpha-two"] {
+                let folder = sources_dir.join("alpha").join(child);
+                fs::create_dir_all(&folder).unwrap();
+                fs::write(
+                    folder.join("SKILL.md"),
+                    format!("---\nname: {child}\ndescription: \"c\"\n---\nbody\n"),
+                )
+                .unwrap();
+            }
+            plan_or_write_router_hubs(root, true, true).expect("routers should build");
+            fs::read_to_string(
+                sources_dir
+                    .join(ROUTER_HUB_FOLDER)
+                    .join("alpha")
+                    .join("SKILL.md"),
+            )
+            .expect("router should be written")
+        };
+
+        let before = build(&first);
+        let after = build(&second);
+        assert_ne!(
+            before, after,
+            "a relocated sources root must change the generated router body"
+        );
+        assert_every_declared_child_opens(&after, "relocated alpha router");
+        for path in declared_child_paths(&after) {
+            assert!(
+                !path.contains(&first.to_string_lossy().replace('\\', "/")),
+                "router kept a path under the old sources root: {path}"
+            );
+        }
+
+        // Regenerating an unchanged tree must stay a no-op so routine syncs do
+        // not rewrite every router file.
+        let rerun = plan_or_write_router_hubs(&second, true, true).expect("rerun should succeed");
+        let plan = rerun
+            .plans
+            .iter()
+            .find(|plan| plan.collection_name == "alpha")
+            .expect("alpha plan should exist");
+        assert_eq!(plan.status, "unchanged");
+
+        let _ = fs::remove_dir_all(&first);
+        let _ = fs::remove_dir_all(&second);
     }
 
     #[test]
@@ -17274,10 +17597,24 @@ mod tests {
         )
         .unwrap();
 
-        assert!(alpha.contains("../../alpha/shared-review/SKILL.md"));
-        assert!(!alpha.contains("../../beta/"));
-        assert!(beta.contains("../../beta/shared-review/SKILL.md"));
-        assert!(!beta.contains("../../alpha/"));
+        assert_every_declared_child_opens(&alpha, "alpha router");
+        assert_every_declared_child_opens(&beta, "beta router");
+        // Source isolation: a parent may only ever declare files inside its own
+        // collection, even when both collections ship a `shared-review` child.
+        for path in declared_child_paths(&alpha) {
+            assert!(
+                path.contains("/alpha/"),
+                "alpha router leaked a foreign source path: {path}"
+            );
+        }
+        for path in declared_child_paths(&beta) {
+            assert!(
+                path.contains("/beta/"),
+                "beta router leaked a foreign source path: {path}"
+            );
+        }
+        assert!(alpha.contains("/alpha/shared-review/SKILL.md"));
+        assert!(beta.contains("/beta/shared-review/SKILL.md"));
         assert!(alpha.contains("绝不跨来源替换"));
         let _ = fs::remove_dir_all(&root);
     }
