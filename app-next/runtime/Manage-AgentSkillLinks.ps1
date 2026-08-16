@@ -80,6 +80,7 @@ function Test-UnderRoot([string]$Child, [string]$Root) {
 }
 
 $Shared = Resolve-AppPath $Config.activeSkillsFolder
+$SourceRoot = Resolve-AppPath $Config.githubSourcesFolder
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 
 if (-not (Test-Path -LiteralPath $Shared)) {
@@ -348,12 +349,44 @@ function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot) {
     $missingNames = ($missingSkillMd | ForEach-Object Name) -join ', '
     throw "Agent Skill 交付验收失败；以下入口没有可读的 SKILL.md：$missingNames"
   }
+
+  foreach ($skill in $activeSkillDirs) {
+    $deliveredSkillMd = Join-Path (Join-Path $RecipientSkillsRoot $skill.Name) 'SKILL.md'
+    $body = [System.IO.File]::ReadAllText($deliveredSkillMd, [System.Text.Encoding]::UTF8)
+    if (-not $body.Contains('[ROUTER-HUB]')) { continue }
+    $declaredCount = 0
+    foreach ($line in ($body -split "`r?`n")) {
+      if ($line -notmatch '^\s*-\s+\[CHILD-SKILL\]') { continue }
+      $match = [regex]::Match($line, '来源文件：`([^`]+)`')
+      if (-not $match.Success) {
+        throw "父 Skill 子项声明格式无效：$($skill.Name)"
+      }
+      $declaredCount++
+      $declaredPath = [string]$match.Groups[1].Value
+      $slashPath = $declaredPath -replace '\\', '/'
+      if (-not [IO.Path]::IsPathRooted($declaredPath) -or $slashPath -match '(^|/)\.\.?(?:/|$)') {
+        throw "父 Skill 子项路径不是安全绝对路径：$($skill.Name) -> $declaredPath"
+      }
+      $resolvedChild = Convert-ToFullPath $declaredPath
+      if (-not (Test-UnderRoot $resolvedChild $SourceRoot)) {
+        throw "父 Skill 子项越过受管来源目录：$($skill.Name) -> $declaredPath"
+      }
+      if (-not (Test-Path -LiteralPath $resolvedChild -PathType Leaf)) {
+        throw "父 Skill 子项文件不可读：$($skill.Name) -> $declaredPath"
+      }
+      [System.IO.File]::OpenRead($resolvedChild).Dispose()
+    }
+    if ($declaredCount -lt 1) {
+      throw "父 Skill 没有声明任何可调用子项：$($skill.Name)"
+    }
+  }
   return $activeSkillDirs.Count
 }
 
 $codexCodePresent = Test-CodexCodePresent
 $openAIDesktopPresent = Test-OpenAIDesktopPresent
 $codexPresent = $codexCodePresent -or $openAIDesktopPresent
+$recipientFailures = [System.Collections.Generic.List[string]]::new()
 
 if ($claudePresent) {
   try {
@@ -361,6 +394,7 @@ if ($claudePresent) {
     $claudeStatus = "$claudeCount verified parent-first links"
   } catch {
     $claudeStatus = 'Preserved existing directory: ' + $_.Exception.Message
+    $recipientFailures.Add('Claude Code: ' + $_.Exception.Message) | Out-Null
     Write-Warning $claudeStatus
   }
 } else {
@@ -374,6 +408,7 @@ if ($antigravityPresent) {
     $antigravityStatus = "$antigravityCount verified parent-first links"
   } catch {
     $antigravityStatus = 'Preserved existing directory: ' + $_.Exception.Message
+    $recipientFailures.Add('Antigravity: ' + $_.Exception.Message) | Out-Null
     Write-Warning $antigravityStatus
   }
 } else {
@@ -388,6 +423,7 @@ if ($codexPresent) {
     $codexStatus = "$verifiedCount verified parent-first user-scope links"
   } catch {
     $codexStatus = 'Preserved existing directory: ' + $_.Exception.Message
+    $recipientFailures.Add('ChatGPT / Codex: ' + $_.Exception.Message) | Out-Null
     Write-Warning $codexStatus
   }
   $rows.Add([PSCustomObject]@{ App = 'ChatGPT / Codex'; Entry = $codexRoot; Status = $codexStatus; Target = $Shared }) | Out-Null
@@ -401,6 +437,7 @@ if ($codexPresent) {
       $legacyStatus = "$legacyVerifiedCount parent-first compatibility links"
     } catch {
       $legacyStatus = 'Preserved existing directory: ' + $_.Exception.Message
+      $recipientFailures.Add('Codex legacy: ' + $_.Exception.Message) | Out-Null
       Write-Warning $legacyStatus
     }
     $rows.Add([PSCustomObject]@{ App = 'Codex (legacy compatibility)'; Entry = $legacyCodexRoot; Status = $legacyStatus; Target = $Shared }) | Out-Null
@@ -411,6 +448,10 @@ if ($codexPresent) {
 
 if (-not $claudePresent -and -not $codexPresent -and -not $antigravityPresent) {
   Write-Step '未识别到可接管的 AI 工具。安装 ChatGPT Desktop、Codex、Claude Code 或 Antigravity 后，再重新同步。'
+}
+
+if ($recipientFailures.Count -gt 0) {
+  throw ('AI 工具 Skill 交付未完成；已保留原目录。' + [Environment]::NewLine + ($recipientFailures -join [Environment]::NewLine))
 }
 
 if (-not $Quiet) {

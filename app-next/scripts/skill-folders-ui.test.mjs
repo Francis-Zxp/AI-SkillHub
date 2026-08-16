@@ -55,11 +55,15 @@ test("the All filter cannot accept a classification drop", () => {
   assert.match(app, /onDrop=\{acceptsDrop \? event => acceptDrop/);
 });
 
-test("import draft retains the selected folder and files the promoted source", () => {
+test("import draft retains a folder and can create a custom classification during add", () => {
   const draftType = app.match(/type ImportWizardDraft = \{([\s\S]*?)\n\};/)?.[1] ?? "";
   assert.match(draftType, /folderId: string/);
+  assert.match(draftType, /customFolderName: string/);
   assert.match(app, /move_source_skills_to_folder/);
-  assert.match(app, /onMoveSourceSkillsToFolder\(promotedSource\.id, folderId\)/);
+  assert.match(app, /CREATE_IMPORT_FOLDER_VALUE/);
+  assert.match(app, /onCreateFolder\(requestedName, "", "cyan"\)/);
+  assert.match(app, /onMoveSourceSkillsToFolder\(promotedSource\.id, resolvedFolderId\)/);
+  assert.match(i18n, /新建自定义分类文件夹/);
 });
 
 test("homepage folder mode only reflects user folders and keeps unassigned Skills together", () => {

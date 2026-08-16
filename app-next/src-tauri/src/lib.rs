@@ -14809,7 +14809,12 @@ fn build_router_hub_skill_md(
                 .rsplit_once('/')
                 .map(|(parent, _)| parent)
                 .unwrap_or(".");
-            format!("`${}` （{}）", child.name, location)
+            format!(
+                "`${}` （{}变体 · {}）",
+                child.name,
+                router_child_host_variant(&child.relative_path),
+                location
+            )
         } else {
             format!("`${}`", child.name)
         };
@@ -14836,7 +14841,15 @@ fn build_router_hub_skill_md(
     } else {
         capabilities.join("、")
     };
-    let description = format!("◈ 父 · {} 个子项 · {}", children.len(), capability_summary);
+    let capability_count = children
+        .iter()
+        .map(|child| normalize_skill_lookup(&child.name))
+        .collect::<BTreeSet<_>>()
+        .len();
+    let description = format!(
+        "◈ 父 · {} 个子项 · {}",
+        capability_count, capability_summary
+    );
     // Keep the machine marker in an HTML comment instead of visible frontmatter.
     // Agent hosts still identify the generated parent deterministically, while
     // users see the concise `父 Skill` label in their Skill picker.
@@ -14856,7 +14869,7 @@ fn build_router_hub_skill_md(
         - 路径请原样使用，不要拼接、不要相对化、不要基于本文件所在目录再做解析。\n\
         - 只能打开下方明确列出的、属于来源 `{collection}` 的文件。\n\
         - 即使其它父 Skill 有同名子 Skill，也绝不跨来源替换。\n\
-        - 同名子项后面括号内是它在来源中的位置，用于区分；按用户意图选择其一。\n\
+        - 同名且内容完全相同的打包副本已自动合并；同名但内容不同的子项会标成变体。优先选择与当前 Agent 对应的变体，没有对应项时使用“通用”变体。\n\
         - 用户明确指定子 Skill 时，直接打开并完整遵循对应来源文件。\n\
         - 用户只指定父 Skill 或描述宽泛任务时，自动选择能完成任务的最小子 Skill。\n\
         - 只有在任务存在实质性歧义或安全风险时才向用户提问。\n\
@@ -15264,6 +15277,35 @@ struct RouterChildLink {
     absolute_path: String,
     relative_path: String,
     summary: String,
+    /// Exact source bytes are retained only while a router is planned. They let
+    /// us collapse packaging copies without relying on a collision-prone hash.
+    source_bytes: Option<Vec<u8>>,
+}
+
+fn router_child_host_variant(relative_path: &str) -> &'static str {
+    let normalized = format!("/{}/", relative_path.to_ascii_lowercase().trim_matches('/'));
+    if normalized.contains("/.claude/") || normalized.contains("/dist/claude/") {
+        "Claude"
+    } else if normalized.contains("/.codex/") || normalized.contains("/dist/codex/") {
+        "Codex"
+    } else if normalized.contains("/.agents/") || normalized.contains("/dist/agents/") {
+        "Agents"
+    } else if normalized.contains("/.gemini/") || normalized.contains("/dist/gemini/") {
+        "Gemini"
+    } else if normalized.contains("/dist/openclaw/") {
+        "OpenClaw"
+    } else {
+        "通用"
+    }
+}
+
+fn router_child_canonical_priority(relative_path: &str) -> u8 {
+    match router_child_host_variant(relative_path) {
+        "通用" => 0,
+        "Agents" => 10,
+        "Claude" | "Codex" | "Gemini" => 20,
+        _ => 30,
+    }
 }
 
 /// Render a child's absolute `SKILL.md` path for a generated router file.
@@ -15328,6 +15370,7 @@ fn collect_child_skill_links_for_collection(collection_dir: &Path) -> Vec<Router
                         absolute_path: router_child_absolute_path(&skill_md),
                         relative_path: relative,
                         summary,
+                        source_bytes: fs::read(&skill_md).ok(),
                     });
                 }
             }
@@ -15369,12 +15412,45 @@ fn collect_child_skill_links_for_collection(collection_dir: &Path) -> Vec<Router
         normalize_skill_lookup(&left.name)
             .cmp(&normalize_skill_lookup(&right.name))
             .then_with(|| {
+                router_child_canonical_priority(&left.relative_path)
+                    .cmp(&router_child_canonical_priority(&right.relative_path))
+            })
+            .then_with(|| {
                 left.relative_path
                     .to_lowercase()
                     .cmp(&right.relative_path.to_lowercase())
             })
     });
-    links
+
+    // Repositories commonly ship byte-identical copies for several hosts.
+    // Count and publish those as one capability. If same-name files differ,
+    // retain every distinct body as an explicit host/path variant so no real
+    // behavior is lost.
+    let mut deduplicated: Vec<RouterChildLink> = Vec::new();
+    for link in links {
+        let duplicate = link.source_bytes.as_ref().is_some_and(|candidate| {
+            deduplicated.iter().any(|existing| {
+                normalize_skill_lookup(&existing.name) == normalize_skill_lookup(&link.name)
+                    && existing
+                        .source_bytes
+                        .as_ref()
+                        .is_some_and(|body| body == candidate)
+            })
+        });
+        if !duplicate {
+            deduplicated.push(link);
+        }
+    }
+    deduplicated.sort_by(|left, right| {
+        normalize_skill_lookup(&left.name)
+            .cmp(&normalize_skill_lookup(&right.name))
+            .then_with(|| {
+                left.relative_path
+                    .to_lowercase()
+                    .cmp(&right.relative_path.to_lowercase())
+            })
+    });
+    deduplicated
 }
 
 /// Read just the `name:` field of a SKILL.md frontmatter.
@@ -15448,10 +15524,13 @@ fn plan_or_write_router_hubs(
         }
         let collection_dir = entry.path();
         let child_links = collect_child_skill_links_for_collection(&collection_dir);
-        let children = child_links
-            .iter()
-            .map(|link| link.name.clone())
-            .collect::<Vec<_>>();
+        let children = child_links.iter().fold(BTreeMap::new(), |mut names, link| {
+            names
+                .entry(normalize_skill_lookup(&link.name))
+                .or_insert_with(|| link.name.clone());
+            names
+        });
+        let children = children.into_values().collect::<Vec<_>>();
 
         // Walk one level of skill md files looking for unquoted [ROUTER-HUB] descriptions.
         for child in fs::read_dir(&collection_dir)
@@ -17323,27 +17402,26 @@ mod tests {
     }
 
     #[test]
-    fn router_hub_keeps_every_same_name_child_inside_one_source() {
-        // A source may ship the same `name:` at several paths (a `src/` copy
-        // plus per-host build outputs). Dropping any of them silently makes a
-        // real, installed Skill uncallable, so all of them stay listed and each
-        // repeated one is qualified with its in-source location.
+    fn router_hub_collapses_packaging_copies_but_keeps_distinct_variants() {
+        // A source may ship byte-identical host packaging copies and also a
+        // genuinely different host variant under the same `name:`. Exact copies
+        // become one capability; different bodies remain callable variants.
         let root = std::env::temp_dir().join(format!(
             "skillhub-router-samename-test-{}",
             unix_timestamp_string()
         ));
         let sources_dir = active_sources_dir(&root);
         let collection = sources_dir.join("PaperSpine");
-        for location in &[
-            "src/skill",
-            "dist/claude/skills/paper-spine",
-            "dist/codex/skills/paper-spine",
+        for (location, body) in &[
+            ("src/skill", "body"),
+            ("dist/claude/skills/paper-spine", "body"),
+            ("dist/codex/skills/paper-spine", "codex body"),
         ] {
             let folder = collection.join(location);
             fs::create_dir_all(&folder).unwrap();
             fs::write(
                 folder.join("SKILL.md"),
-                "---\nname: paper-spine\ndescription: \"review a paper\"\n---\nbody\n",
+                format!("---\nname: paper-spine\ndescription: \"review a paper\"\n---\n{body}\n"),
             )
             .unwrap();
         }
@@ -17362,8 +17440,8 @@ mod tests {
             .find(|plan| plan.collection_name == "PaperSpine")
             .expect("PaperSpine plan should exist");
         assert_eq!(
-            plan.child_count, 4,
-            "every same-name child must survive generation"
+            plan.child_count, 2,
+            "parent count must represent capabilities, not packaging paths"
         );
 
         let body = fs::read_to_string(
@@ -17374,14 +17452,15 @@ mod tests {
         )
         .expect("router should be written");
         let opened = assert_every_declared_child_opens(&body, "PaperSpine router");
-        assert_eq!(opened, 4);
+        assert_eq!(opened, 3);
 
-        // The three same-name children must be told apart by their location;
-        // the unique child stays unqualified.
-        assert!(body.contains("`$paper-spine` （src/skill）"));
-        assert!(body.contains("`$paper-spine` （dist/claude/skills/paper-spine）"));
-        assert!(body.contains("`$paper-spine` （dist/codex/skills/paper-spine）"));
+        // The neutral source copy wins over its byte-identical Claude package;
+        // the content-different Codex body remains an explicit variant.
+        assert!(body.contains("`$paper-spine` （通用变体 · src/skill）"));
+        assert!(body.contains("`$paper-spine` （Codex变体 · dist/codex/skills/paper-spine）"));
+        assert!(!body.contains("dist/claude/skills/paper-spine/SKILL.md"));
         assert!(body.contains("`$figure-planner` —"));
+        assert!(body.contains("description: \"◈ 父 · 2 个子项"));
         let _ = fs::remove_dir_all(&root);
     }
 

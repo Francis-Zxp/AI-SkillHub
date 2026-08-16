@@ -1,33 +1,20 @@
 #!/usr/bin/env node
-// Verify that every child Skill a generated parent router declares can actually
-// be opened by a recipient Agent.
-//
-// A recipient never sees the router at its physical location. It opens the copy
-// delivered into its own home (~/.claude/skills/<Name>/SKILL.md and friends),
-// which is a directory junction, and it resolves any relative path lexically
-// against that entry -- Node's path.resolve, Rust's Path::join and .NET's
-// Path.GetFullPath all agree here, and all of them disagree with a shell's `cd`.
-// So a declared path only works for every consumer if it is absolute.
-//
-// Usage:
-//   node scripts/verify-live-router-children.mjs [sourcesFolder]
-//
-// Exits non-zero when any declared child is unreachable from any recipient.
+// Verify every active parent and declared child from the exact paths used by
+// installed Agent recipients.
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const ROUTER_COLLECTION = "AI-SkillHub-local-routers";
 const CHILD_MARKER = "[CHILD-SKILL]";
-const SOURCE_FILE_LABEL = "来源文件："; // 来源文件：
+const SOURCE_FILE_LABEL = "来源文件：";
 
 function defaultSourcesFolder() {
   const configPath = path.join(
     process.env.LOCALAPPDATA ?? path.join(homedir(), "AppData", "Local"),
-    "AI SkillHub",
-    "UserData",
-    "skillhub.config.json"
+    "AI SkillHub", "UserData", "skillhub.config.json"
   );
   if (!existsSync(configPath)) return null;
   try {
@@ -37,100 +24,153 @@ function defaultSourcesFolder() {
   }
 }
 
-const sourcesFolder = process.argv[2] ?? defaultSourcesFolder();
-if (!sourcesFolder) {
-  console.error("Could not determine the sources folder. Pass it as the first argument.");
-  process.exit(2);
+export function defaultRecipientRoots(home = homedir()) {
+  return [
+    { name: "claude", root: path.join(home, ".claude", "skills") },
+    { name: "agents", root: path.join(home, ".agents", "skills") },
+    { name: "codex_legacy", root: path.join(home, ".codex", "skills") },
+    { name: "antigravity", root: path.join(home, ".gemini", "antigravity", "skills") }
+  ];
 }
 
-const routersRoot = path.join(sourcesFolder, ROUTER_COLLECTION);
-if (!existsSync(routersRoot)) {
-  console.error(`No router collection at ${routersRoot}`);
-  process.exit(2);
-}
-
-// Where each host publishes the entries. These are the paths an Agent resolves
-// relative to, so they are the ones that decide whether the fix worked.
-const recipients = [
-  { name: "claude", root: path.join(homedir(), ".claude", "skills") },
-  { name: "codex", root: path.join(homedir(), ".codex", "skills") },
-  { name: "agents", root: path.join(homedir(), ".agents", "skills") }
-];
-
-function declaredChildPaths(body) {
+export function declaredChildPaths(body) {
   const paths = [];
   for (const line of body.split(/\r?\n/)) {
     if (!line.includes(CHILD_MARKER)) continue;
     const labelAt = line.indexOf(SOURCE_FILE_LABEL);
     if (labelAt < 0) continue;
-    const tail = line.slice(labelAt + SOURCE_FILE_LABEL.length);
-    const match = /`([^`]+)`/.exec(tail);
+    const match = /`([^`]+)`/.exec(line.slice(labelAt + SOURCE_FILE_LABEL.length));
     if (match) paths.push(match[1]);
   }
   return paths;
 }
 
-const routers = readdirSync(routersRoot)
-  .filter((entry) => {
+function directoriesAt(root) {
+  if (!existsSync(root)) return [];
+  return readdirSync(root).filter(entry => {
     try {
-      return statSync(path.join(routersRoot, entry)).isDirectory();
+      return statSync(path.join(root, entry)).isDirectory();
     } catch {
       return false;
     }
-  })
-  .filter((entry) => existsSync(path.join(routersRoot, entry, "SKILL.md")))
-  .sort();
-
-const stats = {
-  routers: routers.length,
-  refs: 0,
-  absolute: 0,
-  physical_ok: 0,
-  lexical_ok: 0
-};
-for (const recipient of recipients) {
-  stats[`${recipient.name}_entries`] = 0;
-  stats[`${recipient.name}_entry_ok`] = 0;
+  }).sort();
 }
-const failures = [];
 
-for (const router of routers) {
-  const routerDir = path.join(routersRoot, router);
-  const body = readFileSync(path.join(routerDir, "SKILL.md"), "utf8");
-  const declared = declaredChildPaths(body);
-  stats.refs += declared.length;
+export function verifyRouterChildren({ sourcesFolder, recipients = defaultRecipientRoots() }) {
+  const routersRoot = path.join(sourcesFolder, ROUTER_COLLECTION);
+  if (!existsSync(routersRoot)) throw new Error(`No router collection at ${routersRoot}`);
+  const activeSkillsRoot = path.join(path.dirname(path.resolve(sourcesFolder)), "skills");
+  const routers = directoriesAt(routersRoot)
+    .filter(entry => existsSync(path.join(routersRoot, entry, "SKILL.md")));
+  const publishedRouters = routers.filter(router =>
+    existsSync(path.join(activeSkillsRoot, router, "SKILL.md"))
+  );
+  const stats = {
+    routers: routers.length,
+    published_routers: publishedRouters.length,
+    refs: 0,
+    absolute: 0,
+    physical_ok: 0,
+    lexical_ok: 0
+  };
+  for (const recipient of recipients) {
+    stats[`${recipient.name}_entries`] = 0;
+    stats[`${recipient.name}_entry_ok`] = 0;
+    stats[`${recipient.name}_skipped`] = 0;
+  }
+  const failures = [];
+  const missingEntryKeys = new Set();
+  for (const recipient of recipients) {
+    if (!existsSync(recipient.root)) {
+      stats[`${recipient.name}_skipped`] = 1;
+      if (recipient.required) failures.push(`${recipient.name}: recipient root is missing: ${recipient.root}`);
+    }
+  }
 
-  for (const declaredPath of declared) {
-    if (path.isAbsolute(declaredPath)) stats.absolute += 1;
-
-    // Physical resolution: what a shell does after `cd` into the junction.
-    const physical = path.resolve(sourcesFolder, ROUTER_COLLECTION, router, declaredPath);
-    if (existsSync(physical)) stats.physical_ok += 1;
-
-    // Lexical resolution from the physical router location.
-    if (existsSync(path.resolve(routerDir, declaredPath))) stats.lexical_ok += 1;
+  const normalizedSources = `${path.resolve(sourcesFolder)}${path.sep}`.toLowerCase();
+  for (const router of publishedRouters) {
+    const routerDir = path.join(routersRoot, router);
+    const body = readFileSync(path.join(routerDir, "SKILL.md"), "utf8");
+    const declared = declaredChildPaths(body);
+    stats.refs += declared.length;
+    if (declared.length === 0) failures.push(`${router}: parent declares no child Skills`);
 
     for (const recipient of recipients) {
-      const entryDir = path.join(recipient.root, router);
-      if (!existsSync(entryDir)) continue;
-      stats[`${recipient.name}_entries`] += 1;
-      if (existsSync(path.resolve(entryDir, declaredPath))) {
-        stats[`${recipient.name}_entry_ok`] += 1;
-      } else {
-        failures.push(`${recipient.name}: ${router} -> ${declaredPath}`);
+      if (!existsSync(recipient.root)) continue;
+      if (!existsSync(path.join(recipient.root, router))) {
+        const key = `${recipient.name}:${router}`;
+        if (!missingEntryKeys.has(key)) {
+          missingEntryKeys.add(key);
+          failures.push(`${recipient.name}: missing published parent entry ${router}`);
+        }
+      }
+    }
+
+    for (const declaredPath of declared) {
+      if (path.isAbsolute(declaredPath)) stats.absolute += 1;
+      else failures.push(`${router}: child path is not absolute: ${declaredPath}`);
+      const normalizedChild = path.resolve(declaredPath);
+      if (!`${normalizedChild}${path.sep}`.toLowerCase().startsWith(normalizedSources)) {
+        failures.push(`${router}: child path escapes managed sources: ${declaredPath}`);
+      }
+      if (existsSync(path.resolve(sourcesFolder, ROUTER_COLLECTION, router, declaredPath))) {
+        stats.physical_ok += 1;
+      }
+      if (existsSync(path.resolve(routerDir, declaredPath))) stats.lexical_ok += 1;
+
+      for (const recipient of recipients) {
+        if (!existsSync(recipient.root)) continue;
+        const entryDir = path.join(recipient.root, router);
+        if (!existsSync(entryDir)) continue;
+        stats[`${recipient.name}_entries`] += 1;
+        if (existsSync(path.resolve(entryDir, declaredPath))) {
+          stats[`${recipient.name}_entry_ok`] += 1;
+        } else {
+          failures.push(`${recipient.name}: ${router} -> ${declaredPath}`);
+        }
       }
     }
   }
+  return { failures, stats };
 }
 
-const line = Object.entries(stats)
-  .map(([key, value]) => `${key}=${value}`)
-  .join(" ");
-console.log(line);
-
-if (failures.length > 0) {
-  console.error(`\n${failures.length} unreachable declaration(s); first 20:`);
-  for (const failure of failures.slice(0, 20)) console.error(`  ${failure}`);
-  process.exit(1);
+export function formatRouterStats(stats) {
+  return Object.entries(stats).map(([key, value]) => `${key}=${value}`).join(" ");
 }
-console.log("OK: every declared child opens from every published recipient entry.");
+
+function main() {
+  const sourcesFolder = process.argv[2] ?? defaultSourcesFolder();
+  if (!sourcesFolder) {
+    console.error("Could not determine the sources folder. Pass it as the first argument.");
+    process.exitCode = 2;
+    return;
+  }
+  try {
+    const requested = process.argv.slice(3).map((value, index) => {
+      const separator = value.indexOf("=");
+      if (separator <= 0 || separator === value.length - 1) {
+        throw new Error(`Invalid recipient argument ${index + 1}: ${value}`);
+      }
+      return { name: value.slice(0, separator), root: value.slice(separator + 1), required: true };
+    });
+    const result = verifyRouterChildren({
+      sourcesFolder,
+      recipients: requested.length > 0 ? requested : defaultRecipientRoots()
+    });
+    console.log(formatRouterStats(result.stats));
+    if (result.failures.length > 0) {
+      console.error(`\n${result.failures.length} delivery failure(s); first 20:`);
+      for (const failure of result.failures.slice(0, 20)) console.error(`  ${failure}`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log("OK: every active parent and declared child opens from every installed recipient.");
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 2;
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  main();
+}

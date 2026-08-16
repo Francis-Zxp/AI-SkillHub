@@ -85,6 +85,7 @@ type SourceDraft = {
 type QuickSourceDraft = Omit<SourceDraft, "name">;
 type ImportWizardDraft = {
   customCategory: string;
+  customFolderName: string;
   enabled: boolean;
   importKind: "github" | "local" | "zip";
   input: string;
@@ -166,8 +167,11 @@ function applySkillFolderCommandResult(
 }
 
 const IMPORT_WIZARD_DRAFT_STORAGE_KEY = "ai-skillhub-source-import-draft-v1";
+const CREATE_IMPORT_FOLDER_VALUE = "__create_custom_folder__";
+
 const EMPTY_IMPORT_WIZARD_DRAFT: ImportWizardDraft = {
   customCategory: "",
+  customFolderName: "",
   enabled: true,
   importKind: "github",
   input: "",
@@ -193,6 +197,7 @@ function loadImportWizardDraft(): ImportWizardDraft {
       typeof value === "string" ? value.slice(0, maxLength) : "";
     return {
       customCategory: text(saved.customCategory, 500),
+      customFolderName: text(saved.customFolderName, 48),
       enabled: typeof saved.enabled === "boolean" ? saved.enabled : true,
       importKind,
       input: text(saved.input, 10_000),
@@ -216,6 +221,7 @@ function importWizardDraftHasContent(draft: ImportWizardDraft) {
     draft.note.trim() ||
     draft.tags.trim() ||
     draft.customCategory.trim() ||
+    draft.customFolderName.trim() ||
     draft.selectedCategoryIds.length ||
     draft.importKind !== EMPTY_IMPORT_WIZARD_DRAFT.importKind ||
     draft.sourceType !== EMPTY_IMPORT_WIZARD_DRAFT.sourceType ||
@@ -3051,6 +3057,7 @@ function Library(props: LibraryProps) {
         <ImportWizard
           disabled={loading}
           onCancel={onCancelImport}
+          onCreateFolder={onCreateFolder}
           onPreview={onPreviewImport}
           onPromote={onPromoteImport}
           onRefreshIndex={onRefreshIndex}
@@ -4391,6 +4398,7 @@ function ParentIsolationPanel({ conflicts }: { conflicts: SkillConflictCard[] })
 function ImportWizard({
   disabled,
   onCancel,
+  onCreateFolder,
   onPreview,
   onPromote,
   onRefreshIndex,
@@ -4402,6 +4410,7 @@ function ImportWizard({
 }: {
   disabled: boolean;
   onCancel: (operationId: string) => Promise<boolean>;
+  onCreateFolder: (name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
   onPreview: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportPlanCard>;
   onPromote: (
     importKind: string,
@@ -4425,6 +4434,7 @@ function ImportWizard({
   const [tags, setTags] = useState(initialDraft.tags);
   const [enabled, setEnabled] = useState(initialDraft.enabled);
   const [customCategory, setCustomCategory] = useState(initialDraft.customCategory);
+  const [customFolderName, setCustomFolderName] = useState(initialDraft.customFolderName);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>(initialDraft.selectedCategoryIds);
   const [pending, setPending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -4442,6 +4452,7 @@ function ImportWizard({
   useEffect(() => {
     saveImportWizardDraft({
       customCategory,
+      customFolderName,
       enabled,
       importKind,
       input,
@@ -4451,7 +4462,7 @@ function ImportWizard({
       sourceType,
       tags
     });
-  }, [customCategory, enabled, folderId, importKind, input, note, selectedCategoryIds, sourceType, tags]);
+  }, [customCategory, customFolderName, enabled, folderId, importKind, input, note, selectedCategoryIds, sourceType, tags]);
 
   function resetImportDraft() {
     clearImportWizardDraft();
@@ -4463,6 +4474,7 @@ function ImportWizard({
     setTags(EMPTY_IMPORT_WIZARD_DRAFT.tags);
     setEnabled(EMPTY_IMPORT_WIZARD_DRAFT.enabled);
     setCustomCategory(EMPTY_IMPORT_WIZARD_DRAFT.customCategory);
+    setCustomFolderName(EMPTY_IMPORT_WIZARD_DRAFT.customFolderName);
     setSelectedCategoryIds([]);
   }
 
@@ -4577,8 +4589,25 @@ function ImportWizard({
         };
         setProgress({ detail: t("qa.statusRefreshing"), percent: 96, step: 5, total: 5 });
         await onSaveSourceMetadata(promotedSource, draft);
-        if (folderId) {
-          await onMoveSourceSkillsToFolder(promotedSource.id, folderId);
+        let resolvedFolderId = folderId;
+        if (folderId === CREATE_IMPORT_FOLDER_VALUE) {
+          const requestedName = customFolderName.trim();
+          const existingFolder = skillFolders.find(
+            folder => folder.name.trim().toLocaleLowerCase() === requestedName.toLocaleLowerCase()
+          );
+          if (existingFolder) {
+            resolvedFolderId = existingFolder.id;
+          } else {
+            const created = await onCreateFolder(requestedName, "", "cyan");
+            const createdFolder = (created?.skillFolders ?? []).find(
+              folder => folder.name.trim().toLocaleLowerCase() === requestedName.toLocaleLowerCase()
+            );
+            if (!createdFolder) throw new Error(t("folders.createDuringImportFailed"));
+            resolvedFolderId = createdFolder.id;
+          }
+        }
+        if (resolvedFolderId) {
+          await onMoveSourceSkillsToFolder(promotedSource.id, resolvedFolderId);
         }
       }
       setProgress({ detail: t("qa.statusAddedTitle"), percent: 100, step: 5, total: 5 });
@@ -4601,6 +4630,10 @@ function ImportWizard({
     const value = input.trim();
     if (!value) {
       showUiToast(t("qa.needInput"), "warn");
+      return;
+    }
+    if (folderId === CREATE_IMPORT_FOLDER_VALUE && !customFolderName.trim()) {
+      showUiToast(t("folders.customNameRequired"), "warn");
       return;
     }
     setPending(true);
@@ -4777,7 +4810,17 @@ function ImportWizard({
           <select disabled={isBusy} onChange={event => setFolderId(event.target.value)} value={folderId}>
             <option value="">{t("folders.chooseLater")}</option>
             {skillFolders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+            <option value={CREATE_IMPORT_FOLDER_VALUE}>{t("folders.createDuringImport")}</option>
           </select>
+          {folderId === CREATE_IMPORT_FOLDER_VALUE && (
+            <input
+              disabled={isBusy}
+              maxLength={48}
+              onChange={event => setCustomFolderName(event.target.value)}
+              placeholder={t("folders.customNamePlaceholder")}
+              value={customFolderName}
+            />
+          )}
         </label>
       </div>
 
@@ -4926,6 +4969,7 @@ function ImportWizard({
           className="secondary-action"
           disabled={isBusy || !importWizardDraftHasContent({
             customCategory,
+            customFolderName,
             enabled,
             importKind,
             input,
@@ -5429,6 +5473,26 @@ function Settings({
   const updateFailureDetail = appUpdate.failure
     ? t(`update.failure.${appUpdate.failure}`, { attempts: appUpdate.attempts })
     : "";
+  const actionableSourceUpdateStatuses = new Set([
+    "dirty-blocked", "not-git", "failed", "timeout",
+    "safety-check-failed", "governance-blocked", "pinned-missing"
+  ]);
+  const sourceUpdateProblems = (snapshot?.lastSyncSummary?.repositories ?? []).filter(item =>
+    actionableSourceUpdateStatuses.has(item.status.trim().toLowerCase())
+  );
+
+  function sourceUpdateProblemMessage(status: string) {
+    const normalized = status.trim().toLowerCase();
+    if (normalized === "not-git") return t("set.sourceUpdatesNotGit");
+    if (normalized === "dirty-blocked") return t("set.sourceUpdatesDirty");
+    if (normalized === "timeout") return t("set.sourceUpdatesTimeout");
+    if (normalized === "failed") return t("set.sourceUpdatesFailed");
+    if (normalized === "safety-check-failed") return t("set.sourceUpdatesSafety");
+    if (normalized === "governance-blocked" || normalized === "pinned-missing") {
+      return t("set.sourceUpdatesGovernance");
+    }
+    return t("set.sourceUpdatesSkipped");
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -5541,6 +5605,37 @@ function Settings({
           </div>
         )}
       </section>
+
+      {sourceUpdateProblems.length > 0 && (
+        <section className="panel glow-card source-update-problems" role="status">
+          <header className="panel-head">
+            <div>
+              <span className="eyebrow">{t("set.sourceUpdatesEyebrow")}</span>
+              <h3>{t("set.sourceUpdatesTitle")}</h3>
+              <p>{t("set.sourceUpdatesBody")}</p>
+            </div>
+            <span className="legacy-cleanup-count">{sourceUpdateProblems.length}</span>
+          </header>
+          <div className="source-update-problem-list">
+            {sourceUpdateProblems.map((item, index) => (
+              <article className="source-update-problem-card" key={`${item.repository}-${item.status}-${index}`}>
+                <span className="source-update-problem-icon" aria-hidden="true"><Icon name="alert" /></span>
+                <div>
+                  <strong>{item.repository}</strong>
+                  <p>{sourceUpdateProblemMessage(item.status)}</p>
+                </div>
+                <span className={`qa-status ${item.status === "dirty-blocked" ? "planned" : "failed"}`}>
+                  {item.status === "dirty-blocked"
+                    ? t("set.sourceUpdatesLocalChanges")
+                    : item.status === "not-git"
+                      ? t("set.sourceUpdatesReinstall")
+                      : t("set.sourceUpdatesRetry")}
+                </span>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="preset-concept-strip glow-card">
         <article><Icon name="folder" /><div><strong>{t("preset.folderTitle")}</strong><span>{t("preset.folderBody")}</span></div></article>

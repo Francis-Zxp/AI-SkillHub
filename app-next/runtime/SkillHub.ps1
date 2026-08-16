@@ -643,6 +643,27 @@ function Get-RouterCapabilityLabel([string]$SkillName, [string]$Description) {
   return $fallback
 }
 
+function Get-RouterHostVariant([string]$RelativePath) {
+  $normalized = '/' + (($RelativePath -replace '\\', '/').Trim('/').ToLowerInvariant()) + '/'
+  if ($normalized.Contains('/.claude/') -or $normalized.Contains('/dist/claude/')) { return 'Claude' }
+  if ($normalized.Contains('/.codex/') -or $normalized.Contains('/dist/codex/')) { return 'Codex' }
+  if ($normalized.Contains('/.agents/') -or $normalized.Contains('/dist/agents/')) { return 'Agents' }
+  if ($normalized.Contains('/.gemini/') -or $normalized.Contains('/dist/gemini/')) { return 'Gemini' }
+  if ($normalized.Contains('/dist/openclaw/')) { return 'OpenClaw' }
+  return '通用'
+}
+
+function Get-RouterCanonicalPriority([string]$RelativePath) {
+  switch (Get-RouterHostVariant $RelativePath) {
+    '通用' { return 0 }
+    'Agents' { return 10 }
+    'Claude' { return 20 }
+    'Codex' { return 20 }
+    'Gemini' { return 20 }
+    default { return 30 }
+  }
+}
+
 function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates) {
   if ([string]::IsNullOrWhiteSpace($RepoName)) { return }
   if ($RepoName -eq 'AI-SkillHub-local-routers') { return }
@@ -653,8 +674,31 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
       (Normalize-SkillLookupName ([string]$_.Skill)) -eq $repoKey
     } | Sort-Object Priority, TieBreaker, Source | Select-Object -First 1
   )
+  $collectionRoot = Join-Path $SourceRoot $RepoName
+  $childCandidates = @($RepoCandidates | Sort-Object Skill, Source | ForEach-Object {
+    $childSkillMd = Join-Path ([string]$_.Source) 'SKILL.md'
+    $relativeChild = Convert-ToRelativePath -Root $collectionRoot -Path $childSkillMd
+    $fingerprint = try {
+      (Get-FileHash -LiteralPath $childSkillMd -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+    } catch {
+      # An unreadable file must remain unique so an I/O failure can never make a
+      # real variant disappear. Later delivery validation will fail closed.
+      'unreadable:' + (Convert-ToFullPath $childSkillMd).ToLowerInvariant()
+    }
+    [PSCustomObject]@{
+      Candidate = $_
+      DedupKey = (Normalize-SkillLookupName ([string]$_.Skill)) + '|' + $fingerprint
+      Priority = Get-RouterCanonicalPriority $relativeChild
+      RelativePath = $relativeChild
+      Source = [string]$_.Source
+    }
+  })
   $childSkills = @(
-    $RepoCandidates | Sort-Object Skill, Source -Unique
+    $childCandidates |
+      Sort-Object DedupKey, Priority, Source |
+      Group-Object DedupKey |
+      ForEach-Object { $_.Group[0].Candidate } |
+      Sort-Object Skill, Source
   )
   if ($childSkills.Count -lt 1) { return }
 
@@ -694,11 +738,11 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
     if ($childNameCounts[$nameKey] -gt 1) {
       # Location is relative to the collection root, so the qualifier reads
       # `src/skill` rather than repeating the source name on every line.
-      $collectionRoot = Join-Path $SourceRoot $RepoName
       $relativeChild = Convert-ToRelativePath -Root $collectionRoot -Path $childSkillMd
       $location = Split-Path -Parent $relativeChild
       if ([string]::IsNullOrWhiteSpace($location)) { $location = '.' }
-      $label = '`${0}` （{1}）' -f ([string]$_.Skill), ($location -replace '\\', '/')
+      $variant = Get-RouterHostVariant $relativeChild
+      $label = '`${0}` （{1}变体 · {2}）' -f ([string]$_.Skill), $variant, ($location -replace '\\', '/')
     }
     '- [CHILD-SKILL] {0} — {1}；来源文件：`{2}`' -f $label, $childDescription, $absoluteChild
   })
@@ -730,10 +774,11 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
       )
     }
   }
+  $capabilityCount = @($childSkills | ForEach-Object { Normalize-SkillLookupName ([string]$_.Skill) } | Sort-Object -Unique).Count
   $routerText = @(
     '---'
     "name: $safeRouterName"
-    "description: `"◈ 父 · $($childSkills.Count) 个子项 · $capabilitySummary`""
+    "description: `"◈ 父 · $capabilityCount 个子项 · $capabilitySummary`""
     '---'
     ''
     '<!-- [ROUTER-HUB] -->'
@@ -753,7 +798,7 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
     '- 路径请原样使用，不要拼接、不要相对化、不要基于本文件所在目录再做解析。'
     "- 只能打开下方明确列出的、属于来源 ``$RepoName`` 的文件。"
     '- 即使其它父 Skill 有同名子 Skill，也绝不跨来源替换。'
-    '- 同名子项后面括号内是它在来源中的位置，用于区分；按用户意图选择其一。'
+    '- 同名且内容完全相同的打包副本已自动合并；同名但内容不同的子项会标成变体。优先选择与当前 Agent 对应的变体，没有对应项时使用“通用”变体。'
     '- 用户明确指定子 Skill 时，直接打开并完整遵循对应来源文件。'
     '- 用户只指定父 Skill 或描述宽泛任务时，自动选择能完成任务的最小子 Skill。'
     '- 只有在任务存在实质性歧义或安全风险时才向用户提问。'
@@ -1142,7 +1187,7 @@ foreach ($repo in $Config.repositories) {
     }
   } elseif (Test-Path -LiteralPath $target) {
     Write-Warning "$target exists but is not a Git repository. Skipping clone."
-    Add-RepoUpdateLog ([string]$repo.name) 'clone' 'skipped' 'Target exists but is not a Git repository.'
+    Add-RepoUpdateLog ([string]$repo.name) 'reinstall' 'not-git' 'Target exists but has no .git metadata; automatic GitHub updates are unavailable.'
   } else {
     if (-not (Test-GitUpdateBudget)) {
       Write-Warning "Git update budget exhausted. Skipping clone for $($repo.name)."
@@ -1211,6 +1256,23 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
       Write-Warning "git pull failed for manual repository $($manualRepo.Name); continuing with local copy."
       Add-RepoUpdateLog $manualRepo.Name 'pull' 'failed' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
     }
+  }
+}
+
+if (-not $ReportOnly -and -not $NoPull) {
+  # Codeload/legacy copies without .git are usable locally but cannot receive a
+  # `git pull`. Surface every one explicitly instead of silently omitting it
+  # from the update summary, so the user can remove and re-add the GitHub URL.
+  $alreadyLogged = @{}
+  foreach ($row in $RepoUpdateLog) { $alreadyLogged[[string]$row.Repository] = $true }
+  $nonGitSources = @(Get-ChildItem -LiteralPath $SourceRoot -Force -Directory -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Name -ne 'AI-SkillHub-local-routers' -and
+      -not (Test-Path -LiteralPath (Join-Path $_.FullName '.git')) -and
+      -not $alreadyLogged.ContainsKey($_.Name)
+    })
+  foreach ($source in $nonGitSources) {
+    Add-RepoUpdateLog $source.Name 'reinstall' 'not-git' 'Local source has no .git metadata; remove it and add its GitHub URL again to restore automatic updates.'
   }
 }
 
@@ -1511,7 +1573,7 @@ foreach ($repo in ($Config.repositories | Where-Object { $_.type -eq 'prompt' })
 }
 
 Write-Utf8Bom $ReportPath ($report -join [Environment]::NewLine)
-$failedUpdates = @($RepoUpdateLog | Where-Object { $_.Status -in @('failed', 'timeout', 'governance-blocked', 'pinned-missing', 'safety-check-failed') })
+$failedUpdates = @($RepoUpdateLog | Where-Object { $_.Status -in @('failed', 'timeout', 'governance-blocked', 'pinned-missing', 'safety-check-failed', 'not-git') })
 $successfulUpdates = @($RepoUpdateLog | Where-Object { $_.Status -eq 'ok' })
 $skippedUpdates = @($RepoUpdateLog | Where-Object { $_.Status -in @('skipped', 'pinned', 'dirty-blocked') })
 $syncStatus = if ($RepoUpdateLog.Count -eq 0 -or $successfulUpdates.Count -eq 0) {
@@ -1521,20 +1583,22 @@ $syncStatus = if ($RepoUpdateLog.Count -eq 0 -or $successfulUpdates.Count -eq 0)
 } else {
   'ok'
 }
-Write-JsonUtf8 $ReportJsonPath ([PSCustomObject]@{
-  schemaVersion = 1
-  generatedAt = (Get-Date).ToUniversalTime().ToString('o')
-  status = $syncStatus
-  total = $RepoUpdateLog.Count
-  succeeded = $successfulUpdates.Count
-  failed = $failedUpdates.Count
-  skipped = $skippedUpdates.Count
-  activeSkills = $selected.Count
-  # Windows PowerShell 5.1 can throw "Argument types do not match" when a
-  # generic List[object] is wrapped directly with @(...). Materialize a plain
-  # object array before ConvertTo-Json so partial syncs still finish normally.
-  repositories = @($RepoUpdateLog.ToArray())
-}) 8
+if (-not $NoPull -or -not (Test-Path -LiteralPath $ReportJsonPath -PathType Leaf)) {
+  Write-JsonUtf8 $ReportJsonPath ([PSCustomObject]@{
+    schemaVersion = 1
+    generatedAt = (Get-Date).ToUniversalTime().ToString('o')
+    status = $syncStatus
+    total = $RepoUpdateLog.Count
+    succeeded = $successfulUpdates.Count
+    failed = $failedUpdates.Count
+    skipped = $skippedUpdates.Count
+    activeSkills = $selected.Count
+    # Windows PowerShell 5.1 can throw "Argument types do not match" when a
+    # generic List[object] is wrapped directly with @(...). Materialize a plain
+    # object array before ConvertTo-Json so partial syncs still finish normally.
+    repositories = @($RepoUpdateLog.ToArray())
+  }) 8
+}
 Add-SyncTiming 'report written'
 
 Write-Host ''

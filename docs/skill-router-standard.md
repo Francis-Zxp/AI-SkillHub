@@ -38,7 +38,7 @@ ASCII machine marker.
 8. The parent may load children only from its declared source. It must never substitute a same-name child from another source.
 9. Rebuild parents after startup repair, adding a source, manual sync, automatic update, and any change to the sources root (a moved root changes every absolute child path).
 10. Generated writes are recoverable: write a temporary file, preserve the previous generated file, then activate the replacement.
-11. Never drop a child because another child shares its `name:`. Keep every declared child and disambiguate it with its path inside the source.
+11. Never drop a content-distinct child because another child shares its `name:`. Collapse only byte-identical same-name packaging copies; retain every different body and label it as a host/path variant.
 
 ## Child Path Contract
 
@@ -80,13 +80,14 @@ AI SkillHub no longer generates global `[CONFLICT-DISPATCHER]` Skills or asks th
 user to select a default child. Existing generated dispatchers are removed during
 repair. Historical SQLite choices are retained only for rollback compatibility.
 
-Same-name children **inside one source** are also kept in full. A repository that
-ships the same Skill at several paths (`src/skill`, `dist/claude/skills/...`,
-`dist/codex/skills/...`) has several real installed Skills, and dropping any of
-them removes a capability the user can ask for. Each such child is listed with its
-path inside the source in full-width parentheses after the name — for example
-`` `$paper-spine` （dist/claude/skills/paper-spine） `` — and the router text tells
-the Agent to pick by user intent.
+Same-name children **inside one source** are compared by exact file content.
+Byte-identical host packaging copies are one capability and are published once,
+preferring a neutral source path. Content-different files remain explicit
+variants, labelled with their host and source-relative path — for example
+`` `$paper-spine` （Codex变体 · dist/codex/skills/paper-spine） ``. The current
+Agent's host variant wins; otherwise the neutral `通用` variant is used. The
+visible parent count is the number of unique capability names, not the number of
+packaging paths or retained variants.
 
 ## Agent Delivery Contract
 
@@ -95,7 +96,7 @@ the Agent to pick by user intent.
 3. Keep truly standalone/local Skills visible when no parent exists.
 4. Never create a fake Agent directory when that Agent is not installed.
 5. Preserve user-owned folders and external links; only replace links previously managed by AI SkillHub.
-6. Validate that every published entry contains `SKILL.md`.
+6. Validate that every published entry contains `SKILL.md`, every generated parent declares at least one child, and every declared absolute child remains readable inside the managed sources root.
 
 ## Skill Library Contract
 

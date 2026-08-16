@@ -12,10 +12,10 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
 const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const cargoToml = await readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
 
-test("software updater sees one consistent v3.1.11 installed version", () => {
-  assert.equal(packageJson.version, "3.1.11");
+test("software updater sees one consistent v3.1.12 installed version", () => {
+  assert.equal(packageJson.version, "3.1.12");
   assert.equal(tauriConfig.version, packageJson.version);
-  assert.match(cargoToml, /^version = "3\.1\.11"$/m);
+  assert.match(cargoToml, /^version = "3\.1\.12"$/m);
   assert.equal(tauriConfig.bundle.createUpdaterArtifacts, true);
   assert.equal(tauriConfig.plugins.updater.endpoints.length, 3);
   assert.ok(tauriConfig.plugins.updater.endpoints.every(endpoint => endpoint.includes("{{current_version}}")));
@@ -39,6 +39,11 @@ test("Skill source sync reports partial failures instead of claiming universal s
   assert.match(runtime, /Removed broken managed source link/);
   assert.match(runtime, /Skipping invalid managed Skill target/);
   assert.match(runtime, /'dirty-blocked'\) \}\)/);
+  assert.match(runtime, /'not-git'/);
+  assert.match(runtime, /remove it and add its GitHub URL again/);
+  assert.match(runtime, /if \(-not \$NoPull -or -not \(Test-Path -LiteralPath \$ReportJsonPath/);
+  assert.match(app, /set\.sourceUpdatesTitle/);
+  assert.match(app, /sourceUpdateProblems/);
   assert.match(runtime, /exit 0\s*$/);
   assert.doesNotMatch(backend, /SkillHub 同步脚本执行失败：\{detail\}/);
 });

@@ -2038,6 +2038,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   border-color: color-mix(in srgb, var(--brand) 45%, transparent);
 }
 .category-custom { margin-top: 6px; }
+.import-folder-field input { margin-top: 6px; min-width: 220px; }
 
 .import-toggle-row {
   display: flex; justify-content: space-between; align-items: center; gap: var(--space-3);
@@ -2885,6 +2886,36 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   min-width: max-content;
   justify-self: end;
 }
+.source-update-problems {
+  border-color: color-mix(in srgb, var(--warning) 32%, var(--border));
+}
+.source-update-problem-list { display: grid; gap: 8px; }
+.source-update-problem-card {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 22%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-soft) 90%, var(--warning) 10%);
+}
+.source-update-problem-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.source-update-problem-card strong { font-size: calc(13px * var(--ui-text-scale, 1)); }
+.source-update-problem-card p {
+  margin: 3px 0 0;
+  color: var(--text-soft);
+  font-size: calc(11.5px * var(--ui-text-scale, 1));
+  line-height: 1.45;
+}
 @media (max-width: 820px) {
   .legacy-cleanup-card {
     grid-template-columns: 34px minmax(0, 1fr);
@@ -2897,6 +2928,8 @@ code { font-family: var(--ui-mono); font-size: .92em; }
     grid-column: 2;
     justify-self: start;
   }
+  .source-update-problem-card { grid-template-columns: 34px minmax(0, 1fr); }
+  .source-update-problem-card .qa-status { grid-column: 2; justify-self: start; }
 }
 
 /* v3.1.6 source-tree folders: stable affordances, theme-proof swatches, bounded rendering. */

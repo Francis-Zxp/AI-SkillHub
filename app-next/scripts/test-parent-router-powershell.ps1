@@ -25,14 +25,15 @@ try {
     [Text.UTF8Encoding]::new($false)
   )
 
-  # A source that ships the same `name:` at several paths. None of them may be
-  # dropped, because each is a real installed Skill a user can ask for.
+  # A source that ships the same `name:` at several paths. The neutral and
+  # Claude files are exact packaging copies; Codex is a distinct variant.
   foreach ($location in @('src\skill', 'dist\claude\skills\paper-spine', 'dist\codex\skills\paper-spine')) {
     $sameName = Join-Path $sources (Join-Path 'PaperSpine' $location)
     New-Item -ItemType Directory -Force -Path $sameName | Out-Null
+    $body = if ($location -like 'dist\codex*') { '# PaperSpine Codex variant' } else { '# PaperSpine' }
     [IO.File]::WriteAllText(
       (Join-Path $sameName 'SKILL.md'),
-      "---`nname: paper-spine`ndescription: Review a paper end to end.`n---`n`n# PaperSpine`n",
+      "---`nname: paper-spine`ndescription: Review a paper end to end.`n---`n`n$body`n",
       [Text.UTF8Encoding]::new($false)
     )
   }
@@ -127,14 +128,15 @@ try {
   }
   $spine = [IO.File]::ReadAllText($spinePath, [Text.UTF8Encoding]::new($false))
   $spineChildren = Assert-DeclaredChildrenOpen $spine 'PaperSpine router' $sourceFileLabel
-  if ($spineChildren -ne 3) {
-    throw "Same-name children must never be dropped; expected 3 declared children, got $spineChildren."
+  if ($spineChildren -ne 2) {
+    throw "Exact packaging copies must collapse while distinct variants remain; expected 2 declarations, got $spineChildren."
   }
-  foreach ($location in @('src/skill', 'dist/claude/skills/paper-spine', 'dist/codex/skills/paper-spine')) {
-    $marker = $openParen + $location + $closeParen
-    if (-not $spine.Contains($marker)) {
-      throw "Same-name child is not disambiguated by its in-source location: $location"
-    }
+  if (-not $spine.Contains('src/skill/SKILL.md')) { throw 'Neutral canonical copy is missing.' }
+  if (-not $spine.Contains('dist/codex/skills/paper-spine/SKILL.md')) { throw 'Distinct Codex variant is missing.' }
+  if ($spine.Contains('dist/claude/skills/paper-spine/SKILL.md')) { throw 'Byte-identical Claude packaging copy was not collapsed.' }
+  $spineDescription = @($spine -split "`r?`n" | Where-Object { $_ -like 'description:*' } | Select-Object -First 1)
+  if ($spineDescription.Count -ne 1 -or $spineDescription[0] -notmatch '1') {
+    throw 'Parent child count must describe one capability, not two packaging variants.'
   }
 
   # The defect this scheme exists to prevent: a recipient opens the router
