@@ -1,11 +1,11 @@
 {
-  "version": "3.1.11",
-  "notes": "AI SkillHub v3.1.11：修复同步空状态与父路由交付，优化文件夹布局，并为 Prompt 提供真实调用工作流。",
-  "pub_date": "2026-08-12T18:21:21Z",
+  "version": "3.1.12",
+  "notes": "修复 Windows GitHub 导入、父 Skill 路由与跨 Agent 子 Skill 可访问性，并加强 Prompt 仓库预检与来源更新诊断。",
+  "pub_date": "2026-08-16T12:18:40Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVExd0VqREtqVjU3eUY3TEI1aTZ3aytZc1JaQzJ5Q1dpNkZZK1hoVVhrL2lJdXlmQ1dLdm05MEdYNkhOKzNTQWZqb08zRTVWaDdCZUZOK0wrRktEWGd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2NTU4ODgwCWZpbGU6QUkgU2tpbGxIdWJfMy4xLjExX3g2NC1zZXR1cC5leGUKc3FJcjdKY0J1WWFuZUdYRzhoZ2MrN0xHYW9UVXpMT0c2bXNUc25aNXVManBZbmhvc005VUxBTkRRSkJIMHVRUVRlT2VldVVuMEN2WmZFdlFNeFp4QWc9PQo=",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.1.11/AI-SkillHub-3.1.11-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVpjZGtCTWMyaVJKY2hYbCtJTi9pZmZIL2VZd1dNaWpGZWFBOVdtL0lzYkRwOU1LYUowUTVSSWJNYTU0dm1SUExhNGJCRXlVb3pTaWpsT1ppVnVaVFFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2ODgyNzE5CWZpbGU6QUkgU2tpbGxIdWJfMy4xLjEyX3g2NC1zZXR1cC5leGUKb3Y5aUJRRlNZZC9XUndFa05iTXc0dytTUVo5STdaMEowaDdDcnM4cWJiekxwRGR2V0h1ZnQrYkVzNmFzVWhTNnVGRHBIUjdsclJyeG1BcFh5d293RFE9PQo=",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.1.12/AI-SkillHub-3.1.12-setup.exe"
     }
   }
 }
