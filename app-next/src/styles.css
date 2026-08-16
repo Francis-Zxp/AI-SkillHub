@@ -2085,6 +2085,39 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   font-size: calc(12px * var(--ui-text-scale, 1));
   line-height: 1.55;
 }
+.import-download-mode {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  padding: 10px 12px;
+  color: var(--text-soft);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+}
+.import-download-mode > .ui-icon {
+  width: 20px;
+  height: 20px;
+  color: var(--warning);
+}
+.import-download-mode.git {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+}
+.import-download-mode.git > .ui-icon { color: var(--success); }
+.import-download-mode div { min-width: 0; }
+.import-download-mode strong,
+.import-download-mode span { display: block; }
+.import-download-mode strong {
+  color: var(--text);
+  font-size: calc(12.5px * var(--ui-text-scale, 1));
+}
+.import-download-mode span {
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: calc(11px * var(--ui-text-scale, 1));
+  line-height: 1.5;
+}
 .import-security-findings {
   display: grid;
   gap: 6px;
@@ -2143,6 +2176,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 }
 .import-security-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--space-2);
 }

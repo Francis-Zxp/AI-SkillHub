@@ -4743,6 +4743,54 @@ function ImportWizard({
     }
   }
 
+  async function retryGitCloneFromSecurityReview() {
+    if (!securityReview || securityReview.plan.importKind !== "github") return;
+    const current = securityReview;
+    setPending(true);
+    setProgress({ detail: t("qa.retryGitRunning"), percent: 20, step: 2, total: 5 });
+    setStatus({ tone: "info", title: t("qa.retryGitRunning"), body: t("qa.retryGitRunningBody") });
+    try {
+      const operationId = createSourceImportOperationId();
+      setActiveOperationId(operationId);
+      const execution = await onStage(current.plan.importKind, current.plan.input, {
+        quiet: true,
+        operationId,
+        onProgress: applyBackendProgress
+      });
+      if (requiresSecurityReview(execution.securityStatus, execution.securityFindings.length)) {
+        setEnabled(false);
+        setSecurityReview({ plan: current.plan, execution });
+        setProgress({ detail: t("qa.securityReviewTitle"), percent: 70, step: 3, total: 5 });
+        setStatus({
+          tone: execution.downloadMethod === "git" ? "ok" : "warn",
+          title: execution.downloadMethod === "git" ? t("qa.retryGitSucceeded") : t("qa.retryGitStillSnapshot"),
+          body: execution.downloadMethod === "git"
+            ? t("qa.downloadModeGitBody")
+            : execution.blockingChecks[0] || t("qa.downloadModeSnapshotBody")
+        });
+        return;
+      }
+      if (execution.status !== "staged" && execution.status !== "warn") {
+        setProgress(null);
+        setStatus({
+          tone: "warn",
+          title: t("qa.retryGitStillSnapshot"),
+          body: execution.blockingChecks[0] || execution.summary
+        });
+        return;
+      }
+      setSecurityReview(null);
+      await promoteAndFinalize(current.plan, execution, false);
+    } catch (error) {
+      setProgress(null);
+      setStatus({ tone: "error", title: t("qa.statusFailed"), body: messageFromError(error) });
+      showUiToast(t("qa.toastFailed"), "error");
+    } finally {
+      setActiveOperationId("");
+      setPending(false);
+    }
+  }
+
   const isBusy = disabled || pending;
   const placeholder =
     importKind === "github"
@@ -4904,6 +4952,19 @@ function ImportWizard({
             </div>
             <span className="qa-status planned">{t("qa.securityReviewIsolated")}</span>
           </header>
+          {securityReview.execution.importKind === "github" && (
+            <div className={`import-download-mode ${securityReview.execution.downloadMethod === "git" ? "git" : "snapshot"}`}>
+              <Icon name={securityReview.execution.downloadMethod === "git" ? "github" : "alert"} />
+              <div>
+                <strong>
+                  {t(securityReview.execution.downloadMethod === "git" ? "qa.downloadModeGitTitle" : "qa.downloadModeSnapshotTitle")}
+                </strong>
+                <span>
+                  {t(securityReview.execution.downloadMethod === "git" ? "qa.downloadModeGitBody" : "qa.downloadModeSnapshotBody")}
+                </span>
+              </div>
+            </div>
+          )}
           <ul className="import-security-findings">
             {securityReview.execution.securityFindings.slice(0, 8).map(finding => (
               <li key={finding.id}>
@@ -4937,6 +4998,16 @@ function ImportWizard({
             </small>
           )}
           <div className="import-security-actions">
+            {securityReview.execution.importKind === "github" && securityReview.execution.downloadMethod !== "git" && (
+              <button
+                className="secondary-action"
+                disabled={isBusy}
+                onClick={() => void retryGitCloneFromSecurityReview()}
+                type="button"
+              >
+                <Icon name="refresh" /> {t("qa.retryGit")}
+              </button>
+            )}
             <button
               className="ghost-action"
               disabled={isBusy}

@@ -49,6 +49,9 @@ const SOURCE_POPULARITY_DEFERRED_BACKOFF_NANOS: u128 = 15 * 60 * NANOS_PER_SECON
 // template/icon libraries. ppt-master v4.4.0 contains about 12,350 files but only
 // ~67 MB in its installable Skill subtree. Byte and per-file ceilings remain enforced.
 const SOURCE_IMPORT_MAX_FILES: usize = 20_000;
+// Real self-contained Skills can carry deeply nested fixtures and evaluation assets.
+// Keep a finite traversal ceiling, but do not truncate valid files silently.
+const SOURCE_IMPORT_MAX_DEPTH: usize = 24;
 const GITHUB_FALLBACK_MAX_FILES: usize = SOURCE_IMPORT_MAX_FILES;
 const GITHUB_FALLBACK_MAX_BYTES: u64 = 80 * 1024 * 1024;
 const GITHUB_FALLBACK_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -7623,25 +7626,67 @@ fn stage_github_source_import_with_git_program_and_control(
 ) -> Result<(), String> {
     control.ensure_active()?;
     control.emit("git", "started", "正在连接系统 Git，并读取仓库目录。", 0, 0);
-    let mut command = Command::new(git_program);
-    command
-        .args([
-            "clone",
-            "--depth",
-            "1",
-            "--filter=blob:none",
-            "--no-checkout",
-            "--no-tags",
-            "--progress",
-            &plan.normalized_target,
-        ])
-        .arg(staged_path);
-    let mut git_result = command_output_with_timeout_and_cancel(
-        &mut command,
-        Duration::from_secs(120),
-        "GitHub 仓库目录下载超过 120 秒，已自动停止。请检查网络、仓库地址，或稍后重试。",
-        Some(control.cancelled.as_ref()),
+    let run_clone = |use_openssl: bool| {
+        let mut command = Command::new(git_program);
+        command.args(["-c", "core.longpaths=true"]);
+        if use_openssl {
+            // Git for Windows can occasionally lose access to the current user's
+            // Schannel credentials (SEC_E_NO_CREDENTIALS) even though the network
+            // and repository are healthy. Retry only that exact failure with Git's
+            // bundled OpenSSL backend; never change the user's global Git config.
+            command.args(["-c", "http.sslBackend=openssl"]);
+        }
+        command.args(["clone", "--config", "core.longpaths=true"]);
+        if use_openssl {
+            // Persist this repository-scoped choice so the later bounded checkout
+            // can fetch deferred blobs without falling back to broken Schannel.
+            command.args(["--config", "http.sslBackend=openssl"]);
+        }
+        command
+            .args([
+                "--depth",
+                "1",
+                "--filter=blob:none",
+                "--no-checkout",
+                "--no-tags",
+                "--progress",
+                &plan.normalized_target,
+            ])
+            .arg(staged_path);
+        command_output_with_timeout_and_cancel(
+            &mut command,
+            Duration::from_secs(120),
+            "GitHub 仓库目录下载超过 120 秒，已自动停止。请检查网络、仓库地址，或稍后重试。",
+            Some(control.cancelled.as_ref()),
+        )
+    };
+    let mut git_result = run_clone(false);
+
+    let schannel_credentials_unavailable = matches!(&git_result, Ok(output) if
+        git_failure_needs_openssl_retry(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stderr),
+        )
     );
+    if schannel_credentials_unavailable && !control.is_cancelled() {
+        if staged_path.exists() {
+            fs::remove_dir_all(staged_path).map_err(|error| {
+                format!(
+                    "Cannot clear Schannel retry staging folder {}: {}",
+                    staged_path.display(),
+                    error
+                )
+            })?;
+        }
+        control.emit(
+            "git",
+            "retry",
+            "Windows Git 凭据接口暂时不可用，正在使用 Git 内置 TLS 后端重试。",
+            0,
+            0,
+        );
+        git_result = run_clone(true);
+    }
 
     if matches!(&git_result, Ok(output) if output.status.success()) {
         control.emit(
@@ -7651,7 +7696,12 @@ fn stage_github_source_import_with_git_program_and_control(
             1,
             3,
         );
-        git_result = complete_sparse_skill_checkout(git_program, staged_path, control);
+        git_result = complete_sparse_skill_checkout(
+            git_program,
+            staged_path,
+            control,
+            Some(&plan.normalized_target),
+        );
     }
 
     if control.is_cancelled()
@@ -7676,10 +7726,12 @@ fn stage_github_source_import_with_git_program_and_control(
     };
 
     if let Some(git_failure) = git_failure {
+        #[cfg(test)]
+        eprintln!("Git import fallback reason: {git_failure}");
         control.emit(
             "git",
             "fallback",
-            "系统 Git 连接失败，正在切换到 GitHub ZIP 下载。",
+            "Git 导入未完成，正在切换到 GitHub ZIP 下载。",
             0,
             0,
         );
@@ -7780,8 +7832,8 @@ fn stage_github_source_import_with_git_program_and_control(
         execution.download_method = download_method.to_string();
         execution.blocking_checks = vec![
             format!(
-                "系统 Git 不可用或克隆失败，已自动切换到内置 GitHub 下载器（引用：{}）。",
-                downloaded_ref
+                "Git 自动更新模式未建立：{} 内置 GitHub 下载器已接管（引用：{}）；此副本不含 .git，不能自动 pull。",
+                friendly_git_import_failure(&git_failure), downloaded_ref
             ),
             "内置下载器只保留可安装的 Skill 目录；若仓库没有 SKILL.md，则在文件数、单文件与总容量上限内保留完整 Prompt 项目工作区。"
                 .to_string(),
@@ -7836,6 +7888,7 @@ fn complete_sparse_skill_checkout(
     git_program: &str,
     staged_path: &Path,
     control: &SourceImportControl,
+    github_target: Option<&str>,
 ) -> Result<std::process::Output, String> {
     control.ensure_active()?;
     let mut tree_command = Command::new(git_program);
@@ -7889,7 +7942,16 @@ fn complete_sparse_skill_checkout(
             // the isolated, bounded source workspace remains runnable and inspectable.
             // Validate the committed tree before materializing any blob: a post-check alone
             // cannot prevent a hostile upstream from exhausting disk during checkout.
-            validate_prompt_git_tree_before_checkout(git_program, staged_path, control)?;
+            if let Some(target) = github_target {
+                validate_prompt_github_tree_before_checkout(
+                    git_program,
+                    staged_path,
+                    target,
+                    control,
+                )?;
+            } else {
+                validate_prompt_git_tree_before_checkout(git_program, staged_path, control)?;
+            }
             sparse_command.args(["sparse-checkout", "disable"]);
         } else {
             sparse_command.args(["sparse-checkout", "set", "--cone", "--"]);
@@ -7935,9 +7997,116 @@ fn configure_safe_git_materialization(command: &mut Command, staged_path: &Path)
         .env("GIT_CONFIG_GLOBAL", empty_global_config)
         .arg("-C")
         .arg(staged_path)
+        .args(["-c", "core.longpaths=true"])
         .args(["-c", "filter.lfs.smudge="])
         .args(["-c", "filter.lfs.required=false"])
         .args(["-c", "core.hooksPath=.git/skillhub-disabled-hooks"]);
+}
+
+fn validate_prompt_github_tree_before_checkout(
+    git_program: &str,
+    staged_path: &Path,
+    github_target: &str,
+    control: &SourceImportControl,
+) -> Result<(), String> {
+    control.ensure_active()?;
+    let (owner, repo) = parse_github_repo(github_target)
+        .ok_or_else(|| "GitHub 地址无法解析，不能执行 Prompt 下载前大小校验。".to_string())?;
+    let mut revision_command = Command::new(git_program);
+    revision_command
+        .arg("-C")
+        .arg(staged_path)
+        .args(["rev-parse", "HEAD"]);
+    let revision_output = command_output_with_timeout_and_cancel(
+        &mut revision_command,
+        Duration::from_secs(15),
+        "读取 Prompt 仓库提交版本超过 15 秒，已自动停止。",
+        Some(control.cancelled.as_ref()),
+    )?;
+    if !revision_output.status.success() {
+        return Err("无法确认 Prompt 仓库提交版本，已停止下载。".to_string());
+    }
+    let revision = String::from_utf8_lossy(&revision_output.stdout)
+        .trim()
+        .to_string();
+    if revision.len() != 40
+        || !revision
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err("Prompt 仓库提交版本格式异常，已停止下载。".to_string());
+    }
+
+    // `git ls-tree -l` on a blobless partial clone lazily downloads every blob and
+    // can hang before the byte limit is known. GitHub's tree endpoint exposes the
+    // committed blob sizes without materializing them, so the same 20k/16MB/80MB
+    // gate is enforced before checkout.
+    let tree_url = format!(
+        "https://api.github.com/repos/{}/{}/git/trees/{}?recursive=1",
+        owner, repo, revision
+    );
+    let tree = github_json_request(&github_http_agent(), &tree_url, &owner, &repo)?;
+    if tree
+        .get("truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err("Prompt 仓库文件树过大，GitHub 返回了截断结果；已停止下载。".to_string());
+    }
+    let entries = tree
+        .get("tree")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "GitHub 未返回可验证的 Prompt 文件树。".to_string())?;
+    let mut file_count = 0usize;
+    let mut byte_count = 0u64;
+    for entry in entries {
+        if entry.get("type").and_then(Value::as_str) != Some("blob") {
+            continue;
+        }
+        let path = entry
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "GitHub Prompt 文件树缺少路径。".to_string())?;
+        let relative = safe_relative_github_path(path)
+            .ok_or_else(|| format!("Prompt Git tree 含不安全路径：{}", compact_note(path)))?;
+        if relative.components().count() > SOURCE_IMPORT_MAX_DEPTH + 1 {
+            return Err(format!(
+                "Prompt Git tree 目录深度超过安全上限（{} 层）：{}",
+                SOURCE_IMPORT_MAX_DEPTH,
+                relative.display(),
+            ));
+        }
+        if entry.get("mode").and_then(Value::as_str) == Some("120000") {
+            continue;
+        }
+        let size = entry.get("size").and_then(Value::as_u64).ok_or_else(|| {
+            format!(
+                "Prompt Git tree 未提供可验证的文件大小：{}",
+                relative.display()
+            )
+        })?;
+        if size > GITHUB_FALLBACK_MAX_FILE_BYTES {
+            return Err(format!(
+                "Prompt Git tree 包含超过 16 MB 的单个文件：{}",
+                relative.display()
+            ));
+        }
+        file_count += 1;
+        byte_count = byte_count.saturating_add(size);
+        if file_count > GITHUB_FALLBACK_MAX_FILES {
+            return Err(format!(
+                "Prompt Git tree 文件数超过安全上限（{} > {}）。",
+                file_count, GITHUB_FALLBACK_MAX_FILES
+            ));
+        }
+        if byte_count > GITHUB_FALLBACK_MAX_BYTES {
+            return Err(format!(
+                "Prompt Git tree 超过 80 MB 安全上限（{} bytes）。",
+                byte_count
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_prompt_git_tree_before_checkout(
@@ -7986,10 +8155,11 @@ fn validate_prompt_git_tree_before_checkout(
         }
         let relative = safe_relative_github_path(path)
             .ok_or_else(|| format!("Prompt Git tree 含不安全路径：{}", compact_note(path)))?;
-        if relative.components().count() > 11 {
+        if relative.components().count() > SOURCE_IMPORT_MAX_DEPTH + 1 {
             return Err(format!(
-                "Prompt Git tree 目录深度超过安全上限（10 层）：{}",
-                relative.display()
+                "Prompt Git tree 目录深度超过安全上限（{} 层）：{}",
+                SOURCE_IMPORT_MAX_DEPTH,
+                relative.display(),
             ));
         }
         if fields[0] == "120000" {
@@ -8032,10 +8202,11 @@ fn validate_staged_repository_bounds(staged_path: &Path) -> Result<(), String> {
     let mut file_count = 0usize;
     let mut byte_count = 0u64;
     while let Some((directory, depth)) = stack.pop() {
-        if depth > 10 {
+        if depth > SOURCE_IMPORT_MAX_DEPTH {
             return Err(format!(
-                "Git 隔离工作区目录深度超过安全上限（10 层）：{}",
-                directory.display()
+                "Git 隔离工作区目录深度超过安全上限（{} 层）：{}",
+                SOURCE_IMPORT_MAX_DEPTH,
+                directory.display(),
             ));
         }
         let entries = fs::read_dir(&directory).map_err(|error| {
@@ -8244,7 +8415,12 @@ fn ensure_github_api_file_fallback_allowed(has_token: bool) -> Result<(), String
 
 fn friendly_git_import_failure(raw: &str) -> String {
     let normalized = raw.to_ascii_lowercase();
-    if normalized.contains("could not connect")
+    if normalized.contains("filename too long")
+        || normalized.contains("the filename or extension is too long")
+    {
+        "Git 已连接仓库，但 Windows 长路径检出失败；AI SkillHub 将启用 Git longpaths 后重试。"
+            .to_string()
+    } else if normalized.contains("could not connect")
         || normalized.contains("failed to connect")
         || normalized.contains("timed out")
         || normalized.contains("recv failure")
@@ -8260,6 +8436,15 @@ fn friendly_git_import_failure(raw: &str) -> String {
     } else {
         "系统 Git 克隆未完成；已自动尝试内置 ZIP 下载。".to_string()
     }
+}
+
+fn git_failure_needs_openssl_retry(success: bool, stderr: &str) -> bool {
+    if success {
+        return false;
+    }
+    let normalized = stderr.to_ascii_lowercase();
+    normalized.contains("sec_e_no_credentials")
+        || normalized.contains("acquirecredentialshandle failed")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10189,8 +10374,12 @@ fn local_copy_preflight(root: &Path) -> Result<(usize, u64), String> {
     let mut file_count = 0usize;
     let mut byte_count = 0u64;
     while let Some((directory, depth)) = stack.pop() {
-        if depth > 10 {
-            continue;
+        if depth > SOURCE_IMPORT_MAX_DEPTH {
+            return Err(format!(
+                "本地来源目录深度超过安全上限（{} 层）：{}",
+                SOURCE_IMPORT_MAX_DEPTH,
+                directory.display(),
+            ));
         }
         let entries = fs::read_dir(&directory).map_err(|error| {
             format!(
@@ -10241,8 +10430,12 @@ fn copy_directory_filtered_with_options(
     })?;
     let mut stack = vec![(source.to_path_buf(), destination.to_path_buf(), 0usize)];
     while let Some((source_dir, destination_dir, depth)) = stack.pop() {
-        if depth > 10 {
-            continue;
+        if depth > SOURCE_IMPORT_MAX_DEPTH {
+            return Err(format!(
+                "来源复制目录深度超过安全上限（{} 层）：{}",
+                SOURCE_IMPORT_MAX_DEPTH,
+                source_dir.display(),
+            ));
         }
         fs::create_dir_all(&destination_dir).map_err(|error| {
             format!(
@@ -18788,7 +18981,7 @@ mod tests {
         assert!(!staged.join("train.py").exists());
 
         let control = SourceImportControl::detached("prompt-full-checkout-test");
-        let output = complete_sparse_skill_checkout("git", &staged, &control)
+        let output = complete_sparse_skill_checkout("git", &staged, &control, None)
             .expect("Prompt checkout should complete");
         assert!(
             output.status.success(),
@@ -18853,7 +19046,7 @@ mod tests {
             unix_timestamp_string()
         ));
         let mut nested = root.clone();
-        for index in 0..12 {
+        for index in 0..(SOURCE_IMPORT_MAX_DEPTH + 2) {
             nested = nested.join(format!("level-{index}"));
         }
         fs::create_dir_all(&nested).expect("deep fixture should create");
@@ -19291,6 +19484,161 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "network-dependent Windows long-path Git import gate"]
+    fn github_git_import_keeps_academic_research_skills_codex_updateable() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-academic-research-git-longpath-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test database should open");
+        let plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/Imbad0202/academic-research-skills-codex.git",
+        )
+        .expect("academic research plan should build");
+        let staged_path = source_import_staging_root(&root).join("academic-research-git");
+        let mut execution = SourceImportExecutionCard {
+            id: "academic-research-git".to_string(),
+            import_kind: "github".to_string(),
+            input: plan.input.clone(),
+            status: "blocked".to_string(),
+            risk_level: "low".to_string(),
+            summary: String::new(),
+            staged_path: staged_path.display().to_string(),
+            report_path: String::new(),
+            manifest_path: String::new(),
+            copied_files: 0,
+            copied_bytes: 0,
+            skill_count: 0,
+            prompt_count: 0,
+            blocking_checks: Vec::new(),
+            rollback_steps: Vec::new(),
+            real_write_scope: "staging-only".to_string(),
+            download_method: String::new(),
+            security_status: "not-run".to_string(),
+            security_scanned_files: 0,
+            security_findings: Vec::new(),
+        };
+
+        stage_github_source_import_with_control(
+            &plan,
+            &staged_path,
+            &mut execution,
+            &SourceImportControl::detached("academic-research-git-longpath-test"),
+        )
+        .expect("Git import should survive the repository's deep Windows paths");
+
+        assert_eq!(
+            execution.download_method, "git",
+            "{:?}",
+            execution.blocking_checks
+        );
+        assert!(staged_path.join(".git").is_dir());
+        assert!(execution.skill_count >= 2);
+        assert!(staged_path
+            .join("plugins/ars-codex/skills/academic-research-suite/SKILL.md")
+            .is_file());
+        assert!(staged_path
+            .join("skills/academic-research-suite/SKILL.md")
+            .is_file());
+
+        let longpaths = Command::new("git")
+            .arg("-C")
+            .arg(&staged_path)
+            .args(["config", "--get", "core.longpaths"])
+            .output()
+            .expect("Git configuration should be readable");
+        assert!(longpaths.status.success());
+        assert_eq!(String::from_utf8_lossy(&longpaths.stdout).trim(), "true");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "network-dependent Windows Schannel retry gate"]
+    fn github_git_import_retries_paper_pilot_with_repository_scoped_openssl() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-paper-pilot-git-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test database should open");
+        let plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/aytzey/paper-pilot.git",
+        )
+        .expect("paper-pilot plan should build");
+        let staged_path = source_import_staging_root(&root).join("paper-pilot-git");
+        let mut execution = SourceImportExecutionCard {
+            id: "paper-pilot-git".to_string(),
+            import_kind: "github".to_string(),
+            input: plan.input.clone(),
+            status: "blocked".to_string(),
+            risk_level: "low".to_string(),
+            summary: String::new(),
+            staged_path: staged_path.display().to_string(),
+            report_path: String::new(),
+            manifest_path: String::new(),
+            copied_files: 0,
+            copied_bytes: 0,
+            skill_count: 0,
+            prompt_count: 0,
+            blocking_checks: Vec::new(),
+            rollback_steps: Vec::new(),
+            real_write_scope: "staging-only".to_string(),
+            download_method: String::new(),
+            security_status: "not-run".to_string(),
+            security_scanned_files: 0,
+            security_findings: Vec::new(),
+        };
+
+        stage_github_source_import_with_control(
+            &plan,
+            &staged_path,
+            &mut execution,
+            &SourceImportControl::detached("paper-pilot-git-test"),
+        )
+        .expect("paper-pilot should remain a Git working tree");
+
+        assert_eq!(
+            execution.download_method, "git",
+            "{:?}",
+            execution.blocking_checks
+        );
+        assert!(staged_path.join(".git").is_dir());
+        assert_eq!(execution.skill_count, 0);
+        assert!(execution.prompt_count >= 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn git_import_failure_explains_windows_long_paths() {
+        let message =
+            friendly_git_import_failure("error: unable to create file x: Filename too long");
+        assert!(message.contains("Windows 长路径"));
+        assert!(!message.contains("连接 GitHub"));
+    }
+
+    #[test]
+    fn git_import_retries_only_windows_schannel_credential_failures() {
+        assert!(git_failure_needs_openssl_retry(
+            false,
+            "schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e)"
+        ));
+        assert!(!git_failure_needs_openssl_retry(
+            false,
+            "fatal: repository not found"
+        ));
+        assert!(!git_failure_needs_openssl_retry(
+            true,
+            "SEC_E_NO_CREDENTIALS"
+        ));
     }
 
     #[cfg(target_os = "windows")]
