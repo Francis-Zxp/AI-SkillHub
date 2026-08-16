@@ -12,10 +12,10 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
 const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const cargoToml = await readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
 
-test("software updater sees one consistent v3.1.11 installed version", () => {
-  assert.equal(packageJson.version, "3.1.11");
+test("software updater sees one consistent v3.1.12 installed version", () => {
+  assert.equal(packageJson.version, "3.1.12");
   assert.equal(tauriConfig.version, packageJson.version);
-  assert.match(cargoToml, /^version = "3\.1\.11"$/m);
+  assert.match(cargoToml, /^version = "3\.1\.12"$/m);
   assert.equal(tauriConfig.bundle.createUpdaterArtifacts, true);
   assert.equal(tauriConfig.plugins.updater.endpoints.length, 3);
   assert.ok(tauriConfig.plugins.updater.endpoints.every(endpoint => endpoint.includes("{{current_version}}")));
@@ -39,6 +39,11 @@ test("Skill source sync reports partial failures instead of claiming universal s
   assert.match(runtime, /Removed broken managed source link/);
   assert.match(runtime, /Skipping invalid managed Skill target/);
   assert.match(runtime, /'dirty-blocked'\) \}\)/);
+  assert.match(runtime, /'not-git'/);
+  assert.match(runtime, /remove it and add its GitHub URL again/);
+  assert.match(runtime, /if \(-not \$NoPull -or -not \(Test-Path -LiteralPath \$ReportJsonPath/);
+  assert.match(app, /set\.sourceUpdatesTitle/);
+  assert.match(app, /sourceUpdateProblems/);
   assert.match(runtime, /exit 0\s*$/);
   assert.doesNotMatch(backend, /SkillHub 同步脚本执行失败：\{detail\}/);
 });
@@ -67,6 +72,19 @@ test("source updates preserve dirty work and clear stale version comparisons", (
   assert.match(governance, /remote_revision = excluded\.current_revision/);
   assert.match(governance, /ELSE 'unknown'/);
   assert.match(governance, /changed_files = 0/);
+});
+
+test("the app's own bookkeeping never blocks a source from tracking GitHub", () => {
+  // .skillhub-source.json and .skillhub-extracted are written by AI SkillHub
+  // itself. Counting them as local work made every touched source stop updating.
+  assert.match(runtime, /\$SelfAuthoredRepoArtifacts = @\('\.skillhub-source\.json', '\.skillhub-extracted'\)/);
+  assert.match(runtime, /function Test-PorcelainEntryIsSelfAuthored/);
+  assert.match(runtime, /function Get-BlockingWorkingTreeChanges/);
+  // Only untracked entries may be ignored; a tracked change still blocks.
+  assert.match(runtime, /if \(\$Line\.Substring\(0, 2\) -ne '\?\?'\) \{ return \$false \}/);
+  // Both the configured-repo and the auto-discovered-repo paths must filter.
+  assert.equal(runtime.match(/Get-BlockingWorkingTreeChanges \$dirtyResult\.Stdout/g)?.length, 2);
+  assert.doesNotMatch(runtime, /if \(-not \[string\]::IsNullOrWhiteSpace\(\$dirtyResult\.Stdout\)\) \{\s*Write-Warning/);
 });
 
 test("default desktop width reserves readable source titles before wrapping metadata", () => {

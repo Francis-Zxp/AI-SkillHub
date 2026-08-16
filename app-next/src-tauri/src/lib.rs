@@ -49,6 +49,9 @@ const SOURCE_POPULARITY_DEFERRED_BACKOFF_NANOS: u128 = 15 * 60 * NANOS_PER_SECON
 // template/icon libraries. ppt-master v4.4.0 contains about 12,350 files but only
 // ~67 MB in its installable Skill subtree. Byte and per-file ceilings remain enforced.
 const SOURCE_IMPORT_MAX_FILES: usize = 20_000;
+// Real self-contained Skills can carry deeply nested fixtures and evaluation assets.
+// Keep a finite traversal ceiling, but do not truncate valid files silently.
+const SOURCE_IMPORT_MAX_DEPTH: usize = 24;
 const GITHUB_FALLBACK_MAX_FILES: usize = SOURCE_IMPORT_MAX_FILES;
 const GITHUB_FALLBACK_MAX_BYTES: u64 = 80 * 1024 * 1024;
 const GITHUB_FALLBACK_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -7623,25 +7626,67 @@ fn stage_github_source_import_with_git_program_and_control(
 ) -> Result<(), String> {
     control.ensure_active()?;
     control.emit("git", "started", "正在连接系统 Git，并读取仓库目录。", 0, 0);
-    let mut command = Command::new(git_program);
-    command
-        .args([
-            "clone",
-            "--depth",
-            "1",
-            "--filter=blob:none",
-            "--no-checkout",
-            "--no-tags",
-            "--progress",
-            &plan.normalized_target,
-        ])
-        .arg(staged_path);
-    let mut git_result = command_output_with_timeout_and_cancel(
-        &mut command,
-        Duration::from_secs(120),
-        "GitHub 仓库目录下载超过 120 秒，已自动停止。请检查网络、仓库地址，或稍后重试。",
-        Some(control.cancelled.as_ref()),
+    let run_clone = |use_openssl: bool| {
+        let mut command = Command::new(git_program);
+        command.args(["-c", "core.longpaths=true"]);
+        if use_openssl {
+            // Git for Windows can occasionally lose access to the current user's
+            // Schannel credentials (SEC_E_NO_CREDENTIALS) even though the network
+            // and repository are healthy. Retry only that exact failure with Git's
+            // bundled OpenSSL backend; never change the user's global Git config.
+            command.args(["-c", "http.sslBackend=openssl"]);
+        }
+        command.args(["clone", "--config", "core.longpaths=true"]);
+        if use_openssl {
+            // Persist this repository-scoped choice so the later bounded checkout
+            // can fetch deferred blobs without falling back to broken Schannel.
+            command.args(["--config", "http.sslBackend=openssl"]);
+        }
+        command
+            .args([
+                "--depth",
+                "1",
+                "--filter=blob:none",
+                "--no-checkout",
+                "--no-tags",
+                "--progress",
+                &plan.normalized_target,
+            ])
+            .arg(staged_path);
+        command_output_with_timeout_and_cancel(
+            &mut command,
+            Duration::from_secs(120),
+            "GitHub 仓库目录下载超过 120 秒，已自动停止。请检查网络、仓库地址，或稍后重试。",
+            Some(control.cancelled.as_ref()),
+        )
+    };
+    let mut git_result = run_clone(false);
+
+    let schannel_credentials_unavailable = matches!(&git_result, Ok(output) if
+        git_failure_needs_openssl_retry(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stderr),
+        )
     );
+    if schannel_credentials_unavailable && !control.is_cancelled() {
+        if staged_path.exists() {
+            fs::remove_dir_all(staged_path).map_err(|error| {
+                format!(
+                    "Cannot clear Schannel retry staging folder {}: {}",
+                    staged_path.display(),
+                    error
+                )
+            })?;
+        }
+        control.emit(
+            "git",
+            "retry",
+            "Windows Git 凭据接口暂时不可用，正在使用 Git 内置 TLS 后端重试。",
+            0,
+            0,
+        );
+        git_result = run_clone(true);
+    }
 
     if matches!(&git_result, Ok(output) if output.status.success()) {
         control.emit(
@@ -7651,7 +7696,12 @@ fn stage_github_source_import_with_git_program_and_control(
             1,
             3,
         );
-        git_result = complete_sparse_skill_checkout(git_program, staged_path, control);
+        git_result = complete_sparse_skill_checkout(
+            git_program,
+            staged_path,
+            control,
+            Some(&plan.normalized_target),
+        );
     }
 
     if control.is_cancelled()
@@ -7676,10 +7726,12 @@ fn stage_github_source_import_with_git_program_and_control(
     };
 
     if let Some(git_failure) = git_failure {
+        #[cfg(test)]
+        eprintln!("Git import fallback reason: {git_failure}");
         control.emit(
             "git",
             "fallback",
-            "系统 Git 连接失败，正在切换到 GitHub ZIP 下载。",
+            "Git 导入未完成，正在切换到 GitHub ZIP 下载。",
             0,
             0,
         );
@@ -7780,8 +7832,8 @@ fn stage_github_source_import_with_git_program_and_control(
         execution.download_method = download_method.to_string();
         execution.blocking_checks = vec![
             format!(
-                "系统 Git 不可用或克隆失败，已自动切换到内置 GitHub 下载器（引用：{}）。",
-                downloaded_ref
+                "Git 自动更新模式未建立：{} 内置 GitHub 下载器已接管（引用：{}）；此副本不含 .git，不能自动 pull。",
+                friendly_git_import_failure(&git_failure), downloaded_ref
             ),
             "内置下载器只保留可安装的 Skill 目录；若仓库没有 SKILL.md，则在文件数、单文件与总容量上限内保留完整 Prompt 项目工作区。"
                 .to_string(),
@@ -7836,6 +7888,7 @@ fn complete_sparse_skill_checkout(
     git_program: &str,
     staged_path: &Path,
     control: &SourceImportControl,
+    github_target: Option<&str>,
 ) -> Result<std::process::Output, String> {
     control.ensure_active()?;
     let mut tree_command = Command::new(git_program);
@@ -7889,7 +7942,16 @@ fn complete_sparse_skill_checkout(
             // the isolated, bounded source workspace remains runnable and inspectable.
             // Validate the committed tree before materializing any blob: a post-check alone
             // cannot prevent a hostile upstream from exhausting disk during checkout.
-            validate_prompt_git_tree_before_checkout(git_program, staged_path, control)?;
+            if let Some(target) = github_target {
+                validate_prompt_github_tree_before_checkout(
+                    git_program,
+                    staged_path,
+                    target,
+                    control,
+                )?;
+            } else {
+                validate_prompt_git_tree_before_checkout(git_program, staged_path, control)?;
+            }
             sparse_command.args(["sparse-checkout", "disable"]);
         } else {
             sparse_command.args(["sparse-checkout", "set", "--cone", "--"]);
@@ -7935,9 +7997,116 @@ fn configure_safe_git_materialization(command: &mut Command, staged_path: &Path)
         .env("GIT_CONFIG_GLOBAL", empty_global_config)
         .arg("-C")
         .arg(staged_path)
+        .args(["-c", "core.longpaths=true"])
         .args(["-c", "filter.lfs.smudge="])
         .args(["-c", "filter.lfs.required=false"])
         .args(["-c", "core.hooksPath=.git/skillhub-disabled-hooks"]);
+}
+
+fn validate_prompt_github_tree_before_checkout(
+    git_program: &str,
+    staged_path: &Path,
+    github_target: &str,
+    control: &SourceImportControl,
+) -> Result<(), String> {
+    control.ensure_active()?;
+    let (owner, repo) = parse_github_repo(github_target)
+        .ok_or_else(|| "GitHub 地址无法解析，不能执行 Prompt 下载前大小校验。".to_string())?;
+    let mut revision_command = Command::new(git_program);
+    revision_command
+        .arg("-C")
+        .arg(staged_path)
+        .args(["rev-parse", "HEAD"]);
+    let revision_output = command_output_with_timeout_and_cancel(
+        &mut revision_command,
+        Duration::from_secs(15),
+        "读取 Prompt 仓库提交版本超过 15 秒，已自动停止。",
+        Some(control.cancelled.as_ref()),
+    )?;
+    if !revision_output.status.success() {
+        return Err("无法确认 Prompt 仓库提交版本，已停止下载。".to_string());
+    }
+    let revision = String::from_utf8_lossy(&revision_output.stdout)
+        .trim()
+        .to_string();
+    if revision.len() != 40
+        || !revision
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err("Prompt 仓库提交版本格式异常，已停止下载。".to_string());
+    }
+
+    // `git ls-tree -l` on a blobless partial clone lazily downloads every blob and
+    // can hang before the byte limit is known. GitHub's tree endpoint exposes the
+    // committed blob sizes without materializing them, so the same 20k/16MB/80MB
+    // gate is enforced before checkout.
+    let tree_url = format!(
+        "https://api.github.com/repos/{}/{}/git/trees/{}?recursive=1",
+        owner, repo, revision
+    );
+    let tree = github_json_request(&github_http_agent(), &tree_url, &owner, &repo)?;
+    if tree
+        .get("truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err("Prompt 仓库文件树过大，GitHub 返回了截断结果；已停止下载。".to_string());
+    }
+    let entries = tree
+        .get("tree")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "GitHub 未返回可验证的 Prompt 文件树。".to_string())?;
+    let mut file_count = 0usize;
+    let mut byte_count = 0u64;
+    for entry in entries {
+        if entry.get("type").and_then(Value::as_str) != Some("blob") {
+            continue;
+        }
+        let path = entry
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "GitHub Prompt 文件树缺少路径。".to_string())?;
+        let relative = safe_relative_github_path(path)
+            .ok_or_else(|| format!("Prompt Git tree 含不安全路径：{}", compact_note(path)))?;
+        if relative.components().count() > SOURCE_IMPORT_MAX_DEPTH + 1 {
+            return Err(format!(
+                "Prompt Git tree 目录深度超过安全上限（{} 层）：{}",
+                SOURCE_IMPORT_MAX_DEPTH,
+                relative.display(),
+            ));
+        }
+        if entry.get("mode").and_then(Value::as_str) == Some("120000") {
+            continue;
+        }
+        let size = entry.get("size").and_then(Value::as_u64).ok_or_else(|| {
+            format!(
+                "Prompt Git tree 未提供可验证的文件大小：{}",
+                relative.display()
+            )
+        })?;
+        if size > GITHUB_FALLBACK_MAX_FILE_BYTES {
+            return Err(format!(
+                "Prompt Git tree 包含超过 16 MB 的单个文件：{}",
+                relative.display()
+            ));
+        }
+        file_count += 1;
+        byte_count = byte_count.saturating_add(size);
+        if file_count > GITHUB_FALLBACK_MAX_FILES {
+            return Err(format!(
+                "Prompt Git tree 文件数超过安全上限（{} > {}）。",
+                file_count, GITHUB_FALLBACK_MAX_FILES
+            ));
+        }
+        if byte_count > GITHUB_FALLBACK_MAX_BYTES {
+            return Err(format!(
+                "Prompt Git tree 超过 80 MB 安全上限（{} bytes）。",
+                byte_count
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_prompt_git_tree_before_checkout(
@@ -7986,10 +8155,11 @@ fn validate_prompt_git_tree_before_checkout(
         }
         let relative = safe_relative_github_path(path)
             .ok_or_else(|| format!("Prompt Git tree 含不安全路径：{}", compact_note(path)))?;
-        if relative.components().count() > 11 {
+        if relative.components().count() > SOURCE_IMPORT_MAX_DEPTH + 1 {
             return Err(format!(
-                "Prompt Git tree 目录深度超过安全上限（10 层）：{}",
-                relative.display()
+                "Prompt Git tree 目录深度超过安全上限（{} 层）：{}",
+                SOURCE_IMPORT_MAX_DEPTH,
+                relative.display(),
             ));
         }
         if fields[0] == "120000" {
@@ -8032,10 +8202,11 @@ fn validate_staged_repository_bounds(staged_path: &Path) -> Result<(), String> {
     let mut file_count = 0usize;
     let mut byte_count = 0u64;
     while let Some((directory, depth)) = stack.pop() {
-        if depth > 10 {
+        if depth > SOURCE_IMPORT_MAX_DEPTH {
             return Err(format!(
-                "Git 隔离工作区目录深度超过安全上限（10 层）：{}",
-                directory.display()
+                "Git 隔离工作区目录深度超过安全上限（{} 层）：{}",
+                SOURCE_IMPORT_MAX_DEPTH,
+                directory.display(),
             ));
         }
         let entries = fs::read_dir(&directory).map_err(|error| {
@@ -8244,7 +8415,12 @@ fn ensure_github_api_file_fallback_allowed(has_token: bool) -> Result<(), String
 
 fn friendly_git_import_failure(raw: &str) -> String {
     let normalized = raw.to_ascii_lowercase();
-    if normalized.contains("could not connect")
+    if normalized.contains("filename too long")
+        || normalized.contains("the filename or extension is too long")
+    {
+        "Git 已连接仓库，但 Windows 长路径检出失败；AI SkillHub 将启用 Git longpaths 后重试。"
+            .to_string()
+    } else if normalized.contains("could not connect")
         || normalized.contains("failed to connect")
         || normalized.contains("timed out")
         || normalized.contains("recv failure")
@@ -8260,6 +8436,15 @@ fn friendly_git_import_failure(raw: &str) -> String {
     } else {
         "系统 Git 克隆未完成；已自动尝试内置 ZIP 下载。".to_string()
     }
+}
+
+fn git_failure_needs_openssl_retry(success: bool, stderr: &str) -> bool {
+    if success {
+        return false;
+    }
+    let normalized = stderr.to_ascii_lowercase();
+    normalized.contains("sec_e_no_credentials")
+        || normalized.contains("acquirecredentialshandle failed")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -10189,8 +10374,12 @@ fn local_copy_preflight(root: &Path) -> Result<(usize, u64), String> {
     let mut file_count = 0usize;
     let mut byte_count = 0u64;
     while let Some((directory, depth)) = stack.pop() {
-        if depth > 10 {
-            continue;
+        if depth > SOURCE_IMPORT_MAX_DEPTH {
+            return Err(format!(
+                "本地来源目录深度超过安全上限（{} 层）：{}",
+                SOURCE_IMPORT_MAX_DEPTH,
+                directory.display(),
+            ));
         }
         let entries = fs::read_dir(&directory).map_err(|error| {
             format!(
@@ -10241,8 +10430,12 @@ fn copy_directory_filtered_with_options(
     })?;
     let mut stack = vec![(source.to_path_buf(), destination.to_path_buf(), 0usize)];
     while let Some((source_dir, destination_dir, depth)) = stack.pop() {
-        if depth > 10 {
-            continue;
+        if depth > SOURCE_IMPORT_MAX_DEPTH {
+            return Err(format!(
+                "来源复制目录深度超过安全上限（{} 层）：{}",
+                SOURCE_IMPORT_MAX_DEPTH,
+                source_dir.display(),
+            ));
         }
         fs::create_dir_all(&destination_dir).map_err(|error| {
             format!(
@@ -14776,39 +14969,58 @@ fn router_hub_skill_name(collection: &str) -> String {
 }
 
 /// Compose the body of a generated router-hub SKILL.md.
+///
+/// Child references are absolute paths. See [`RouterChildLink`] for why a
+/// relative path cannot work across the delivery junction chain.
 fn build_router_hub_skill_md(
     collection: &str,
     router_name: &str,
-    children: &[String],
-    child_links: &BTreeMap<String, (String, String, String)>,
+    children: &[RouterChildLink],
 ) -> String {
+    // A source may ship two children declaring the same `name:` (for example a
+    // `src/` copy plus per-host build outputs). Both stay listed — dropping one
+    // would make it uncallable — so qualify the repeated ones with their
+    // in-source location, otherwise the Agent sees N identical options.
+    let mut name_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for child in children {
+        *name_counts
+            .entry(normalize_skill_lookup(&child.name))
+            .or_insert(0) += 1;
+    }
+
     let mut child_lines = String::new();
     for child in children {
-        let key = normalize_skill_lookup(child);
-        let (relative_path, summary) = child_links
-            .get(&key)
-            .map(|(_, relative, summary)| {
-                (
-                    relative.as_str(),
-                    localized_router_child_summary(child, summary),
-                )
-            })
-            .unwrap_or_else(|| ("SKILL.md", format!("用于处理“{}”相关任务。", child)));
+        let summary = localized_router_child_summary(&child.name, &child.summary);
+        let ambiguous = name_counts
+            .get(&normalize_skill_lookup(&child.name))
+            .copied()
+            .unwrap_or(0)
+            > 1;
+        let label = if ambiguous {
+            let location = child
+                .relative_path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .unwrap_or(".");
+            format!(
+                "`${}` （{}变体 · {}）",
+                child.name,
+                router_child_host_variant(&child.relative_path),
+                location
+            )
+        } else {
+            format!("`${}`", child.name)
+        };
         child_lines.push_str(&format!(
-            "- {} `${}` — {} 来源文件：`../../{}/{}`\n",
-            CHILD_SKILL_MARKER, child, summary, collection, relative_path
+            "- {} {} — {} 来源文件：`{}`\n",
+            CHILD_SKILL_MARKER, label, summary, child.absolute_path
         ));
     }
     let mut seen_capabilities = BTreeSet::new();
     let capabilities = children
         .iter()
         .filter_map(|child| {
-            let key = normalize_skill_lookup(child);
-            let summary = child_links
-                .get(&key)
-                .map(|(_, _, summary)| summary.as_str())
-                .unwrap_or_default();
-            let capability = router_capability_label(child, summary);
+            let capability = router_capability_label(&child.name, &child.summary);
             if seen_capabilities.insert(capability.clone()) {
                 Some(capability)
             } else {
@@ -14822,7 +15034,15 @@ fn build_router_hub_skill_md(
     } else {
         capabilities.join("、")
     };
-    let description = format!("◈ 父 · {} 个子项 · {}", children.len(), capability_summary);
+    let capability_count = children
+        .iter()
+        .map(|child| normalize_skill_lookup(&child.name))
+        .collect::<BTreeSet<_>>()
+        .len();
+    let description = format!(
+        "◈ 父 · {} 个子项 · {}",
+        capability_count, capability_summary
+    );
     // Keep the machine marker in an HTML comment instead of visible frontmatter.
     // Agent hosts still identify the generated parent deterministically, while
     // users see the concise `父 Skill` label in their Skill picker.
@@ -14838,8 +15058,11 @@ fn build_router_hub_skill_md(
         父路由生成在作者仓库之外，因此 GitHub 更新不会覆盖标记、子 Skill 清单或隔离规则。\n\n\
         类型：AI SkillHub 管理的父 Skill；下方 {child_marker} 表示来源内的功能型子 Skill。\n\n\
         路由规则：\n\
-        - 只能打开下方 `../../{collection}` 内明确列出的来源文件。\n\
+        - 下方每个子 Skill 都给出完整绝对路径。执行前必须先用文件读取工具打开该路径的全文，不要凭名称或摘要推测其内容。\n\
+        - 路径请原样使用，不要拼接、不要相对化、不要基于本文件所在目录再做解析。\n\
+        - 只能打开下方明确列出的、属于来源 `{collection}` 的文件。\n\
         - 即使其它父 Skill 有同名子 Skill，也绝不跨来源替换。\n\
+        - 同名且内容完全相同的打包副本已自动合并；同名但内容不同的子项会标成变体。优先选择与当前 Agent 对应的变体，没有对应项时使用“通用”变体。\n\
         - 用户明确指定子 Skill 时，直接打开并完整遵循对应来源文件。\n\
         - 用户只指定父 Skill 或描述宽泛任务时，自动选择能完成任务的最小子 Skill。\n\
         - 只有在任务存在实质性歧义或安全风险时才向用户提问。\n\
@@ -15230,12 +15453,86 @@ fn check_router_hub_description_quoting(skill_md_path: &Path) -> Option<RouterHu
     None
 }
 
+/// One callable child Skill inside a managed source.
+///
+/// `absolute_path` is the only field a recipient Agent ever resolves. It is a
+/// fully qualified, forward-slash path to the child's `SKILL.md`. Router files
+/// are machine-local generated artifacts under `%LOCALAPPDATA%`, regenerated on
+/// every sync, so they never need portable relative paths — and a relative path
+/// is actively wrong here, because the recipient opens the router through a
+/// junction chain (`~/.claude/skills/X` → `UserData/skills/X` → router folder).
+/// Any `../..` in the file is resolved lexically against the *delivered* path by
+/// Node/Rust/`path.resolve` and by the model itself, which lands outside the
+/// published Skill directory instead of in the source tree.
+#[derive(Debug, Clone)]
+struct RouterChildLink {
+    name: String,
+    absolute_path: String,
+    relative_path: String,
+    summary: String,
+    /// Exact source bytes are retained only while a router is planned. They let
+    /// us collapse packaging copies without relying on a collision-prone hash.
+    source_bytes: Option<Vec<u8>>,
+}
+
+fn router_child_host_variant(relative_path: &str) -> &'static str {
+    let normalized = format!("/{}/", relative_path.to_ascii_lowercase().trim_matches('/'));
+    if normalized.contains("/.claude/") || normalized.contains("/dist/claude/") {
+        "Claude"
+    } else if normalized.contains("/.codex/") || normalized.contains("/dist/codex/") {
+        "Codex"
+    } else if normalized.contains("/.agents/") || normalized.contains("/dist/agents/") {
+        "Agents"
+    } else if normalized.contains("/.gemini/") || normalized.contains("/dist/gemini/") {
+        "Gemini"
+    } else if normalized.contains("/dist/openclaw/") {
+        "OpenClaw"
+    } else {
+        "通用"
+    }
+}
+
+fn router_child_canonical_priority(relative_path: &str) -> u8 {
+    match router_child_host_variant(relative_path) {
+        "通用" => 0,
+        "Agents" => 10,
+        "Claude" | "Codex" | "Gemini" => 20,
+        _ => 30,
+    }
+}
+
+/// Render a child's absolute `SKILL.md` path for a generated router file.
+///
+/// Forward slashes are used on every platform: Windows accepts them in every
+/// filesystem API, and they avoid `\U`-style escape damage when the path is
+/// copied through Markdown, JSON or a shell.
+fn router_child_absolute_path(skill_md: &Path) -> String {
+    let absolute = fs::canonicalize(skill_md)
+        .map(|value| strip_extended_length_prefix(&value.to_string_lossy()))
+        .unwrap_or_else(|_| skill_md.to_string_lossy().to_string());
+    absolute.replace('\\', "/")
+}
+
+/// Drop the Windows `\\?\` extended-length prefix that `canonicalize` adds.
+/// Agents copy these paths verbatim; the prefix breaks several of them.
+fn strip_extended_length_prefix(value: &str) -> String {
+    value
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{}", rest))
+        .or_else(|| value.strip_prefix(r"\\?\").map(str::to_string))
+        .unwrap_or_else(|| value.to_string())
+}
+
 /// Walk a source/collection and collect every callable source-scoped Skill,
 /// including a SKILL.md at the source root.
-fn collect_child_skill_links_for_collection(
-    collection_dir: &Path,
-) -> BTreeMap<String, (String, String, String)> {
-    let mut links = BTreeMap::new();
+///
+/// Every discovered child is kept. Two children in one source may legitimately
+/// declare the same `name:` (a repository that ships `src/` plus per-host build
+/// outputs, or two genuinely different Skills that collide). Dropping one would
+/// silently make it uncallable, so same-name children are disambiguated at
+/// render time by [`build_router_hub_skill_md`] instead of being discarded.
+fn collect_child_skill_links_for_collection(collection_dir: &Path) -> Vec<RouterChildLink> {
+    let mut links: Vec<RouterChildLink> = Vec::new();
     let mut pending = vec![collection_dir.to_path_buf()];
     let mut visited_dirs = 0usize;
 
@@ -15261,7 +15558,13 @@ fn collect_child_skill_links_for_collection(
                         .to_string_lossy()
                         .replace('\\', "/");
                     let summary = metadata::analyze_skill(&dir).summary;
-                    links.entry(key).or_insert((name, relative, summary));
+                    links.push(RouterChildLink {
+                        name,
+                        absolute_path: router_child_absolute_path(&skill_md),
+                        relative_path: relative,
+                        summary,
+                        source_bytes: fs::read(&skill_md).ok(),
+                    });
                 }
             }
         }
@@ -15296,7 +15599,51 @@ fn collect_child_skill_links_for_collection(
         }
     }
 
-    links
+    // Deterministic order so an unchanged tree regenerates a byte-identical
+    // router and the `existing != body` short-circuit keeps holding.
+    links.sort_by(|left, right| {
+        normalize_skill_lookup(&left.name)
+            .cmp(&normalize_skill_lookup(&right.name))
+            .then_with(|| {
+                router_child_canonical_priority(&left.relative_path)
+                    .cmp(&router_child_canonical_priority(&right.relative_path))
+            })
+            .then_with(|| {
+                left.relative_path
+                    .to_lowercase()
+                    .cmp(&right.relative_path.to_lowercase())
+            })
+    });
+
+    // Repositories commonly ship byte-identical copies for several hosts.
+    // Count and publish those as one capability. If same-name files differ,
+    // retain every distinct body as an explicit host/path variant so no real
+    // behavior is lost.
+    let mut deduplicated: Vec<RouterChildLink> = Vec::new();
+    for link in links {
+        let duplicate = link.source_bytes.as_ref().is_some_and(|candidate| {
+            deduplicated.iter().any(|existing| {
+                normalize_skill_lookup(&existing.name) == normalize_skill_lookup(&link.name)
+                    && existing
+                        .source_bytes
+                        .as_ref()
+                        .is_some_and(|body| body == candidate)
+            })
+        });
+        if !duplicate {
+            deduplicated.push(link);
+        }
+    }
+    deduplicated.sort_by(|left, right| {
+        normalize_skill_lookup(&left.name)
+            .cmp(&normalize_skill_lookup(&right.name))
+            .then_with(|| {
+                left.relative_path
+                    .to_lowercase()
+                    .cmp(&right.relative_path.to_lowercase())
+            })
+    });
+    deduplicated
 }
 
 /// Read just the `name:` field of a SKILL.md frontmatter.
@@ -15370,10 +15717,13 @@ fn plan_or_write_router_hubs(
         }
         let collection_dir = entry.path();
         let child_links = collect_child_skill_links_for_collection(&collection_dir);
-        let children = child_links
-            .values()
-            .map(|(name, _, _)| name.clone())
-            .collect::<Vec<_>>();
+        let children = child_links.iter().fold(BTreeMap::new(), |mut names, link| {
+            names
+                .entry(normalize_skill_lookup(&link.name))
+                .or_insert_with(|| link.name.clone());
+            names
+        });
+        let children = children.into_values().collect::<Vec<_>>();
 
         // Walk one level of skill md files looking for unquoted [ROUTER-HUB] descriptions.
         for child in fs::read_dir(&collection_dir)
@@ -15410,8 +15760,7 @@ fn plan_or_write_router_hubs(
 
         let router_folder = routers_root.join(&router_name);
         let router_skill_md = router_folder.join("SKILL.md");
-        let body =
-            build_router_hub_skill_md(&collection_name, &router_name, &children, &child_links);
+        let body = build_router_hub_skill_md(&collection_name, &router_name, &child_links);
         let needs_write = if allow_write {
             match fs::read_to_string(&router_skill_md) {
                 Ok(existing) => existing != body,
@@ -17191,9 +17540,255 @@ mod tests {
             .join("nature-skills")
             .join("SKILL.md");
         let body = fs::read_to_string(router).expect("parent router should be written");
-        assert!(body.contains("../../nature-skills/nature-skills/SKILL.md"));
-        assert!(body.contains("../../nature-skills/nature-figure/SKILL.md"));
+        // Both children stay declared, and both must actually open from the
+        // exact string the router publishes.
+        let opened = assert_every_declared_child_opens(&body, "nature-skills router");
+        assert_eq!(opened, 2, "no child may be dropped from the parent");
+        assert!(body.contains("/nature-skills/nature-skills/SKILL.md"));
+        assert!(body.contains("/nature-skills/nature-figure/SKILL.md"));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Parse the `[CHILD-SKILL]` declarations out of a generated router file
+    /// exactly the way a recipient Agent reads them: take the path between the
+    /// backticks after `来源文件：` and use it verbatim.
+    fn declared_child_paths(router_body: &str) -> Vec<String> {
+        router_body
+            .lines()
+            .filter(|line| line.contains(CHILD_SKILL_MARKER))
+            .filter_map(|line| {
+                let tail = line.split("来源文件：").nth(1)?;
+                let start = tail.find('`')? + 1;
+                let end = tail[start..].find('`')? + start;
+                Some(tail[start..end].to_string())
+            })
+            .collect()
+    }
+
+    /// The contract this whole router scheme exists for: every declared child
+    /// path must open, used verbatim, with no relative-path arithmetic and no
+    /// knowledge of where the router file itself lives. A recipient reaches the
+    /// router through a junction chain, so a path that only resolves relative to
+    /// the router's physical location is not reachable in practice.
+    fn assert_every_declared_child_opens(router_body: &str, context: &str) -> usize {
+        let declared = declared_child_paths(router_body);
+        assert!(
+            !declared.is_empty(),
+            "{context}: router declared no children"
+        );
+        for path in &declared {
+            let candidate = Path::new(path);
+            assert!(
+                candidate.is_absolute(),
+                "{context}: child path is not absolute and cannot survive the \
+                 delivery junction chain: {path}"
+            );
+            assert!(
+                !path.contains(".."),
+                "{context}: child path contains a relative segment: {path}"
+            );
+            fs::read_to_string(candidate).unwrap_or_else(|error| {
+                panic!("{context}: declared child path did not open: {path} ({error})")
+            });
+        }
+        declared.len()
+    }
+
+    #[test]
+    fn router_hub_collapses_packaging_copies_but_keeps_distinct_variants() {
+        // A source may ship byte-identical host packaging copies and also a
+        // genuinely different host variant under the same `name:`. Exact copies
+        // become one capability; different bodies remain callable variants.
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-router-samename-test-{}",
+            unix_timestamp_string()
+        ));
+        let sources_dir = active_sources_dir(&root);
+        let collection = sources_dir.join("PaperSpine");
+        for (location, body) in &[
+            ("src/skill", "body"),
+            ("dist/claude/skills/paper-spine", "body"),
+            ("dist/codex/skills/paper-spine", "codex body"),
+        ] {
+            let folder = collection.join(location);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(
+                folder.join("SKILL.md"),
+                format!("---\nname: paper-spine\ndescription: \"review a paper\"\n---\n{body}\n"),
+            )
+            .unwrap();
+        }
+        let other = collection.join("figure-planner");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(
+            other.join("SKILL.md"),
+            "---\nname: figure-planner\ndescription: \"plan a figure\"\n---\nbody\n",
+        )
+        .unwrap();
+
+        let report = plan_or_write_router_hubs(&root, true, true).expect("routers should build");
+        let plan = report
+            .plans
+            .iter()
+            .find(|plan| plan.collection_name == "PaperSpine")
+            .expect("PaperSpine plan should exist");
+        assert_eq!(
+            plan.child_count, 2,
+            "parent count must represent capabilities, not packaging paths"
+        );
+
+        let body = fs::read_to_string(
+            sources_dir
+                .join(ROUTER_HUB_FOLDER)
+                .join(&plan.router_skill_name)
+                .join("SKILL.md"),
+        )
+        .expect("router should be written");
+        let opened = assert_every_declared_child_opens(&body, "PaperSpine router");
+        assert_eq!(opened, 3);
+
+        // The neutral source copy wins over its byte-identical Claude package;
+        // the content-different Codex body remains an explicit variant.
+        assert!(body.contains("`$paper-spine` （通用变体 · src/skill）"));
+        assert!(body.contains("`$paper-spine` （Codex变体 · dist/codex/skills/paper-spine）"));
+        assert!(!body.contains("dist/claude/skills/paper-spine/SKILL.md"));
+        assert!(body.contains("`$figure-planner` —"));
+        assert!(body.contains("description: \"◈ 父 · 2 个子项"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// End-to-end reachability through the real delivery topology.
+    ///
+    /// A recipient never opens the router at its physical location. It opens
+    /// `<agent>/skills/<name>/SKILL.md`, which is a junction to the active
+    /// skills folder, which is itself a junction to the router folder. This is
+    /// the exact chain that made every `../../` child reference unreachable, so
+    /// it is the chain the test has to reproduce.
+    #[cfg(windows)]
+    #[test]
+    fn declared_children_open_through_the_agent_delivery_junction_chain() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-router-delivery-test-{}",
+            unix_timestamp_string()
+        ));
+        let sources_dir = active_sources_dir(&root);
+        let collection = sources_dir.join("nature-skills");
+        for child in &["nature-academic-search", "nature-figure"] {
+            let folder = collection.join(child);
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(
+                folder.join("SKILL.md"),
+                format!("---\nname: {child}\ndescription: \"child\"\n---\nbody\n"),
+            )
+            .unwrap();
+        }
+        plan_or_write_router_hubs(&root, true, true).expect("routers should build");
+
+        let router_folder = sources_dir.join(ROUTER_HUB_FOLDER).join("nature-skills");
+        let active_skills = root.join("UserData").join("skills");
+        let agent_skills = root.join("agent-home").join("skills");
+        fs::create_dir_all(&active_skills).unwrap();
+        fs::create_dir_all(&agent_skills).unwrap();
+
+        // Hop 1: active catalog -> router folder. Hop 2: agent -> active catalog.
+        let hop_one = active_skills.join("nature-skills");
+        let hop_two = agent_skills.join("nature-skills");
+        if !make_directory_junction(&router_folder, &hop_one)
+            || !make_directory_junction(&hop_one, &hop_two)
+        {
+            // Junction creation can be unavailable on a restricted CI volume.
+            // Skip rather than fail on an environment limitation.
+            let _ = fs::remove_dir_all(&root);
+            return;
+        }
+
+        let delivered = hop_two.join("SKILL.md");
+        let body = fs::read_to_string(&delivered)
+            .expect("router should be readable through the delivery chain");
+        assert_every_declared_child_opens(&body, "delivered nature-skills router");
+
+        // Guard the original defect directly: resolving a declared child the way
+        // a host actually does it (lexically, against the delivered path) must
+        // still land on a real file.
+        for path in declared_child_paths(&body) {
+            let resolved = hop_two.join(&path);
+            assert!(
+                resolved.exists(),
+                "child unreachable from the delivered entry: {path}"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Create a directory junction, returning false when the platform refuses.
+    #[cfg(windows)]
+    fn make_directory_junction(target: &Path, link: &Path) -> bool {
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn relocating_the_sources_root_rewrites_absolute_child_paths() {
+        // Absolute child paths bake the sources root into the router body. That
+        // is only safe because a relocated root produces a different body, so
+        // the `existing != body` short-circuit regenerates instead of leaving a
+        // router pointing at a directory the user moved away from.
+        let stamp = unix_timestamp_string();
+        let first = std::env::temp_dir().join(format!("skillhub-router-root-a-{stamp}"));
+        let second = std::env::temp_dir().join(format!("skillhub-router-root-b-{stamp}"));
+
+        let build = |root: &Path| -> String {
+            let sources_dir = active_sources_dir(root);
+            for child in &["alpha-one", "alpha-two"] {
+                let folder = sources_dir.join("alpha").join(child);
+                fs::create_dir_all(&folder).unwrap();
+                fs::write(
+                    folder.join("SKILL.md"),
+                    format!("---\nname: {child}\ndescription: \"c\"\n---\nbody\n"),
+                )
+                .unwrap();
+            }
+            plan_or_write_router_hubs(root, true, true).expect("routers should build");
+            fs::read_to_string(
+                sources_dir
+                    .join(ROUTER_HUB_FOLDER)
+                    .join("alpha")
+                    .join("SKILL.md"),
+            )
+            .expect("router should be written")
+        };
+
+        let before = build(&first);
+        let after = build(&second);
+        assert_ne!(
+            before, after,
+            "a relocated sources root must change the generated router body"
+        );
+        assert_every_declared_child_opens(&after, "relocated alpha router");
+        for path in declared_child_paths(&after) {
+            assert!(
+                !path.contains(&first.to_string_lossy().replace('\\', "/")),
+                "router kept a path under the old sources root: {path}"
+            );
+        }
+
+        // Regenerating an unchanged tree must stay a no-op so routine syncs do
+        // not rewrite every router file.
+        let rerun = plan_or_write_router_hubs(&second, true, true).expect("rerun should succeed");
+        let plan = rerun
+            .plans
+            .iter()
+            .find(|plan| plan.collection_name == "alpha")
+            .expect("alpha plan should exist");
+        assert_eq!(plan.status, "unchanged");
+
+        let _ = fs::remove_dir_all(&first);
+        let _ = fs::remove_dir_all(&second);
     }
 
     #[test]
@@ -17274,10 +17869,24 @@ mod tests {
         )
         .unwrap();
 
-        assert!(alpha.contains("../../alpha/shared-review/SKILL.md"));
-        assert!(!alpha.contains("../../beta/"));
-        assert!(beta.contains("../../beta/shared-review/SKILL.md"));
-        assert!(!beta.contains("../../alpha/"));
+        assert_every_declared_child_opens(&alpha, "alpha router");
+        assert_every_declared_child_opens(&beta, "beta router");
+        // Source isolation: a parent may only ever declare files inside its own
+        // collection, even when both collections ship a `shared-review` child.
+        for path in declared_child_paths(&alpha) {
+            assert!(
+                path.contains("/alpha/"),
+                "alpha router leaked a foreign source path: {path}"
+            );
+        }
+        for path in declared_child_paths(&beta) {
+            assert!(
+                path.contains("/beta/"),
+                "beta router leaked a foreign source path: {path}"
+            );
+        }
+        assert!(alpha.contains("/alpha/shared-review/SKILL.md"));
+        assert!(beta.contains("/beta/shared-review/SKILL.md"));
         assert!(alpha.contains("绝不跨来源替换"));
         let _ = fs::remove_dir_all(&root);
     }
@@ -18372,7 +18981,7 @@ mod tests {
         assert!(!staged.join("train.py").exists());
 
         let control = SourceImportControl::detached("prompt-full-checkout-test");
-        let output = complete_sparse_skill_checkout("git", &staged, &control)
+        let output = complete_sparse_skill_checkout("git", &staged, &control, None)
             .expect("Prompt checkout should complete");
         assert!(
             output.status.success(),
@@ -18437,7 +19046,7 @@ mod tests {
             unix_timestamp_string()
         ));
         let mut nested = root.clone();
-        for index in 0..12 {
+        for index in 0..(SOURCE_IMPORT_MAX_DEPTH + 2) {
             nested = nested.join(format!("level-{index}"));
         }
         fs::create_dir_all(&nested).expect("deep fixture should create");
@@ -18875,6 +19484,161 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "network-dependent Windows long-path Git import gate"]
+    fn github_git_import_keeps_academic_research_skills_codex_updateable() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-academic-research-git-longpath-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test database should open");
+        let plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/Imbad0202/academic-research-skills-codex.git",
+        )
+        .expect("academic research plan should build");
+        let staged_path = source_import_staging_root(&root).join("academic-research-git");
+        let mut execution = SourceImportExecutionCard {
+            id: "academic-research-git".to_string(),
+            import_kind: "github".to_string(),
+            input: plan.input.clone(),
+            status: "blocked".to_string(),
+            risk_level: "low".to_string(),
+            summary: String::new(),
+            staged_path: staged_path.display().to_string(),
+            report_path: String::new(),
+            manifest_path: String::new(),
+            copied_files: 0,
+            copied_bytes: 0,
+            skill_count: 0,
+            prompt_count: 0,
+            blocking_checks: Vec::new(),
+            rollback_steps: Vec::new(),
+            real_write_scope: "staging-only".to_string(),
+            download_method: String::new(),
+            security_status: "not-run".to_string(),
+            security_scanned_files: 0,
+            security_findings: Vec::new(),
+        };
+
+        stage_github_source_import_with_control(
+            &plan,
+            &staged_path,
+            &mut execution,
+            &SourceImportControl::detached("academic-research-git-longpath-test"),
+        )
+        .expect("Git import should survive the repository's deep Windows paths");
+
+        assert_eq!(
+            execution.download_method, "git",
+            "{:?}",
+            execution.blocking_checks
+        );
+        assert!(staged_path.join(".git").is_dir());
+        assert!(execution.skill_count >= 2);
+        assert!(staged_path
+            .join("plugins/ars-codex/skills/academic-research-suite/SKILL.md")
+            .is_file());
+        assert!(staged_path
+            .join("skills/academic-research-suite/SKILL.md")
+            .is_file());
+
+        let longpaths = Command::new("git")
+            .arg("-C")
+            .arg(&staged_path)
+            .args(["config", "--get", "core.longpaths"])
+            .output()
+            .expect("Git configuration should be readable");
+        assert!(longpaths.status.success());
+        assert_eq!(String::from_utf8_lossy(&longpaths.stdout).trim(), "true");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "network-dependent Windows Schannel retry gate"]
+    fn github_git_import_retries_paper_pilot_with_repository_scoped_openssl() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-paper-pilot-git-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test database should open");
+        let plan = build_source_import_plan(
+            &root,
+            &connection,
+            "github",
+            "https://github.com/aytzey/paper-pilot.git",
+        )
+        .expect("paper-pilot plan should build");
+        let staged_path = source_import_staging_root(&root).join("paper-pilot-git");
+        let mut execution = SourceImportExecutionCard {
+            id: "paper-pilot-git".to_string(),
+            import_kind: "github".to_string(),
+            input: plan.input.clone(),
+            status: "blocked".to_string(),
+            risk_level: "low".to_string(),
+            summary: String::new(),
+            staged_path: staged_path.display().to_string(),
+            report_path: String::new(),
+            manifest_path: String::new(),
+            copied_files: 0,
+            copied_bytes: 0,
+            skill_count: 0,
+            prompt_count: 0,
+            blocking_checks: Vec::new(),
+            rollback_steps: Vec::new(),
+            real_write_scope: "staging-only".to_string(),
+            download_method: String::new(),
+            security_status: "not-run".to_string(),
+            security_scanned_files: 0,
+            security_findings: Vec::new(),
+        };
+
+        stage_github_source_import_with_control(
+            &plan,
+            &staged_path,
+            &mut execution,
+            &SourceImportControl::detached("paper-pilot-git-test"),
+        )
+        .expect("paper-pilot should remain a Git working tree");
+
+        assert_eq!(
+            execution.download_method, "git",
+            "{:?}",
+            execution.blocking_checks
+        );
+        assert!(staged_path.join(".git").is_dir());
+        assert_eq!(execution.skill_count, 0);
+        assert!(execution.prompt_count >= 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn git_import_failure_explains_windows_long_paths() {
+        let message =
+            friendly_git_import_failure("error: unable to create file x: Filename too long");
+        assert!(message.contains("Windows 长路径"));
+        assert!(!message.contains("连接 GitHub"));
+    }
+
+    #[test]
+    fn git_import_retries_only_windows_schannel_credential_failures() {
+        assert!(git_failure_needs_openssl_retry(
+            false,
+            "schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e)"
+        ));
+        assert!(!git_failure_needs_openssl_retry(
+            false,
+            "fatal: repository not found"
+        ));
+        assert!(!git_failure_needs_openssl_retry(
+            true,
+            "SEC_E_NO_CREDENTIALS"
+        ));
     }
 
     #[cfg(target_os = "windows")]

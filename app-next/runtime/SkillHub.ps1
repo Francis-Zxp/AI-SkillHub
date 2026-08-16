@@ -643,6 +643,27 @@ function Get-RouterCapabilityLabel([string]$SkillName, [string]$Description) {
   return $fallback
 }
 
+function Get-RouterHostVariant([string]$RelativePath) {
+  $normalized = '/' + (($RelativePath -replace '\\', '/').Trim('/').ToLowerInvariant()) + '/'
+  if ($normalized.Contains('/.claude/') -or $normalized.Contains('/dist/claude/')) { return 'Claude' }
+  if ($normalized.Contains('/.codex/') -or $normalized.Contains('/dist/codex/')) { return 'Codex' }
+  if ($normalized.Contains('/.agents/') -or $normalized.Contains('/dist/agents/')) { return 'Agents' }
+  if ($normalized.Contains('/.gemini/') -or $normalized.Contains('/dist/gemini/')) { return 'Gemini' }
+  if ($normalized.Contains('/dist/openclaw/')) { return 'OpenClaw' }
+  return '通用'
+}
+
+function Get-RouterCanonicalPriority([string]$RelativePath) {
+  switch (Get-RouterHostVariant $RelativePath) {
+    '通用' { return 0 }
+    'Agents' { return 10 }
+    'Claude' { return 20 }
+    'Codex' { return 20 }
+    'Gemini' { return 20 }
+    default { return 30 }
+  }
+}
+
 function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates) {
   if ([string]::IsNullOrWhiteSpace($RepoName)) { return }
   if ($RepoName -eq 'AI-SkillHub-local-routers') { return }
@@ -653,8 +674,31 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
       (Normalize-SkillLookupName ([string]$_.Skill)) -eq $repoKey
     } | Sort-Object Priority, TieBreaker, Source | Select-Object -First 1
   )
+  $collectionRoot = Join-Path $SourceRoot $RepoName
+  $childCandidates = @($RepoCandidates | Sort-Object Skill, Source | ForEach-Object {
+    $childSkillMd = Join-Path ([string]$_.Source) 'SKILL.md'
+    $relativeChild = Convert-ToRelativePath -Root $collectionRoot -Path $childSkillMd
+    $fingerprint = try {
+      (Get-FileHash -LiteralPath $childSkillMd -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
+    } catch {
+      # An unreadable file must remain unique so an I/O failure can never make a
+      # real variant disappear. Later delivery validation will fail closed.
+      'unreadable:' + (Convert-ToFullPath $childSkillMd).ToLowerInvariant()
+    }
+    [PSCustomObject]@{
+      Candidate = $_
+      DedupKey = (Normalize-SkillLookupName ([string]$_.Skill)) + '|' + $fingerprint
+      Priority = Get-RouterCanonicalPriority $relativeChild
+      RelativePath = $relativeChild
+      Source = [string]$_.Source
+    }
+  })
   $childSkills = @(
-    $RepoCandidates | Sort-Object Skill, Source -Unique
+    $childCandidates |
+      Sort-Object DedupKey, Priority, Source |
+      Group-Object DedupKey |
+      ForEach-Object { $_.Group[0].Candidate } |
+      Sort-Object Skill, Source
   )
   if ($childSkills.Count -lt 1) { return }
 
@@ -665,11 +709,42 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
     throw "Router target escaped source root: $routerFolder"
   }
 
-  $childLines = @($childSkills | Sort-Object Skill | ForEach-Object {
+  # Same-name children inside one source are kept, never dropped: a repository
+  # may ship `src/` plus per-host build outputs, or two genuinely different
+  # Skills may collide. Count them here so the repeated ones can be qualified
+  # with their in-source location instead of rendering as identical options.
+  $childNameCounts = @{}
+  foreach ($child in $childSkills) {
+    $nameKey = Normalize-SkillLookupName ([string]$child.Skill)
+    if ($childNameCounts.ContainsKey($nameKey)) {
+      $childNameCounts[$nameKey] = $childNameCounts[$nameKey] + 1
+    } else {
+      $childNameCounts[$nameKey] = 1
+    }
+  }
+
+  $childLines = @($childSkills | Sort-Object Skill, Source | ForEach-Object {
     $childSkillMd = Join-Path ([string]$_.Source) 'SKILL.md'
-    $relativeChild = Convert-ToRelativePath -Root $SourceRoot -Path $childSkillMd
+    # Absolute, forward-slash path. Routers are machine-local generated files
+    # regenerated on every sync, so they never need portable relative paths --
+    # and a relative path is actively wrong, because the recipient opens this
+    # router through a junction chain (~/.claude/skills/X -> UserData/skills/X
+    # -> router folder). Any '../..' is resolved lexically against the delivered
+    # path by the Agent, landing outside the published Skill directory.
+    $absoluteChild = (Convert-ToFullPath $childSkillMd) -replace '\\', '/'
     $childDescription = Get-LocalizedRouterChildSummary ([string]$_.Skill) ([string]$_.Description)
-    '- [CHILD-SKILL] `${0}` — {1}；来源文件：`../../{2}`' -f ([string]$_.Skill), $childDescription, ($relativeChild -replace '\\', '/')
+    $nameKey = Normalize-SkillLookupName ([string]$_.Skill)
+    $label = '`${0}`' -f ([string]$_.Skill)
+    if ($childNameCounts[$nameKey] -gt 1) {
+      # Location is relative to the collection root, so the qualifier reads
+      # `src/skill` rather than repeating the source name on every line.
+      $relativeChild = Convert-ToRelativePath -Root $collectionRoot -Path $childSkillMd
+      $location = Split-Path -Parent $relativeChild
+      if ([string]::IsNullOrWhiteSpace($location)) { $location = '.' }
+      $variant = Get-RouterHostVariant $relativeChild
+      $label = '`${0}` （{1}变体 · {2}）' -f ([string]$_.Skill), $variant, ($location -replace '\\', '/')
+    }
+    '- [CHILD-SKILL] {0} — {1}；来源文件：`{2}`' -f $label, $childDescription, $absoluteChild
   })
   $capabilityLabels = [System.Collections.Generic.List[string]]::new()
   foreach ($child in ($childSkills | Sort-Object Skill)) {
@@ -689,7 +764,7 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
       if ($parentBody.Length -gt 16000) {
         $parentBody = $parentBody.Substring(0, 16000) + [Environment]::NewLine + '[TRUNCATED: original parent Skill content is longer than 16000 characters.]'
       }
-      $relativeParent = Convert-ToRelativePath -Root $SourceRoot -Path $parentSkillMd
+      $relativeParent = (Convert-ToFullPath $parentSkillMd) -replace '\\', '/'
       $originalParentSection = @(
         ''
         'Original parent Skill content preserved from source:'
@@ -699,10 +774,11 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
       )
     }
   }
+  $capabilityCount = @($childSkills | ForEach-Object { Normalize-SkillLookupName ([string]$_.Skill) } | Sort-Object -Unique).Count
   $routerText = @(
     '---'
     "name: $safeRouterName"
-    "description: `"◈ 父 · $($childSkills.Count) 个子项 · $capabilitySummary`""
+    "description: `"◈ 父 · $capabilityCount 个子项 · $capabilitySummary`""
     '---'
     ''
     '<!-- [ROUTER-HUB] -->'
@@ -718,8 +794,11 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
     '类型：AI SkillHub 管理的父 Skill；下方 [CHILD-SKILL] 表示来源内的功能型子 Skill。'
     ''
     '路由规则：'
-    "- 只能打开下方属于 $RepoName 的明确来源文件。"
+    '- 下方每个子 Skill 都给出完整绝对路径。执行前必须先用文件读取工具打开该路径的全文，不要凭名称或摘要推测其内容。'
+    '- 路径请原样使用，不要拼接、不要相对化、不要基于本文件所在目录再做解析。'
+    "- 只能打开下方明确列出的、属于来源 ``$RepoName`` 的文件。"
     '- 即使其它父 Skill 有同名子 Skill，也绝不跨来源替换。'
+    '- 同名且内容完全相同的打包副本已自动合并；同名但内容不同的子项会标成变体。优先选择与当前 Agent 对应的变体，没有对应项时使用“通用”变体。'
     '- 用户明确指定子 Skill 时，直接打开并完整遵循对应来源文件。'
     '- 用户只指定父 Skill 或描述宽泛任务时，自动选择能完成任务的最小子 Skill。'
     '- 只有在任务存在实质性歧义或安全风险时才向用户提问。'
@@ -992,6 +1071,41 @@ function Add-RepoUpdateLog([string]$Repository, [string]$Action, [string]$Status
   }) | Out-Null
 }
 
+# AI SkillHub writes its own bookkeeping inside each source repository:
+# .skillhub-source.json holds managed metadata, .skillhub-extracted holds the
+# payload of any zip the source ships. Git reports both as untracked, so treating
+# them as "local changes" permanently blocks auto-update on every source the app
+# has ever touched -- the source silently stops tracking GitHub forever.
+# Ignore only these self-authored artifacts. Every real edit still blocks the
+# pull, so uncommitted user work is never overwritten.
+$SelfAuthoredRepoArtifacts = @('.skillhub-source.json', '.skillhub-extracted')
+
+function Test-PorcelainEntryIsSelfAuthored([string]$Line) {
+  if ($Line.Length -lt 4) { return $false }
+  # Only untracked entries qualify. A tracked file with the same name belongs to
+  # the upstream repository, so a change to it must keep blocking the pull.
+  if ($Line.Substring(0, 2) -ne '??') { return $false }
+  $path = $Line.Substring(3).Trim()
+  if ($path.Length -ge 2 -and $path.StartsWith('"') -and $path.EndsWith('"')) {
+    $path = $path.Substring(1, $path.Length - 2)
+  }
+  $path = ($path -replace '\\', '/').TrimStart('/')
+  foreach ($artifact in $SelfAuthoredRepoArtifacts) {
+    if ($path -ieq $artifact -or $path -ieq "$artifact/") { return $true }
+    if ($path.StartsWith("$artifact/", [StringComparison]::OrdinalIgnoreCase)) { return $true }
+  }
+  return $false
+}
+
+function Get-BlockingWorkingTreeChanges([string]$Porcelain) {
+  if ([string]::IsNullOrWhiteSpace($Porcelain)) { return @() }
+  return @(
+    $Porcelain -split "`r?`n" |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+      Where-Object { -not (Test-PorcelainEntryIsSelfAuthored $_) }
+  )
+}
+
 Write-Host "SkillHub project: $ProjectRoot"
 Write-Host "App package: $AppRoot"
 Write-Host ''
@@ -1044,9 +1158,12 @@ foreach ($repo in $Config.repositories) {
         continue
       }
       if (-not [string]::IsNullOrWhiteSpace($dirtyResult.Stdout)) {
-        Write-Warning "$($repo.name) has local changes; update skipped so uncommitted files are preserved."
-        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'dirty-blocked' 'Local modified or untracked files detected; update skipped.'
-        continue
+        $blockingChanges = Get-BlockingWorkingTreeChanges $dirtyResult.Stdout
+        if ($blockingChanges.Count -gt 0) {
+          Write-Warning "$($repo.name) has local changes; update skipped so uncommitted files are preserved."
+          Add-RepoUpdateLog ([string]$repo.name) 'pull' 'dirty-blocked' 'Local modified or untracked files detected; update skipped.'
+          continue
+        }
       }
       if (-not (Test-GitUpdateBudget)) {
         Write-Warning "Git update budget exhausted. Skipping $($repo.name)."
@@ -1070,7 +1187,7 @@ foreach ($repo in $Config.repositories) {
     }
   } elseif (Test-Path -LiteralPath $target) {
     Write-Warning "$target exists but is not a Git repository. Skipping clone."
-    Add-RepoUpdateLog ([string]$repo.name) 'clone' 'skipped' 'Target exists but is not a Git repository.'
+    Add-RepoUpdateLog ([string]$repo.name) 'reinstall' 'not-git' 'Target exists but has no .git metadata; automatic GitHub updates are unavailable.'
   } else {
     if (-not (Test-GitUpdateBudget)) {
       Write-Warning "Git update budget exhausted. Skipping clone for $($repo.name)."
@@ -1122,9 +1239,12 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
       continue
     }
     if (-not [string]::IsNullOrWhiteSpace($dirtyResult.Stdout)) {
-      Write-Warning "$($manualRepo.Name) has local changes; update skipped so uncommitted files are preserved."
-      Add-RepoUpdateLog $manualRepo.Name 'pull' 'dirty-blocked' 'Local modified or untracked files detected; update skipped.'
-      continue
+      $blockingChanges = Get-BlockingWorkingTreeChanges $dirtyResult.Stdout
+      if ($blockingChanges.Count -gt 0) {
+        Write-Warning "$($manualRepo.Name) has local changes; update skipped so uncommitted files are preserved."
+        Add-RepoUpdateLog $manualRepo.Name 'pull' 'dirty-blocked' 'Local modified or untracked files detected; update skipped.'
+        continue
+      }
     }
     $gitResult = Invoke-GitCommandWithTimeout @('-C', $manualRepo.FullName, 'pull', '--ff-only') $manualRepo.Name $GitCommandTimeoutSeconds
     if ($gitResult.ExitCode -eq 0) {
@@ -1136,6 +1256,23 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
       Write-Warning "git pull failed for manual repository $($manualRepo.Name); continuing with local copy."
       Add-RepoUpdateLog $manualRepo.Name 'pull' 'failed' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
     }
+  }
+}
+
+if (-not $ReportOnly -and -not $NoPull) {
+  # Codeload/legacy copies without .git are usable locally but cannot receive a
+  # `git pull`. Surface every one explicitly instead of silently omitting it
+  # from the update summary, so the user can remove and re-add the GitHub URL.
+  $alreadyLogged = @{}
+  foreach ($row in $RepoUpdateLog) { $alreadyLogged[[string]$row.Repository] = $true }
+  $nonGitSources = @(Get-ChildItem -LiteralPath $SourceRoot -Force -Directory -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Name -ne 'AI-SkillHub-local-routers' -and
+      -not (Test-Path -LiteralPath (Join-Path $_.FullName '.git')) -and
+      -not $alreadyLogged.ContainsKey($_.Name)
+    })
+  foreach ($source in $nonGitSources) {
+    Add-RepoUpdateLog $source.Name 'reinstall' 'not-git' 'Local source has no .git metadata; remove it and add its GitHub URL again to restore automatic updates.'
   }
 }
 
@@ -1436,7 +1573,7 @@ foreach ($repo in ($Config.repositories | Where-Object { $_.type -eq 'prompt' })
 }
 
 Write-Utf8Bom $ReportPath ($report -join [Environment]::NewLine)
-$failedUpdates = @($RepoUpdateLog | Where-Object { $_.Status -in @('failed', 'timeout', 'governance-blocked', 'pinned-missing', 'safety-check-failed') })
+$failedUpdates = @($RepoUpdateLog | Where-Object { $_.Status -in @('failed', 'timeout', 'governance-blocked', 'pinned-missing', 'safety-check-failed', 'not-git') })
 $successfulUpdates = @($RepoUpdateLog | Where-Object { $_.Status -eq 'ok' })
 $skippedUpdates = @($RepoUpdateLog | Where-Object { $_.Status -in @('skipped', 'pinned', 'dirty-blocked') })
 $syncStatus = if ($RepoUpdateLog.Count -eq 0 -or $successfulUpdates.Count -eq 0) {
@@ -1446,20 +1583,22 @@ $syncStatus = if ($RepoUpdateLog.Count -eq 0 -or $successfulUpdates.Count -eq 0)
 } else {
   'ok'
 }
-Write-JsonUtf8 $ReportJsonPath ([PSCustomObject]@{
-  schemaVersion = 1
-  generatedAt = (Get-Date).ToUniversalTime().ToString('o')
-  status = $syncStatus
-  total = $RepoUpdateLog.Count
-  succeeded = $successfulUpdates.Count
-  failed = $failedUpdates.Count
-  skipped = $skippedUpdates.Count
-  activeSkills = $selected.Count
-  # Windows PowerShell 5.1 can throw "Argument types do not match" when a
-  # generic List[object] is wrapped directly with @(...). Materialize a plain
-  # object array before ConvertTo-Json so partial syncs still finish normally.
-  repositories = @($RepoUpdateLog.ToArray())
-}) 8
+if (-not $NoPull -or -not (Test-Path -LiteralPath $ReportJsonPath -PathType Leaf)) {
+  Write-JsonUtf8 $ReportJsonPath ([PSCustomObject]@{
+    schemaVersion = 1
+    generatedAt = (Get-Date).ToUniversalTime().ToString('o')
+    status = $syncStatus
+    total = $RepoUpdateLog.Count
+    succeeded = $successfulUpdates.Count
+    failed = $failedUpdates.Count
+    skipped = $skippedUpdates.Count
+    activeSkills = $selected.Count
+    # Windows PowerShell 5.1 can throw "Argument types do not match" when a
+    # generic List[object] is wrapped directly with @(...). Materialize a plain
+    # object array before ConvertTo-Json so partial syncs still finish normally.
+    repositories = @($RepoUpdateLog.ToArray())
+  }) 8
+}
 Add-SyncTiming 'report written'
 
 Write-Host ''

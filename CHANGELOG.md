@@ -2,6 +2,17 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.1.12 - Verified parent routing and transparent source updates
+
+- Makes every generated parent route use recipient-openable absolute child paths and verifies each declared child from Claude Code, Codex/ChatGPT, legacy Codex, and Antigravity entries before reporting delivery success.
+- Collapses byte-identical host packaging copies while retaining content-different same-name variants with explicit host labels; parent counts now represent capabilities instead of duplicate paths.
+- Keeps the real GitHub sync result across the internal no-pull publish pass and lists dirty or non-Git sources that cannot auto-update.
+- Adds an inline “create custom classification folder” option to the source import workflow and files the complete parent/child tree after import.
+- Keeps deep Windows repositories updateable by enabling repository-scoped Git long paths before checkout, and clearly distinguishes Git clones from non-updateable GitHub snapshots.
+- Retries the exact Git for Windows Schannel credential failure with repository-scoped OpenSSL without changing global Git settings.
+- Validates complete Prompt repositories through GitHub's committed tree metadata before materializing blobs, avoiding the partial-clone `ls-tree -l` stall while preserving file-count, depth, per-file, and total-byte limits.
+- Makes source deletion explicitly recoverable and adds a one-click Git retry before a reviewed snapshot is promoted.
+
 ## 3.1.11 - Reliable sync, responsive folders, and callable Prompts
 
 ### Fixed

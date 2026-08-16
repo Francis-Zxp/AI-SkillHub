@@ -23,7 +23,11 @@ test("every non-empty source receives a stable source-scoped parent", () => {
   assert.match(rust, /只能打开下方/);
   assert.match(rust, /绝不跨来源替换/);
   assert.match(sync, /if \(\$childSkills\.Count -lt 1\) \{ return \}/);
-  assert.match(sync, /◈ 父 · \$\(\$childSkills\.Count\) 个子项 · \$capabilitySummary/);
+  assert.match(sync, /◈ 父 · \$capabilityCount 个子项 · \$capabilitySummary/);
+  assert.match(sync, /Get-FileHash -LiteralPath \$childSkillMd -Algorithm SHA256/);
+  assert.match(sync, /Group-Object DedupKey/);
+  assert.match(rust, /source_bytes: Option<Vec<u8>>/);
+  assert.match(rust, /router_child_host_variant/);
   assert.match(sync, /managed shared catalog publishes one canonical parent per source/);
   assert.match(sync, /\(\[string\]\$_.Repo\) -ne 'AI-SkillHub-local-routers'/);
   assert.match(sync, /Where-Object \{[\s\S]*?routerSourcePrefix/);
@@ -66,6 +70,9 @@ test("Codex Claude and Antigravity use the same curated per-entry delivery", () 
   assert.match(links, /Sync-ManagedSkillDirectory \$claudePath/);
   assert.match(links, /Sync-ManagedSkillDirectory \$antigravityPath/);
   assert.match(links, /Sync-ManagedSkillDirectory \$codexRoot/);
+  assert.match(links, /父 Skill 子项文件不可读/);
+  assert.match(links, /Test-UnderRoot \$resolvedChild \$SourceRoot/);
+  assert.match(links, /if \(\$recipientFailures\.Count -gt 0\)/);
   assert.match(rust, /routed-via-parent/);
   assert.match(rust, /Some\(GeneratedAgentSkillDependency::Skill \{ \.\. \}\) => false/);
 });

@@ -52,3 +52,18 @@ test("security evidence contract and translations are present", () => {
   assert.equal((i18n.match(/"qa\.statusAddedLocalReview":/g) ?? []).length, 3);
   assert.match(app, /enabled: reviewedLocalOnly \? false : enabled/);
 });
+
+test("Git fallback is explicit, retryable, and Windows long-path safe", () => {
+  assert.match(app, /securityReview\.execution\.downloadMethod === "git"/);
+  assert.match(app, /retryGitCloneFromSecurityReview/);
+  assert.match(app, /qa\.downloadModeSnapshotTitle/);
+  assert.match(app, /qa\.retryGit/);
+  assert.match(backend, /"core\.longpaths=true"[\s\S]*?"clone"/);
+  assert.match(backend, /"--config",[\s\S]*?"core\.longpaths=true"/);
+  assert.match(backend, /configure_safe_git_materialization[\s\S]*?"core\.longpaths=true"/);
+  assert.match(backend, /filename too long[\s\S]*?Windows 长路径/i);
+  assert.match(backend, /const SOURCE_IMPORT_MAX_DEPTH: usize = 24/);
+  assert.equal((i18n.match(/"qa\.downloadModeGitTitle":/g) ?? []).length, 3);
+  assert.equal((i18n.match(/"qa\.downloadModeSnapshotTitle":/g) ?? []).length, 3);
+  assert.equal((i18n.match(/"qa\.retryGit":/g) ?? []).length, 3);
+});

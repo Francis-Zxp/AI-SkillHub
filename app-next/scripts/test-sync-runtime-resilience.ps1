@@ -100,6 +100,17 @@ public static class FakeGit
         {
             if (command.IndexOf("dirty-repo", StringComparison.OrdinalIgnoreCase) >= 0)
                 Console.WriteLine(" M local-preserved.txt");
+            // AI SkillHub's own untracked bookkeeping must not look like user work,
+            // or every source the app has touched stops tracking GitHub forever.
+            if (command.IndexOf("metadata-only-repo", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                Console.WriteLine("?? .skillhub-source.json");
+                Console.WriteLine("?? .skillhub-extracted/");
+            }
+            // A tracked file of the same name belongs to the upstream repository,
+            // so a real change to it must still block the pull.
+            if (command.IndexOf("tracked-metadata-repo", StringComparison.OrdinalIgnoreCase) >= 0)
+                Console.WriteLine(" M .skillhub-source.json");
             return 0;
         }
         if (command.IndexOf(" pull ", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -246,7 +257,8 @@ try {
     $updateState = Join-Path $updateRoot 'state'
     $updateReports = Join-Path $updateRoot 'reports'
     New-Item -ItemType Directory -Force -Path $updateSources, $updateActive, (Join-Path $updateState 'sync-state'), $updateReports | Out-Null
-    foreach ($repoName in @('ok-repo', 'dirty-repo', 'failed-repo', 'timeout-repo')) {
+    $updateRepoNames = @('ok-repo', 'dirty-repo', 'failed-repo', 'timeout-repo', 'metadata-only-repo', 'tracked-metadata-repo')
+    foreach ($repoName in $updateRepoNames) {
       $null = New-ManualRepo $updateSources $repoName
     }
     $dirtyMarker = Join-Path $updateSources 'dirty-repo\local-preserved.txt'
@@ -264,7 +276,7 @@ try {
       throw "$engineLabel partial update fixture failed as a batch: $($result.Stderr)"
     }
     $summary = Get-Content -LiteralPath (Join-Path $updateReports 'last-sync.json') -Raw | ConvertFrom-Json
-    if ($summary.status -ne 'partial' -or $summary.total -ne 4 -or $summary.succeeded -ne 1 -or $summary.failed -ne 2 -or $summary.skipped -ne 1) {
+    if ($summary.status -ne 'partial' -or $summary.total -ne 6 -or $summary.succeeded -ne 2 -or $summary.failed -ne 2 -or $summary.skipped -ne 2) {
       throw "$engineLabel partial summary is inaccurate: $($summary | ConvertTo-Json -Compress)"
     }
     $statuses = @{}
@@ -275,13 +287,21 @@ try {
         $statuses['timeout-repo'] -ne 'timeout') {
       throw "$engineLabel repository outcomes were not preserved accurately."
     }
+    # A source is only carrying AI SkillHub's own untracked bookkeeping, so it
+    # must keep tracking GitHub instead of being blocked by the app's own files.
+    if ($statuses['metadata-only-repo'] -ne 'ok') {
+      throw "$engineLabel let AI SkillHub's own metadata block the update: $($statuses['metadata-only-repo'])"
+    }
+    if ($statuses['tracked-metadata-repo'] -ne 'dirty-blocked') {
+      throw "$engineLabel pulled over a tracked modification: $($statuses['tracked-metadata-repo'])"
+    }
     if (([IO.File]::ReadAllText($dirtyMarker, [Text.Encoding]::UTF8)) -ne 'must survive sync') {
       throw "$engineLabel changed dirty local content."
     }
     if (Test-Path -LiteralPath $brokenActiveLink) {
       throw "$engineLabel left a broken managed source junction in the active catalog."
     }
-    foreach ($repoName in @('ok-repo', 'dirty-repo', 'failed-repo', 'timeout-repo')) {
+    foreach ($repoName in $updateRepoNames) {
       if (-not (Test-Path -LiteralPath (Join-Path $updateSources $repoName) -PathType Container)) {
         throw "$engineLabel removed source repository $repoName."
       }
