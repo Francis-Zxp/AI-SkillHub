@@ -31,19 +31,23 @@ dependencies = [
 
 [[package]]
 name = "ai-skillhub-next"
-version = "3.1.12"
+version = "3.2.0"
 dependencies = [
  "base64 0.22.1",
  "minisign-verify",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-updater",
+ "toml_edit 0.25.11+spec-1.1.0",
  "ureq",
+ "uuid",
+ "windows-sys 0.59.0",
  "zip 0.6.6",
 ]
 
@@ -4214,6 +4218,7 @@ dependencies = [
  "indexmap 2.14.0",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.3",
 ]
 

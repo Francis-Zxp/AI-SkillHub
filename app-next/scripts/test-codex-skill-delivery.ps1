@@ -7,10 +7,8 @@ $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot)
 if (-not $resolvedTestRoot.StartsWith($tempBase, [StringComparison]::OrdinalIgnoreCase)) {
   throw "Refusing to create delivery test outside TEMP: $resolvedTestRoot"
 }
-$windowsPowerShellVersion = (& powershell.exe -NoProfile -Command '$PSVersionTable.PSVersion.ToString()').Trim()
-if (-not $windowsPowerShellVersion.StartsWith('5.1', [StringComparison]::Ordinal)) {
-  throw "This regression test requires Windows PowerShell 5.1; found $windowsPowerShellVersion."
-}
+$powerShellHost = (Get-Process -Id $PID).Path
+$powerShellVersion = $PSVersionTable.PSVersion.ToString()
 
 try {
   $homePath = Join-Path $resolvedTestRoot 'recipient-home'
@@ -48,6 +46,34 @@ description: Must not be delivered when absent from the allowlist.
   Set-Content -LiteralPath (Join-Path $invalidSkill 'SKILL.md') -Encoding utf8 -Value @'
 # Missing required YAML name and description.
 '@
+  $blockDescriptionSkill = Join-Path $activeSkills 'block-description-skill'
+  New-Item -ItemType Directory -Force -Path $blockDescriptionSkill | Out-Null
+  Set-Content -LiteralPath (Join-Path $blockDescriptionSkill 'SKILL.md') -Encoding utf8 -Value @'
+---
+name: block-description-skill
+description: >-
+  A valid folded YAML description that must remain discoverable
+  by Codex and Claude Code delivery.
+---
+
+# Block description
+'@
+
+  $unicodeOnlyParent = -join ([char]0x6280, [char]0x80FD)
+  $longUnsafeParent = (('A' * 65) -join '')
+  $unsafeParentNames = @('Upper.Parent_Name', $unicodeOnlyParent, '___', $longUnsafeParent)
+  foreach ($unsafeParentName in $unsafeParentNames) {
+    $unsafeParent = Join-Path $activeSkills $unsafeParentName
+    New-Item -ItemType Directory -Force -Path $unsafeParent | Out-Null
+    Set-Content -LiteralPath (Join-Path $unsafeParent 'SKILL.md') -Encoding utf8 -Value @(
+      '---',
+      "name: $unsafeParentName",
+      'description: "[ROUTER-HUB] Incompatible parent name fixture."',
+      '---',
+      '',
+      '<!-- [ROUTER-HUB] -->'
+    )
+  }
 
   $configPath = Join-Path $resolvedTestRoot 'skillhub.config.json'
   [PSCustomObject]@{
@@ -64,7 +90,7 @@ description: Must not be delivered when absent from the allowlist.
   $env:AI_SKILLHUB_CONFIG_PATH = $configPath
   $scriptPath = Join-Path $PSScriptRoot '..\runtime\Manage-AgentSkillLinks.ps1'
 
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+  & $powerShellHost -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
     -Quiet -HomePath $homePath -SimulateOpenAIDesktopPresent
   if ($LASTEXITCODE -ne 0) { throw "Desktop-only delivery process failed with exit code $LASTEXITCODE" }
 
@@ -78,12 +104,19 @@ description: Must not be delivered when absent from the allowlist.
   if (Test-Path -LiteralPath (Join-Path $homePath '.agents\skills\invalid-skill')) {
     throw 'Invalid SKILL.md was published to the recipient.'
   }
+  foreach ($unsafeParentName in $unsafeParentNames) {
+    $unsafeDelivery = Join-Path (Join-Path $homePath '.agents\skills') $unsafeParentName
+    if (Test-Path -LiteralPath $unsafeDelivery) {
+      throw "Recipient received a parent with a Claude-incompatible name: $unsafeParentName"
+    }
+  }
 
   $allowlistPath = Join-Path $resolvedTestRoot 'agent-skill-allowlist.json'
   Set-Content -LiteralPath $allowlistPath -Encoding utf8 -Value @'
 [
   "demo-skill",
-  "second-skill"
+  "second-skill",
+  "block-description-skill"
 ]
 '@
   $env:AI_SKILLHUB_AGENT_SKILL_ALLOWLIST = $allowlistPath
@@ -91,7 +124,7 @@ description: Must not be delivered when absent from the allowlist.
   $oldClaudeRoot = Join-Path $allowlistedHome '.claude\skills'
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $oldClaudeRoot) | Out-Null
   New-Item -ItemType Junction -Path $oldClaudeRoot -Target $activeSkills | Out-Null
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+  & $powerShellHost -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
     -Quiet -HomePath $allowlistedHome -SimulateOpenAIDesktopPresent -SimulateClaudePresent
   if ($LASTEXITCODE -ne 0) { throw "Allowlisted delivery failed with exit code $LASTEXITCODE" }
   if (-not (Test-Path -LiteralPath (Join-Path $allowlistedHome '.agents\skills\demo-skill\SKILL.md') -PathType Leaf)) {
@@ -99,6 +132,9 @@ description: Must not be delivered when absent from the allowlist.
   }
   if (-not (Test-Path -LiteralPath (Join-Path $allowlistedHome '.agents\skills\second-skill\SKILL.md') -PathType Leaf)) {
     throw 'Windows PowerShell 5.1 treated the multi-item allowlist as one Object[] instead of delivering its second Skill.'
+  }
+  if (-not (Test-Path -LiteralPath (Join-Path $allowlistedHome '.agents\skills\block-description-skill\SKILL.md') -PathType Leaf)) {
+    throw 'A valid block-scalar YAML description was incorrectly excluded from Agent delivery.'
   }
   if (Test-Path -LiteralPath (Join-Path $allowlistedHome '.agents\skills\disabled-skill')) {
     throw 'Disabled Skill was delivered despite being absent from the allowlist.'
@@ -116,6 +152,25 @@ description: Must not be delivered when absent from the allowlist.
     throw 'Claude received a Skill that was absent from the curated allowlist.'
   }
 
+  # A junction whose target disappeared is invisible to Test-Path, but the link
+  # object still occupies the destination. Reproduce that exact field failure
+  # and verify the next reconciliation replaces it with a healthy managed link.
+  $danglingEntry = Join-Path $allowlistedHome '.agents\skills\demo-skill'
+  $danglingTarget = Join-Path $resolvedTestRoot 'removed-router-target'
+  [IO.Directory]::Delete($danglingEntry, $false)
+  New-Item -ItemType Directory -Force -Path $danglingTarget | Out-Null
+  New-Item -ItemType Junction -Path $danglingEntry -Target $danglingTarget | Out-Null
+  Remove-Item -LiteralPath $danglingTarget -Recurse -Force
+  if (Test-Path -LiteralPath (Join-Path $danglingEntry 'SKILL.md') -PathType Leaf) {
+    throw 'Dangling-junction fixture unexpectedly exposes a SKILL.md after its target was removed.'
+  }
+  & $powerShellHost -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+    -Quiet -HomePath $allowlistedHome -SimulateOpenAIDesktopPresent -SimulateClaudePresent
+  if ($LASTEXITCODE -ne 0) { throw "Dangling-link repair failed with exit code $LASTEXITCODE" }
+  if (-not (Test-Path -LiteralPath (Join-Path $danglingEntry 'SKILL.md') -PathType Leaf)) {
+    throw 'Agent delivery did not replace a dangling managed junction.'
+  }
+
   $preservedDemo = Join-Path $allowlistedHome '.agents\skills\demo-skill\SKILL.md'
   $preservedSecond = Join-Path $allowlistedHome '.agents\skills\second-skill\SKILL.md'
   Set-Content -LiteralPath $allowlistPath -Encoding utf8 -Value @'
@@ -130,7 +185,7 @@ description: Must not be delivered when absent from the allowlist.
   $savedErrorActionPreference = $ErrorActionPreference
   try {
     $ErrorActionPreference = 'Continue'
-    $failClosedOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+    $failClosedOutput = & $powerShellHost -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
       -Quiet -HomePath $allowlistedHome -SimulateOpenAIDesktopPresent 2>&1
     $failClosedExitCode = $LASTEXITCODE
   } finally {
@@ -150,7 +205,7 @@ description: Must not be delivered when absent from the allowlist.
 
   $legacyRoot = Join-Path $homePath '.codex\skills'
   New-Item -ItemType Directory -Force -Path $legacyRoot | Out-Null
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
+  & $powerShellHost -NoProfile -ExecutionPolicy Bypass -File $scriptPath `
     -Quiet -HomePath $homePath -SimulateCodexPresent
   if ($LASTEXITCODE -ne 0) { throw "Legacy compatibility delivery failed with exit code $LASTEXITCODE" }
   $legacySkill = Join-Path $legacyRoot 'demo-skill\SKILL.md'
@@ -161,11 +216,14 @@ description: Must not be delivered when absent from the allowlist.
   Write-Host 'PASS: desktop-only recipient receives verified Skills in ~/.agents/skills.'
   Write-Host 'PASS: clean recipient does not get a fake ~/.codex directory.'
   Write-Host 'PASS: existing ~/.codex/skills remains backward compatible.'
-  Write-Host "PASS: Windows PowerShell $windowsPowerShellVersion enumerates every item in a multi-Skill allowlist."
+  Write-Host "PASS: PowerShell $powerShellVersion enumerates every item in a multi-Skill allowlist."
   Write-Host 'PASS: disabled Skills are excluded by the persisted delivery allowlist.'
   Write-Host 'PASS: Claude full-catalog junction is migrated to a curated per-entry directory.'
   Write-Host 'PASS: a non-empty zero-match allowlist fails closed and preserves existing links.'
   Write-Host 'PASS: invalid SKILL.md manifests are excluded from delivery.'
+  Write-Host 'PASS: folded YAML descriptions remain valid for Codex and Claude Code.'
+  Write-Host 'PASS: parent entries outside the Claude-compatible name subset are rejected before delivery.'
+  Write-Host 'PASS: dangling managed junctions are repaired on the next reconciliation.'
 } finally {
   if ($null -eq $previousConfig) {
     Remove-Item Env:AI_SKILLHUB_CONFIG_PATH -ErrorAction SilentlyContinue

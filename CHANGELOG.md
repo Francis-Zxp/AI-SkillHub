@@ -2,6 +2,37 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.0 - Responsive refresh and safe MCP management
+
+### Changed
+
+- Keeps refresh single-flight and replaces the second serial popularity snapshot with a lightweight background card merge. Navigation remains available while read-only refresh work continues, while conflicting writes share one clear busy state.
+- Saves source metadata and tags as one compact background mutation with an atomic database transaction and a small response instead of rebuilding the full library twice.
+- Bounds each update check to eight seconds and coalesces pointer-glow layout work into one animation frame.
+- Keeps the browser-only preview fixture out of the desktop startup bundle and loads it only when the standalone preview is used.
+- Rotates the bounded Git update starting point across runs, reserves one complete manual-repository attempt before a configured update starts, and records cursor failures in the visible sync summary.
+- Separates the source drag grip from the accessible folder selector, uses theme-aware native dropdowns, and adds an exact-name copy action to every child Skill.
+
+### Agent delivery
+
+- Generates one canonical lowercase parent route for Claude Code and Codex, adds a stable hash suffix when an unsafe or overlong source name must be normalised, repairs stale or broken delivery links, and accepts valid multiline YAML descriptions.
+- Keeps the parent-first catalog: child Skills remain discoverable through their parent route instead of publishing hundreds of global child aliases. The copied child name helps users select the intended capability after invoking its parent.
+
+### MCP configuration governance
+
+- Adds controlled Codex and Claude Code MCP changes through `plan → redacted diff → confirmation → atomic write → static read-back`, with a one-click snapshot rollback that remains discoverable after an app restart.
+- Stores rollback payloads only under private app state, protects them with the current Windows user's DPAPI key, and prunes them after seven days or at 16 snapshots / 128 MiB. No backup is placed beside a host configuration file.
+- Restores every target if any host in a multi-host change fails, refuses concurrent or unsafe path changes, and fails closed if another program edits a target before apply or rollback. Claude JSONC files with comments or trailing commas remain read-only.
+- Persists an encrypted `prepared → applying → committed` manifest before host writes. After an interrupted apply or rollback, restart recovery restores only content matching the recorded original or planned fingerprints; unknown external content is preserved for attention.
+- Never starts an MCP server and never asks for credential values. Ordinary command, URL, and argument fields stay in process memory only while the user confirms the plan; the bounded on-disk journal contains only protected target fingerprints and redacted diffs, encrypted for the current Windows user. Credential references use environment-variable or header-reference names, and existing secret values stay out of the UI, plan journal, diagnostics, and returned results.
+- Treats a successful write as verified static configuration, not proof that the server is running. Restart the affected host and use its `/mcp` command to verify runtime availability.
+- Keeps Codex binding enable/disable management in AI SkillHub, while Claude Code enablement remains in Claude Code's per-project `/mcp` state instead of writing a non-standard binding field.
+- Bounds the in-memory confirmation cache to 15 minutes, 64 plans, and 8 MiB; applying a plan consumes it whether the operation succeeds or fails.
+
+### Release safeguards
+
+- Extends CI to future `codex/v3.*` branches and enforces bounded main JavaScript and CSS bundle sizes after the production build.
+
 ## 3.1.12 - Verified parent routing and transparent source updates
 
 - Makes every generated parent route use recipient-openable absolute child paths and verifies each declared child from Claude Code, Codex/ChatGPT, legacy Codex, and Antigravity entries before reporting delivery success.

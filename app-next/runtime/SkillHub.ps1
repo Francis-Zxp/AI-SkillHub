@@ -173,7 +173,10 @@ function Stop-ProcessTreeQuietly([System.Diagnostics.Process]$Process) {
   } catch {
     try { $Process.Kill() } catch {}
   }
-  try { $Process.WaitForExit(5000) | Out-Null } catch {}
+  # taskkill /F has already completed synchronously. Keep the final observation
+  # bounded so timeout cleanup cannot add another five seconds past the shared
+  # Git update deadline if a broken process handle never signals promptly.
+  try { $Process.WaitForExit(1000) | Out-Null } catch {}
 }
 
 function Invoke-GitCommandWithTimeout([string[]]$Arguments, [string]$Label, [int]$TimeoutSeconds) {
@@ -535,10 +538,16 @@ function Get-IsReparsePoint($Item) {
 }
 
 function Remove-ManagedReparsePoint([string]$Path, [string]$Root, [string]$Skill, [string]$Action, [string]$Target) {
-  if (-not (Test-Path -LiteralPath $Path)) { return $false }
   if (-not (Test-UnderRoot $Path $Root)) { throw "Refusing to remove path outside skills root: $Path" }
 
-  $item = Get-Item -LiteralPath $Path -Force
+  try {
+    # Test-Path follows a junction and returns false when its target disappeared.
+    # Get-Item -Force still opens the link itself, which is exactly what cleanup
+    # must inspect without ever touching the missing target.
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+  } catch {
+    return $false
+  }
   if (-not (Get-IsReparsePoint $item)) {
     $actions.Add([PSCustomObject]@{ Skill = $Skill; Action = 'Skipped real folder'; Target = $Path }) | Out-Null
     return $false
@@ -601,6 +610,62 @@ function Add-Candidate($List, [string]$Folder, [string]$RepoName, [bool]$Explici
 function Normalize-SkillLookupName([string]$Value) {
   if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
   return ($Value.Trim().ToLowerInvariant() -replace '[_\s]+', '-')
+}
+
+function Get-StableParentSkillNameHash([string]$Value) {
+  $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
+  $sha256 = [Security.Cryptography.SHA256]::Create()
+  try {
+    $hashBytes = $sha256.ComputeHash($bytes)
+  } finally {
+    $sha256.Dispose()
+  }
+  return ([BitConverter]::ToString($hashBytes).Replace('-', '').ToLowerInvariant())
+}
+
+function Convert-ToCanonicalParentSkillName([string]$Value) {
+  $trimmed = if ($null -eq $Value) { '' } else { $Value.Trim() }
+  if ($trimmed.Length -le 64 -and
+      $trimmed -cmatch '^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$') {
+    return $trimmed.ToLowerInvariant()
+  }
+
+  # Only ASCII survives the canonical host-facing slug. Avoid locale or Unicode
+  # case/compatibility folding so the Rust and PowerShell generators remain byte-for-byte identical.
+  $source = $trimmed
+  $builder = [Text.StringBuilder]::new()
+  $separatorPending = $false
+  foreach ($character in $source.ToCharArray()) {
+    $codePoint = [int]$character
+    $isAsciiUpper = $codePoint -ge [int][char]'A' -and $codePoint -le [int][char]'Z'
+    $isAsciiLower = $codePoint -ge [int][char]'a' -and $codePoint -le [int][char]'z'
+    $isAsciiDigit = $codePoint -ge [int][char]'0' -and $codePoint -le [int][char]'9'
+    if ($isAsciiUpper -or $isAsciiLower -or $isAsciiDigit) {
+      if ($separatorPending -and $builder.Length -gt 0) {
+        [void]$builder.Append('-')
+      }
+      if ($isAsciiUpper) {
+        [void]$builder.Append([char]($codePoint + 32))
+      } else {
+        [void]$builder.Append($character)
+      }
+      $separatorPending = $false
+    } elseif ($builder.Length -gt 0) {
+      $separatorPending = $true
+    }
+  }
+
+  $candidate = $builder.ToString()
+  $hash = (Get-StableParentSkillNameHash $trimmed).Substring(0, 12)
+  if ([string]::IsNullOrWhiteSpace($candidate)) {
+    return 'skill-' + $hash
+  }
+  $prefixLength = [Math]::Min(51, $candidate.Length)
+  $prefix = $candidate.Substring(0, $prefixLength).TrimEnd('-')
+  if ([string]::IsNullOrWhiteSpace($prefix)) {
+    return 'skill-' + $hash
+  }
+  return $prefix + '-' + $hash
 }
 
 function Get-LocalizedRouterChildSummary([string]$SkillName, [string]$Description) {
@@ -702,7 +767,14 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
   )
   if ($childSkills.Count -lt 1) { return }
 
-  $safeRouterName = Get-SafeSkillName $RepoName $RepoName
+  # Parent invocation names must fit the strict subset accepted by every
+  # recipient, including Claude Code: lower-case ASCII letters, digits and
+  # hyphens only, with an alphanumeric edge and a 64-character maximum. Any
+  # lossy rewrite carries a stable source-name hash so `a.b` and `a_b` cannot
+  # overwrite each other's router directory.
+  # Keep this separate from Normalize-SkillLookupName, whose broader identity
+  # semantics are also used for child deduplication and source matching.
+  $safeRouterName = Convert-ToCanonicalParentSkillName $RepoName
   $routerRoot = Join-Path $SourceRoot 'AI-SkillHub-local-routers'
   $routerFolder = Join-Path $routerRoot $safeRouterName
   if (-not (Test-UnderRoot $routerFolder $SourceRoot)) {
@@ -1014,6 +1086,7 @@ $ArchivesRoot = Join-Path $StateBase 'archives'
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $ArchiveRoot = Join-Path $ArchivesRoot "replaced_active_skill_copies_$Stamp"
 $StatePath = Join-Path $StateRoot 'managed-links.json'
+$GitUpdateCursorPath = Join-Path $StateRoot 'git-update-cursor.json'
 $ReportPath = Join-Path $ReportsRoot 'last-sync.md'
 $ReportJsonPath = Join-Path $ReportsRoot 'last-sync.json'
 $AgentLinkScript = Join-Path $AppRoot 'Manage-AgentSkillLinks.ps1'
@@ -1046,9 +1119,25 @@ function Get-PinnedSourceRevision([string]$RepositoryName) {
 
 New-Item -ItemType Directory -Force -Path $SourceRoot, $SkillsRoot, $StateRoot, $ReportsRoot, $ArchivesRoot | Out-Null
 $RepoUpdateLog = New-Object System.Collections.Generic.List[object]
-$GitUpdateStarted = Get-Date
 $SyncTimings = New-Object System.Collections.Generic.List[object]
+# Stopwatch is monotonic, unlike wall-clock time, so a clock adjustment cannot
+# accidentally extend (or prematurely consume) the shared Git update window.
 $SyncStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+$GitUpdateCursor = [PSCustomObject]@{
+  configuredNextRepository = ''
+  manualNextRepository = ''
+}
+$GitUpdateCursorReadFailed = $false
+if (-not $NoPull -and -not $ReportOnly -and (Test-Path -LiteralPath $GitUpdateCursorPath -PathType Leaf)) {
+  try {
+    $savedGitUpdateCursor = Get-Content -LiteralPath $GitUpdateCursorPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $GitUpdateCursor.configuredNextRepository = ([string]$savedGitUpdateCursor.configuredNextRepository).Trim()
+    $GitUpdateCursor.manualNextRepository = ([string]$savedGitUpdateCursor.manualNextRepository).Trim()
+  } catch {
+    $GitUpdateCursorReadFailed = $true
+    Write-Warning 'Git update rotation could not be restored; this run starts from the default order.'
+  }
+}
 
 function Add-SyncTiming([string]$Stage) {
   $SyncTimings.Add([PSCustomObject]@{
@@ -1057,9 +1146,55 @@ function Add-SyncTiming([string]$Stage) {
   }) | Out-Null
 }
 
-function Test-GitUpdateBudget {
+function Get-GitUpdateRemainingSeconds {
+  if ($GitUpdateBudgetSeconds -le 0) { return [double]::PositiveInfinity }
+  return [Math]::Max(0.0, ([double]$GitUpdateBudgetSeconds - $SyncStopwatch.Elapsed.TotalSeconds))
+}
+
+function Test-GitUpdateBudget([int]$RequiredSeconds = 0) {
   if ($GitUpdateBudgetSeconds -le 0) { return $true }
-  return (((Get-Date) - $GitUpdateStarted).TotalSeconds -lt $GitUpdateBudgetSeconds)
+  return ((Get-GitUpdateRemainingSeconds) -ge [Math]::Max(0, $RequiredSeconds))
+}
+
+function Get-BoundedGitCommandTimeout([int]$RequestedSeconds, [int]$ReservedAfterSeconds = 0) {
+  $requested = [Math]::Max(1, $RequestedSeconds)
+  if ($GitUpdateBudgetSeconds -le 0) { return $requested }
+
+  # Floor to whole seconds because Process.WaitForExit accepts milliseconds but
+  # this runtime's public timeout contract is seconds. The discarded fraction
+  # also leaves a small margin for process-tree cleanup and bookkeeping.
+  $usable = [int][Math]::Floor((Get-GitUpdateRemainingSeconds) - [Math]::Max(0, $ReservedAfterSeconds))
+  if ($usable -lt 1) { return 0 }
+  return [Math]::Min($requested, $usable)
+}
+
+function Get-RotatedRepositories($Repositories, [string]$NextRepository) {
+  $items = @($Repositories)
+  if ($items.Count -lt 2 -or [string]::IsNullOrWhiteSpace($NextRepository)) { return $items }
+  $startIndex = -1
+  for ($index = 0; $index -lt $items.Count; $index++) {
+    if (([string]$items[$index].Name) -ieq $NextRepository) {
+      $startIndex = $index
+      break
+    }
+  }
+  if ($startIndex -le 0) { return $items }
+  return @($items[$startIndex..($items.Count - 1)]) + @($items[0..($startIndex - 1)])
+}
+
+function Get-NextRepositoryRotationName($Repositories, [string]$CurrentStart) {
+  $items = @($Repositories)
+  if ($items.Count -eq 0) { return '' }
+  $startIndex = 0
+  if (-not [string]::IsNullOrWhiteSpace($CurrentStart)) {
+    for ($index = 0; $index -lt $items.Count; $index++) {
+      if (([string]$items[$index].Name) -ieq $CurrentStart) {
+        $startIndex = $index
+        break
+      }
+    }
+  }
+  return [string]$items[(($startIndex + 1) % $items.Count)].Name
 }
 
 function Add-RepoUpdateLog([string]$Repository, [string]$Action, [string]$Status, [string]$Message) {
@@ -1069,6 +1204,10 @@ function Add-RepoUpdateLog([string]$Repository, [string]$Action, [string]$Status
     Status = $Status
     Message = $Message
   }) | Out-Null
+}
+
+if ($GitUpdateCursorReadFailed) {
+  Add-RepoUpdateLog '__rotation__' 'cursor-read' 'failed' 'Saved update rotation could not be read; default order was used.'
 }
 
 # AI SkillHub writes its own bookkeeping inside each source repository:
@@ -1112,7 +1251,24 @@ Write-Host ''
 Write-Host 'Updating configured repositories...'
 
 $ConfigChanged = $false
-foreach ($repo in $Config.repositories) {
+$ManualRepositories = @()
+if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
+  # Discover once, read-only, before configured updates begin. A bounded sync
+  # reserves one complete manual status-plus-pull attempt before any configured
+  # attempt starts, so configured sources cannot consume the manual rotation.
+  $ManualRepositories = @(Get-ChildItem -LiteralPath $SourceRoot -Force -Directory -ErrorAction SilentlyContinue |
+    Where-Object { -not (Get-ConfiguredRepo $_.Name) -and (Test-Path -LiteralPath (Join-Path $_.FullName '.git')) } |
+    Sort-Object Name)
+}
+$GitStatusCommandTimeoutSeconds = 12
+$GitNetworkCommandTimeoutSeconds = [Math]::Max(1, $GitCommandTimeoutSeconds)
+$ManualAttemptCapSeconds = $GitStatusCommandTimeoutSeconds + $GitNetworkCommandTimeoutSeconds
+$ManualGitUpdateReserveSeconds = if ($ManualRepositories.Count -gt 0) { $ManualAttemptCapSeconds } else { 0 }
+$ConfiguredRepositories = @($Config.repositories)
+$ConfiguredRepositoriesForUpdate = @(Get-RotatedRepositories $ConfiguredRepositories ([string]$GitUpdateCursor.configuredNextRepository))
+$NextConfiguredRepository = Get-NextRepositoryRotationName $ConfiguredRepositories ([string]$GitUpdateCursor.configuredNextRepository)
+$ConfiguredBudgetDeferred = ''
+foreach ($repo in $ConfiguredRepositoriesForUpdate) {
   Assert-SafeRepoName ([string]$repo.name)
   $originalUrl = [string]$repo.url
   $normalizedUrl = Normalize-GitHubRepoUrl $originalUrl
@@ -1151,7 +1307,21 @@ foreach ($repo in $Config.repositories) {
 
   if (Test-Path -LiteralPath (Join-Path $target '.git')) {
     if (-not $NoPull) {
-      $dirtyResult = Invoke-GitCommandWithTimeout @('-C', $target, 'status', '--porcelain', '--untracked-files=normal') ([string]$repo.name) 12
+      $configuredAttemptCap = $GitStatusCommandTimeoutSeconds + $GitNetworkCommandTimeoutSeconds
+      if (-not (Test-GitUpdateBudget ($configuredAttemptCap + $ManualGitUpdateReserveSeconds))) {
+        if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
+        Write-Warning "Git update budget exhausted. Deferring $($repo.name) to a later rotation."
+        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'skipped' 'Git update budget exhausted; deferred by the persistent rotation.'
+        continue
+      }
+      $statusTimeout = Get-BoundedGitCommandTimeout $GitStatusCommandTimeoutSeconds ($GitNetworkCommandTimeoutSeconds + $ManualGitUpdateReserveSeconds)
+      if ($statusTimeout -lt 1) {
+        if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
+        Write-Warning "Git update budget exhausted. Deferring $($repo.name) to a later rotation."
+        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'skipped' 'Git update budget exhausted; deferred by the persistent rotation.'
+        continue
+      }
+      $dirtyResult = Invoke-GitCommandWithTimeout @('-C', $target, 'status', '--porcelain', '--untracked-files=normal') ([string]$repo.name) $statusTimeout
       if ($dirtyResult.ExitCode -ne 0) {
         Write-Warning "Cannot verify working tree safety for $($repo.name); update skipped."
         Add-RepoUpdateLog ([string]$repo.name) 'pull' 'safety-check-failed' $dirtyResult.Stderr
@@ -1165,13 +1335,15 @@ foreach ($repo in $Config.repositories) {
           continue
         }
       }
-      if (-not (Test-GitUpdateBudget)) {
-        Write-Warning "Git update budget exhausted. Skipping $($repo.name)."
-        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'skipped' 'Git update budget exhausted.'
+      Write-Host "Pulling $($repo.name)..."
+      $pullTimeout = Get-BoundedGitCommandTimeout $GitNetworkCommandTimeoutSeconds $ManualGitUpdateReserveSeconds
+      if ($pullTimeout -lt 1) {
+        if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
+        Write-Warning "Git update budget exhausted. Deferring $($repo.name) to a later rotation."
+        Add-RepoUpdateLog ([string]$repo.name) 'pull' 'skipped' 'Git update budget exhausted; deferred by the persistent rotation.'
         continue
       }
-      Write-Host "Pulling $($repo.name)..."
-      $gitResult = Invoke-GitCommandWithTimeout @('-C', $target, 'pull', '--ff-only') ([string]$repo.name) $GitCommandTimeoutSeconds
+      $gitResult = Invoke-GitCommandWithTimeout @('-C', $target, 'pull', '--ff-only') ([string]$repo.name) $pullTimeout
       if ($gitResult.ExitCode -eq 0) {
         Add-RepoUpdateLog ([string]$repo.name) 'pull' 'ok' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
       } elseif ($gitResult.TimedOut) {
@@ -1189,13 +1361,21 @@ foreach ($repo in $Config.repositories) {
     Write-Warning "$target exists but is not a Git repository. Skipping clone."
     Add-RepoUpdateLog ([string]$repo.name) 'reinstall' 'not-git' 'Target exists but has no .git metadata; automatic GitHub updates are unavailable.'
   } else {
-    if (-not (Test-GitUpdateBudget)) {
-      Write-Warning "Git update budget exhausted. Skipping clone for $($repo.name)."
-      Add-RepoUpdateLog ([string]$repo.name) 'clone' 'skipped' 'Git update budget exhausted.'
+    if (-not (Test-GitUpdateBudget ($GitNetworkCommandTimeoutSeconds + $ManualGitUpdateReserveSeconds))) {
+      if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
+      Write-Warning "Git update budget exhausted. Deferring clone for $($repo.name) to a later rotation."
+      Add-RepoUpdateLog ([string]$repo.name) 'clone' 'skipped' 'Git update budget exhausted; deferred by the persistent rotation.'
+      continue
+    }
+    $cloneTimeout = Get-BoundedGitCommandTimeout $GitNetworkCommandTimeoutSeconds $ManualGitUpdateReserveSeconds
+    if ($cloneTimeout -lt 1) {
+      if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
+      Write-Warning "Git update budget exhausted. Deferring clone for $($repo.name) to a later rotation."
+      Add-RepoUpdateLog ([string]$repo.name) 'clone' 'skipped' 'Git update budget exhausted; deferred by the persistent rotation.'
       continue
     }
     Write-Host "Cloning $($repo.name)..."
-    $gitResult = Invoke-GitCommandWithTimeout @('clone', '--', ([string]$repo.url), $target) ([string]$repo.name) $GitCommandTimeoutSeconds
+    $gitResult = Invoke-GitCommandWithTimeout @('clone', '--', ([string]$repo.url), $target) ([string]$repo.name) $cloneTimeout
     if ($gitResult.ExitCode -eq 0) {
       Add-RepoUpdateLog ([string]$repo.name) 'clone' 'ok' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
     } elseif ($gitResult.TimedOut) {
@@ -1208,13 +1388,19 @@ foreach ($repo in $Config.repositories) {
   }
 }
 
+if (-not [string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) {
+  $NextConfiguredRepository = $ConfiguredBudgetDeferred
+}
+
 if ($ConfigChanged -and -not $ReportOnly) {
   Write-JsonUtf8 $ConfigPath $Config 12
 }
 
+$NextManualRepository = ''
+$ManualBudgetDeferred = ''
 if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
-  $manualRepos = Get-ChildItem -LiteralPath $SourceRoot -Force -Directory -ErrorAction SilentlyContinue |
-    Where-Object { -not (Get-ConfiguredRepo $_.Name) -and (Test-Path -LiteralPath (Join-Path $_.FullName '.git')) }
+  $manualRepos = @(Get-RotatedRepositories $ManualRepositories ([string]$GitUpdateCursor.manualNextRepository))
+  $NextManualRepository = Get-NextRepositoryRotationName $ManualRepositories ([string]$GitUpdateCursor.manualNextRepository)
   foreach ($manualRepo in $manualRepos) {
     if (-not $GovernanceManifestReadable) {
       Add-RepoUpdateLog $manualRepo.Name 'pull' 'governance-blocked' 'Source pin manifest is unreadable; network update skipped.'
@@ -1226,13 +1412,21 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
       Add-RepoUpdateLog $manualRepo.Name 'pull' 'pinned' "Pinned revision $pinnedRevision; network update skipped."
       continue
     }
-    if (-not (Test-GitUpdateBudget)) {
-      Write-Warning "Git update budget exhausted. Skipping manual repository $($manualRepo.Name)."
-      Add-RepoUpdateLog $manualRepo.Name 'pull' 'skipped' 'Git update budget exhausted.'
+    if (-not (Test-GitUpdateBudget $ManualAttemptCapSeconds)) {
+      if ([string]::IsNullOrWhiteSpace($ManualBudgetDeferred)) { $ManualBudgetDeferred = $manualRepo.Name }
+      Write-Warning "Git update budget exhausted. Deferring manual repository $($manualRepo.Name) to a later rotation."
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'skipped' 'Git update budget exhausted; deferred by the persistent rotation.'
       continue
     }
     Write-Host "Pulling manual repository $($manualRepo.Name)..."
-    $dirtyResult = Invoke-GitCommandWithTimeout @('-C', $manualRepo.FullName, 'status', '--porcelain', '--untracked-files=normal') $manualRepo.Name 12
+    $statusTimeout = Get-BoundedGitCommandTimeout $GitStatusCommandTimeoutSeconds $GitNetworkCommandTimeoutSeconds
+    if ($statusTimeout -lt 1) {
+      if ([string]::IsNullOrWhiteSpace($ManualBudgetDeferred)) { $ManualBudgetDeferred = $manualRepo.Name }
+      Write-Warning "Git update budget exhausted. Deferring manual repository $($manualRepo.Name) to a later rotation."
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'skipped' 'Git update budget exhausted; deferred by the persistent rotation.'
+      continue
+    }
+    $dirtyResult = Invoke-GitCommandWithTimeout @('-C', $manualRepo.FullName, 'status', '--porcelain', '--untracked-files=normal') $manualRepo.Name $statusTimeout
     if ($dirtyResult.ExitCode -ne 0) {
       Write-Warning "Cannot verify working tree safety for manual repository $($manualRepo.Name); update skipped."
       Add-RepoUpdateLog $manualRepo.Name 'pull' 'safety-check-failed' $dirtyResult.Stderr
@@ -1246,7 +1440,14 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
         continue
       }
     }
-    $gitResult = Invoke-GitCommandWithTimeout @('-C', $manualRepo.FullName, 'pull', '--ff-only') $manualRepo.Name $GitCommandTimeoutSeconds
+    $pullTimeout = Get-BoundedGitCommandTimeout $GitNetworkCommandTimeoutSeconds
+    if ($pullTimeout -lt 1) {
+      if ([string]::IsNullOrWhiteSpace($ManualBudgetDeferred)) { $ManualBudgetDeferred = $manualRepo.Name }
+      Write-Warning "Git update budget exhausted. Deferring manual repository $($manualRepo.Name) to a later rotation."
+      Add-RepoUpdateLog $manualRepo.Name 'pull' 'skipped' 'Git update budget exhausted; deferred by the persistent rotation.'
+      continue
+    }
+    $gitResult = Invoke-GitCommandWithTimeout @('-C', $manualRepo.FullName, 'pull', '--ff-only') $manualRepo.Name $pullTimeout
     if ($gitResult.ExitCode -eq 0) {
       Add-RepoUpdateLog $manualRepo.Name 'pull' 'ok' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
     } elseif ($gitResult.TimedOut) {
@@ -1256,6 +1457,23 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
       Write-Warning "git pull failed for manual repository $($manualRepo.Name); continuing with local copy."
       Add-RepoUpdateLog $manualRepo.Name 'pull' 'failed' (($gitResult.Stdout + ' ' + $gitResult.Stderr).Trim())
     }
+  }
+  if (-not [string]::IsNullOrWhiteSpace($ManualBudgetDeferred)) {
+    $NextManualRepository = $ManualBudgetDeferred
+  }
+}
+
+if (-not $ReportOnly -and -not $NoPull) {
+  try {
+    Write-JsonUtf8 $GitUpdateCursorPath ([PSCustomObject]@{
+      schemaVersion = 1
+      configuredNextRepository = $NextConfiguredRepository
+      manualNextRepository = $NextManualRepository
+      updatedAt = (Get-Date).ToUniversalTime().ToString('o')
+    }) 4
+  } catch {
+    Write-Warning 'Git update rotation could not be saved; repository results remain valid.'
+    Add-RepoUpdateLog '__rotation__' 'cursor-write' 'failed' 'Update rotation could not be saved; repository results remain valid.'
   }
 }
 
@@ -1428,8 +1646,9 @@ if (-not $ReportOnly) {
     if ([string]::IsNullOrWhiteSpace($prevSkill)) { continue }
     if ($selectedByName.ContainsKey($prevSkill)) { continue }
     $dest = Join-Path $SkillsRoot $prevSkill
-    if (Test-Path -LiteralPath $dest) {
-      $item = Get-Item -LiteralPath $dest -Force
+    $item = $null
+    try { $item = Get-Item -LiteralPath $dest -Force -ErrorAction Stop } catch { $item = $null }
+    if ($null -ne $item) {
       if (Get-IsReparsePoint $item) {
         Remove-ManagedReparsePoint $dest $SkillsRoot $prevSkill 'Removed stale managed link' $prevTarget | Out-Null
       }
@@ -1464,8 +1683,9 @@ if (-not $ReportOnly) {
       continue
     }
 
-    if (Test-Path -LiteralPath $dest) {
-      $item = Get-Item -LiteralPath $dest -Force
+    $item = $null
+    try { $item = Get-Item -LiteralPath $dest -Force -ErrorAction Stop } catch { $item = $null }
+    if ($null -ne $item) {
       if (Get-IsReparsePoint $item) {
         $currentTarget = [string]$item.Target
         if ($currentTarget -ne $src) {

@@ -54,11 +54,17 @@ material and are not installed as Skills.
 - Zip or `.skill` package previews.
 - Prompt/reference repositories.
 - Parent router Skills and child Skills.
-- Source-scoped parent-to-child routing. Exact same-name children keep
-  source-qualified aliases; only an explicit advanced choice creates a global
-  bare-name dispatcher.
+- One canonical parent route per non-empty source. Children stay source-scoped;
+  exact same-name capabilities do not create global aliases, and their exact
+  names can be copied from the library for selection through the parent.
 - Claude Code, OpenAI Codex, and Antigravity shared-skill links, with separate
   desktop-app and code-capability detection.
+- A secret-safe Codex and Claude Code MCP inventory plus confirmed add, update,
+  remove, static verification, and snapshot rollback for supported bindings.
+  Rollback data stays in private app state, is protected for the current Windows
+  user, survives app restarts within its retention window, and refuses to
+  overwrite externally changed host configuration. AI SkillHub never starts
+  the configured server or reads credential values.
 - Source categories, tags, notes, search, sorting, usage counters, and GitHub
   popularity metadata.
 - Offline, bounded metadata recognition from `README`, `SKILL.md`, and source
@@ -127,8 +133,8 @@ the user may explicitly move allowlisted legacy locations to a recoverable
 backup with the cleanup assistant.
 
 The internal `AI-SkillHub-local-routers` storage folder is not shown as a user
-source. Generated aliases and same-name conflict dispatchers are routing
-infrastructure, so they are not counted as standalone local Skills. A source
+source. Generated parent routes are delivery infrastructure, so they are not
+counted as standalone local Skills. A source
 still shows zero Skills when it genuinely contains no
 `SKILL.md`; it remains Prompt/reference material instead of being installed as
 a Skill.
@@ -232,16 +238,12 @@ See `docs/skill-router-standard.md` for the rule.
 Different sources can contain child Skills with the same callable name, such as
 `Nature-Paper-Skills / figure-planner` and `PaperSpine / figure-planner`.
 
-This means the exact slash-call name is duplicated; it does not mean the two
-Skills were merely judged to have similar functions. AI SkillHub automatically
-chooses the canonical route using enabled state, health, personal rating, and
-path specificity. It never deletes or overwrites a candidate, and it generates
-a source-qualified alias for every choice.
-
-A user can still set a manual override in Routing Observatory. The override is
-stored in the local SQLite table `skill_conflict_choices`, so GitHub updates do
-not erase it. For broad tasks, invoke the parent Skill; its generated routing
-instructions select the smallest child Skill that fits the request.
+This means the child name is duplicated; it does not mean the two Skills were
+merely judged to have similar functions. AI SkillHub never deletes or overwrites
+either candidate, but it also does not publish hundreds of child names as global
+aliases. Invoke the relevant source parent and, when useful, paste the exact child
+name copied from the library; the generated parent instructions keep routing
+inside that source.
 
 ## Author
 

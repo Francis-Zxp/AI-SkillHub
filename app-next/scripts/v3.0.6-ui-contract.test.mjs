@@ -17,7 +17,8 @@ test("updater uses redundant signed channels, bounded retries, and sanitized dia
   assert.match(endpoints[1], /raw\.githubusercontent\.com\/Francis-Zxp\/AI-SkillHub\/main\/updates\/latest\.json/);
   assert.match(endpoints[2], /cdn\.jsdelivr\.net\/gh\/Francis-Zxp\/AI-SkillHub@main\/updates\/latest\.json/);
   assert.match(app, /"retrying"/);
-  assert.match(app, /const retryDelays = silent \? \[0\] : \[0, 1_800\]/);
+  assert.match(app, /const retryDelays = \[0\]/);
+  assert.match(app, /timeout: 8_000/);
   assert.match(app, /\[30_000, 120_000, 480_000\]\[retryNumber\]/);
   assert.match(app, /updateCheckInFlightRef/);
   assert.match(app, /updateInstallInFlightRef/);

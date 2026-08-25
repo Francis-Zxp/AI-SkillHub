@@ -1,4 +1,5 @@
 #[path = "../src/mcp_center.rs"]
+#[allow(dead_code)]
 mod mcp_center;
 
 #[test]

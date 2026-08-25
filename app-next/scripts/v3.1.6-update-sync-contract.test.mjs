@@ -12,14 +12,18 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
 const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const cargoToml = await readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
 
-test("software updater sees one consistent v3.1.12 installed version", () => {
-  assert.equal(packageJson.version, "3.1.12");
+test("software updater sees one consistent v3.2.0 installed version", () => {
+  assert.equal(packageJson.version, "3.2.0");
   assert.equal(tauriConfig.version, packageJson.version);
-  assert.match(cargoToml, /^version = "3\.1\.12"$/m);
+  assert.match(cargoToml, /^version = "3\.2\.0"$/m);
   assert.equal(tauriConfig.bundle.createUpdaterArtifacts, true);
   assert.equal(tauriConfig.plugins.updater.endpoints.length, 3);
   assert.ok(tauriConfig.plugins.updater.endpoints.every(endpoint => endpoint.includes("{{current_version}}")));
-  assert.match(app, /window\.setTimeout\(\(\) => void checkForAppUpdate\(true\), 2600\)/);
+  assert.match(app, /initialUpdateTimerRef\.current = window\.setTimeout\([\s\S]*?10_000\)/);
+  assert.match(app, /requestIdleCallback\(run, \{ timeout: 2_000 \}\)/);
+  assert.match(app, /const retryDelays = \[0\]/);
+  assert.match(app, /check\(\{ headers: UPDATE_CHECK_HEADERS, timeout: 8_000 \}\)/);
+  assert.match(app, /else if \(!silent\) \{\s*setAppUpdate/);
   assert.match(app, /window\.addEventListener\("online", checkAfterReconnect\)/);
   assert.match(releaseScript, /AI-SkillHub-\$Version-setup\.exe/);
   assert.match(releaseScript, /LatestPayload = \[ordered\]@\{/);
@@ -46,6 +50,27 @@ test("Skill source sync reports partial failures instead of claiming universal s
   assert.match(app, /sourceUpdateProblems/);
   assert.match(runtime, /exit 0\s*$/);
   assert.doesNotMatch(backend, /SkillHub 同步脚本执行失败：\{detail\}/);
+});
+
+test("core sync is single-flight and follows with a lightweight popularity refresh", () => {
+  assert.match(app, /const syncInFlightRef = useRef<Promise<LegacySnapshot \| null> \| null>\(null\)/);
+  assert.match(app, /if \(syncInFlightRef\.current\)[\s\S]*?return syncInFlightRef\.current/);
+  assert.match(app, /const task = runCoreSync\(\);\s*syncInFlightRef\.current = task/);
+  const coreSync = app.slice(app.indexOf("async function runCoreSync"), app.indexOf("async function refreshLocalAgents"));
+  assert.match(coreSync, /loadSnapshot\("refresh", \{ background: true, quiet: true \}\)/);
+  assert.doesNotMatch(coreSync, /refreshSourcePopularity|sourcePopularityRefreshMessage/);
+  const syncEntry = app.slice(app.indexOf("async function syncAndRefreshAll"), app.indexOf("async function runCoreSync"));
+  assert.match(syncEntry, /options: \{ refreshPopularity\?: boolean \} = \{\}/);
+  assert.match(syncEntry, /options\.refreshPopularity !== false/);
+  assert.match(syncEntry, /void refreshSourcePopularity\(\{ background: true \}\)/);
+  assert.match(app, /syncAndRefreshAll\(\{ refreshPopularity: false \}\)/);
+  const popularityStart = backend.indexOf("fn refresh_source_popularity_blocking");
+  const popularityEnd = backend.indexOf("fn resolve_legacy_root", popularityStart);
+  const popularityRefresh = backend.slice(popularityStart, popularityEnd);
+  assert.match(popularityRefresh, /build_source_popularity_refresh_result/);
+  assert.doesNotMatch(popularityRefresh, /scan_legacy_snapshot_blocking/);
+  assert.match(app, /loading=\{mutationBusy\}/);
+  assert.match(app, /disabled=\{loading \|\| syncing\}/);
 });
 
 test("router generation finishes before the final active-catalog publish", () => {

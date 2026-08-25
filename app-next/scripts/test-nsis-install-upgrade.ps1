@@ -3,8 +3,8 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$InstallerPath,
   [string]$PreviousInstallerPath = '',
-  [string]$ExpectedVersion = '3.1.12',
-  [string]$PreviousExpectedVersion = '3.1.11',
+  [string]$ExpectedVersion = '3.2.0',
+  [string]$PreviousExpectedVersion = '3.1.12',
   [ValidateRange(10, 1800)]
   [int]$InstallerTimeoutSeconds = 300,
   [ValidateRange(5, 300)]

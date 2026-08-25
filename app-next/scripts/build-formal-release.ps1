@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Version = '',
+  [string]$PreviousVersion = '3.1.12',
   [string]$ReleaseNotes = '',
   [switch]$SkipBuild,
   [string]$ExistingInstallerPath = '',
@@ -124,6 +125,7 @@ function Assert-BinaryOmitsLocalPaths([string]$BinaryPath, [string[]]$Paths) {
 
 if ([string]::IsNullOrWhiteSpace($Version)) { $Version = Get-ConfiguredVersion }
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Release version must use x.y.z: $Version" }
+if ($PreviousVersion -notmatch '^\d+\.\d+\.\d+$') { throw "Previous release version must use x.y.z: $PreviousVersion" }
 if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) {
   $ReleaseNotes = "AI SkillHub v${Version}: signed stable update with preserved local user data."
 }
@@ -149,6 +151,8 @@ Assert-FileContains (Join-Path $ProjectRoot "docs\release-notes\v$Version.md") "
 Assert-FileContains $PreviewPath "appVersion:\s*`"$escapedVersion preview`"" 'preview app version'
 Assert-FileContains $I18nPath "`"atlas\.releaseTag`":\s*`"$escapedVersion\s+\u00B7" 'visible atlas release tag'
 Assert-FileContains $NsisUpgradeTestPath "\[string\]\`$ExpectedVersion\s*=\s*'$escapedVersion'" 'NSIS upgrade expected version'
+$escapedPreviousVersion = [regex]::Escape($PreviousVersion)
+Assert-FileContains $NsisUpgradeTestPath "\[string\]\`$PreviousExpectedVersion\s*=\s*'$escapedPreviousVersion'" 'NSIS previous upgrade version'
 
 if ($SkipBuild) {
   if ([string]::IsNullOrWhiteSpace($ExistingInstallerPath)) {

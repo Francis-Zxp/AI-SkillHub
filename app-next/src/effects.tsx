@@ -522,14 +522,30 @@ export function CountUp({ value }: { value: number }) {
 /* Global pointer-follow glow for any .glow-card element. One listener for the app. */
 export function useCardGlow() {
   useEffect(() => {
-    function onPointerMove(event: PointerEvent) {
-      const target = (event.target as HTMLElement | null)?.closest?.(".glow-card");
+    let frame = 0;
+    let pointerX = 0;
+    let pointerY = 0;
+    let pointerTarget: EventTarget | null = null;
+
+    function updateGlow() {
+      frame = 0;
+      const target = (pointerTarget as HTMLElement | null)?.closest?.(".glow-card");
       if (!(target instanceof HTMLElement)) return;
       const rect = target.getBoundingClientRect();
-      target.style.setProperty("--glow-x", `${event.clientX - rect.left}px`);
-      target.style.setProperty("--glow-y", `${event.clientY - rect.top}px`);
+      target.style.setProperty("--glow-x", `${pointerX - rect.left}px`);
+      target.style.setProperty("--glow-y", `${pointerY - rect.top}px`);
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      pointerX = event.clientX;
+      pointerY = event.clientY;
+      pointerTarget = event.target;
+      if (!frame) frame = window.requestAnimationFrame(updateGlow);
     }
     window.addEventListener("pointermove", onPointerMove, { passive: true });
-    return () => window.removeEventListener("pointermove", onPointerMove);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("pointermove", onPointerMove);
+    };
   }, []);
 }
