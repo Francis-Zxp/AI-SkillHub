@@ -70,9 +70,10 @@ const identity = buildIdentity();
     const page = await waitForAppPage(browser);
 
     await page.locator(".shell").waitFor({ timeout: 30_000 });
-    const startupLoadPath = await page.evaluate(() =>
-      window.__TAURI_INTERNALS__.invoke("get_startup_load_path")
-    );
+    const startupLoadPath = await page.waitForFunction(async () => {
+      const value = await window.__TAURI_INTERNALS__.invoke("get_startup_load_path");
+      return value === "unknown" ? false : value;
+    }, undefined, { timeout: 30_000, polling: 100 }).then(handle => handle.jsonValue());
     assert.equal(
       startupLoadPath,
       expectCached ? "sqlite-cache" : "fallback-scan",

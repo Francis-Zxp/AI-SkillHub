@@ -14,7 +14,6 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $appNextRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-$projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $appNextRoot))
 $resolvedExecutable = [IO.Path]::GetFullPath($ExecutablePath)
 $resolvedNode = [IO.Path]::GetFullPath($NodeExecutable)
 $resolvedNodeModules = [IO.Path]::GetFullPath($NodeModulesPath)
@@ -45,6 +44,8 @@ $qaDataRoot = Join-Path $qaRoot 'data'
 $qaProfileRoot = Join-Path $qaRoot 'profile'
 $qaLocalAppData = Join-Path $qaProfileRoot 'AppData\Local'
 $qaRoamingAppData = Join-Path $qaProfileRoot 'AppData\Roaming'
+$qaProjectRoot = Join-Path $qaRoot 'project'
+$qaProjectRuntime = Join-Path $qaProjectRoot 'app-next\runtime'
 $qaSourceRoot = Join-Path $qaDataRoot "sources\$qaSourceName"
 $qaChildRoot = Join-Path $qaSourceRoot 'skills\qa-child-one'
 
@@ -63,6 +64,7 @@ $environmentNames = @(
   'AI_SKILLHUB_QA_SOURCE_NAME',
   'AI_SKILLHUB_STARTUP_RUN',
   'APPDATA',
+  'CLAUDE_CONFIG_DIR',
   'LOCALAPPDATA',
   'NODE_PATH',
   'USERPROFILE',
@@ -185,8 +187,11 @@ $qaResult = $null
 $cleanupErrors = [Collections.Generic.List[string]]::new()
 
 try {
-  foreach ($directory in @($qaDataRoot, $qaProfileRoot, $qaLocalAppData, $qaRoamingAppData, $qaSourceRoot, $qaChildRoot)) {
+  foreach ($directory in @($qaDataRoot, $qaProfileRoot, $qaLocalAppData, $qaRoamingAppData, $qaProjectRuntime, $qaSourceRoot, $qaChildRoot)) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  }
+  foreach ($runtimeFile in @('SkillHub.ps1', 'Manage-AgentSkillLinks.ps1', 'Export-SkillHubDiagnostics.ps1', 'skillhub.config.example.json')) {
+    Copy-Item -LiteralPath (Join-Path $appNextRoot "runtime\$runtimeFile") -Destination (Join-Path $qaProjectRuntime $runtimeFile)
   }
   $utf8 = [Text.UTF8Encoding]::new($false)
   $parentSkill = @"
@@ -222,7 +227,7 @@ Performs the isolated child capability check.
   [IO.File]::WriteAllText((Join-Path $qaDataRoot 'skillhub.config.json'), $config, $utf8)
 
   Set-ProcessEnvironment 'AI_SKILLHUB_DATA_ROOT' $qaDataRoot
-  Set-ProcessEnvironment 'AI_SKILLHUB_ROOT' $projectRoot
+  Set-ProcessEnvironment 'AI_SKILLHUB_ROOT' $qaProjectRoot
   Set-ProcessEnvironment 'AI_SKILLHUB_EXPECTED_EXE_PATH' $resolvedExecutable
   Set-ProcessEnvironment 'AI_SKILLHUB_EXPECTED_EXE_SHA256' $executableSha256
   Set-ProcessEnvironment 'AI_SKILLHUB_EXPECTED_PRODUCT_VERSION' $productVersion
@@ -230,6 +235,7 @@ Performs the isolated child capability check.
   Set-ProcessEnvironment 'AI_SKILLHUB_QA_RUN_ID' $qaRunId
   Set-ProcessEnvironment 'AI_SKILLHUB_QA_SOURCE_NAME' $qaSourceName
   Set-ProcessEnvironment 'APPDATA' $qaRoamingAppData
+  Set-ProcessEnvironment 'CLAUDE_CONFIG_DIR' (Join-Path $qaProfileRoot '.claude')
   Set-ProcessEnvironment 'LOCALAPPDATA' $qaLocalAppData
   Set-ProcessEnvironment 'NODE_PATH' $resolvedNodeModules
   Set-ProcessEnvironment 'USERPROFILE' $qaProfileRoot
