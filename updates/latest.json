@@ -1,11 +1,11 @@
 {
-  "version": "3.1.12",
-  "notes": "修复 Windows GitHub 导入、父 Skill 路由与跨 Agent 子 Skill 可访问性，并加强 Prompt 仓库预检与来源更新诊断。",
-  "pub_date": "2026-08-16T12:18:40Z",
+  "version": "3.2.0",
+  "notes": "AI SkillHub v3.2.0：刷新与来源编辑保持响应，修复 Skill 拖动、主题和 Claude/Codex 交付，并新增可预览、可回滚且不启动服务器的 MCP 配置管理。",
+  "pub_date": "2026-08-25T22:18:37Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVpjZGtCTWMyaVJKY2hYbCtJTi9pZmZIL2VZd1dNaWpGZWFBOVdtL0lzYkRwOU1LYUowUTVSSWJNYTU0dm1SUExhNGJCRXlVb3pTaWpsT1ppVnVaVFFVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2ODgyNzE5CWZpbGU6QUkgU2tpbGxIdWJfMy4xLjEyX3g2NC1zZXR1cC5leGUKb3Y5aUJRRlNZZC9XUndFa05iTXc0dytTUVo5STdaMEowaDdDcnM4cWJiekxwRGR2V0h1ZnQrYkVzNmFzVWhTNnVGRHBIUjdsclJyeG1BcFh5d293RFE9PQo=",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.1.12/AI-SkillHub-3.1.12-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVdGMTlSd3ZEUkxMTThrSUo0ajhRQnZraGNSN2cwYnJ1d2RTS0lPazM4RmlITm9BQURlWDVsbjZCUWNmQkJRVDl5dFd6YnRncHM1RmNSc1BWemw1TUFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3Njk2MzE2CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjBfeDY0LXNldHVwLmV4ZQplYjMvMkRnYm5uTXNUS29RZU52dkpZYWdrV3duUFFXU2Fxd21qY0xxbDlwK01DMkJsNG44ZE91ZjJiYkVCOWJGaWZrUkh5ZkJ4anNtK3ViWCsrbzRDUT09Cg==",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.0/AI-SkillHub-3.2.0-setup.exe"
     }
   }
 }
