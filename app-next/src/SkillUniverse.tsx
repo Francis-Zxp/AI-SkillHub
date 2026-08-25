@@ -239,7 +239,12 @@ export function SkillUniverse({
     runtimeRef.current = runtime;
 
     let frame = 0;
-    let visible = !document.hidden;
+    let frameTimer = 0;
+    let lastDrawAt = 0;
+    let ambientUntil = performance.now() + 2400;
+    let pageVisible = !document.hidden;
+    let focused = document.hasFocus();
+    let intersecting = host.getClientRects().length > 0;
     let contextReady = true;
     let width = 1;
     let height = 1;
@@ -250,9 +255,42 @@ export function SkillUniverse({
     canvas.dataset.nodeCount = String(model.nodes.length);
     canvas.dataset.nodeShape = "screen-space-circles";
 
-    const scheduleDraw = () => {
-      if (!visible || !contextReady || frame) return;
-      frame = window.requestAnimationFrame(draw);
+    const cancelScheduledDraw = () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(frameTimer);
+      frame = 0;
+      frameTimer = 0;
+    };
+
+    const canRender = () => pageVisible && intersecting && contextReady;
+    const hasInteractiveMotion = () => {
+      const now = performance.now();
+      return runtime.dragging ||
+        now < runtime.interactionUntil ||
+        Math.abs(runtime.velocityX) > 0.00004 ||
+        Math.abs(runtime.velocityY) > 0.00004 ||
+        Math.abs(runtime.targetZoom - runtime.zoom) > 0.001;
+    };
+
+    const scheduleDraw = (urgent = false) => {
+      if (!canRender() || frame || (!focused && !urgent)) return;
+      const interactiveMotion = hasInteractiveMotion();
+      if (!urgent && !interactiveMotion && performance.now() >= ambientUntil) return;
+      if (frameTimer) {
+        if (!urgent) return;
+        window.clearTimeout(frameTimer);
+        frameTimer = 0;
+      }
+      const interval = interactiveMotion ? 1000 / 60 : 1000 / 6;
+      const wait = urgent ? 0 : Math.max(0, interval - (performance.now() - lastDrawAt));
+      if (wait <= 1) {
+        frame = window.requestAnimationFrame(draw);
+        return;
+      }
+      frameTimer = window.setTimeout(() => {
+        frameTimer = 0;
+        if (canRender() && focused) frame = window.requestAnimationFrame(draw);
+      }, wait);
     };
 
     const resize = () => {
@@ -260,18 +298,19 @@ export function SkillUniverse({
       width = Math.max(1, Math.floor(rect.width));
       height = Math.max(1, Math.floor(rect.height));
       const pixelBudgetScale = Math.sqrt(1_700_000 / Math.max(1, width * height));
-      dpr = Math.min(window.devicePixelRatio || 1, 1.35, Math.max(0.78, pixelBudgetScale));
+      dpr = Math.min(window.devicePixelRatio || 1, 1.35, pixelBudgetScale);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      scheduleDraw();
+      scheduleDraw(true);
     };
 
     const draw = (time: number) => {
       frame = 0;
-      if (!visible) return;
+      if (!canRender()) return;
+      const animationTime = reducedMotion || !focused ? 0 : time;
       const drawStarted = performance.now();
       context.clearRect(0, 0, width, height);
       drawUniverse(
@@ -281,74 +320,99 @@ export function SkillUniverse({
         modeRef.current,
         width,
         height,
-        reducedMotion ? 0 : time,
+        animationTime,
         centeredRef.current,
         lightTheme,
         tone
       );
+      lastDrawAt = time;
       const drawDuration = performance.now() - drawStarted;
       runtime.drawMs = runtime.drawMs ? runtime.drawMs * 0.86 + drawDuration * 0.14 : drawDuration;
-      if (time > 0) {
+      if (animationTime > 0) {
         runtime.frameSamples.push(runtime.frameMs);
         if (runtime.frameSamples.length > 90) runtime.frameSamples.shift();
       }
       if (reducedMotion || runtime.frameIndex % 30 === 0) updateUniverseDiagnostics(canvas, runtime);
-      if (!reducedMotion) scheduleDraw();
+      if (!reducedMotion && focused) scheduleDraw();
     };
-    runtime.requestDraw = scheduleDraw;
+    runtime.requestDraw = () => scheduleDraw(true);
 
     const onVisibility = () => {
-      visible = !document.hidden;
-      window.cancelAnimationFrame(frame);
-      frame = 0;
-      if (visible) scheduleDraw();
+      pageVisible = !document.hidden;
+      cancelScheduledDraw();
+      runtime.lastFrame = 0;
+      if (pageVisible) scheduleDraw(true);
+    };
+
+    const onFocus = () => {
+      focused = true;
+      ambientUntil = performance.now() + 800;
+      runtime.lastFrame = 0;
+      lastDrawAt = 0;
+      scheduleDraw(true);
+    };
+
+    const onBlur = () => {
+      focused = false;
+      cancelScheduledDraw();
     };
 
     const onMotionPreference = (event: MediaQueryListEvent) => {
       reducedMotion = event.matches;
       runtime.lastFrame = 0;
-      window.cancelAnimationFrame(frame);
-      frame = 0;
-      scheduleDraw();
+      cancelScheduledDraw();
+      scheduleDraw(true);
     };
 
     const onContextLost = (event: Event) => {
       event.preventDefault();
       canvas.dataset.contextState = "lost";
       contextReady = false;
-      window.cancelAnimationFrame(frame);
-      frame = 0;
+      cancelScheduledDraw();
     };
 
     const onContextRestored = () => {
       canvas.dataset.contextState = "ready";
       contextReady = true;
-      visible = !document.hidden;
+      pageVisible = !document.hidden;
       resize();
-      scheduleDraw();
+      scheduleDraw(true);
     };
 
     const observer = new ResizeObserver(resize);
     observer.observe(host);
+    const intersectionObserver = new IntersectionObserver(entries => {
+      intersecting = entries.some(entry => entry.isIntersecting);
+      cancelScheduledDraw();
+      runtime.lastFrame = 0;
+      if (intersecting) scheduleDraw(true);
+    });
+    intersectionObserver.observe(host);
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
     motionQuery.addEventListener("change", onMotionPreference);
     canvas.addEventListener("contextlost", onContextLost);
     canvas.addEventListener("contextrestored", onContextRestored);
     resize();
-    scheduleDraw();
+    scheduleDraw(true);
 
     return () => {
       observer.disconnect();
+      intersectionObserver.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
       motionQuery.removeEventListener("change", onMotionPreference);
       canvas.removeEventListener("contextlost", onContextLost);
       canvas.removeEventListener("contextrestored", onContextRestored);
-      window.cancelAnimationFrame(frame);
+      cancelScheduledDraw();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
   }, [lightTheme, model, tone]);
 
   useEffect(() => {
+    if (runtimeRef.current) runtimeRef.current.interactionUntil = performance.now() + 420;
     runtimeRef.current?.requestDraw();
   }, [centered, mode]);
 
@@ -765,7 +829,7 @@ function drawUniverse(
     runtime.frameMs = runtime.frameMs * 0.92 + elapsed * 0.08;
     runtime.frameIndex += 1;
     if (runtime.frameIndex % 30 === 0) {
-      const targetQuality = runtime.frameMs > 24 ? 0.58 : runtime.frameMs > 19.5 ? 0.78 : 1;
+      const targetQuality = runtime.drawMs > 18 ? 0.58 : runtime.drawMs > 12 ? 0.78 : 1;
       runtime.quality += (targetQuality - runtime.quality) * 0.5;
     }
     if (!runtime.dragging) {

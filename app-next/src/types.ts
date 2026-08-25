@@ -52,6 +52,17 @@ export type LegacySnapshot = {
   index: IndexReport;
 };
 
+export type RuntimeSnapshotHydration = Pick<
+  LegacySnapshot,
+  | "agentSkillStatuses"
+  | "agentDoctors"
+  | "sourceGovernance"
+  | "operationRunners"
+  | "releaseReports"
+  | "importPreviews"
+  | "writeGates"
+>;
+
 export type LegacySummary = {
   skills: number;
   sources: number;
@@ -67,6 +78,8 @@ export type SkillCard = {
   /** Exact owning source identity. Empty only for truly standalone/local Skills. */
   sourceId?: string;
   name: string;
+  /** Immutable host-delivered name used when invoking this Skill. */
+  invocationName?: string;
   folderName: string;
   category: string;
   description: string;

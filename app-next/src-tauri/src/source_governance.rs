@@ -162,6 +162,23 @@ pub(crate) fn read_governance_cards(
     connection: &Connection,
     sources: &[SourceCard],
 ) -> Result<Vec<SourceGovernanceCard>, String> {
+    read_governance_cards_with_revision_probe(root, connection, sources, true)
+}
+
+pub(crate) fn read_cached_governance_cards(
+    root: &Path,
+    connection: &Connection,
+    sources: &[SourceCard],
+) -> Result<Vec<SourceGovernanceCard>, String> {
+    read_governance_cards_with_revision_probe(root, connection, sources, false)
+}
+
+fn read_governance_cards_with_revision_probe(
+    root: &Path,
+    connection: &Connection,
+    sources: &[SourceCard],
+    probe_live_revision: bool,
+) -> Result<Vec<SourceGovernanceCard>, String> {
     ensure_schema(connection)?;
     let mut cards = Vec::with_capacity(sources.len());
 
@@ -199,11 +216,14 @@ pub(crate) fn read_governance_cards(
             .map_err(|error| format!("Cannot read source governance state: {error}"))?;
 
         let path = resolve_source_path(root, &source.local_path, &folder);
-        let live_revision = path
-            .as_deref()
-            .filter(|path| is_git_repository(path))
-            .and_then(|path| git_revision(path).ok())
-            .unwrap_or_default();
+        let live_revision = if probe_live_revision {
+            path.as_deref()
+                .filter(|path| is_git_repository(path))
+                .and_then(|path| git_revision(path).ok())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         let support_status = if path.as_deref().is_some_and(is_git_repository) {
             "git".to_string()
         } else if source.url.trim().is_empty() {

@@ -14,6 +14,8 @@ const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const escapedPreviousVersion = previousVersion.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const builder = read(appRoot, "scripts", "build-formal-release.ps1");
 const nsisQa = read(appRoot, "scripts", "test-nsis-install-upgrade.ps1");
+const formalDesktopQa = read(appRoot, "scripts", "v3.2.0-formal-desktop-qa.ps1");
+const startupCacheQa = read(appRoot, "scripts", "v3.2.0-startup-cache-qa.cjs");
 
 test("formal release version surfaces agree before signing", () => {
   assert.equal(tauriConfig.version, version);
@@ -77,4 +79,12 @@ test("NSIS QA retries only its bounded TEMP sandbox cleanup", () => {
   assert.match(nsisQa, /if \(\$registryRestoreFailed\)/);
   assert.match(nsisQa, /Registry recovery evidence preserved/);
   assert.match(nsisQa, /recovery files preserved at \$QaRoot/);
+});
+
+test("formal desktop QA isolates host roots and waits for an app-side startup path", () => {
+  assert.match(formalDesktopQa, /'CLAUDE_CONFIG_DIR'/);
+  assert.match(formalDesktopQa, /Set-ProcessEnvironment 'CLAUDE_CONFIG_DIR' \(Join-Path \$qaProfileRoot '\.claude'\)/);
+  assert.match(formalDesktopQa, /Set-ProcessEnvironment 'AI_SKILLHUB_ROOT' \$qaProjectRoot/);
+  assert.match(formalDesktopQa, /Copy-Item -LiteralPath \(Join-Path \$appNextRoot "runtime\\\$runtimeFile"\)/);
+  assert.match(startupCacheQa, /value === "unknown" \? false : value/);
 });

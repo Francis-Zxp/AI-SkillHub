@@ -10,8 +10,11 @@ All notable changes to AI SkillHub are documented here.
 - Saves source metadata and tags as one compact background mutation with an atomic database transaction and a small response instead of rebuilding the full library twice.
 - Bounds each update check to eight seconds and coalesces pointer-glow layout work into one animation frame.
 - Keeps the browser-only preview fixture out of the desktop startup bundle and loads it only when the standalone preview is used.
+- Paints the compact SQLite library before Agent delivery checks, then hydrates deferred runtime cards in one non-blocking compact merge without rescanning or replacing the visible Skills.
 - Rotates the bounded Git update starting point across runs, reserves one complete manual-repository attempt before a configured update starts, and records cursor failures in the visible sync summary.
-- Separates the source drag grip from the accessible folder selector, uses theme-aware native dropdowns, and adds an exact-name copy action to every child Skill.
+- Disables native WebView file-drop interception so HTML source-tree drag/drop works in the packaged app, while rejecting external file/text drops; keeps the folder selector as the accessible alternative and theme-matches its options.
+- Adds exact-name copy actions to collapsed parent Skills as well as expanded child Skills, so users can invoke the parent and name the intended child capability in their task.
+- Lets decorative dashboard canvases settle to zero idle redraws while preserving 60 fps interaction wake-up, and enforces a hard high-DPI canvas pixel budget.
 
 ### Agent delivery
 
@@ -24,7 +27,7 @@ All notable changes to AI SkillHub are documented here.
 - Stores rollback payloads only under private app state, protects them with the current Windows user's DPAPI key, and prunes them after seven days or at 16 snapshots / 128 MiB. No backup is placed beside a host configuration file.
 - Restores every target if any host in a multi-host change fails, refuses concurrent or unsafe path changes, and fails closed if another program edits a target before apply or rollback. Claude JSONC files with comments or trailing commas remain read-only.
 - Persists an encrypted `prepared → applying → committed` manifest before host writes. After an interrupted apply or rollback, restart recovery restores only content matching the recorded original or planned fingerprints; unknown external content is preserved for attention.
-- Never starts an MCP server and never asks for credential values. Ordinary command, URL, and argument fields stay in process memory only while the user confirms the plan; the bounded on-disk journal contains only protected target fingerprints and redacted diffs, encrypted for the current Windows user. Credential references use environment-variable or header-reference names, and existing secret values stay out of the UI, plan journal, diagnostics, and returned results.
+- Never starts an MCP server, never asks for credential values, and never reads referenced environment-variable values. Ordinary command, URL, and argument fields stay in process memory only while the user confirms the plan; the bounded confirmation journal contains only target fingerprints and redacted diffs. Existing inline values are parsed briefly to preserve the host configuration and are retained only inside the private rollback snapshot protected with the current Windows user's DPAPI key; they stay out of the UI, confirmation journal, diagnostics, and returned results.
 - Treats a successful write as verified static configuration, not proof that the server is running. Restart the affected host and use its `/mcp` command to verify runtime availability.
 - Keeps Codex binding enable/disable management in AI SkillHub, while Claude Code enablement remains in Claude Code's per-project `/mcp` state instead of writing a non-standard binding field.
 - Bounds the in-memory confirmation cache to 15 minutes, 64 plans, and 8 MiB; applying a plan consumes it whether the operation succeeds or fails.

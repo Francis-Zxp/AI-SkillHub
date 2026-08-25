@@ -268,6 +268,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
       {
         sourceId: "source-nature-paper-skills",
         name: "Nature-Paper-Skills",
+        invocationName: "nature-paper-skills",
         folderName: "Nature-Paper-Skills",
         category: "academic-writing",
         description: "[ROUTER-HUB] Nature 论文技能集合的路由入口。",
