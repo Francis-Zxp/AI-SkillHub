@@ -2,6 +2,7 @@
   [switch]$NoPull,
   [switch]$ReportOnly,
   [int]$GitCommandTimeoutSeconds = 18,
+  [int]$GitStatusCommandTimeoutSeconds = 12,
   [int]$GitUpdateBudgetSeconds = 95
 )
 
@@ -168,18 +169,36 @@ function Join-ProcessArguments([string[]]$Arguments) {
 
 function Stop-ProcessTreeQuietly([System.Diagnostics.Process]$Process) {
   if (-not $Process -or $Process.HasExited) { return }
+  $killer = $null
   try {
-    & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null
+    $killStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $killStartInfo.FileName = 'taskkill.exe'
+    $killStartInfo.Arguments = "/PID $($Process.Id) /T /F"
+    $killStartInfo.UseShellExecute = $false
+    $killStartInfo.CreateNoWindow = $true
+    $killStartInfo.RedirectStandardOutput = $true
+    $killStartInfo.RedirectStandardError = $true
+    $killer = [System.Diagnostics.Process]::Start($killStartInfo)
+    if ($killer) {
+      $null = $killer.StandardOutput.ReadToEndAsync()
+      $null = $killer.StandardError.ReadToEndAsync()
+    }
+    if ($killer -and -not $killer.WaitForExit(750)) {
+      try { $killer.Kill() } catch {}
+    }
   } catch {
-    try { $Process.Kill() } catch {}
+  } finally {
+    if ($killer) { $killer.Dispose() }
   }
-  # taskkill /F has already completed synchronously. Keep the final observation
-  # bounded so timeout cleanup cannot add another five seconds past the shared
-  # Git update deadline if a broken process handle never signals promptly.
-  try { $Process.WaitForExit(1000) | Out-Null } catch {}
+  try {
+    if (-not $Process.HasExited) { $Process.Kill() }
+  } catch {}
+  # Both the tree-kill helper and this final observation are bounded. Their
+  # combined one-second ceiling is reserved inside the shared Git budget.
+  try { $Process.WaitForExit(250) | Out-Null } catch {}
 }
 
-function Invoke-GitCommandWithTimeout([string[]]$Arguments, [string]$Label, [int]$TimeoutSeconds) {
+function Invoke-GitCommandWithTimeout([string[]]$Arguments, [string]$Label, [int]$TimeoutMilliseconds) {
   $process = $null
   $stdoutTask = $null
   $stderrTask = $null
@@ -206,14 +225,17 @@ function Invoke-GitCommandWithTimeout([string[]]$Arguments, [string]$Label, [int
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
 
-    if (-not $process.WaitForExit([Math]::Max(1, $TimeoutSeconds) * 1000)) {
+    if (-not $process.WaitForExit([Math]::Max(1, $TimeoutMilliseconds))) {
       Stop-ProcessTreeQuietly $process
       $timeoutStdout = ''
-      $timeoutStderr = "Timed out after $TimeoutSeconds seconds."
-      if ($null -ne $stdoutTask) {
+      $timeoutSeconds = [Math]::Round(($TimeoutMilliseconds / 1000.0), 2)
+      $timeoutStderr = "Timed out after $timeoutSeconds seconds."
+      # A failed tree kill must not turn a timeout into an unbounded .Result
+      # wait. Preserve output only when the asynchronous read already ended.
+      if ($null -ne $stdoutTask -and $stdoutTask.IsCompleted) {
         try { $timeoutStdout = [string]$stdoutTask.Result } catch {}
       }
-      if ($null -ne $stderrTask) {
+      if ($null -ne $stderrTask -and $stderrTask.IsCompleted) {
         try {
           $capturedTimeoutError = [string]$stderrTask.Result
           if (-not [string]::IsNullOrWhiteSpace($capturedTimeoutError)) {
@@ -1123,6 +1145,10 @@ $SyncTimings = New-Object System.Collections.Generic.List[object]
 # Stopwatch is monotonic, unlike wall-clock time, so a clock adjustment cannot
 # accidentally extend (or prematurely consume) the shared Git update window.
 $SyncStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+# Process-tree termination and final handle observation wait for at most one
+# second in total. Reserve a little more than that for every command so cleanup
+# remains inside the public Git update budget instead of becoming an overrun.
+$GitCommandCleanupReserveMilliseconds = 1250
 $GitUpdateCursor = [PSCustomObject]@{
   configuredNextRepository = ''
   manualNextRepository = ''
@@ -1151,21 +1177,23 @@ function Get-GitUpdateRemainingSeconds {
   return [Math]::Max(0.0, ([double]$GitUpdateBudgetSeconds - $SyncStopwatch.Elapsed.TotalSeconds))
 }
 
-function Test-GitUpdateBudget([int]$RequiredSeconds = 0) {
+function Test-GitUpdateBudget([double]$RequiredSeconds = 0) {
   if ($GitUpdateBudgetSeconds -le 0) { return $true }
   return ((Get-GitUpdateRemainingSeconds) -ge [Math]::Max(0, $RequiredSeconds))
 }
 
-function Get-BoundedGitCommandTimeout([int]$RequestedSeconds, [int]$ReservedAfterSeconds = 0) {
-  $requested = [Math]::Max(1, $RequestedSeconds)
-  if ($GitUpdateBudgetSeconds -le 0) { return $requested }
+function Get-BoundedGitCommandTimeoutMilliseconds([int]$RequestedSeconds, [double]$ReservedAfterSeconds = 0) {
+  $requestedMilliseconds = [Math]::Max(1, $RequestedSeconds) * 1000
+  if ($GitUpdateBudgetSeconds -le 0) { return $requestedMilliseconds }
 
-  # Floor to whole seconds because Process.WaitForExit accepts milliseconds but
-  # this runtime's public timeout contract is seconds. The discarded fraction
-  # also leaves a small margin for process-tree cleanup and bookkeeping.
-  $usable = [int][Math]::Floor((Get-GitUpdateRemainingSeconds) - [Math]::Max(0, $ReservedAfterSeconds))
-  if ($usable -lt 1) { return 0 }
-  return [Math]::Min($requested, $usable)
+  # Compute against the monotonic deadline immediately before Process.Start.
+  # Future attempts and this command's bounded cleanup are both subtracted, so
+  # neither status nor pull can extend the shared update window by itself.
+  $usableMilliseconds = [int][Math]::Floor(
+    ((Get-GitUpdateRemainingSeconds) - [Math]::Max(0.0, $ReservedAfterSeconds)) * 1000.0
+  ) - $GitCommandCleanupReserveMilliseconds
+  if ($usableMilliseconds -lt 1) { return 0 }
+  return [Math]::Min($requestedMilliseconds, $usableMilliseconds)
 }
 
 function Get-RotatedRepositories($Repositories, [string]$NextRepository) {
@@ -1260,9 +1288,12 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
     Where-Object { -not (Get-ConfiguredRepo $_.Name) -and (Test-Path -LiteralPath (Join-Path $_.FullName '.git')) } |
     Sort-Object Name)
 }
-$GitStatusCommandTimeoutSeconds = 12
+$GitStatusCommandTimeoutSeconds = [Math]::Max(1, $GitStatusCommandTimeoutSeconds)
 $GitNetworkCommandTimeoutSeconds = [Math]::Max(1, $GitCommandTimeoutSeconds)
-$ManualAttemptCapSeconds = $GitStatusCommandTimeoutSeconds + $GitNetworkCommandTimeoutSeconds
+$GitCommandCleanupReserveSeconds = $GitCommandCleanupReserveMilliseconds / 1000.0
+$GitStatusAttemptCapSeconds = $GitStatusCommandTimeoutSeconds + $GitCommandCleanupReserveSeconds
+$GitNetworkAttemptCapSeconds = $GitNetworkCommandTimeoutSeconds + $GitCommandCleanupReserveSeconds
+$ManualAttemptCapSeconds = $GitStatusAttemptCapSeconds + $GitNetworkAttemptCapSeconds
 $ManualGitUpdateReserveSeconds = if ($ManualRepositories.Count -gt 0) { $ManualAttemptCapSeconds } else { 0 }
 $ConfiguredRepositories = @($Config.repositories)
 $ConfiguredRepositoriesForUpdate = @(Get-RotatedRepositories $ConfiguredRepositories ([string]$GitUpdateCursor.configuredNextRepository))
@@ -1307,14 +1338,14 @@ foreach ($repo in $ConfiguredRepositoriesForUpdate) {
 
   if (Test-Path -LiteralPath (Join-Path $target '.git')) {
     if (-not $NoPull) {
-      $configuredAttemptCap = $GitStatusCommandTimeoutSeconds + $GitNetworkCommandTimeoutSeconds
+      $configuredAttemptCap = $GitStatusAttemptCapSeconds + $GitNetworkAttemptCapSeconds
       if (-not (Test-GitUpdateBudget ($configuredAttemptCap + $ManualGitUpdateReserveSeconds))) {
         if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
         Write-Warning "Git update budget exhausted. Deferring $($repo.name) to a later rotation."
         Add-RepoUpdateLog ([string]$repo.name) 'pull' 'skipped' 'Git update budget exhausted; deferred by the persistent rotation.'
         continue
       }
-      $statusTimeout = Get-BoundedGitCommandTimeout $GitStatusCommandTimeoutSeconds ($GitNetworkCommandTimeoutSeconds + $ManualGitUpdateReserveSeconds)
+      $statusTimeout = Get-BoundedGitCommandTimeoutMilliseconds $GitStatusCommandTimeoutSeconds ($GitNetworkAttemptCapSeconds + $ManualGitUpdateReserveSeconds)
       if ($statusTimeout -lt 1) {
         if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
         Write-Warning "Git update budget exhausted. Deferring $($repo.name) to a later rotation."
@@ -1336,7 +1367,7 @@ foreach ($repo in $ConfiguredRepositoriesForUpdate) {
         }
       }
       Write-Host "Pulling $($repo.name)..."
-      $pullTimeout = Get-BoundedGitCommandTimeout $GitNetworkCommandTimeoutSeconds $ManualGitUpdateReserveSeconds
+      $pullTimeout = Get-BoundedGitCommandTimeoutMilliseconds $GitNetworkCommandTimeoutSeconds $ManualGitUpdateReserveSeconds
       if ($pullTimeout -lt 1) {
         if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
         Write-Warning "Git update budget exhausted. Deferring $($repo.name) to a later rotation."
@@ -1361,13 +1392,13 @@ foreach ($repo in $ConfiguredRepositoriesForUpdate) {
     Write-Warning "$target exists but is not a Git repository. Skipping clone."
     Add-RepoUpdateLog ([string]$repo.name) 'reinstall' 'not-git' 'Target exists but has no .git metadata; automatic GitHub updates are unavailable.'
   } else {
-    if (-not (Test-GitUpdateBudget ($GitNetworkCommandTimeoutSeconds + $ManualGitUpdateReserveSeconds))) {
+    if (-not (Test-GitUpdateBudget ($GitNetworkAttemptCapSeconds + $ManualGitUpdateReserveSeconds))) {
       if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
       Write-Warning "Git update budget exhausted. Deferring clone for $($repo.name) to a later rotation."
       Add-RepoUpdateLog ([string]$repo.name) 'clone' 'skipped' 'Git update budget exhausted; deferred by the persistent rotation.'
       continue
     }
-    $cloneTimeout = Get-BoundedGitCommandTimeout $GitNetworkCommandTimeoutSeconds $ManualGitUpdateReserveSeconds
+    $cloneTimeout = Get-BoundedGitCommandTimeoutMilliseconds $GitNetworkCommandTimeoutSeconds $ManualGitUpdateReserveSeconds
     if ($cloneTimeout -lt 1) {
       if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
       Write-Warning "Git update budget exhausted. Deferring clone for $($repo.name) to a later rotation."
@@ -1419,7 +1450,7 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
       continue
     }
     Write-Host "Pulling manual repository $($manualRepo.Name)..."
-    $statusTimeout = Get-BoundedGitCommandTimeout $GitStatusCommandTimeoutSeconds $GitNetworkCommandTimeoutSeconds
+    $statusTimeout = Get-BoundedGitCommandTimeoutMilliseconds $GitStatusCommandTimeoutSeconds $GitNetworkAttemptCapSeconds
     if ($statusTimeout -lt 1) {
       if ([string]::IsNullOrWhiteSpace($ManualBudgetDeferred)) { $ManualBudgetDeferred = $manualRepo.Name }
       Write-Warning "Git update budget exhausted. Deferring manual repository $($manualRepo.Name) to a later rotation."
@@ -1440,7 +1471,7 @@ if ($Config.autoDiscoverManualRepos -and -not $ReportOnly -and -not $NoPull) {
         continue
       }
     }
-    $pullTimeout = Get-BoundedGitCommandTimeout $GitNetworkCommandTimeoutSeconds
+    $pullTimeout = Get-BoundedGitCommandTimeoutMilliseconds $GitNetworkCommandTimeoutSeconds
     if ($pullTimeout -lt 1) {
       if ([string]::IsNullOrWhiteSpace($ManualBudgetDeferred)) { $ManualBudgetDeferred = $manualRepo.Name }
       Write-Warning "Git update budget exhausted. Deferring manual repository $($manualRepo.Name) to a later rotation."
@@ -1683,15 +1714,28 @@ if (-not $ReportOnly) {
       continue
     }
 
-    $item = $null
-    try { $item = Get-Item -LiteralPath $dest -Force -ErrorAction Stop } catch { $item = $null }
+    # Get-Item with a differently-cased path echoes the requested spelling on
+    # Windows. Enumerate the parent instead so a legacy `Nature-Paper-Skills`
+    # junction is distinguishable from the canonical `nature-paper-skills`.
+    $item = @(
+      Get-ChildItem -LiteralPath $SkillsRoot -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ieq [string]$skill.Skill } |
+        Select-Object -First 1
+    )
+    $item = if ($item.Count -gt 0) { $item[0] } else { $null }
     if ($null -ne $item) {
       if (Get-IsReparsePoint $item) {
         $currentTarget = [string]$item.Target
-        if ($currentTarget -ne $src) {
-          if (Remove-ManagedReparsePoint $dest $SkillsRoot $skill.Skill 'Removed outdated link before relink' $currentTarget) {
+        $requiresCanonicalName = $item.Name -cne [string]$skill.Skill
+        if ($currentTarget -ne $src -or $requiresCanonicalName) {
+          $cleanupAction = if ($requiresCanonicalName) {
+            'Removed non-canonical managed link before relink'
+          } else {
+            'Removed outdated link before relink'
+          }
+          if (Remove-ManagedReparsePoint $item.FullName $SkillsRoot $skill.Skill $cleanupAction $currentTarget) {
             New-Item -ItemType Junction -Path $dest -Target $src | Out-Null
-            $action = 'Relinked'
+            $action = if ($requiresCanonicalName) { 'Relinked canonical name' } else { 'Relinked' }
           } else {
             $action = 'Skipped relink'
           }

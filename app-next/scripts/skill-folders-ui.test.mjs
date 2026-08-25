@@ -7,6 +7,7 @@ const backend = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.ur
 const universe = await readFile(new URL("../src/SkillUniverse.tsx", import.meta.url), "utf8");
 const i18n = await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8");
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 
 test("Skill folders are SQLite metadata and never move or delete Skill files", () => {
   assert.match(backend, /CREATE TABLE IF NOT EXISTS skill_folders/);
@@ -19,16 +20,25 @@ test("Skill folders are SQLite metadata and never move or delete Skill files", (
 });
 
 test("library keeps drag handles separate from the accessible folder select", () => {
+  assert.equal(tauriConfig.app.windows[0].dragDropEnabled, false, "Windows HTML drag/drop requires Tauri native file drop to be disabled");
   assert.match(app, /application\/x-ai-skillhub-skill-id/);
   assert.match(app, /application\/x-ai-skillhub-source-id/);
   assert.match(app, /source-folder-drag-handle/);
   assert.match(app, /<Icon name="grip"/);
   assert.match(app, /folders\.dragShort/);
-  const sourceDragHandle = app.match(/<span\s+aria-label=\{t\("folders\.dragSource"[\s\S]*?className="source-folder-drag-handle"[\s\S]*?<\/span>/)?.[0] ?? "";
+  const sourceDragHandle = app.match(/<span\s+aria-label=\{t\("folders\.dragSource"[\s\S]*?className=\{`source-folder-drag-handle[\s\S]*?<\/span>/)?.[0] ?? "";
   assert.match(sourceDragHandle, /draggable=\{!loading\}/);
   assert.match(sourceDragHandle, /onDragStart=/);
   assert.doesNotMatch(sourceDragHandle, /showPicker|onClick|onKeyDown|aria-haspopup|role="button"|tabIndex/);
+  assert.doesNotMatch(app, /getData\("text\/plain"/);
+  assert.equal((app.match(/setData\("text\/plain"/g) ?? []).length, 2);
+  assert.match(app, /if \(disabled \|\| !hasInternalSkillDrag\(event\.dataTransfer\)\) return/);
+  assert.equal((app.match(/if \(!hasInternalSkillDrag\(event\.dataTransfer\)\) return/g) ?? []).length, 2);
+  assert.match(app, /window\.addEventListener\("dragover", preventExternalDropNavigation\)/);
+  assert.match(app, /window\.addEventListener\("drop", preventExternalDropNavigation\)/);
+  assert.match(app, /type === "Files" \|\| type === "text\/plain" \|\| type === "text\/uri-list"/);
   assert.match(app, /<select[\s\S]*folders\.choose/);
+  assert.equal((app.match(/event\.dataTransfer\.dropEffect = "move"/g) ?? []).length, 2);
   assert.match(app, /skillMatchesUserFolder/);
   assert.match(app, /delete_skill_folder/);
   assert.match(i18n, /Skill 不会删除，只会回到/);

@@ -22,6 +22,8 @@
     "test:codex-delivery": "node --test ./scripts/codex-delivery-contract.test.mjs",
     "test:update-sync": "node --test ./scripts/v3.1.6-update-sync-contract.test.mjs",
     "test:frontend-performance": "node --test ./scripts/frontend-performance-ui.test.mjs",
+    "test:visual-performance": "node ./scripts/v3.2.0-animation-performance-qa.cjs",
+    "test:startup-cache": "node ./scripts/v3.2.0-startup-cache-qa.cjs",
     "test:parent-routing": "node --test ./scripts/parent-routing-contract.test.mjs",
     "test:sync-resilience": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-sync-runtime-resilience.ps1",
     "test:diagnostics-index": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/test-diagnostics-index-integrity.ps1",

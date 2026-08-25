@@ -67,13 +67,20 @@ export function ParticleField({
     const isViewportField = mode === "cosmos" || mode === "backdrop";
     const isCosmos = mode === "cosmos" || mode === "atlas";
     const colors = palette.length ? palette : [accent];
-    const dpr = Math.min(window.devicePixelRatio || 1, isCosmos ? 1.65 : 1.4);
+    const maxDpr = isCosmos ? 1.65 : 1.4;
     const random = mulberry32(0x5f3759df + skillCount * 17 + sourceCount * 31 + mode.length);
 
     let width = 1;
     let height = 1;
+    let dpr = 1;
     let frame = 0;
-    let visible = !document.hidden;
+    let frameTimer = 0;
+    let lastDrawAt = 0;
+    let ambientUntil = performance.now() + 2400;
+    let pageVisible = !document.hidden;
+    let focused = document.hasFocus();
+    let intersecting = canvas.getClientRects().length > 0;
+    let interactionUntil = 0;
     let cosmosParticles: CosmosParticle[] = [];
     let dust: DustParticle[] = [];
     let orbits: Orbit[] = [];
@@ -164,11 +171,24 @@ export function ParticleField({
     }
 
     function resize() {
+      if (isViewportField && canvas.getClientRects().length === 0) {
+        width = 1;
+        height = 1;
+        canvas.width = 1;
+        canvas.height = 1;
+        cosmosParticles = [];
+        dust = [];
+        orbits = [];
+        links = [];
+        return;
+      }
       const rect = isViewportField
         ? { width: window.innerWidth, height: window.innerHeight }
         : (canvas.parentElement?.getBoundingClientRect() ?? canvas.getBoundingClientRect());
       width = Math.max(1, Math.floor(rect.width));
       height = Math.max(1, Math.floor(rect.height));
+      const pixelBudgetScale = Math.sqrt(1_700_000 / Math.max(1, width * height));
+      dpr = Math.min(window.devicePixelRatio || 1, maxDpr, pixelBudgetScale);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
@@ -179,6 +199,8 @@ export function ParticleField({
     }
 
     function draw(time: number) {
+      pointer.x += (pointer.targetX - pointer.x) * 0.035;
+      pointer.y += (pointer.targetY - pointer.y) * 0.035;
       context.clearRect(0, 0, width, height);
       drawDust(time);
       if (isCosmos) drawCosmos(time);
@@ -229,8 +251,6 @@ export function ParticleField({
     }
 
     function drawCosmos(time: number) {
-      pointer.x += (pointer.targetX - pointer.x) * 0.035;
-      pointer.y += (pointer.targetY - pointer.y) * 0.035;
       const compact = width < 880;
       const centerX = width * (compact ? 0.55 : 0.66);
       const centerY = height * (compact ? 0.43 : 0.5);
@@ -368,45 +388,114 @@ export function ParticleField({
       context.restore();
     }
 
+    function cancelScheduledDraw() {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(frameTimer);
+      frame = 0;
+      frameTimer = 0;
+    }
+
+    function canAnimate() {
+      return pageVisible && focused && intersecting && !reduceMotion;
+    }
+
+    function frameInterval() {
+      if (performance.now() < interactionUntil) return 1000 / 60;
+      if (mode === "backdrop") return 1000 / 6;
+      return 1000 / 8;
+    }
+
+    function hasActiveMotion() {
+      const now = performance.now();
+      return now < ambientUntil || now < interactionUntil;
+    }
+
+    function scheduleDraw(urgent = false) {
+      if (!canAnimate() || frame || (!urgent && !hasActiveMotion())) return;
+      if (frameTimer) {
+        if (!urgent) return;
+        window.clearTimeout(frameTimer);
+        frameTimer = 0;
+      }
+      const wait = urgent ? 0 : Math.max(0, frameInterval() - (performance.now() - lastDrawAt));
+      if (wait <= 1) {
+        frame = window.requestAnimationFrame(loop);
+        return;
+      }
+      frameTimer = window.setTimeout(() => {
+        frameTimer = 0;
+        if (canAnimate()) frame = window.requestAnimationFrame(loop);
+      }, wait);
+    }
+
     function loop(time: number) {
-      if (!visible || reduceMotion) return;
+      frame = 0;
+      if (!canAnimate()) return;
       draw(time);
-      frame = window.requestAnimationFrame(loop);
+      lastDrawAt = time;
+      scheduleDraw();
     }
 
     function onPointerMove(event: PointerEvent) {
       pointer.targetX = clamp((event.clientX / Math.max(width, 1)) * 2 - 1, -1, 1);
       pointer.targetY = clamp((event.clientY / Math.max(height, 1)) * 2 - 1, -1, 1);
       pointer.active = true;
+      interactionUntil = performance.now() + 280;
+      scheduleDraw(true);
     }
 
     function onPointerLeave() {
       pointer.targetX = 0;
       pointer.targetY = 0;
       pointer.active = false;
+      interactionUntil = performance.now() + 280;
+      scheduleDraw(true);
     }
 
     function onVisibilityChange() {
-      visible = !document.hidden;
-      window.cancelAnimationFrame(frame);
-      if (visible && !reduceMotion) frame = window.requestAnimationFrame(loop);
+      pageVisible = !document.hidden;
+      cancelScheduledDraw();
+      if (pageVisible) scheduleDraw(true);
     }
 
-    const observer = isViewportField ? null : new ResizeObserver(resize);
-    observer?.observe(canvas.parentElement ?? canvas);
+    function onFocus() {
+      focused = true;
+      ambientUntil = performance.now() + 800;
+      lastDrawAt = 0;
+      scheduleDraw(true);
+    }
+
+    function onBlur() {
+      focused = false;
+      cancelScheduledDraw();
+    }
+
+    const resizeObserver = isViewportField ? null : new ResizeObserver(resize);
+    resizeObserver?.observe(canvas.parentElement ?? canvas);
+    const intersectionObserver = new IntersectionObserver(entries => {
+      intersecting = entries.some(entry => entry.isIntersecting);
+      cancelScheduledDraw();
+      if (intersecting) scheduleDraw(true);
+    });
+    intersectionObserver.observe(canvas);
     window.addEventListener("resize", resize, { passive: true });
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
     document.addEventListener("visibilitychange", onVisibilityChange);
     if (!reduceMotion) {
       window.addEventListener("pointermove", onPointerMove, { passive: true });
       document.documentElement.addEventListener("pointerleave", onPointerLeave);
     }
     resize();
-    if (!reduceMotion) frame = window.requestAnimationFrame(loop);
+    scheduleDraw(true);
 
     return () => {
-      window.cancelAnimationFrame(frame);
-      observer?.disconnect();
+      cancelScheduledDraw();
+      resizeObserver?.disconnect();
+      intersectionObserver.disconnect();
       window.removeEventListener("resize", resize);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
       window.removeEventListener("pointermove", onPointerMove);
       document.documentElement.removeEventListener("pointerleave", onPointerLeave);
       document.removeEventListener("visibilitychange", onVisibilityChange);

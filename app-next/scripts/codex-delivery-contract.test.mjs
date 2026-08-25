@@ -44,10 +44,41 @@ test("diagnostics and runtime agree on .agents/skills and expand redacted home p
   assert.match(rust, /installed_entry_name/);
 });
 
-test("startup repairs a detected recipient and UI documents host-specific invocation", () => {
-  assert.match(app, /invoke<LegacySnapshot>\("refresh_agent_detection"\)/);
-  assert.match(app, /invoke<LegacySnapshot>\("ensure_agent_skill_delivery"\)/);
-  assert.match(app, /shouldReconcileDelivery = detected\.skills\.length > 0/);
+test("startup verifies delivery without repeating the full Agent diagnostics scan", () => {
+  const startup = app.slice(
+    app.indexOf("async function verifyStartupSnapshot"),
+    app.indexOf("useEffect(() =>", app.indexOf("async function verifyStartupSnapshot"))
+  );
+  assert.match(startup, /invoke<LegacySnapshot>\("ensure_agent_skill_delivery"\)/);
+  assert.doesNotMatch(startup, /refresh_agent_detection|shouldReconcileDelivery/);
+  assert.match(rust, /fn agent_delivery_fingerprint/);
+  assert.match(rust, /agent_delivery_links_are_healthy/);
+  assert.match(rust, /fn delivery_fingerprint_is_authoritative/);
+  assert.match(rust, /!stored\.is_empty\(\) && stored == expected/);
+  assert.doesNotMatch(rust, /stored\.is_empty\(\) && agent_delivery_links_are_healthy/);
+  const localDelivery = rust.slice(
+    rust.indexOf("fn sync_local_sources_to_agents"),
+    rust.indexOf("fn reconcile_agent_skill_delivery")
+  );
+  assert.doesNotMatch(localDelivery, /run_diagnostics_export_script/);
+  assert.doesNotMatch(localDelivery, /write_agent_delivery_fingerprint/);
+  const reconcile = rust.slice(
+    rust.indexOf("fn reconcile_agent_skill_delivery"),
+    rust.indexOf("fn run_skillhub_script", rust.indexOf("fn reconcile_agent_skill_delivery"))
+  );
+  const scanIndex = reconcile.indexOf("scan_legacy_snapshot_under_write_guard");
+  const freshDatabaseIndex = reconcile.indexOf("open_index_database", scanIndex);
+  const recipientIndex = reconcile.indexOf("run_agent_link_script", freshDatabaseIndex);
+  const healthIndex = reconcile.indexOf("agent_delivery_links_are_healthy", recipientIndex);
+  const markerIndex = reconcile.indexOf("write_agent_delivery_fingerprint", healthIndex);
+  assert.ok(scanIndex >= 0 && scanIndex < freshDatabaseIndex);
+  assert.ok(freshDatabaseIndex < recipientIndex && recipientIndex < healthIndex);
+  assert.ok(healthIndex < markerIndex);
+  const promotion = rust.slice(
+    rust.indexOf("fn promote_staged_source_import"),
+    rust.indexOf("fn write_source_import_promotion_report")
+  );
+  assert.match(promotion, /reconcile_agent_skill_delivery/);
   assert.match(i18n, /ChatGPT 输入 @；Codex 输入 \/skills 或 \$。/);
   assert.match(app, /return \/\^\[\\\/@\$\]\//);
 });

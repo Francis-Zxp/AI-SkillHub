@@ -51,11 +51,17 @@ function Invoke-SyncFixture(
   [string]$ReportsPath,
   [string]$FakeGitBin,
   [switch]$NoPull,
-  [int]$GitUpdateBudgetSeconds = 30
+  [int]$GitUpdateBudgetSeconds = 30,
+  [int]$GitCommandTimeoutSeconds = 1,
+  [int]$GitStatusCommandTimeoutSeconds = 12
 ) {
   $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runtimeScript)
   if ($NoPull) { $arguments += '-NoPull' }
-  $arguments += @('-GitCommandTimeoutSeconds', '1', '-GitUpdateBudgetSeconds', [string]$GitUpdateBudgetSeconds)
+  $arguments += @(
+    '-GitCommandTimeoutSeconds', [string]$GitCommandTimeoutSeconds,
+    '-GitStatusCommandTimeoutSeconds', [string]$GitStatusCommandTimeoutSeconds,
+    '-GitUpdateBudgetSeconds', [string]$GitUpdateBudgetSeconds
+  )
 
   $startInfo = [Diagnostics.ProcessStartInfo]::new()
   $startInfo.FileName = $Engine
@@ -106,6 +112,8 @@ public static class FakeGit
         string command = string.Join(" ", args ?? new string[0]);
         if (command.IndexOf(" status ", StringComparison.OrdinalIgnoreCase) >= 0)
         {
+            if (command.IndexOf("status-budget-repo", StringComparison.OrdinalIgnoreCase) >= 0)
+                Thread.Sleep(5000);
             if (command.IndexOf("config-slow", StringComparison.OrdinalIgnoreCase) >= 0)
                 Thread.Sleep(1500);
             if (command.IndexOf("dirty-repo", StringComparison.OrdinalIgnoreCase) >= 0)
@@ -125,6 +133,12 @@ public static class FakeGit
         }
         if (command.IndexOf(" pull ", StringComparison.OrdinalIgnoreCase) >= 0)
         {
+            if (command.IndexOf("pull-budget-repo", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                Thread.Sleep(5000);
+                Console.WriteLine("late success");
+                return 0;
+            }
             if (command.IndexOf("timeout-repo", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 Thread.Sleep(5000);
@@ -164,6 +178,15 @@ function New-ManualRepo([string]$Sources, [string]$Name) {
   Write-TestText (Join-Path $repo '.git\HEAD') ('1' * 40)
   Write-TestText (Join-Path $skill 'SKILL.md') ("---`nname: $Name-child`ndescription: Isolated sync fixture.`n---`n`n# Fixture`n")
   return $repo
+}
+
+function Get-RepositoryUpdateTimingSeconds([string]$ReportPath) {
+  $reportText = [IO.File]::ReadAllText($ReportPath, [Text.Encoding]::UTF8)
+  $match = [regex]::Match($reportText, '(?m)^\| repository updates \| (?<seconds>[0-9]+(?:\.[0-9]+)?) \|\r?$')
+  if (-not $match.Success) {
+    throw "Repository update timing is missing from $ReportPath"
+  }
+  return [double]::Parse($match.Groups['seconds'].Value, [Globalization.CultureInfo]::InvariantCulture)
 }
 
 function Invoke-AtomicWriteFailureProbe([string]$Engine, [string]$Destination) {
@@ -259,7 +282,48 @@ try {
       if (@($emptySummary.repositories).Count -ne 0) { throw "$engineLabel did not persist repositories as []." }
     }
 
-    # Regression 2: a timeout at the start of one complete manual-attempt budget
+    # Regression 2: the shared deadline includes each command and its bounded
+    # cleanup. A hanging status or pull cannot extend the repository-update
+    # phase beyond the declared wall-clock budget.
+    $deadlineBudgetSeconds = 8
+    foreach ($deadlineCase in @(
+      [PSCustomObject]@{ Name = 'status-budget-repo'; ExpectedStatus = 'safety-check-failed' },
+      [PSCustomObject]@{ Name = 'pull-budget-repo'; ExpectedStatus = 'timeout' }
+    )) {
+      $deadlineRoot = Join-Path $fixtureRoot ("deadline-$engineLabel-" + $deadlineCase.Name)
+      $deadlineSources = Join-Path $deadlineRoot 'sources'
+      $deadlineActive = Join-Path $deadlineRoot 'active'
+      $deadlineState = Join-Path $deadlineRoot 'state'
+      $deadlineReports = Join-Path $deadlineRoot 'reports'
+      New-Item -ItemType Directory -Force -Path $deadlineSources, $deadlineActive, (Join-Path $deadlineState 'sync-state'), $deadlineReports | Out-Null
+      $null = New-ManualRepo $deadlineSources $deadlineCase.Name
+      $deadlineConfig = Join-Path $deadlineRoot 'skillhub.config.json'
+      Write-TestConfig $deadlineConfig $deadlineSources $deadlineActive
+
+      $deadlineRun = Invoke-SyncFixture $engine $deadlineConfig $deadlineState $deadlineReports $fakeGitBin `
+        -GitUpdateBudgetSeconds $deadlineBudgetSeconds -GitCommandTimeoutSeconds 1 -GitStatusCommandTimeoutSeconds 2
+      if ($deadlineRun.ExitCode -ne 0) {
+        throw "$engineLabel $($deadlineCase.Name) deadline fixture failed: $($deadlineRun.Stderr)"
+      }
+      $deadlineSummary = Get-Content -LiteralPath (Join-Path $deadlineReports 'last-sync.json') -Raw | ConvertFrom-Json
+      $deadlineRow = @($deadlineSummary.repositories | Where-Object { $_.Repository -eq $deadlineCase.Name })
+      if ($deadlineRow.Count -ne 1 -or $deadlineRow[0].Status -ne $deadlineCase.ExpectedStatus) {
+        throw "$engineLabel did not preserve the bounded $($deadlineCase.Name) outcome: $($deadlineSummary | ConvertTo-Json -Compress -Depth 6)"
+      }
+      $deadlineTiming = Get-RepositoryUpdateTimingSeconds (Join-Path $deadlineReports 'last-sync.md')
+      if ($deadlineTiming -gt $deadlineBudgetSeconds) {
+        throw "$engineLabel let $($deadlineCase.Name) exceed the repository-update budget: $deadlineTiming seconds."
+      }
+      if ($deadlineRun.ElapsedSeconds -gt ($deadlineBudgetSeconds + 3)) {
+        throw "$engineLabel let $($deadlineCase.Name) visibly overrun the full fixture wall clock: $([Math]::Round($deadlineRun.ElapsedSeconds, 2)) seconds."
+      }
+      if ($deadlineRun.Stdout -match 'late success' -or $deadlineRun.Stderr -match 'late success') {
+        throw "$engineLabel did not terminate the over-budget Git process for $($deadlineCase.Name)."
+      }
+    }
+    Write-Host "PASS: $engineLabel enforces the shared wall-clock deadline across status, pull and timeout cleanup."
+
+    # Regression 3: a timeout at the start of one complete manual-attempt budget
     # must persist the first deferred source as the next start. The following run
     # therefore updates that source instead of starving the alphabetical tail.
     $rotationRoot = Join-Path $fixtureRoot "rotation-$engineLabel"
@@ -275,7 +339,7 @@ try {
     Write-TestConfig $rotationConfig $rotationSources $rotationActive
     Write-TestText (Join-Path $rotationState 'sync-state\git-update-cursor.json') '{broken cursor'
 
-    $firstRotation = Invoke-SyncFixture $engine $rotationConfig $rotationState $rotationReports $fakeGitBin -GitUpdateBudgetSeconds 14
+    $firstRotation = Invoke-SyncFixture $engine $rotationConfig $rotationState $rotationReports $fakeGitBin -GitUpdateBudgetSeconds 17
     if ($firstRotation.ExitCode -ne 0) {
       throw "$engineLabel first rotation fixture failed: $($firstRotation.Stderr)"
     }
@@ -303,7 +367,7 @@ try {
       throw "$engineLabel did not persist the first deferred source as the next rotation cursor."
     }
 
-    $secondRotation = Invoke-SyncFixture $engine $rotationConfig $rotationState $rotationReports $fakeGitBin -GitUpdateBudgetSeconds 14
+    $secondRotation = Invoke-SyncFixture $engine $rotationConfig $rotationState $rotationReports $fakeGitBin -GitUpdateBudgetSeconds 17
     if ($secondRotation.ExitCode -ne 0) {
       throw "$engineLabel second rotation fixture failed: $($secondRotation.Stderr)"
     }
@@ -315,7 +379,7 @@ try {
       throw "$engineLabel did not resume from the deferred source: $($secondRotationSummary | ConvertTo-Json -Compress -Depth 6)"
     }
 
-    # Regression 3: configured repositories can consume their share of a
+    # Regression 4: configured repositories can consume their share of a
     # bounded update window, but cannot starve manually discovered repositories.
     # Each group keeps its own persisted rotation cursor across runs.
     $fairRoot = Join-Path $fixtureRoot "fairness-$engineLabel"
@@ -344,7 +408,7 @@ try {
     $fairConfig = Join-Path $fairRoot 'skillhub.config.json'
     Write-TestConfig $fairConfig $fairSources $fairActive $configuredRows
 
-    $fairBudgetSeconds = 27
+    $fairBudgetSeconds = 33
     $firstFairRun = Invoke-SyncFixture $engine $fairConfig $fairState $fairReports $fakeGitBin -GitUpdateBudgetSeconds $fairBudgetSeconds
     if ($firstFairRun.ExitCode -ne 0) {
       throw "$engineLabel first configured/manual fairness run failed: $($firstFairRun.Stderr)"
@@ -397,7 +461,7 @@ try {
     }
     Write-Host "PASS: $engineLabel reserves bounded update time for manual sources and rotates both groups independently."
 
-    # Regression 4: a cursor persistence failure remains non-fatal, is visible
+    # Regression 5: a cursor persistence failure remains non-fatal, is visible
     # in last-sync, and never exposes a filesystem path or exception detail.
     $cursorWriteRoot = Join-Path $fixtureRoot "cursor-write-$engineLabel"
     $cursorWriteSources = Join-Path $cursorWriteRoot 'sources'
@@ -410,7 +474,7 @@ try {
     Write-TestConfig $cursorWriteConfig $cursorWriteSources $cursorWriteActive
     New-Item -ItemType Directory -Force -Path (Join-Path $cursorWriteState 'sync-state\git-update-cursor.json.skillhub-tmp') | Out-Null
 
-    $cursorWriteRun = Invoke-SyncFixture $engine $cursorWriteConfig $cursorWriteState $cursorWriteReports $fakeGitBin -GitUpdateBudgetSeconds 14
+    $cursorWriteRun = Invoke-SyncFixture $engine $cursorWriteConfig $cursorWriteState $cursorWriteReports $fakeGitBin -GitUpdateBudgetSeconds 17
     if ($cursorWriteRun.ExitCode -ne 0) {
       throw "$engineLabel treated a cursor-write failure as a batch failure: $($cursorWriteRun.Stderr)"
     }
@@ -429,7 +493,7 @@ try {
     }
     Write-Host "PASS: $engineLabel reports cursor persistence failures without leaking paths or exceptions."
 
-    # Regression 5: one success, one dirty tree, one failure and one timeout
+    # Regression 6: one success, one dirty tree, one failure and one timeout
     # must finish as a partial sync without changing or removing source trees.
     $updateRoot = Join-Path $fixtureRoot "updates-$engineLabel"
     $updateSources = Join-Path $updateRoot 'sources'
@@ -447,6 +511,14 @@ try {
     $brokenActiveLink = Join-Path $updateActive 'removed-parent'
     New-Item -ItemType Directory -Force -Path $brokenRouterTarget | Out-Null
     New-Item -ItemType Junction -Path $brokenActiveLink -Target $brokenRouterTarget | Out-Null
+    # Older Windows builds could preserve the source repository's letter case
+    # on an otherwise valid managed junction. Parent manifests now expose a
+    # canonical lower-case invocation name, so seed that legacy mismatch and
+    # require the sync to rebuild only the managed junction under its exact name.
+    $legacyCaseRouterTarget = Join-Path $updateSources 'AI-SkillHub-local-routers\OK-REPO'
+    Write-TestText (Join-Path $legacyCaseRouterTarget 'SKILL.md') "---`nname: ok-repo`ndescription: `"legacy managed parent`"`n---`n`n<!-- [ROUTER-HUB] -->`n"
+    $legacyCaseActiveLink = Join-Path $updateActive 'OK-REPO'
+    New-Item -ItemType Junction -Path $legacyCaseActiveLink -Target $legacyCaseRouterTarget | Out-Null
     $updateConfig = Join-Path $updateRoot 'skillhub.config.json'
     Write-TestConfig $updateConfig $updateSources $updateActive
     Write-TestText (Join-Path $updateState 'sync-state\managed-links.json') ''
@@ -480,6 +552,16 @@ try {
     }
     if (Test-Path -LiteralPath $brokenActiveLink) {
       throw "$engineLabel left a broken managed source junction in the active catalog."
+    }
+    $actualOkRepoLinks = @(Get-ChildItem -LiteralPath $updateActive -Force -Directory | Where-Object {
+      $_.Name -ieq 'ok-repo'
+    })
+    if ($actualOkRepoLinks.Count -ne 1 -or $actualOkRepoLinks[0].Name -cne 'ok-repo') {
+      throw "$engineLabel did not normalize the legacy mixed-case managed parent link: $($actualOkRepoLinks.Name -join ', ')"
+    }
+    $normalizedManifest = Get-Content -LiteralPath (Join-Path $actualOkRepoLinks[0].FullName 'SKILL.md') -Raw
+    if ($normalizedManifest -notmatch '(?m)^name:\s+ok-repo\s*$') {
+      throw "$engineLabel normalized the link name but did not preserve the canonical parent manifest."
     }
     foreach ($repoName in $updateRepoNames) {
       if (-not (Test-Path -LiteralPath (Join-Path $updateSources $repoName) -PathType Container)) {

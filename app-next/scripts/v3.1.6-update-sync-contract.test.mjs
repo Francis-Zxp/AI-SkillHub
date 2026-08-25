@@ -73,7 +73,7 @@ test("core sync is single-flight and follows with a lightweight popularity refre
   assert.match(app, /disabled=\{loading \|\| syncing\}/);
 });
 
-test("router generation finishes before the final active-catalog publish", () => {
+test("full sync publishes once while local mutations still generate parents before publish", () => {
   const fullStart = backend.indexOf("fn run_skillhub_sync_blocking()");
   const fullEnd = backend.indexOf("fn ensure_agent_skill_delivery_blocking", fullStart);
   const localStart = backend.indexOf("fn sync_local_sources_to_agents(");
@@ -82,11 +82,11 @@ test("router generation finishes before the final active-catalog publish", () =>
   const localSync = backend.slice(localStart, localEnd);
   assert.ok(fullStart >= 0 && fullEnd > fullStart);
   assert.ok(localStart >= 0 && localEnd > localStart);
-  assert.ok(fullSync.indexOf("plan_or_write_router_hubs") < fullSync.lastIndexOf("run_skillhub_script_no_pull"));
+  assert.ok(fullSync.indexOf("run_skillhub_script(&root)") < fullSync.indexOf("finalize_agent_skill_delivery"));
+  assert.doesNotMatch(fullSync, /run_skillhub_script_no_pull|plan_or_write_router_hubs|run_diagnostics_export_script/);
+  assert.match(fullSync, /sync_skill_conflict_dispatchers\(&root, &connection\)\?;/);
   assert.ok(localSync.indexOf("plan_or_write_router_hubs") < localSync.indexOf("run_skillhub_script_no_pull"));
-  assert.match(fullSync, /let report = plan_or_write_router_hubs\(&root, true, true\)\?;/);
   assert.match(localSync, /let report = plan_or_write_router_hubs\(root, true, true\)\?;/);
-  assert.doesNotMatch(fullSync, /if let Ok\(report\) = plan_or_write_router_hubs/);
   assert.doesNotMatch(localSync, /if let Ok\(report\) = plan_or_write_router_hubs/);
 });
 

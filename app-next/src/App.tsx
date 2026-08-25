@@ -29,6 +29,7 @@ import type {
   LegacySummary,
   NavKey,
   ReleaseReportCard,
+  RuntimeSnapshotHydration,
   RouterHubReport,
   SkillCard,
   SkillConflictCard,
@@ -333,6 +334,16 @@ const UI_ICON_SCALES: Record<UiScalePreset, number> = {
   comfortable: 1.2,
   large: 1.36
 };
+const INTERNAL_SKILL_DRAG_TYPES = [
+  "application/x-ai-skillhub-source-id",
+  "application/x-ai-skillhub-skill-id"
+] as const;
+
+function hasInternalSkillDrag(dataTransfer: DataTransfer) {
+  const types = Array.from(dataTransfer.types);
+  return INTERNAL_SKILL_DRAG_TYPES.some(type => types.includes(type));
+}
+
 const UI_SCALE_OPTIONS: UiScalePreset[] = ["compact", "standard", "comfortable", "large"];
 const THEME_OPTIONS: Array<{ icon: IconName; labelKey: string; value: ThemeName }> = [
   { value: "nocturne", labelKey: "theme.nocturne", icon: "moon" },
@@ -423,6 +434,10 @@ export function App() {
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
   const [initialDeliveryBusy, setInitialDeliveryBusy] = useState(true);
+  const [startupVerified, setStartupVerified] = useState(() => !hasTauriRuntime());
+  const [runtimeHydrated, setRuntimeHydrated] = useState(() => !hasTauriRuntime());
+  const [startupVerificationFailed, setStartupVerificationFailed] = useState(false);
+  const [startupVerificationError, setStartupVerificationError] = useState("");
   const [indexRefreshing, setIndexRefreshing] = useState(false);
   const [popularityRefreshing, setPopularityRefreshing] = useState(false);
   const [operation, setOperation] = useState<OperationStatus | null>(null);
@@ -440,14 +455,23 @@ export function App() {
   const backgroundUpdateRetriesRef = useRef(0);
   const initialDeliveryCheckStartedRef = useRef(false);
   const initialDeliveryInFlightRef = useRef(true);
+  const runtimeHydrationInFlightRef = useRef<Promise<RuntimeSnapshotHydration> | null>(null);
+  const runtimeHydrationRetryRef = useRef<number | null>(null);
+  const runtimeMutationGenerationRef = useRef(0);
+  const mutationBusyRef = useRef(true);
   const indexRefreshInFlightRef = useRef<Promise<LegacySnapshot | null> | null>(null);
   const popularityRefreshInFlightRef = useRef<Promise<SourcePopularityRefreshResult | null> | null>(null);
   const syncInFlightRef = useRef<Promise<LegacySnapshot | null> | null>(null);
   const runtimeAvailable = hasTauriRuntime();
   const realWritesEnabled = snapshot?.operatorConsent?.realWritesEnabled === true;
   const mutationBusy = loading || initialDeliveryBusy || indexRefreshing || popularityRefreshing || Boolean(operation);
+  mutationBusyRef.current = mutationBusy;
 
   useCardGlow();
+
+  useEffect(() => {
+    if (snapshot) runtimeMutationGenerationRef.current += 1;
+  }, [snapshot]);
 
   const summary = useMemo<LegacySummary>(
     () =>
@@ -487,8 +511,9 @@ export function App() {
     setToast({ message, tone });
   }
 
-  function mutationBlockedBySync(notify = true) {
+  function mutationBlockedBySync(notify = true, markMutation = true) {
     if (!syncInFlightRef.current && !initialDeliveryInFlightRef.current && !indexRefreshInFlightRef.current && !popularityRefreshInFlightRef.current) {
+      if (markMutation) runtimeMutationGenerationRef.current += 1;
       return false;
     }
     if (notify) toastMessage(t("toast.syncBusy"), "warn");
@@ -738,6 +763,15 @@ export function App() {
     else setSnapshot(nextSnapshot);
   }
 
+  function markAfterNextPaint(name: string) {
+    if (performance.getEntriesByName(name).length > 0) return;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (performance.getEntriesByName(name).length === 0) performance.mark(name);
+      });
+    });
+  }
+
   /* ---- backend bridges ---- */
 
   async function loadSnapshot(
@@ -760,6 +794,7 @@ export function App() {
           : "load_indexed_snapshot";
       const result = await invoke<LegacySnapshot>(command);
       applySnapshot(result, Boolean(options.background));
+      if (mode === "indexed") markAfterNextPaint("ai-skillhub-index-visible");
       setLoadError("");
       if (mode !== "indexed" && !options.quiet) toastMessage(t("toast.refreshDone"), "ok");
       return result;
@@ -1153,7 +1188,7 @@ export function App() {
     sourceName: string,
     eventType: string
   ) {
-    if (mutationBlockedBySync(false)) return;
+    if (mutationBlockedBySync(false, false)) return;
     if (!runtimeAvailable) return;
     try {
       await invoke<void>("record_usage_event", {
@@ -1172,7 +1207,7 @@ export function App() {
     options: { quiet?: boolean; background?: boolean } = {}
   ): Promise<SourcePopularityRefreshResult | null> {
     if (popularityRefreshInFlightRef.current) return popularityRefreshInFlightRef.current;
-    if (mutationBlockedBySync(!options.quiet)) return null;
+    if (mutationBlockedBySync(!options.quiet, false)) return null;
     const task = runSourcePopularityRefresh(options);
     popularityRefreshInFlightRef.current = task;
     setPopularityRefreshing(true);
@@ -1518,39 +1553,101 @@ export function App() {
 
   /* ---- lifecycle ---- */
 
+  function scheduleDeferredRuntimeRetry(isCancelled: () => boolean) {
+    if (isCancelled() || runtimeHydrationRetryRef.current !== null) return;
+    runtimeHydrationRetryRef.current = window.setTimeout(() => {
+      runtimeHydrationRetryRef.current = null;
+      void hydrateDeferredRuntime(isCancelled);
+    }, 100);
+  }
+
+  async function hydrateDeferredRuntime(isCancelled: () => boolean = () => false) {
+    if (!runtimeAvailable || isCancelled() || runtimeHydrationInFlightRef.current) return;
+    if (mutationBusyRef.current) {
+      scheduleDeferredRuntimeRetry(isCancelled);
+      return;
+    }
+    const generation = runtimeMutationGenerationRef.current;
+    const task = invoke<RuntimeSnapshotHydration>("hydrate_runtime_snapshot");
+    runtimeHydrationInFlightRef.current = task;
+    let retry = false;
+    try {
+      const hydration = await task;
+      if (isCancelled()) return;
+      if (generation !== runtimeMutationGenerationRef.current || mutationBusyRef.current) {
+        retry = true;
+        return;
+      }
+      setSnapshot(current => current ? { ...current, ...hydration } : current);
+      setRuntimeHydrated(true);
+      markAfterNextPaint("ai-skillhub-runtime-hydrated");
+    } catch {
+      // Core SQLite content is already usable. A deferred local-status read must
+      // never blank the library or turn a successful startup into a failure;
+      // the next verification/manual refresh can retry it.
+      if (!isCancelled()) setRuntimeHydrated(false);
+    } finally {
+      if (runtimeHydrationInFlightRef.current === task) {
+        runtimeHydrationInFlightRef.current = null;
+      }
+      if (retry && !isCancelled()) scheduleDeferredRuntimeRetry(isCancelled);
+    }
+  }
+
+  async function verifyStartupSnapshot(
+    loadIndexed: boolean,
+    isCancelled: () => boolean = () => false,
+    initialRun = false
+  ) {
+    if (!initialRun && (initialDeliveryInFlightRef.current || mutationBusy || mutationBlockedBySync(false, false))) return;
+    let verified = !runtimeAvailable;
+    initialDeliveryInFlightRef.current = true;
+    setInitialDeliveryBusy(true);
+    setStartupVerificationFailed(false);
+    setStartupVerificationError("");
+    try {
+      if (loadIndexed) {
+        const indexed = await loadSnapshot();
+        if (!indexed) {
+          if (!isCancelled()) setStartupVerificationError(t("error.verificationFailed"));
+          return;
+        }
+        if (isCancelled()) return;
+      }
+      if (!runtimeAvailable || isCancelled()) return;
+      // The SQLite snapshot is already visible. Startup only verifies the
+      // parent-first delivery fingerprint and link health; a full Agent scan is
+      // intentionally reserved for the explicit refresh action.
+      const delivered = await invoke<LegacySnapshot>("ensure_agent_skill_delivery");
+      if (isCancelled()) return;
+      applySnapshot(delivered, true);
+      verified = true;
+    } catch (error) {
+      if (!isCancelled()) setStartupVerificationError(messageFromError(error));
+    } finally {
+      initialDeliveryInFlightRef.current = false;
+      if (!isCancelled()) {
+        setStartupVerified(verified);
+        setStartupVerificationFailed(runtimeAvailable && !verified);
+        setInitialDeliveryBusy(false);
+        if (verified) markAfterNextPaint("ai-skillhub-controls-unlocked");
+        scheduleInitialUpdateCheck();
+        if (verified && runtimeAvailable) void hydrateDeferredRuntime(isCancelled);
+      }
+    }
+  }
+
   useEffect(() => {
     if (initialDeliveryCheckStartedRef.current) return;
     initialDeliveryCheckStartedRef.current = true;
     let cancelled = false;
-    void (async () => {
-      try {
-        await loadSnapshot();
-        if (!runtimeAvailable || cancelled) return;
-        const detected = await invoke<LegacySnapshot>("refresh_agent_detection");
-        if (cancelled) return;
-        applySnapshot(detected, true);
-        // Always reconcile managed entries after detection. A version upgrade
-        // can change the delivery policy (for example from flat children to a
-        // parent-first catalog) while every old entry still looks "installed".
-        // The recipient script itself remains fail-closed and never creates a
-        // directory for an Agent that was not detected.
-        const shouldReconcileDelivery = detected.skills.length > 0;
-        if (shouldReconcileDelivery) {
-          const delivered = await invoke<LegacySnapshot>("ensure_agent_skill_delivery");
-          if (!cancelled) applySnapshot(delivered, true);
-        }
-      } catch (error) {
-        if (!cancelled) setLoadError(messageFromError(error));
-      } finally {
-        initialDeliveryInFlightRef.current = false;
-        if (!cancelled) {
-          setInitialDeliveryBusy(false);
-          scheduleInitialUpdateCheck();
-        }
-      }
-    })();
+    const startTimer = window.setTimeout(() => {
+      void verifyStartupSnapshot(true, () => cancelled, true);
+    }, 0);
     return () => {
       cancelled = true;
+      window.clearTimeout(startTimer);
+      initialDeliveryCheckStartedRef.current = false;
     };
   }, []);
 
@@ -1558,6 +1655,10 @@ export function App() {
     if (!runtimeAvailable) return;
     return () => {
       cancelInitialUpdateCheck();
+      if (runtimeHydrationRetryRef.current !== null) {
+        window.clearTimeout(runtimeHydrationRetryRef.current);
+        runtimeHydrationRetryRef.current = null;
+      }
       if (updateRetryTimerRef.current !== null) {
         window.clearTimeout(updateRetryTimerRef.current);
         updateRetryTimerRef.current = null;
@@ -1584,6 +1685,22 @@ export function App() {
       document.removeEventListener("visibilitychange", checkAfterResume);
     };
   }, [runtimeAvailable]);
+
+  useEffect(() => {
+    const preventExternalDropNavigation = (event: globalThis.DragEvent) => {
+      if (!event.dataTransfer || hasInternalSkillDrag(event.dataTransfer)) return;
+      const types = Array.from(event.dataTransfer.types);
+      if (types.some(type => type === "Files" || type === "text/plain" || type === "text/uri-list")) {
+        event.preventDefault();
+      }
+    };
+    window.addEventListener("dragover", preventExternalDropNavigation);
+    window.addEventListener("drop", preventExternalDropNavigation);
+    return () => {
+      window.removeEventListener("dragover", preventExternalDropNavigation);
+      window.removeEventListener("drop", preventExternalDropNavigation);
+    };
+  }, []);
 
   useEffect(() => {
     document.body.dataset.theme = theme;
@@ -1658,6 +1775,7 @@ export function App() {
   return (
     <main
       className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"} page-${active} lang-${lang}${dashboardImmersive && active === "dashboard" ? " dashboard-immersive" : ""}`}
+      data-runtime-hydrated={runtimeHydrated ? "true" : "false"}
       style={{
         "--ui-icon-scale": UI_ICON_SCALES[iconScale],
         "--ui-text-scale": UI_TEXT_SCALES[textScale]
@@ -1759,11 +1877,11 @@ export function App() {
             )}
             <button
               className="primary-pill"
-              disabled={loading || Boolean(operation)}
+              disabled={mutationBusy}
               onClick={() => void syncAndRefreshAll()}
               type="button"
             >
-              <Icon className={loading || Boolean(operation) ? "icon-spin" : ""} name="refresh" />
+              <Icon className={loading || initialDeliveryBusy || indexRefreshing || Boolean(operation) ? "icon-spin" : ""} name="refresh" />
               <span>
                 {runtimeAvailable
                   ? operation
@@ -1772,9 +1890,13 @@ export function App() {
                       ? snapshot
                         ? t("topbar.processing")
                         : t("topbar.loadingIndex")
-                      : realWritesEnabled
-                        ? t("topbar.sync")
-                        : t("topbar.refreshIndex")
+                      : startupVerificationFailed
+                        ? t("topbar.verificationFailed")
+                        : initialDeliveryBusy || !startupVerified
+                          ? t("topbar.verifyingIndex")
+                          : realWritesEnabled
+                            ? t("topbar.sync")
+                            : t("topbar.refreshIndex")
                   : loading
                     ? t("topbar.loading")
                     : t("topbar.reloadPreview")}
@@ -1820,6 +1942,24 @@ export function App() {
                 <strong>{t("error.title")}</strong>
                 <span>{friendlyErrorMessage(loadError)}</span>
               </div>
+            </section>
+          )}
+
+          {startupVerificationFailed && (
+            <section className="status-banner error" role="alert">
+              <Icon name="alert" />
+              <div>
+                <strong>{t("topbar.verificationFailed")}</strong>
+                <span>{friendlyErrorMessage(startupVerificationError || t("error.verificationFailed"))}</span>
+              </div>
+              <button
+                className="ghost-action small"
+                disabled={mutationBusy}
+                onClick={() => void verifyStartupSnapshot(!snapshot)}
+                type="button"
+              >
+                <Icon name="refresh" /> {t("error.retryVerification")}
+              </button>
             </section>
           )}
 
@@ -2475,45 +2615,112 @@ function SkillShowcase({
       panX: 0,
       panY: 0,
       pointerX: 0,
-      pointerY: 0
+      pointerY: 0,
+      requestDraw: () => undefined
     };
     graphRef.current = runtime;
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     let frame = 0;
     let frameTimer = 0;
+    let lastDrawAt = 0;
+    let ambientUntil = performance.now() + 2400;
     let disposed = false;
+    let pageVisible = !document.hidden;
+    let focused = document.hasFocus();
+    let intersecting = host.getClientRects().length > 0;
+
+    const cancelScheduledDraw = () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(frameTimer);
+      frame = 0;
+      frameTimer = 0;
+    };
+
+    const canRender = () => !disposed && pageVisible && intersecting;
+
+    const scheduleDraw = (urgent = false) => {
+      if (!canRender() || frame || (!focused && !urgent)) return;
+      if (!urgent && performance.now() >= ambientUntil) return;
+      if (frameTimer) {
+        if (!urgent) return;
+        window.clearTimeout(frameTimer);
+        frameTimer = 0;
+      }
+      const wait = urgent ? 0 : Math.max(0, 160 - (performance.now() - lastDrawAt));
+      if (wait <= 1) {
+        frame = window.requestAnimationFrame(draw);
+        return;
+      }
+      frameTimer = window.setTimeout(() => {
+        frameTimer = 0;
+        if (canRender() && focused) frame = window.requestAnimationFrame(draw);
+      }, wait);
+    };
 
     const resizeCanvas = () => {
       const rect = host.getBoundingClientRect();
-      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      const pixelBudgetScale = Math.sqrt(1_700_000 / Math.max(1, rect.width * rect.height));
+      const ratio = Math.min(window.devicePixelRatio || 1, 2, pixelBudgetScale);
       canvas.width = Math.max(1, Math.floor(rect.width * ratio));
       canvas.height = Math.max(1, Math.floor(rect.height * ratio));
       canvas.style.width = `${rect.width}px`;
       canvas.style.height = `${rect.height}px`;
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      scheduleDraw(true);
     };
 
     const draw = (time: number) => {
-      if (disposed) return;
+      frame = 0;
+      if (!canRender()) return;
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       context.clearRect(0, 0, width, height);
-      drawSkillGraph(context, graphData, runtime, width, height, reducedMotion ? 0 : time);
-      frameTimer = window.setTimeout(() => {
-        frame = window.requestAnimationFrame(draw);
-      }, reducedMotion ? 250 : 80);
+      drawSkillGraph(context, graphData, runtime, width, height, reducedMotion || !focused ? 0 : time);
+      lastDrawAt = time;
+      if (!reducedMotion && focused) scheduleDraw();
+    };
+    runtime.requestDraw = () => scheduleDraw(true);
+
+    const onVisibility = () => {
+      pageVisible = !document.hidden;
+      cancelScheduledDraw();
+      if (pageVisible) scheduleDraw(true);
+    };
+
+    const onFocus = () => {
+      focused = true;
+      ambientUntil = performance.now() + 800;
+      lastDrawAt = 0;
+      scheduleDraw(true);
+    };
+
+    const onBlur = () => {
+      focused = false;
+      cancelScheduledDraw();
     };
 
     const observer = new ResizeObserver(resizeCanvas);
     observer.observe(host);
+    const intersectionObserver = new IntersectionObserver(entries => {
+      intersecting = entries.some(entry => entry.isIntersecting);
+      cancelScheduledDraw();
+      if (intersecting) scheduleDraw(true);
+    });
+    intersectionObserver.observe(host);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
     resizeCanvas();
-    frame = window.requestAnimationFrame(draw);
+    scheduleDraw(true);
 
     return () => {
       disposed = true;
       observer.disconnect();
-      window.clearTimeout(frameTimer);
-      window.cancelAnimationFrame(frame);
+      intersectionObserver.disconnect();
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+      cancelScheduledDraw();
       if (graphRef.current === runtime) graphRef.current = null;
     };
   }, [graphData]);
@@ -2532,11 +2739,13 @@ function SkillShowcase({
         runtime.dragged = true;
       }
       canvas.style.cursor = "grabbing";
+      runtime.requestDraw();
       return;
     }
     const hovered = findGraphHit(runtime, runtime.pointerX, runtime.pointerY);
     runtime.hoverId = hovered?.id ?? "";
     canvas.style.cursor = hovered?.skill ? "copy" : hovered?.kind === "source" ? "pointer" : "grab";
+    runtime.requestDraw();
   };
 
   const startGraphDrag = (event: PointerEvent<HTMLCanvasElement>) => {
@@ -2552,6 +2761,7 @@ function SkillShowcase({
     runtime.dragged = false;
     runtime.dragging = true;
     canvas.style.cursor = "grabbing";
+    runtime.requestDraw();
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
 
@@ -2565,6 +2775,7 @@ function SkillShowcase({
     runtime.dragged = false;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     canvas.style.cursor = hovered?.skill ? "copy" : hovered?.kind === "source" ? "pointer" : "grab";
+    runtime.requestDraw();
     if (wasDragged || !hovered) return;
     if (hovered.skill) onCopySkill(hovered.skill);
     else if (hovered.kind === "source") onOpenLibrary();
@@ -3290,6 +3501,8 @@ function Library(props: LibraryProps) {
           const singleRootSkill = sourceSkills.length === 1;
           const parentSkills = singleRootSkill ? [] : sourceSkills.filter(isRouterHubSkill);
           const childSkills = singleRootSkill ? sourceSkills : sourceSkills.filter(skill => !isRouterHubSkill(skill));
+          const primaryInvocationSkill = sourceParentSkill(source, sourceSkills);
+          const primaryInvocationName = primaryInvocationSkill ? skillInvocationName(primaryInvocationSkill) : "";
           const childLimit = childLimits[source.id] ?? 36;
           const visibleChildSkills = childSkills.slice(0, childLimit);
           const matchesQuery = searchQuery.trim()
@@ -3326,9 +3539,21 @@ function Library(props: LibraryProps) {
                   </div>
                 </button>
                 <div className="source-group-meta">
+                  {primaryInvocationSkill && (
+                    <button
+                      aria-label={t("lib.copyName", { name: primaryInvocationName })}
+                      className="icon-action source-parent-copy"
+                      onClick={() => void copyTextToClipboard(primaryInvocationName, t("toast.skillNameCopied"))}
+                      title={`${t("lib.copyParent")}：${primaryInvocationName}`}
+                      type="button"
+                    >
+                      <Icon name="copy" />
+                    </button>
+                  )}
                   <span
                     aria-label={t("folders.dragSource", { name: source.name })}
-                    className="source-folder-drag-handle"
+                    aria-disabled={loading}
+                    className={`source-folder-drag-handle${loading ? " disabled" : ""}`}
                     draggable={!loading}
                     onDragStart={event => {
                       if (loading) {
@@ -3780,7 +4005,7 @@ function SkillFolderShelf({
   }
 
   function acceptDrop(event: DragEvent<HTMLElement>, folderId: string) {
-    if (disabled) return;
+    if (disabled || !hasInternalSkillDrag(event.dataTransfer)) return;
     event.preventDefault();
     setDropTarget("");
     const sourceId = event.dataTransfer.getData("application/x-ai-skillhub-source-id");
@@ -3788,8 +4013,7 @@ function SkillFolderShelf({
       void onDropSource(sourceId.trim(), folderId);
       return;
     }
-    const skillId = event.dataTransfer.getData("application/x-ai-skillhub-skill-id") ||
-      event.dataTransfer.getData("text/plain");
+    const skillId = event.dataTransfer.getData("application/x-ai-skillhub-skill-id");
     if (skillId.trim()) void onDropSkill(skillId.trim(), folderId);
   }
 
@@ -3801,8 +4025,17 @@ function SkillFolderShelf({
         className={`skill-folder-target tone-${tone}${selectedId === id ? " active" : ""}${dropTarget === id ? " drop-ready" : ""}`}
         key={id}
         onClick={() => onSelect(id)}
-        onDragEnter={acceptsDrop ? event => { event.preventDefault(); setDropTarget(id); } : undefined}
-        onDragOver={acceptsDrop ? event => event.preventDefault() : undefined}
+        onDragEnter={acceptsDrop ? event => {
+          if (!hasInternalSkillDrag(event.dataTransfer)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          setDropTarget(id);
+        } : undefined}
+        onDragOver={acceptsDrop ? event => {
+          if (!hasInternalSkillDrag(event.dataTransfer)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+        } : undefined}
         onDragLeave={acceptsDrop ? () => setDropTarget(current => current === id ? "" : current) : undefined}
         onDrop={acceptsDrop ? event => acceptDrop(event, id === "unfiled" ? "" : id) : undefined}
         title={noteText || label}
@@ -3945,10 +4178,10 @@ function SkillRow({
           <strong>{skill.name}</strong>
           {!isParent && (
             <button
-              aria-label={t("lib.copyName", { name: skill.name })}
+              aria-label={t("lib.copyName", { name: skillInvocationName(skill) })}
               className="skill-name-copy"
-              onClick={() => void copyTextToClipboard(skill.name, t("toast.skillNameCopied"))}
-              title={t("lib.copyName", { name: skill.name })}
+              onClick={() => void copyTextToClipboard(skillInvocationName(skill), t("toast.skillNameCopied"))}
+              title={t("lib.copyName", { name: skillInvocationName(skill) })}
               type="button"
             >
               <Icon name="copy" />
@@ -6634,6 +6867,10 @@ function stableSkillClientId(skill: SkillCard) {
   return skill.id || `preview-skill-${skill.folderName}`;
 }
 
+function skillInvocationName(skill: SkillCard) {
+  return skill.invocationName?.trim() || skill.folderName.trim() || skill.name.trim();
+}
+
 function skillVisualCategory(skill: SkillCard) {
   const raw = normalizeLookup(skill.category || "");
   if (raw && !["auto", "general", "local"].includes(raw)) return raw;
@@ -6674,6 +6911,7 @@ type SkillGraphRuntime = {
   panY: number;
   pointerX: number;
   pointerY: number;
+  requestDraw: () => void;
 };
 
 function buildSkillGraphData(skills: SkillCard[], sources: SourceCard[]): SkillGraphData {
@@ -7462,7 +7700,7 @@ async function copySkillPrompt(
   ) => Promise<void>
 ) {
   const context = localizedSkillDescription(skill, getLang()) || displayCategoryName(skill.category) || t("copy.fallbackContext");
-  const text = t("copy.template", { name: skill.name, context });
+  const text = t("copy.template", { name: skillInvocationName(skill), context });
   try {
     await navigator.clipboard.writeText(text);
     showUiToast(t("toast.copied"), "ok");

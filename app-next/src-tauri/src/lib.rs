@@ -30,7 +30,7 @@ use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
     Arc, Mutex, OnceLock,
 };
 use std::thread;
@@ -58,12 +58,18 @@ const GITHUB_FALLBACK_MAX_FILES: usize = SOURCE_IMPORT_MAX_FILES;
 const GITHUB_FALLBACK_MAX_BYTES: u64 = 80 * 1024 * 1024;
 const GITHUB_FALLBACK_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MANAGED_SOURCE_METADATA_FILE: &str = ".skillhub-source.json";
+const AGENT_DELIVERY_FINGERPRINT_KEY: &str = "agent_delivery_fingerprint_v1";
+const AGENT_DELIVERY_POLICY_VERSION: &str = "parent-first-v3.2";
 static SNAPSHOT_SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 // Heavy reconciliation jobs touch the same SQLite index, generated routers and
 // recipient links. Keep them single-flight so a user action cannot overlap a
 // refresh and leave either side observing a half-reconciled catalog.
 static BACKGROUND_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static MCP_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+const STARTUP_LOAD_PATH_UNKNOWN: u8 = 0;
+const STARTUP_LOAD_PATH_SQLITE_CACHE: u8 = 1;
+const STARTUP_LOAD_PATH_FALLBACK_SCAN: u8 = 2;
+static STARTUP_LOAD_PATH: AtomicU8 = AtomicU8::new(STARTUP_LOAD_PATH_UNKNOWN);
 static SOURCE_IMPORT_CANCELLATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
     OnceLock::new();
 const SOURCE_IMPORT_PROGRESS_EVENT: &str = "source-import-progress";
@@ -117,6 +123,18 @@ struct LegacySnapshot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RuntimeSnapshotHydration {
+    agent_skill_statuses: Vec<AgentSkillStatusCard>,
+    agent_doctors: Vec<adapter_doctor::AgentDoctorCard>,
+    source_governance: Vec<source_governance::SourceGovernanceCard>,
+    operation_runners: Vec<OperationRunnerCard>,
+    release_reports: Vec<ReleaseReportCard>,
+    import_previews: Vec<ImportPreviewCard>,
+    write_gates: Vec<WriteGateCard>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct LegacySummary {
     skills: usize,
     sources: usize,
@@ -154,6 +172,8 @@ struct SkillCard {
     id: String,
     source_id: String,
     name: String,
+    /// Immutable name delivered to AI hosts. Display-name overrides never change it.
+    invocation_name: String,
     folder_name: String,
     category: String,
     description: String,
@@ -1165,7 +1185,17 @@ async fn scan_legacy_snapshot() -> Result<LegacySnapshot, String> {
 
 #[tauri::command]
 async fn load_indexed_snapshot() -> Result<LegacySnapshot, String> {
-    run_blocking_task(load_indexed_snapshot_blocking).await
+    run_blocking_task(load_startup_indexed_snapshot_blocking).await
+}
+
+#[tauri::command]
+fn get_startup_load_path() -> &'static str {
+    startup_load_path_label(STARTUP_LOAD_PATH.load(Ordering::Relaxed))
+}
+
+#[tauri::command]
+async fn hydrate_runtime_snapshot() -> Result<RuntimeSnapshotHydration, String> {
+    run_blocking_task(hydrate_runtime_snapshot_blocking).await
 }
 
 #[tauri::command]
@@ -1563,16 +1593,106 @@ fn scan_legacy_snapshot_under_write_guard() -> Result<LegacySnapshot, String> {
 }
 
 fn load_indexed_snapshot_blocking() -> Result<LegacySnapshot, String> {
-    load_indexed_snapshot_with_fallback(scan_legacy_snapshot_blocking)
+    load_indexed_snapshot_with_fallback(scan_legacy_snapshot_blocking, read_snapshot_from_database)
 }
 
 fn load_indexed_snapshot_under_write_guard() -> Result<LegacySnapshot, String> {
-    load_indexed_snapshot_with_fallback(scan_legacy_snapshot_under_write_guard)
+    load_indexed_snapshot_with_fallback(
+        scan_legacy_snapshot_under_write_guard,
+        read_snapshot_from_database,
+    )
 }
 
-fn load_indexed_snapshot_with_fallback<F>(mut scan_fallback: F) -> Result<LegacySnapshot, String>
+fn load_startup_indexed_snapshot_blocking() -> Result<LegacySnapshot, String> {
+    let mut used_fallback_scan = false;
+    let result = load_indexed_snapshot_with_fallback(
+        || {
+            used_fallback_scan = true;
+            scan_legacy_snapshot_blocking()
+        },
+        read_startup_snapshot_from_database,
+    );
+    if result.is_ok() {
+        STARTUP_LOAD_PATH.fetch_or(
+            if used_fallback_scan {
+                STARTUP_LOAD_PATH_FALLBACK_SCAN
+            } else {
+                STARTUP_LOAD_PATH_SQLITE_CACHE
+            },
+            Ordering::Relaxed,
+        );
+    }
+    result
+}
+
+fn startup_load_path_label(value: u8) -> &'static str {
+    match value {
+        STARTUP_LOAD_PATH_SQLITE_CACHE => "sqlite-cache",
+        value if value & STARTUP_LOAD_PATH_FALLBACK_SCAN != 0 => "fallback-scan",
+        _ => "unknown",
+    }
+}
+
+fn hydrate_runtime_snapshot_blocking() -> Result<RuntimeSnapshotHydration, String> {
+    let root = resolve_legacy_root()?;
+    if migration_v4_is_pending(&root) || !database_file(&root).is_file() {
+        return Err("本地索引尚未就绪；运行态补充已跳过，未触发重新扫描。".to_string());
+    }
+    let connection = open_index_database(&root)?;
+    let skills = read_indexed_skills(&connection)?;
+    let sources = read_indexed_sources(&connection)?;
+    let agents = read_indexed_agents(&connection)?;
+    let agent_skill_statuses = derive_agent_skill_statuses(&root, &skills, &agents);
+    let agent_adapters = read_indexed_agent_adapters(&connection)?;
+    let diagnostics_json = read_json(&diagnostics_file(&root));
+    let agent_doctors = derive_agent_doctors(diagnostics_json.as_ref(), &agent_adapters);
+    let source_governance =
+        source_governance::read_cached_governance_cards(&root, &connection, &sources)?;
+    let operation_runners = read_indexed_operation_runners(&connection, &root)?;
+    let release_reports = derive_release_reports(&root);
+    let import_previews =
+        derive_import_previews(&active_sources_dir(&root), &sources, &release_reports);
+
+    // Write gates depend on persisted/local reports only. Reading them here is
+    // deliberately separate from scanning sources, refreshing Agents, or
+    // running any Git/network command.
+    let diagnostics = read_indexed_diagnostics(&connection);
+    let backup_dry_run = read_indexed_backup_dry_run(&connection)?;
+    let restore_dry_run = read_indexed_restore_dry_run(&connection)?;
+    let rollback_plan = read_indexed_rollback_plan(&connection)?;
+    let desktop_qa_checks = read_indexed_desktop_qa_checks(&connection)?;
+    let operator_consent = read_operator_consent(&connection)?;
+    let write_gates = derive_write_gates(
+        &diagnostics,
+        &release_reports,
+        &import_previews,
+        &backup_dry_run,
+        &restore_dry_run,
+        &rollback_plan,
+        &desktop_qa_checks,
+        &agent_adapters,
+        &operation_runners,
+        &operator_consent,
+    );
+
+    Ok(RuntimeSnapshotHydration {
+        agent_skill_statuses,
+        agent_doctors,
+        source_governance,
+        operation_runners,
+        release_reports,
+        import_previews,
+        write_gates,
+    })
+}
+
+fn load_indexed_snapshot_with_fallback<F, R>(
+    mut scan_fallback: F,
+    read_indexed_snapshot: R,
+) -> Result<LegacySnapshot, String>
 where
     F: FnMut() -> Result<LegacySnapshot, String>,
+    R: Fn(&Path, &Connection) -> Result<LegacySnapshot, String>,
 {
     let root = resolve_legacy_root()?;
     if migration_v4_is_pending(&root) {
@@ -1585,7 +1705,7 @@ where
     }
 
     let connection = open_index_database(&root)?;
-    let snapshot = read_snapshot_from_database(&root, &connection).or_else(|_| scan_fallback())?;
+    let snapshot = read_indexed_snapshot(&root, &connection).or_else(|_| scan_fallback())?;
 
     if indexed_snapshot_needs_portable_source_refresh(&root, &snapshot) {
         return scan_fallback();
@@ -1655,20 +1775,13 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     source_governance::prepare_sync_backups(&root, &connection)?;
     run_skillhub_script(&root)?;
     source_governance::refresh_local_revisions(&root, &connection)?;
-    // A repository update can add/remove children, so regenerate parent routers
-    // before the final no-pull publish. The second PowerShell pass atomically
-    // reconciles the active catalog with the regenerated router tree and removes
-    // broken managed links left by older versions.
-    // A source is callable only after its parent router exists. Do not publish a
-    // partially regenerated catalog when router creation fails: keep the current
-    // active links intact and surface the bounded error to the user instead.
-    let report = plan_or_write_router_hubs(&root, true, true)?;
-    let _ = record_router_hub_audit(&connection, &report);
-    let _ = sync_skill_conflict_dispatchers(&root, &connection);
-    run_skillhub_script_no_pull(&root)?;
-    run_agent_link_script(&root, &connection)?;
-    run_diagnostics_export_script(&root)?;
-    scan_legacy_snapshot_under_write_guard()
+    // The full SkillHub script has already regenerated every parent and
+    // published the active catalog. Do not immediately repeat the same source
+    // traversal with `-NoPull`; remove only legacy dispatchers, then perform one
+    // final index/link/health pass. Live Agent detection remains the explicit
+    // Agent-page action and no longer blocks every Git refresh.
+    sync_skill_conflict_dispatchers(&root, &connection)?;
+    finalize_agent_skill_delivery(&root, false, false)
 }
 
 fn ensure_agent_skill_delivery_blocking() -> Result<LegacySnapshot, String> {
@@ -1678,12 +1791,15 @@ fn ensure_agent_skill_delivery_blocking() -> Result<LegacySnapshot, String> {
         let _ = scan_legacy_snapshot_under_write_guard()?;
     }
     let connection = open_index_database(&root)?;
-    let snapshot = read_snapshot_from_database(&root, &connection)?;
-    if snapshot.skills.is_empty() {
-        return Ok(snapshot);
+    let skill_count = connection
+        .query_row("SELECT COUNT(*) FROM skills", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| format!("Cannot count indexed Skills: {}", error))?;
+    if skill_count == 0 || agent_delivery_is_current(&root, &connection)? {
+        return read_startup_snapshot_from_database(&root, &connection);
     }
-    sync_local_sources_to_agents(&root, &connection)?;
-    scan_legacy_snapshot_under_write_guard()
+    reconcile_agent_skill_delivery(&root, &connection, false, true)
 }
 
 fn set_source_version_pin_blocking(
@@ -1719,9 +1835,9 @@ fn rollback_source_to_latest_backup_blocking(source_id: String) -> Result<Legacy
     }
     let connection = open_index_database(&root)?;
     source_governance::rollback_latest(&root, &connection, &source_id)?;
-    // The repository tree changed atomically; rebuild the index so the library
-    // and generated parent/child routes reflect the restored commit.
-    scan_legacy_snapshot_under_write_guard()
+    // The repository tree changed atomically; rebuild both the index and the
+    // parent-first recipient catalog from the restored commit.
+    reconcile_agent_skill_delivery(&root, &connection, false, false)
 }
 
 fn refresh_agent_detection_blocking() -> Result<LegacySnapshot, String> {
@@ -1749,7 +1865,54 @@ fn sync_local_sources_to_agents(root: &Path, connection: &Connection) -> Result<
     sync_skill_conflict_dispatchers(root, connection)?;
     run_skillhub_script_no_pull(root)?;
     run_agent_link_script(root, connection)?;
-    run_diagnostics_export_script(root)
+    Ok(())
+}
+
+fn reconcile_agent_skill_delivery(
+    root: &Path,
+    audit_connection: &Connection,
+    refresh_diagnostics: bool,
+    startup_fast_path: bool,
+) -> Result<LegacySnapshot, String> {
+    // Source updates can add or remove children. Finish every source/active
+    // catalog write first, then rebuild SQLite from that final filesystem state
+    // before deriving the allowlist. This prevents a fresh fingerprint from
+    // ever being paired with stale dispatchers, active links, or an old
+    // transaction snapshot.
+    let report = plan_or_write_router_hubs(root, true, true)?;
+    let _ = record_router_hub_audit(audit_connection, &report);
+    sync_skill_conflict_dispatchers(root, audit_connection)?;
+    run_skillhub_script_no_pull(root)?;
+
+    finalize_agent_skill_delivery(root, refresh_diagnostics, startup_fast_path)
+}
+
+fn finalize_agent_skill_delivery(
+    root: &Path,
+    refresh_diagnostics: bool,
+    startup_fast_path: bool,
+) -> Result<LegacySnapshot, String> {
+    let _ = scan_legacy_snapshot_under_write_guard()?;
+    let mut connection = open_index_database(root)?;
+    run_agent_link_script(root, &connection)?;
+
+    if refresh_diagnostics {
+        run_diagnostics_export_script(root)?;
+        let diagnostics_json = read_json(&diagnostics_file(root));
+        persist_agent_detection_refresh(root, &mut connection, diagnostics_json.as_ref())?;
+    }
+    let delivery_plan = build_agent_delivery_plan(root, &connection)?;
+    if !agent_delivery_links_are_healthy_for_plan(root, &delivery_plan)? {
+        return Err(
+            "AI 工具 Skill 交付后的完整性核对未通过；未记录完成标记，请点击同步重试。".to_string(),
+        );
+    }
+    write_agent_delivery_fingerprint_for_plan(root, &connection, &delivery_plan)?;
+    if startup_fast_path {
+        read_startup_snapshot_from_database(root, &connection)
+    } else {
+        read_snapshot_from_database(root, &connection)
+    }
 }
 
 fn run_skillhub_script(root: &Path) -> Result<(), String> {
@@ -2041,7 +2204,9 @@ fn select_agent_skill_allowlist_entries(
     Ok(enabled)
 }
 
-fn write_agent_skill_allowlist(root: &Path, connection: &Connection) -> Result<PathBuf, String> {
+fn read_agent_skill_allowlist_rules(
+    connection: &Connection,
+) -> Result<Vec<AgentSkillAllowlistRule>, String> {
     let mut statement = connection
         .prepare(
             "SELECT skills.folder_name,
@@ -2067,8 +2232,19 @@ fn write_agent_skill_allowlist(root: &Path, connection: &Connection) -> Result<P
             })
         })
         .map_err(|error| format!("Cannot read Agent Skill allowlist: {}", error))?;
-    let rules = collect_rows(rows, "Agent Skill allowlist")?;
-    let enabled = select_agent_skill_allowlist_entries(&active_skills_dir(root), &rules)?;
+    collect_rows(rows, "Agent Skill allowlist")
+}
+
+fn expected_agent_skill_allowlist(
+    root: &Path,
+    connection: &Connection,
+) -> Result<Vec<String>, String> {
+    let rules = read_agent_skill_allowlist_rules(connection)?;
+    select_agent_skill_allowlist_entries(&active_skills_dir(root), &rules)
+}
+
+fn write_agent_skill_allowlist(root: &Path, connection: &Connection) -> Result<PathBuf, String> {
+    let enabled = expected_agent_skill_allowlist(root, connection)?;
     let path = private_state_dir(root).join("agent-skill-allowlist.json");
     let body = serde_json::to_string_pretty(&enabled)
         .map_err(|error| format!("Cannot serialize Agent Skill allowlist: {}", error))?;
@@ -2080,6 +2256,667 @@ fn write_agent_skill_allowlist(root: &Path, connection: &Connection) -> Result<P
         )
     })?;
     Ok(path)
+}
+
+fn update_delivery_hash(hasher: &mut Sha256, value: &str) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
+fn update_delivery_hash_bytes(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
+
+#[derive(Clone, Debug)]
+struct AgentDeliveryRecipientState {
+    id: &'static str,
+    path: PathBuf,
+    detected: bool,
+}
+
+#[derive(Clone, Debug)]
+struct AgentDeliveryPlan {
+    allowlist: Vec<String>,
+    recipients: Vec<AgentDeliveryRecipientState>,
+}
+
+fn delivery_home_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_default()
+}
+
+fn expand_delivery_environment_path(value: &str) -> PathBuf {
+    let mut expanded = String::new();
+    let mut remaining = value.trim();
+    while let Some(start) = remaining.find('%') {
+        expanded.push_str(&remaining[..start]);
+        let after_start = &remaining[start + 1..];
+        let Some(end) = after_start.find('%') else {
+            expanded.push_str(&remaining[start..]);
+            remaining = "";
+            break;
+        };
+        let variable = &after_start[..end];
+        match std::env::var(variable) {
+            Ok(replacement) => expanded.push_str(&replacement),
+            Err(_) => {
+                expanded.push('%');
+                expanded.push_str(variable);
+                expanded.push('%');
+            }
+        }
+        remaining = &after_start[end + 1..];
+    }
+    expanded.push_str(remaining);
+    PathBuf::from(expanded)
+}
+
+fn directory_has_any_marker(directory: &Path, markers: &[&str]) -> bool {
+    markers.iter().any(|marker| directory.join(marker).exists())
+}
+
+fn directory_has_name_prefix(directory: &Path, prefixes: &[&str]) -> bool {
+    fs::read_dir(directory).ok().is_some_and(|entries| {
+        entries.flatten().any(|entry| {
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            prefixes
+                .iter()
+                .any(|prefix| name.starts_with(&prefix.to_lowercase()))
+        })
+    })
+}
+
+fn delivery_recipient_states(
+    connection: &Connection,
+) -> Result<Vec<AgentDeliveryRecipientState>, String> {
+    let home = delivery_home_dir();
+    if home.as_os_str().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let claude_root = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| expand_delivery_environment_path(&value))
+        .unwrap_or_else(|| home.join(".claude"));
+    let claude_target = claude_root.join("skills");
+    let claude_detected = command_exists("claude")
+        || home.join(".local").join("bin").join("claude.exe").is_file()
+        || directory_has_any_marker(
+            &claude_root,
+            &[
+                "settings.json",
+                "history.jsonl",
+                "projects",
+                "sessions",
+                "plugins",
+                "local",
+            ],
+        );
+
+    let antigravity_root = home.join(".gemini").join("antigravity");
+    let antigravity_target = antigravity_root.join("skills");
+    let mut antigravity_detected = command_exists("antigravity")
+        || antigravity_root.is_dir()
+        || home.join(".antigravity").is_dir();
+
+    let codex_home = home.join(".codex");
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let program_files = std::env::var_os("ProgramFiles")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let codex_target = home.join(".agents").join("skills");
+    let mut codex_detected = command_exists("codex")
+        || directory_has_any_marker(
+            &codex_home,
+            &[
+                "auth.json",
+                "config.toml",
+                "installation_id",
+                "sessions",
+                "state_5.sqlite",
+            ],
+        )
+        || [
+            local_app_data
+                .join("OpenAI")
+                .join("Codex")
+                .join("bin")
+                .join("codex.exe"),
+            local_app_data
+                .join("Programs")
+                .join("ChatGPT")
+                .join("ChatGPT.exe"),
+            local_app_data
+                .join("OpenAI")
+                .join("ChatGPT")
+                .join("ChatGPT.exe"),
+            local_app_data
+                .join("Programs")
+                .join("Codex")
+                .join("Codex.exe"),
+            local_app_data
+                .join("OpenAI")
+                .join("Codex")
+                .join("Codex.exe"),
+            program_files.join("ChatGPT").join("ChatGPT.exe"),
+            program_files.join("Codex").join("Codex.exe"),
+        ]
+        .iter()
+        .any(|candidate| candidate.is_file())
+        || directory_has_name_prefix(
+            &local_app_data.join("Packages"),
+            &["openai.codex_", "openai.chatgpt_"],
+        );
+    let legacy_codex = codex_home.join("skills");
+
+    let mut statement = connection
+        .prepare("SELECT name, skills_path FROM agents WHERE detected = 1")
+        .map_err(|error| format!("Cannot prepare cached Agent delivery detection: {}", error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| format!("Cannot read cached Agent delivery detection: {}", error))?;
+    for row in rows {
+        let (name, path) = row
+            .map_err(|error| format!("Cannot decode cached Agent delivery detection: {}", error))?;
+        let identity = format!("{} {}", name, path)
+            .replace('/', "\\")
+            .to_lowercase();
+        // `agents.detected` also covers Claude Desktop, which cannot consume
+        // local Claude Code Skills. Do not turn a Desktop-only cached row into
+        // a delivery recipient merely because an old `.claude\skills` folder
+        // exists; the command/native install/config markers above are the
+        // lightweight Claude Code evidence used at startup.
+        if antigravity_target.is_dir() && identity.contains("antigravity") {
+            antigravity_detected = true;
+        }
+        if codex_target.is_dir()
+            && (identity.contains("codex")
+                || identity.contains("chatgpt")
+                || identity.contains("\\.agents\\skills"))
+        {
+            codex_detected = true;
+        }
+    }
+
+    Ok(vec![
+        AgentDeliveryRecipientState {
+            id: "claude",
+            path: claude_target,
+            detected: claude_detected,
+        },
+        AgentDeliveryRecipientState {
+            id: "antigravity",
+            path: antigravity_target,
+            detected: antigravity_detected,
+        },
+        AgentDeliveryRecipientState {
+            id: "codex",
+            path: codex_target,
+            detected: codex_detected,
+        },
+        AgentDeliveryRecipientState {
+            id: "codex-legacy",
+            detected: codex_detected && legacy_codex.is_dir(),
+            path: legacy_codex,
+        },
+    ])
+}
+
+fn build_agent_delivery_plan(
+    root: &Path,
+    connection: &Connection,
+) -> Result<AgentDeliveryPlan, String> {
+    Ok(AgentDeliveryPlan {
+        allowlist: expected_agent_skill_allowlist(root, connection)?,
+        recipients: delivery_recipient_states(connection)?,
+    })
+}
+
+#[cfg(test)]
+fn agent_delivery_fingerprint(root: &Path, connection: &Connection) -> Result<String, String> {
+    let plan = build_agent_delivery_plan(root, connection)?;
+    agent_delivery_fingerprint_for_plan(root, connection, &plan)
+}
+
+fn agent_delivery_fingerprint_for_plan(
+    root: &Path,
+    connection: &Connection,
+    plan: &AgentDeliveryPlan,
+) -> Result<String, String> {
+    let mut hasher = Sha256::new();
+    update_delivery_hash(&mut hasher, env!("CARGO_PKG_VERSION"));
+    update_delivery_hash(&mut hasher, AGENT_DELIVERY_POLICY_VERSION);
+    update_delivery_hash(&mut hasher, &active_skills_dir(root).display().to_string());
+    update_delivery_hash(
+        &mut hasher,
+        &managed_sources_dir(root).display().to_string(),
+    );
+
+    for script in [agent_link_script_file(root), skillhub_script_file(root)] {
+        update_delivery_hash(
+            &mut hasher,
+            script
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default(),
+        );
+        match fs::read(&script) {
+            Ok(bytes) => update_delivery_hash_bytes(&mut hasher, &bytes),
+            Err(_) => update_delivery_hash(&mut hasher, "missing"),
+        }
+    }
+
+    let mut statement = connection
+        .prepare(
+            "SELECT skills.id, COALESCE(skills.source_id, ''), skills.name,
+                    skills.folder_name, skills.relative_path,
+                    CASE
+                      WHEN COALESCE(skill_overrides.enabled, skills.enabled, 1) = 1
+                       AND COALESCE(source_overrides.enabled, sources.enabled, 1) = 1
+                      THEN 1 ELSE 0
+                    END,
+                    COALESCE(skills.is_router_hub, 0)
+             FROM skills
+             LEFT JOIN skill_overrides ON skill_overrides.skill_id = skills.id
+             LEFT JOIN sources ON sources.id = skills.source_id
+             LEFT JOIN source_overrides ON source_overrides.source_id = sources.id
+             WHERE COALESCE(skill_overrides.enabled, skills.enabled, 1) = 1
+               AND COALESCE(source_overrides.enabled, sources.enabled, 1) = 1
+             ORDER BY lower(skills.id), skills.id",
+        )
+        .map_err(|error| format!("Cannot prepare Agent delivery Skill fingerprint: {}", error))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })
+        .map_err(|error| format!("Cannot read Agent delivery Skill fingerprint: {}", error))?;
+    for row in rows {
+        let (id, source_id, name, folder_name, relative_path, enabled, is_router) =
+            row.map_err(|error| {
+                format!("Cannot decode Agent delivery Skill fingerprint: {}", error)
+            })?;
+        for value in [id, source_id, name, folder_name, relative_path] {
+            update_delivery_hash(&mut hasher, &value);
+        }
+        hasher.update([u8::from(enabled != 0), u8::from(is_router != 0)]);
+    }
+
+    let mut statement = connection
+        .prepare(
+            "SELECT sources.id, sources.name, sources.source_type,
+                    COALESCE(sources.local_path, ''),
+                    COALESCE(source_overrides.enabled, sources.enabled, 1)
+             FROM sources
+             LEFT JOIN source_overrides ON source_overrides.source_id = sources.id
+             WHERE COALESCE(source_overrides.enabled, sources.enabled, 1) = 1
+             ORDER BY lower(sources.id), sources.id",
+        )
+        .map_err(|error| {
+            format!(
+                "Cannot prepare Agent delivery source fingerprint: {}",
+                error
+            )
+        })?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .map_err(|error| format!("Cannot read Agent delivery source fingerprint: {}", error))?;
+    for row in rows {
+        let (id, name, source_type, local_path, enabled) = row.map_err(|error| {
+            format!("Cannot decode Agent delivery source fingerprint: {}", error)
+        })?;
+        for value in [id, name, source_type, local_path] {
+            update_delivery_hash(&mut hasher, &value);
+        }
+        hasher.update([u8::from(enabled != 0)]);
+    }
+
+    // Conflict choices no longer alter the parent-scoped catalog, and cached
+    // Agent managed/enabled UI state is an output of delivery rather than an
+    // input. Hashing either would force a redundant PowerShell repair on the
+    // next launch. The effective allowlist and recipient plan below are the
+    // authoritative delivery inputs.
+    for entry in &plan.allowlist {
+        update_delivery_hash(&mut hasher, entry);
+    }
+    for recipient in &plan.recipients {
+        update_delivery_hash(&mut hasher, recipient.id);
+        update_delivery_hash(&mut hasher, &recipient.path.display().to_string());
+        hasher.update([
+            u8::from(recipient.detected),
+            u8::from(recipient.path.is_dir()),
+        ]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn read_agent_delivery_fingerprint(connection: &Connection) -> Result<String, String> {
+    connection
+        .query_row(
+            "SELECT value FROM operator_preferences WHERE key = ?1",
+            params![AGENT_DELIVERY_FINGERPRINT_KEY],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(|value| value.unwrap_or_default())
+        .map_err(|error| format!("Cannot read Agent delivery fingerprint: {}", error))
+}
+
+fn write_agent_delivery_fingerprint_for_plan(
+    root: &Path,
+    connection: &Connection,
+    plan: &AgentDeliveryPlan,
+) -> Result<(), String> {
+    let fingerprint = agent_delivery_fingerprint_for_plan(root, connection, plan)?;
+    connection
+        .execute(
+            "INSERT INTO operator_preferences (key, value, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET
+               value = excluded.value,
+               updated_at = excluded.updated_at",
+            params![
+                AGENT_DELIVERY_FINGERPRINT_KEY,
+                fingerprint,
+                unix_timestamp_string()
+            ],
+        )
+        .map_err(|error| format!("Cannot save Agent delivery fingerprint: {}", error))?;
+    Ok(())
+}
+
+fn normalize_stored_agent_skill_allowlist(entries: Vec<String>) -> Option<Vec<String>> {
+    let mut normalized = Vec::with_capacity(entries.len());
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let trimmed = entry.trim();
+        let path = Path::new(trimmed);
+        let mut components = path.components();
+        let is_single_name = matches!(components.next(), Some(Component::Normal(_)))
+            && components.next().is_none()
+            && path.file_name().and_then(|name| name.to_str()) == Some(trimmed);
+        let key = trimmed.to_lowercase();
+        if trimmed.is_empty() || trimmed != entry || !is_single_name || !seen.insert(key) {
+            return None;
+        }
+        normalized.push(entry);
+    }
+    normalized.sort_by(|left, right| {
+        left.to_lowercase()
+            .cmp(&right.to_lowercase())
+            .then_with(|| left.cmp(right))
+    });
+    Some(normalized)
+}
+
+fn canonical_parent_delivery_name(value: &str) -> bool {
+    value.len() <= 64
+        && !value.is_empty()
+        && value.is_ascii()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+}
+
+fn delivery_manifest_is_valid(skill_dir: &Path, canonical_sources_root: Option<&Path>) -> bool {
+    let Ok(raw) = fs::read_to_string(skill_dir.join("SKILL.md")) else {
+        return false;
+    };
+    let lines = raw.lines().take(256).collect::<Vec<_>>();
+    if lines.len() < 4 || lines[0].trim() != "---" {
+        return false;
+    }
+    let Some(frontmatter_end) = lines
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find_map(|(index, line)| (line.trim() == "---").then_some(index))
+    else {
+        return false;
+    };
+    if frontmatter_end < 2 {
+        return false;
+    }
+    let frontmatter = &lines[1..frontmatter_end];
+    let name = frontmatter
+        .iter()
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.trim()
+                .eq_ignore_ascii_case("name")
+                .then(|| value.trim().trim_matches(&['\'', '"'][..]).to_string())
+        })
+        .unwrap_or_default();
+    let description_index = frontmatter.iter().position(|line| {
+        line.split_once(':')
+            .is_some_and(|(key, _)| key.trim().eq_ignore_ascii_case("description"))
+    });
+    let mut description = description_index
+        .and_then(|index| frontmatter[index].split_once(':').map(|(_, value)| value))
+        .map(|value| value.trim().trim_matches(&['\'', '"'][..]).to_string())
+        .unwrap_or_default();
+    if matches!(description.as_str(), ">" | ">+" | ">-" | "|" | "|+" | "|-") {
+        description = description_index
+            .map(|index| {
+                frontmatter[index + 1..]
+                    .iter()
+                    .take_while(|line| {
+                        line.trim().is_empty()
+                            || line.chars().next().is_some_and(char::is_whitespace)
+                    })
+                    .map(|line| line.trim())
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+    }
+    if name.trim().is_empty() || description.trim().is_empty() {
+        return false;
+    }
+
+    if !raw.contains(ROUTER_HUB_MARKER) {
+        return true;
+    }
+    let folder_name = skill_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if name != folder_name
+        || !canonical_parent_delivery_name(&name)
+        || !canonical_parent_delivery_name(folder_name)
+    {
+        return false;
+    }
+    let Some(canonical_sources_root) = canonical_sources_root else {
+        return false;
+    };
+    let mut child_count = 0usize;
+    for line in raw.lines().filter(|line| {
+        line.trim_start()
+            .strip_prefix('-')
+            .is_some_and(|tail| tail.trim_start().starts_with(CHILD_SKILL_MARKER))
+    }) {
+        let Some(tail) = line.split("来源文件：").nth(1) else {
+            return false;
+        };
+        let Some(start) = tail.find('`').map(|index| index + 1) else {
+            return false;
+        };
+        let Some(end) = tail[start..].find('`').map(|index| index + start) else {
+            return false;
+        };
+        let declared = Path::new(&tail[start..end]);
+        if !declared.is_absolute()
+            || declared
+                .components()
+                .any(|component| matches!(component, Component::ParentDir | Component::CurDir))
+        {
+            return false;
+        }
+        let Ok(canonical_child) = declared.canonicalize() else {
+            return false;
+        };
+        if !canonical_child.starts_with(canonical_sources_root)
+            || !canonical_child.is_file()
+            || fs::File::open(&canonical_child).is_err()
+        {
+            return false;
+        }
+        child_count += 1;
+    }
+    child_count > 0
+}
+
+fn delivery_link_target(link: &Path) -> Option<PathBuf> {
+    let target = fs::read_link(link).ok()?;
+    if target.is_absolute() {
+        Some(target)
+    } else {
+        link.parent().map(|parent| parent.join(target))
+    }
+}
+
+fn delivery_paths_equal(left: &Path, right: &Path) -> bool {
+    fn normalized(value: &Path) -> String {
+        let raw = value.to_string_lossy().replace('/', "\\");
+        let without_device_prefix = raw
+            .strip_prefix("\\\\?\\")
+            .or_else(|| raw.strip_prefix("\\??\\"))
+            .unwrap_or(&raw)
+            .trim_end_matches('\\')
+            .to_string();
+        if cfg!(windows) {
+            without_device_prefix.to_lowercase()
+        } else {
+            without_device_prefix
+        }
+    }
+    normalized(left) == normalized(right)
+}
+
+#[cfg(test)]
+fn agent_delivery_links_are_healthy_for_recipients(
+    root: &Path,
+    connection: &Connection,
+    recipient_roots: &[PathBuf],
+) -> Result<bool, String> {
+    let expected_entries = expected_agent_skill_allowlist(root, connection)?;
+    agent_delivery_links_are_healthy_for_entries_and_recipients(
+        root,
+        &expected_entries,
+        recipient_roots,
+    )
+}
+
+fn agent_delivery_links_are_healthy_for_entries_and_recipients(
+    root: &Path,
+    expected_entries: &[String],
+    recipient_roots: &[PathBuf],
+) -> Result<bool, String> {
+    let allowlist_path = private_state_dir(root).join("agent-skill-allowlist.json");
+    let raw = match fs::read_to_string(&allowlist_path) {
+        Ok(raw) => raw,
+        Err(_) => return Ok(false),
+    };
+    let stored_entries = match serde_json::from_str::<Vec<String>>(&raw)
+        .ok()
+        .and_then(normalize_stored_agent_skill_allowlist)
+    {
+        Some(entries) => entries,
+        None => return Ok(false),
+    };
+    if stored_entries != expected_entries {
+        return Ok(false);
+    }
+
+    let active_root = active_skills_dir(root);
+    let canonical_sources_root = managed_sources_dir(root).canonicalize().ok();
+    let mut active_links = HashMap::new();
+    for entry in expected_entries {
+        let active_entry = active_root.join(entry);
+        if !delivery_manifest_is_valid(&active_entry, canonical_sources_root.as_deref()) {
+            return Ok(false);
+        }
+        active_links.insert(entry.to_lowercase(), active_entry);
+    }
+
+    for skills_root in recipient_roots {
+        if !skills_root.is_dir() {
+            return Ok(false);
+        }
+        for entry in expected_entries {
+            let delivered = skills_root.join(entry);
+            let Some(delivered_target) = delivery_link_target(&delivered) else {
+                return Ok(false);
+            };
+            let active_link = &active_links[&entry.to_lowercase()];
+            if !delivery_paths_equal(&delivered_target, active_link)
+                || !delivered.join("SKILL.md").is_file()
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn agent_delivery_links_are_healthy_for_plan(
+    root: &Path,
+    plan: &AgentDeliveryPlan,
+) -> Result<bool, String> {
+    let recipients = plan
+        .recipients
+        .iter()
+        .filter(|recipient| recipient.detected)
+        .map(|recipient| recipient.path.clone())
+        .collect::<Vec<_>>();
+    agent_delivery_links_are_healthy_for_entries_and_recipients(root, &plan.allowlist, &recipients)
+}
+
+fn agent_delivery_is_current(root: &Path, connection: &Connection) -> Result<bool, String> {
+    let plan = build_agent_delivery_plan(root, connection)?;
+    let expected = agent_delivery_fingerprint_for_plan(root, connection, &plan)?;
+    let stored = read_agent_delivery_fingerprint(connection)?;
+    if !delivery_fingerprint_is_authoritative(&stored, &expected) {
+        return Ok(false);
+    }
+    agent_delivery_links_are_healthy_for_plan(root, &plan)
+}
+
+fn delivery_fingerprint_is_authoritative(stored: &str, expected: &str) -> bool {
+    !stored.is_empty() && stored == expected
 }
 
 fn run_diagnostics_export_script(root: &Path) -> Result<(), String> {
@@ -2278,8 +3115,7 @@ fn set_skill_enabled(folder_name: String, enabled: bool) -> Result<LegacySnapsho
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_skill_enabled_override_in_connection(&connection, &folder_name, enabled)?;
-    sync_local_sources_to_agents(&root, &connection)?;
-    scan_legacy_snapshot_under_write_guard()
+    reconcile_agent_skill_delivery(&root, &connection, false, false)
 }
 
 #[tauri::command]
@@ -2661,18 +3497,18 @@ fn save_source_metadata_blocking(
         || committed.previous.source_type != committed.source.source_type
         || committed.previous.category_id != committed.source.category_id;
     let source = committed.source;
-    Ok(source_mutation_result_after_commit(
+    source_mutation_result_after_commit(
         source,
         delivery_reconciled,
         structural_snapshot_required,
         || {
             if delivery_reconciled {
-                scan_legacy_snapshot_under_write_guard()
+                reconcile_agent_skill_delivery(&root, &connection, false, false)
             } else {
                 load_indexed_snapshot_under_write_guard()
             }
         },
-    ))
+    )
 }
 
 fn source_mutation_result_after_commit<F>(
@@ -2680,22 +3516,37 @@ fn source_mutation_result_after_commit<F>(
     delivery_reconciled: bool,
     snapshot_required: bool,
     load_snapshot: F,
-) -> SourceMutationResult
+) -> Result<SourceMutationResult, String>
 where
     F: FnOnce() -> Result<LegacySnapshot, String>,
 {
     let snapshot = if snapshot_required {
-        load_snapshot()
-            .ok()
-            .filter(|snapshot| snapshot.sources.iter().any(|item| item.id == source.id))
+        match load_snapshot() {
+            Ok(snapshot) if snapshot.sources.iter().any(|item| item.id == source.id) => {
+                Some(snapshot)
+            }
+            Ok(_) if delivery_reconciled => {
+                return Err(
+                    "来源信息已保存，但 AI 工具 Skill 交付后的索引缺少该来源；请点击同步重试。"
+                        .to_string(),
+                );
+            }
+            Err(error) if delivery_reconciled => {
+                return Err(format!(
+                    "来源信息已保存，但 AI 工具 Skill 交付核对失败：{}；请点击同步重试。",
+                    error
+                ));
+            }
+            _ => None,
+        }
     } else {
         None
     };
-    SourceMutationResult {
+    Ok(SourceMutationResult {
         source,
         snapshot,
         delivery_reconciled,
-    }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2871,8 +3722,7 @@ fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
         }),
     )?;
 
-    sync_local_sources_to_agents(&root, &connection)?;
-    scan_legacy_snapshot_under_write_guard()
+    reconcile_agent_skill_delivery(&root, &connection, false, false)
 }
 
 #[tauri::command]
@@ -3321,8 +4171,8 @@ async fn promote_staged_source_import(
                     &unix_timestamp_string(),
                 );
             }
-            match sync_local_sources_to_agents(&root, &connection) {
-                Ok(()) => {
+            match reconcile_agent_skill_delivery(&root, &connection, false, false) {
+                Ok(_) => {
                     promotion.summary = format!(
                         "{} 已刷新共享 Skills、父/子 Skill 路由和 Agent 托管链接。",
                         promotion.summary
@@ -4330,14 +5180,38 @@ fn read_snapshot_from_database(
     root: &Path,
     connection: &Connection,
 ) -> Result<LegacySnapshot, String> {
+    read_snapshot_from_database_with_runtime(root, connection, true)
+}
+
+fn read_startup_snapshot_from_database(
+    root: &Path,
+    connection: &Connection,
+) -> Result<LegacySnapshot, String> {
+    read_snapshot_from_database_with_runtime(root, connection, false)
+}
+
+fn read_snapshot_from_database_with_runtime(
+    root: &Path,
+    connection: &Connection,
+    hydrate_runtime_statuses: bool,
+) -> Result<LegacySnapshot, String> {
     let skills = read_indexed_skills(connection)?;
     let mut sources = read_indexed_sources(connection)?;
-    hydrate_source_urls_from_git(root, &mut sources);
+    if hydrate_runtime_statuses {
+        hydrate_source_urls_from_git(root, &mut sources);
+    }
     let agents = read_indexed_agents(connection)?;
-    let agent_skill_statuses = derive_agent_skill_statuses(root, &skills, &agents);
+    let agent_skill_statuses = if hydrate_runtime_statuses {
+        derive_agent_skill_statuses(root, &skills, &agents)
+    } else {
+        Vec::new()
+    };
     let agent_adapters = read_indexed_agent_adapters(connection)?;
-    let agent_doctors =
-        derive_agent_doctors(read_json(&diagnostics_file(root)).as_ref(), &agent_adapters);
+    let agent_doctors = if hydrate_runtime_statuses {
+        derive_agent_doctors(read_json(&diagnostics_file(root)).as_ref(), &agent_adapters)
+    } else {
+        Vec::new()
+    };
     let adapter_safety_checks = read_indexed_adapter_safety_checks(connection)?;
     let adapter_capabilities = read_indexed_adapter_capabilities(connection)?;
     let workspaces = read_indexed_workspaces(connection)?;
@@ -4351,7 +5225,15 @@ fn read_snapshot_from_database(
     let desktop_qa_checks = read_indexed_desktop_qa_checks(connection)?;
     let usage_stats = read_indexed_usage_stats(connection)?;
     let source_popularity = read_indexed_source_popularity(connection, &sources, &usage_stats)?;
-    let source_governance = source_governance::read_governance_cards(root, connection, &sources)?;
+    let source_governance = if hydrate_runtime_statuses {
+        // Live revision probing launches one Git process per source and made
+        // every unrelated metadata save/navigation wait behind 50+ probes.
+        // Explicit governance refresh commands update these cached rows; normal
+        // snapshot reads consume them without spawning Git.
+        source_governance::read_cached_governance_cards(root, connection, &sources)?
+    } else {
+        Vec::new()
+    };
     let source_quality_signals = source_governance::read_quality_signals(connection, &sources)?;
     let last_sync_summary = read_last_sync_summary(root);
     let skill_conflict_choices = read_skill_conflict_choice_state(connection)?;
@@ -4360,7 +5242,11 @@ fn read_snapshot_from_database(
     let tags = read_indexed_tags(connection)?;
     let skill_folders = read_indexed_skill_folders(connection)?;
     let preset_distributions = read_indexed_preset_distributions(connection)?;
-    let operation_runners = read_indexed_operation_runners(connection, root)?;
+    let operation_runners = if hydrate_runtime_statuses {
+        read_indexed_operation_runners(connection, root)?
+    } else {
+        Vec::new()
+    };
     let audit_events = read_indexed_audit_events(connection)?;
     let diagnostics = read_indexed_diagnostics(connection);
     let index = read_index_report(
@@ -4380,20 +5266,32 @@ fn read_snapshot_from_database(
     let skills_dir = active_skills_dir(root);
     let sources_dir = active_sources_dir(root);
     let diagnostics_file = diagnostics_file(root);
-    let release_reports = derive_release_reports(root);
-    let import_previews = derive_import_previews(&sources_dir, &sources, &release_reports);
-    let write_gates = derive_write_gates(
-        &diagnostics,
-        &release_reports,
-        &import_previews,
-        &backup_dry_run,
-        &restore_dry_run,
-        &rollback_plan,
-        &desktop_qa_checks,
-        &agent_adapters,
-        &operation_runners,
-        &operator_consent,
-    );
+    let release_reports = if hydrate_runtime_statuses {
+        derive_release_reports(root)
+    } else {
+        Vec::new()
+    };
+    let import_previews = if hydrate_runtime_statuses {
+        derive_import_previews(&sources_dir, &sources, &release_reports)
+    } else {
+        Vec::new()
+    };
+    let write_gates = if hydrate_runtime_statuses {
+        derive_write_gates(
+            &diagnostics,
+            &release_reports,
+            &import_previews,
+            &backup_dry_run,
+            &restore_dry_run,
+            &rollback_plan,
+            &desktop_qa_checks,
+            &agent_adapters,
+            &operation_runners,
+            &operator_consent,
+        )
+    } else {
+        Vec::new()
+    };
 
     Ok(LegacySnapshot {
         root: root.display().to_string(),
@@ -6704,12 +7602,25 @@ fn persist_agent_detection_refresh(
     connection: &mut Connection,
     diagnostics_json: Option<&Value>,
 ) -> Result<(), String> {
+    persist_agent_detection_refresh_with_runtime(root, connection, diagnostics_json, true)
+}
+
+fn persist_agent_detection_refresh_with_runtime(
+    root: &Path,
+    connection: &mut Connection,
+    diagnostics_json: Option<&Value>,
+    hydrate_runtime_statuses: bool,
+) -> Result<(), String> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| format!("Cannot start agent detection transaction: {}", error))?;
     let enabled_state = load_enabled_state(&transaction);
     let preset_workspace_policies = read_preset_workspace_policies(&transaction)?;
-    let mut snapshot = read_snapshot_from_database(root, &transaction)?;
+    let mut snapshot = if hydrate_runtime_statuses {
+        read_snapshot_from_database(root, &transaction)?
+    } else {
+        read_startup_snapshot_from_database(root, &transaction)?
+    };
     snapshot.agents = parse_agents(diagnostics_json);
     snapshot.agent_adapters = derive_agent_adapters(&snapshot.agents);
     snapshot.adapter_safety_checks = derive_adapter_safety_checks(&snapshot.agent_adapters);
@@ -7028,6 +7939,7 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
                     id: row.get(0)?,
                     source_id: row.get(6)?,
                     name: row.get(1)?,
+                    invocation_name: row.get(2)?,
                     folder_name: row.get(2)?,
                     category: row.get(3)?,
                     description: row.get(4)?,
@@ -11418,11 +12330,29 @@ fn normalize_directory_only_agent_detection(agent: &mut AgentCard) {
 
 fn command_exists(command: &str) -> bool {
     let probe = if cfg!(windows) { "where.exe" } else { "which" };
-    Command::new(probe)
+    let mut probe_command = Command::new(probe);
+    probe_command
         .arg(command)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    configure_background_command(&mut probe_command);
+    let Ok(mut child) = probe_command.spawn() else {
+        return false;
+    };
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if started.elapsed() < Duration::from_millis(750) => {
+                thread::sleep(Duration::from_millis(15));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 fn read_indexed_agent_adapters(connection: &Connection) -> Result<Vec<AgentAdapterCard>, String> {
@@ -14854,6 +15784,7 @@ fn scan_skills(
             id: stable_id("skill", &folder_name),
             source_id: String::new(),
             name,
+            invocation_name: folder_name.clone(),
             folder_name: folder_name.clone(),
             category,
             description,
@@ -14955,6 +15886,7 @@ fn scan_source_tree_skills(
                 id: stable_id("skill", &folder_name),
                 source_id: source.id.clone(),
                 name,
+                invocation_name: folder_name.clone(),
                 folder_name,
                 category,
                 description,
@@ -16420,9 +17352,7 @@ fn set_skill_conflict_choice(
         }),
     )?;
 
-    sync_local_sources_to_agents(&root, &connection)?;
-
-    scan_legacy_snapshot_under_write_guard()
+    reconcile_agent_skill_delivery(&root, &connection, false, false)
 }
 
 fn normalize_source_type(value: &str) -> String {
@@ -16464,6 +17394,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             load_indexed_snapshot,
+            get_startup_load_path,
+            hydrate_runtime_snapshot,
             scan_legacy_snapshot,
             reanalyze_library_metadata,
             run_skillhub_sync,
@@ -16620,6 +17552,74 @@ mod tests {
     }
 
     #[test]
+    fn startup_load_path_labels_distinguish_cache_and_fallback() {
+        assert_eq!(
+            startup_load_path_label(STARTUP_LOAD_PATH_SQLITE_CACHE),
+            "sqlite-cache"
+        );
+        assert_eq!(
+            startup_load_path_label(STARTUP_LOAD_PATH_FALLBACK_SCAN),
+            "fallback-scan"
+        );
+        assert_eq!(
+            startup_load_path_label(
+                STARTUP_LOAD_PATH_SQLITE_CACHE | STARTUP_LOAD_PATH_FALLBACK_SCAN
+            ),
+            "fallback-scan"
+        );
+        assert_eq!(
+            startup_load_path_label(STARTUP_LOAD_PATH_UNKNOWN),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn startup_indexed_snapshot_keeps_core_data_and_defers_live_checks() {
+        scan_legacy_snapshot_under_write_guard().expect("legacy snapshot should seed sqlite");
+        let full = load_indexed_snapshot_blocking().expect("full indexed snapshot should load");
+        let startup =
+            load_startup_indexed_snapshot_blocking().expect("startup indexed snapshot should load");
+
+        assert_eq!(startup.mode, "sqlite-index");
+        assert_eq!(startup.skills.len(), full.skills.len());
+        assert_eq!(startup.sources.len(), full.sources.len());
+        assert_eq!(startup.skill_folders.len(), full.skill_folders.len());
+        assert_eq!(startup.tags.len(), full.tags.len());
+        assert_eq!(
+            startup.source_popularity.len(),
+            full.source_popularity.len()
+        );
+        assert_eq!(startup.index.skills_indexed, startup.skills.len());
+
+        assert!(startup.agent_skill_statuses.is_empty());
+        assert!(startup.agent_doctors.is_empty());
+        assert!(startup.source_governance.is_empty());
+        assert!(startup.operation_runners.is_empty());
+        assert!(startup.release_reports.is_empty());
+        assert!(startup.import_previews.is_empty());
+        assert!(startup.write_gates.is_empty());
+
+        let hydration =
+            hydrate_runtime_snapshot_blocking().expect("deferred runtime cards should hydrate");
+        assert_eq!(
+            hydration.agent_skill_statuses.len(),
+            full.agent_skill_statuses.len()
+        );
+        assert_eq!(hydration.agent_doctors.len(), full.agent_doctors.len());
+        assert_eq!(
+            hydration.source_governance.len(),
+            full.source_governance.len()
+        );
+        assert_eq!(
+            hydration.operation_runners.len(),
+            full.operation_runners.len()
+        );
+        assert_eq!(hydration.release_reports.len(), full.release_reports.len());
+        assert_eq!(hydration.import_previews.len(), full.import_previews.len());
+        assert_eq!(hydration.write_gates.len(), full.write_gates.len());
+    }
+
+    #[test]
     fn stable_id_handles_non_ascii_values() {
         let first = stable_id("preset", "论文科研");
         let second = stable_id("preset", "界面设计");
@@ -16709,6 +17709,7 @@ mod tests {
             id: stable_id("skill", name),
             source_id: String::new(),
             name: name.to_string(),
+            invocation_name: name.to_string(),
             folder_name: name.to_string(),
             category: "test".to_string(),
             description: "test skill".to_string(),
@@ -17139,6 +18140,247 @@ mod tests {
             status.agent_id == "antigravity" && status.status == "agent-missing"
         }));
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn seed_agent_delivery_fixture(root: &Path) -> Connection {
+        write_runtime_markers(root);
+        let source_dir = active_sources_dir(root).join("paper-pack");
+        let active_entry = active_skills_dir(root).join("paper-helper");
+        fs::create_dir_all(&source_dir).expect("source fixture should create");
+        fs::create_dir_all(&active_entry).expect("active entry fixture should create");
+        fs::write(
+            active_entry.join("SKILL.md"),
+            "---\nname: paper-helper\ndescription: Review a paper.\n---\n",
+        )
+        .expect("active manifest should write");
+
+        let connection = open_index_database(root).expect("delivery database should open");
+        let timestamp = unix_timestamp_string();
+        connection
+            .execute(
+                "INSERT INTO sources (
+                    id, name, source_type, url, local_path, install_mode,
+                    category_id, note, enabled, created_at, updated_at
+                ) VALUES ('source-paper-pack', 'paper-pack', 'skill', '', ?1,
+                    'scan', 'test', '', 1, ?2, ?2)",
+                params![source_dir.display().to_string(), &timestamp],
+            )
+            .expect("source fixture should insert");
+        connection
+            .execute(
+                "INSERT INTO skills (
+                    id, source_id, name, folder_name, description, category_id,
+                    health_status, health_summary, enabled, relative_path,
+                    created_at, updated_at, is_router_hub
+                ) VALUES ('skill-paper-helper', 'source-paper-pack', 'paper-helper',
+                    'paper-helper', 'Review a paper.', 'test', 'ok', '', 1,
+                    'paper-pack/paper-helper', ?1, ?1, 0)",
+                params![&timestamp],
+            )
+            .expect("Skill fixture should insert");
+        connection
+    }
+
+    #[test]
+    fn delivery_fingerprint_requires_a_nonempty_exact_marker() {
+        assert!(!delivery_fingerprint_is_authoritative("", "expected"));
+        assert!(!delivery_fingerprint_is_authoritative("stale", "expected"));
+        assert!(delivery_fingerprint_is_authoritative(
+            "expected", "expected"
+        ));
+    }
+
+    #[test]
+    fn agent_delivery_fingerprint_ignores_ui_metadata_but_tracks_effective_changes() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-delivery-fingerprint-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = seed_agent_delivery_fixture(&root);
+        let baseline =
+            agent_delivery_fingerprint(&root, &connection).expect("baseline should hash");
+        let timestamp = unix_timestamp_string();
+        connection
+            .execute(
+                "INSERT INTO skill_overrides (
+                    skill_id, display_name, category_id, description, note,
+                    enabled, rating, updated_at
+                ) VALUES ('skill-paper-helper', 'Paper Helper Plus', 'writing',
+                    'Display-only description', 'display-only note', NULL, 5, ?1)",
+                params![&timestamp],
+            )
+            .expect("Skill UI metadata should insert");
+        connection
+            .execute(
+                "INSERT INTO source_overrides (
+                    source_id, display_name, source_type, category_id, note,
+                    enabled, rating, updated_at
+                ) VALUES ('source-paper-pack', 'Paper Pack Plus', '', 'writing',
+                    'display-only source note', NULL, 4, ?1)",
+                params![&timestamp],
+            )
+            .expect("source UI metadata should insert");
+        let metadata_only =
+            agent_delivery_fingerprint(&root, &connection).expect("metadata should hash");
+        assert_eq!(baseline, metadata_only);
+
+        connection
+            .execute(
+                "INSERT INTO skill_conflict_choices (
+                    conflict_key, default_skill_id, status, updated_at
+                ) VALUES ('paper-helper', 'skill-paper-helper', 'default-set', ?1)",
+                params![&timestamp],
+            )
+            .expect("conflict choice should insert");
+        let conflict_ignored =
+            agent_delivery_fingerprint(&root, &connection).expect("conflict should hash");
+        assert_eq!(metadata_only, conflict_ignored);
+        connection
+            .execute("DELETE FROM skill_conflict_choices", [])
+            .expect("conflict choice should delete");
+        connection
+            .execute(
+                "UPDATE skill_overrides SET enabled = 0 WHERE skill_id = 'skill-paper-helper'",
+                [],
+            )
+            .expect("effective state should update");
+        let disabled =
+            agent_delivery_fingerprint(&root, &connection).expect("disabled state should hash");
+        assert_ne!(metadata_only, disabled);
+
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delivery_health_recomputes_allowlist_and_validates_manifests() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-delivery-health-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = seed_agent_delivery_fixture(&root);
+        let allowlist =
+            write_agent_skill_allowlist(&root, &connection).expect("allowlist should write");
+        assert!(
+            agent_delivery_links_are_healthy_for_recipients(&root, &connection, &[])
+                .expect("health should evaluate")
+        );
+
+        fs::write(&allowlist, "[]\n").expect("truncated allowlist should write");
+        assert!(
+            !agent_delivery_links_are_healthy_for_recipients(&root, &connection, &[])
+                .expect("truncated health should evaluate")
+        );
+
+        write_agent_skill_allowlist(&root, &connection).expect("allowlist should restore");
+        fs::write(
+            active_skills_dir(&root)
+                .join("paper-helper")
+                .join("SKILL.md"),
+            "---\nname: paper-helper\ndescription:\n---\n",
+        )
+        .expect("invalid manifest should write");
+        assert!(
+            !agent_delivery_links_are_healthy_for_recipients(&root, &connection, &[])
+                .expect("manifest health should evaluate")
+        );
+
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn delivery_parent_health_requires_safe_readable_child_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-delivery-parent-health-test-{}",
+            unix_timestamp_string()
+        ));
+        let source_root = active_sources_dir(&root);
+        let child = source_root
+            .join("paper-pack")
+            .join("paper-review")
+            .join("SKILL.md");
+        fs::create_dir_all(child.parent().expect("child parent should exist"))
+            .expect("child folder should create");
+        fs::write(
+            &child,
+            "---\nname: paper-review\ndescription: Review a paper.\n---\n",
+        )
+        .expect("child manifest should write");
+        let parent = active_skills_dir(&root).join("paper-pack");
+        fs::create_dir_all(&parent).expect("parent folder should create");
+        fs::write(
+            parent.join("SKILL.md"),
+            format!(
+                "---\nname: paper-pack\ndescription: \"[ROUTER-HUB] Paper tools.\"\n---\n\
+                 This explanatory [CHILD-SKILL] marker is not a child declaration.\n\
+                 - [CHILD-SKILL] `$paper-review` — Review 来源文件：`{}`\n",
+                child.display()
+            ),
+        )
+        .expect("parent manifest should write");
+        let canonical_sources = source_root
+            .canonicalize()
+            .expect("sources should canonicalize");
+        assert!(delivery_manifest_is_valid(
+            &parent,
+            Some(&canonical_sources)
+        ));
+
+        fs::remove_file(&child).expect("child fixture should remove");
+        assert!(!delivery_manifest_is_valid(
+            &parent,
+            Some(&canonical_sources)
+        ));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn delivery_health_rejects_a_recipient_link_with_the_wrong_target() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-delivery-link-health-test-{}",
+            unix_timestamp_string()
+        ));
+        let connection = seed_agent_delivery_fixture(&root);
+        write_agent_skill_allowlist(&root, &connection).expect("allowlist should write");
+        let recipient_root = root.join("recipient-skills");
+        fs::create_dir_all(&recipient_root).expect("recipient root should create");
+        let delivered = recipient_root.join("paper-helper");
+        let active = active_skills_dir(&root).join("paper-helper");
+        if !make_directory_junction(&active, &delivered) {
+            drop(connection);
+            let _ = fs::remove_dir_all(root);
+            return;
+        }
+        assert!(agent_delivery_links_are_healthy_for_recipients(
+            &root,
+            &connection,
+            std::slice::from_ref(&recipient_root)
+        )
+        .expect("linked health should evaluate"));
+
+        fs::remove_dir(&delivered).expect("recipient junction should remove");
+        let wrong = root.join("wrong-target");
+        fs::create_dir_all(&wrong).expect("wrong target should create");
+        fs::write(
+            wrong.join("SKILL.md"),
+            "---\nname: paper-helper\ndescription: Wrong target.\n---\n",
+        )
+        .expect("wrong manifest should write");
+        if make_directory_junction(&wrong, &delivered) {
+            assert!(!agent_delivery_links_are_healthy_for_recipients(
+                &root,
+                &connection,
+                std::slice::from_ref(&recipient_root)
+            )
+            .expect("wrong target health should evaluate"));
+            fs::remove_dir(&delivered).expect("wrong recipient junction should remove");
+        }
+
+        drop(connection);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -17809,6 +19051,7 @@ mod tests {
             id: stable_id("skill", "VibeSec-Skill"),
             source_id: String::new(),
             name: "VibeSec-Skill".to_string(),
+            invocation_name: "VibeSec-Skill".to_string(),
             folder_name: "VibeSec-Skill".to_string(),
             category: "security".to_string(),
             description: "Secure coding guidance.".to_string(),
@@ -17846,6 +19089,7 @@ mod tests {
             id: stable_id("skill", "nature-skills"),
             source_id: String::new(),
             name: "nature-skills".to_string(),
+            invocation_name: "nature-skills".to_string(),
             folder_name: "nature-skills".to_string(),
             category: "academic-writing".to_string(),
             description: "[ROUTER-HUB] Nature skill collection".to_string(),
@@ -18918,6 +20162,7 @@ mod tests {
             .expect("skill should exist");
 
         assert_eq!(skill.name, "Paper Workflow Plus");
+        assert_eq!(skill.invocation_name, "paper-workflow");
         assert_eq!(skill.category, "论文科研");
         assert_eq!(skill.description, "Updated description");
         assert_eq!(skill.note, "常用入口");
@@ -19063,21 +20308,22 @@ mod tests {
     }
 
     #[test]
-    fn committed_source_snapshot_reload_failure_returns_compact_success() {
+    fn committed_source_delivery_failure_is_reported_after_save() {
         let source = test_source_card(
             "source-committed",
             "committed-source",
             Path::new("D:/committed-source"),
             "https://github.com/example/committed-source.git",
         );
-        let result = source_mutation_result_after_commit(source, true, true, || {
+        let error = match source_mutation_result_after_commit(source, true, true, || {
             Err("injected snapshot reload failure".to_string())
-        });
+        }) {
+            Ok(_) => panic!("delivery failure must not be reported as reconciled"),
+            Err(error) => error,
+        };
 
-        assert_eq!(result.source.id, "source-committed");
-        assert_eq!(result.source.name, "committed-source");
-        assert!(result.delivery_reconciled);
-        assert!(result.snapshot.is_none());
+        assert!(error.contains("来源信息已保存"));
+        assert!(error.contains("injected snapshot reload failure"));
     }
 
     #[test]
@@ -19091,7 +20337,8 @@ mod tests {
         );
         let expected = test_snapshot(&root, vec![source.clone()], Vec::new(), Vec::new());
 
-        let result = source_mutation_result_after_commit(source, false, true, || Ok(expected));
+        let result = source_mutation_result_after_commit(source, false, true, || Ok(expected))
+            .expect("structural snapshot should load");
 
         assert!(!result.delivery_reconciled);
         assert_eq!(
@@ -19115,7 +20362,8 @@ mod tests {
 
         let result = source_mutation_result_after_commit(source, false, false, || {
             panic!("note-only edit must not reload the full snapshot")
-        });
+        })
+        .expect("note-only save should remain compact");
 
         assert!(!result.delivery_reconciled);
         assert!(result.snapshot.is_none());

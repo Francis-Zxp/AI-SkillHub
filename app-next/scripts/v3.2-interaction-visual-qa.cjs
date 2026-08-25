@@ -127,17 +127,52 @@ async function auditFolderControlsAndCopy(page) {
   const source = page.locator(".source-group").filter({ hasText: "Nature-Paper-Skills" }).first();
   await source.waitFor();
   const toggle = source.locator(".source-group-toggle");
-  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  const parentCopyButton = source.locator(".source-parent-copy");
+  await parentCopyButton.waitFor();
+  if (await toggle.getAttribute("aria-expanded") === "true") {
+    await toggle.click();
+    await page.waitForFunction(element => element.getAttribute("aria-expanded") === "false", await toggle.elementHandle());
+  }
+  const collapsedBeforeParentCopy = await toggle.getAttribute("aria-expanded");
+  assert.equal(collapsedBeforeParentCopy, "false", "parent copy was not tested from the collapsed source state");
+  const parentCopyTitle = await parentCopyButton.getAttribute("title");
+  const exactParentName = "nature-paper-skills";
+  assert.equal(parentCopyTitle.split(/[：:]/).pop().trim(), exactParentName, "parent copy title did not expose the host invocation name");
+  await page.evaluate(() => { window.__v32QaClipboardText = ""; });
+  await parentCopyButton.click();
+  await page.waitForFunction(expected => window.__v32QaClipboardText === expected, exactParentName);
+  const copiedParentName = await page.evaluate(() => window.__v32QaClipboardText);
+  assert.equal(copiedParentName, exactParentName, "parent copy button changed the exact router Skill name");
+  assert.equal(await toggle.getAttribute("aria-expanded"), "false", "copying the parent router expanded the source tree");
 
-  const grip = source.locator(".source-folder-drag-handle");
-  const folderSelect = source.locator(".source-folder-select select");
+  await toggle.click();
+  await page.waitForFunction(element => element.getAttribute("aria-expanded") === "true", await toggle.elementHandle());
+  const child = source.locator(".skill-row:not(.is-parent)").first();
+  const childName = (await child.locator(".skill-row-main > header > strong").textContent()).trim();
+  const childCopyButton = child.locator(".skill-name-copy");
+  await childCopyButton.waitFor();
+  await page.evaluate(() => { window.__v32QaClipboardText = ""; });
+  await childCopyButton.click();
+  await page.waitForFunction(expected => window.__v32QaClipboardText === expected, childName);
+  const copiedChildName = await page.evaluate(() => window.__v32QaClipboardText);
+  assert.equal(copiedChildName, childName, "child copy button changed the exact child Skill name");
+
+  await page.locator(".skill-folder-shelf").scrollIntoViewIfNeeded();
+  const dragSource = page.locator(".source-group").first();
+  const dragToggle = dragSource.locator(".source-group-toggle");
+  const grip = dragSource.locator(".source-folder-drag-handle");
+  const folderSelect = dragSource.locator(".source-folder-select select");
   await grip.waitFor();
   await folderSelect.waitFor();
-  const structure = await source.evaluate(sourceNode => {
+  const structure = await dragSource.evaluate(sourceNode => {
     const handle = sourceNode.querySelector(".source-folder-drag-handle");
     const select = sourceNode.querySelector(".source-folder-select select");
-    window.__v32QaFolderEvents = { dragStarts: 0, selectClicks: 0, selectChanges: 0 };
-    handle.addEventListener("dragstart", () => { window.__v32QaFolderEvents.dragStarts += 1; });
+    window.__v32QaFolderEvents = { dragStarts: 0, dragTypes: [], selectClicks: 0, selectChanges: 0 };
+    document.addEventListener("dragstart", event => {
+      if (!handle.contains(event.target)) return;
+      window.__v32QaFolderEvents.dragStarts += 1;
+      window.__v32QaFolderEvents.dragTypes = [...event.dataTransfer.types];
+    }, { once: true });
     select.addEventListener("click", () => { window.__v32QaFolderEvents.selectClicks += 1; });
     select.addEventListener("change", () => { window.__v32QaFolderEvents.selectChanges += 1; });
     return {
@@ -153,29 +188,90 @@ async function auditFolderControlsAndCopy(page) {
   assert.equal(structure.gripContainsSelect, false, "folder select is nested inside the drag grip");
   assert.equal(structure.selectTag, "SELECT", "folder selection is not a native independent select");
 
-  const expandedBeforeGripClick = await toggle.getAttribute("aria-expanded");
+  const expandedBeforeGripClick = await dragToggle.getAttribute("aria-expanded");
   const selectedBeforeGripClick = await folderSelect.inputValue();
   await grip.click();
   const afterGripClick = await page.evaluate(() => ({
     ...window.__v32QaFolderEvents,
     activeElementId: document.activeElement?.id || ""
   }));
-  assert.equal(await toggle.getAttribute("aria-expanded"), expandedBeforeGripClick, "clicking the drag grip toggled the source tree");
+  assert.equal(await dragToggle.getAttribute("aria-expanded"), expandedBeforeGripClick, "clicking the drag grip toggled the source tree");
   assert.equal(await folderSelect.inputValue(), selectedBeforeGripClick, "clicking the drag grip changed the folder selection");
   assert.equal(afterGripClick.selectClicks, 0, "clicking the drag grip opened/clicked the folder select");
   assert.notEqual(afterGripClick.activeElementId, structure.selectId, "clicking the drag grip focused the folder select");
 
-  await grip.evaluate(handle => {
-    const dataTransfer = new DataTransfer();
-    handle.dispatchEvent(new DragEvent("dragstart", {
-      bubbles: true,
-      cancelable: true,
-      dataTransfer
-    }));
+  const folderOptions = await folderSelect.locator("option").evaluateAll(options =>
+    options.map(option => ({ label: option.textContent.trim(), value: option.value }))
+  );
+  const targetOption = folderOptions.find(option => option.value && option.value !== selectedBeforeGripClick);
+  assert.ok(targetOption, "preview fixture has no alternate folder option");
+  const dropTarget = page.locator(".skill-folder-target").filter({ hasText: targetOption.label }).first();
+  await dropTarget.evaluate(target => {
+    window.__v32QaFolderDropEvents = { dragEnter: 0, dragEnterTypes: [], dragOver: 0, dragOverTypes: [], drop: 0 };
+    target.addEventListener("dragenter", event => {
+      window.__v32QaFolderDropEvents.dragEnter += 1;
+      window.__v32QaFolderDropEvents.dragEnterTypes = [...event.dataTransfer.types];
+    });
+    target.addEventListener("dragover", event => {
+      window.__v32QaFolderDropEvents.dragOver += 1;
+      window.__v32QaFolderDropEvents.dragOverTypes = [...event.dataTransfer.types];
+    });
+    target.addEventListener("drop", () => { window.__v32QaFolderDropEvents.drop += 1; });
   });
+  await page.evaluate(() => window.scrollBy({ top: -160, behavior: "instant" }));
+  await page.waitForTimeout(50);
+  const gripBox = await grip.boundingBox();
+  const targetBox = await dropTarget.boundingBox();
+  assert.ok(gripBox && targetBox, "drag grip or folder target has no visible box");
+  const targetHitTest = await dropTarget.evaluate(target => {
+    const rect = target.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width * 0.2, rect.top + rect.height / 2);
+    return Boolean(hit && (hit === target || target.contains(hit)));
+  });
+  assert.equal(targetHitTest, true, "sticky page chrome covered the folder drag target");
+  await page.mouse.move(gripBox.x + gripBox.width / 2, gripBox.y + gripBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(gripBox.x + gripBox.width / 2 + 12, gripBox.y + gripBox.height / 2 + 4, { steps: 4 });
+  await page.mouse.move(targetBox.x + Math.min(32, targetBox.width * 0.2), targetBox.y + targetBox.height / 2, { steps: 18 });
+  await page.waitForTimeout(80);
+  await page.mouse.up();
   const afterDrag = await page.evaluate(() => ({ ...window.__v32QaFolderEvents }));
-  assert.equal(afterDrag.dragStarts, 1, "dragstart did not originate from the dedicated grip");
-  assert.equal(afterDrag.selectClicks, 0, "dragstart opened/clicked the folder select");
+  const realDrag = await page.evaluate(() => ({ ...window.__v32QaFolderDropEvents }));
+  assert.equal(afterDrag.dragStarts, 1, "real dragstart did not originate from the dedicated grip");
+  assert.equal(afterDrag.selectClicks, 0, "real dragstart opened/clicked the folder select");
+  assert.ok(realDrag.dragEnter >= 1, `real pointer drag never entered a folder target: ${JSON.stringify({ afterDrag, realDrag, gripBox, targetBox, targetOption })}`);
+  assert.ok(realDrag.dragOver >= 1, `real pointer drag was rejected by the folder target: ${JSON.stringify({ afterDrag, realDrag, gripBox, targetBox, targetOption })}`);
+  assert.ok(realDrag.dragEnterTypes.includes("application/x-ai-skillhub-source-id"), "folder dragenter did not carry the internal source MIME type");
+  assert.ok(realDrag.dragOverTypes.includes("application/x-ai-skillhub-source-id"), "folder dragover did not carry the internal source MIME type");
+  assert.equal(realDrag.drop, 1, "real pointer drag did not produce one folder drop");
+
+  const externalDrop = await dropTarget.evaluate(target => {
+    const dispatch = transfer => {
+      const enter = new DragEvent("dragenter", { bubbles: true, cancelable: true, dataTransfer: transfer });
+      const over = new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: transfer });
+      const drop = new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer });
+      target.dispatchEvent(enter);
+      target.dispatchEvent(over);
+      target.dispatchEvent(drop);
+      return {
+        enterPrevented: enter.defaultPrevented,
+        overPrevented: over.defaultPrevented,
+        dropPrevented: drop.defaultPrevented
+      };
+    };
+    const textTransfer = new DataTransfer();
+    textTransfer.setData("text/plain", "external-text-must-not-be-treated-as-a-skill-id");
+    const fileTransfer = new DataTransfer();
+    fileTransfer.items.add(new File(["not an import"], "not-an-import.zip", { type: "application/zip" }));
+    return { text: dispatch(textTransfer), file: dispatch(fileTransfer) };
+  });
+  await page.waitForTimeout(50);
+  assert.equal(await dropTarget.evaluate(target => target.classList.contains("drop-ready")), false, "external text lit an internal folder drop target");
+  for (const [kind, result] of Object.entries(externalDrop)) {
+    assert.equal(result.enterPrevented, false, `folder target accepted external ${kind} as an internal drag`);
+    assert.equal(result.overPrevented, true, `window did not block external ${kind} from browser navigation`);
+    assert.equal(result.dropPrevented, true, `window did not block an external ${kind} drop`);
+  }
 
   const optionValues = await folderSelect.locator("option").evaluateAll(options => options.map(option => option.value));
   const targetFolder = optionValues.find(value => value && value !== selectedBeforeGripClick);
@@ -185,25 +281,18 @@ async function auditFolderControlsAndCopy(page) {
   assert.ok(afterSelect.selectChanges >= 1, "independent folder select did not emit a change");
   assert.equal(afterSelect.dragStarts, 1, "selecting a folder started another drag operation");
 
-  const skillRow = source.locator(".skill-row").filter({ hasText: "paper-workflow" }).first();
-  const copyButton = skillRow.locator(".skill-name-copy");
-  await copyButton.waitFor();
-  const exactSkillName = (await skillRow.locator(".skill-row-main > header > strong").textContent()).trim();
-  await page.evaluate(() => { window.__v32QaClipboardText = ""; });
-  await copyButton.click();
-  await page.waitForFunction(expected => window.__v32QaClipboardText === expected, exactSkillName);
-  const copiedSkillName = await page.evaluate(() => window.__v32QaClipboardText);
-  assert.equal(copiedSkillName, exactSkillName, "child Skill copy button changed the exact Skill name");
-  assert.equal(await toggle.getAttribute("aria-expanded"), "true", "copying a child Skill collapsed the source tree");
-
-  await takeScreenshot(page, "folder-controls-and-child-copy-nocturne");
+  await takeScreenshot(page, "folder-controls-and-parent-copy-nocturne");
   return {
     structure,
     afterGripClick,
     afterDrag,
+    realDrag,
+    externalDrop,
     afterSelect,
-    exactSkillName,
-    copiedSkillName
+    exactParentName,
+    copiedParentName,
+    childName,
+    copiedChildName
   };
 }
 

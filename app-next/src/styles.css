@@ -3040,6 +3040,11 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   cursor: grabbing;
   transform: scale(.96);
 }
+.source-folder-drag-handle.disabled {
+  opacity: .45;
+  cursor: wait;
+  transform: none;
+}
 
 .source-folder-select { max-width: 132px; }
 .inherited-folder-chip {
@@ -4064,7 +4069,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   border: 1px solid var(--border-strong);
   border-radius: 50%;
   box-shadow: inset 0 0 0 5px color-mix(in srgb, var(--brand) 8%, transparent), 0 0 24px color-mix(in srgb, var(--brand) 16%, transparent);
-  animation: atlas-breathe 2.8s ease-in-out infinite;
+  animation: atlas-breathe 2.8s ease-in-out 3;
 }
 @keyframes atlas-breathe { 50% { transform: scale(1.12); box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--brand) 16%, transparent), 0 0 34px color-mix(in srgb, var(--brand) 25%, transparent); } }
 .theme-family-atlas.page-dashboard .atlas-hero-readout {
