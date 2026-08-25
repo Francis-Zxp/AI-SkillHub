@@ -35,8 +35,8 @@ test("MCP management uses the strict plan, confirm, apply and rollback command s
 
   const apply = section(files.ui, "async function applyPendingPlan()", "async function rollbackSnapshot(");
   const rollback = section(files.ui, "async function rollbackSnapshot(", "useEffect(() =>");
-  assert.match(apply, /await Promise\.all\(\[scan\(\), loadManagementState\(\)\]\)/);
-  assert.match(rollback, /await Promise\.all\(\[scan\(\), loadManagementState\(\)\]\)/);
+  assert.match(apply, /await loadManagementState\(\);\s*await scan\(\);/);
+  assert.match(rollback, /await loadManagementState\(\);\s*await scan\(\);/);
   assert.match(files.ui, /rollbackSnapshots\.map\(snapshot =>/);
 });
 
@@ -217,10 +217,9 @@ test("browser preview blocks writes and applied copy never claims a live call", 
 
 test("rollback snapshots survive page remount discovery and disclose retention without secret material", () => {
   const loader = section(files.ui, "async function loadManagementState()", "function startAdd()");
-  assert.match(loader, /list_mcp_rollback_snapshots/);
-  assert.match(loader, /setRollbackSnapshots\(snapshots\)/);
+  assert.match(loader, /await invoke<McpRollbackSnapshot\[\]>\("list_mcp_rollback_snapshots"\);\s*setRollbackSnapshots\(snapshots\);\s*const targets = await invoke<McpMutationTargetOption\[\]>\("list_mcp_mutation_targets"\)/);
   const effect = section(files.ui, "useEffect(() =>", "const selectedBinding");
-  assert.match(effect, /void loadManagementState\(\)/);
+  assert.match(effect, /await loadManagementState\(\);\s*if \(!cancelled\) await scan\(\);/);
   assert.match(files.managementI18n, /最多保留 7 天、16 份或 128 MiB/);
   assert.match(files.managementI18n, /Windows 会按当前用户加密保护原始字节/);
   const snapshotPanel = section(files.ui, "{rollbackSnapshots.length > 0 && (", "{globalDiagnosticGroups.length > 0 && (");

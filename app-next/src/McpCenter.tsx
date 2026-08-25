@@ -324,11 +324,9 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
       return;
     }
     try {
-      const [snapshots, targets] = await Promise.all([
-        invoke<McpRollbackSnapshot[]>("list_mcp_rollback_snapshots"),
-        invoke<McpMutationTargetOption[]>("list_mcp_mutation_targets")
-      ]);
+      const snapshots = await invoke<McpRollbackSnapshot[]>("list_mcp_rollback_snapshots");
       setRollbackSnapshots(snapshots);
+      const targets = await invoke<McpMutationTargetOption[]>("list_mcp_mutation_targets");
       setMutationTargets(targets);
     } catch (reason) {
       setMutationError(friendlyMessage(reason));
@@ -435,7 +433,8 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
       setPendingPlan(null);
       setShowForm(false);
       setMutationNotice(t("mcp.applySuccessBody"));
-      await Promise.all([scan(), loadManagementState()]);
+      await loadManagementState();
+      await scan();
     } catch (reason) {
       setPendingPlan(null);
       setMutationError(friendlyMessage(reason));
@@ -455,7 +454,8 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
         snapshotId
       });
       setMutationNotice(t("mcp.rollbackSuccessBody", { n: result.restoredTargets }));
-      await Promise.all([scan(), loadManagementState()]);
+      await loadManagementState();
+      await scan();
     } catch (reason) {
       setMutationError(friendlyMessage(reason));
     } finally {
@@ -465,8 +465,14 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
   }
 
   useEffect(() => {
-    void scan();
-    void loadManagementState();
+    let cancelled = false;
+    void (async () => {
+      await loadManagementState();
+      if (!cancelled) await scan();
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [runtimeAvailable]);
 
   const selectedBinding = inventory?.bindings.find(item => item.id === selectedBindingId) ?? null;
