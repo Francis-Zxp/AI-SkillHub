@@ -16,7 +16,12 @@ function Write-TestText([string]$Path, [string]$Text) {
   [IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false))
 }
 
-function Write-TestConfig([string]$Path, [string]$Sources, [string]$Active) {
+function Write-TestConfig(
+  [string]$Path,
+  [string]$Sources,
+  [string]$Active,
+  [object[]]$Repositories = @()
+) {
   $config = [ordered]@{
     version = 3
     githubSourcesFolder = $Sources
@@ -24,7 +29,7 @@ function Write-TestConfig([string]$Path, [string]$Sources, [string]$Active) {
     manageAgentLinks = $false
     autoDiscoverManualRepos = $true
     preferredPathFragments = @('\skills\', '\.agents\skills\')
-    repositories = @()
+    repositories = @($Repositories)
   }
   Write-TestText $Path ($config | ConvertTo-Json -Depth 8)
 }
@@ -45,11 +50,12 @@ function Invoke-SyncFixture(
   [string]$StatePath,
   [string]$ReportsPath,
   [string]$FakeGitBin,
-  [switch]$NoPull
+  [switch]$NoPull,
+  [int]$GitUpdateBudgetSeconds = 30
 ) {
   $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $runtimeScript)
   if ($NoPull) { $arguments += '-NoPull' }
-  $arguments += @('-GitCommandTimeoutSeconds', '1', '-GitUpdateBudgetSeconds', '30')
+  $arguments += @('-GitCommandTimeoutSeconds', '1', '-GitUpdateBudgetSeconds', [string]$GitUpdateBudgetSeconds)
 
   $startInfo = [Diagnostics.ProcessStartInfo]::new()
   $startInfo.FileName = $Engine
@@ -67,6 +73,7 @@ function Invoke-SyncFixture(
 
   $process = [Diagnostics.Process]::Start($startInfo)
   if ($null -eq $process) { throw "Could not start test engine: $Engine" }
+  $runStopwatch = [Diagnostics.Stopwatch]::StartNew()
   $stdoutTask = $process.StandardOutput.ReadToEndAsync()
   $stderrTask = $process.StandardError.ReadToEndAsync()
   if (-not $process.WaitForExit(45000)) {
@@ -77,6 +84,7 @@ function Invoke-SyncFixture(
     ExitCode = $process.ExitCode
     Stdout = [string]$stdoutTask.Result
     Stderr = [string]$stderrTask.Result
+    ElapsedSeconds = $runStopwatch.Elapsed.TotalSeconds
   }
   $process.Dispose()
   return $result
@@ -98,6 +106,8 @@ public static class FakeGit
         string command = string.Join(" ", args ?? new string[0]);
         if (command.IndexOf(" status ", StringComparison.OrdinalIgnoreCase) >= 0)
         {
+            if (command.IndexOf("config-slow", StringComparison.OrdinalIgnoreCase) >= 0)
+                Thread.Sleep(1500);
             if (command.IndexOf("dirty-repo", StringComparison.OrdinalIgnoreCase) >= 0)
                 Console.WriteLine(" M local-preserved.txt");
             // AI SkillHub's own untracked bookkeeping must not look like user work,
@@ -249,7 +259,177 @@ try {
       if (@($emptySummary.repositories).Count -ne 0) { throw "$engineLabel did not persist repositories as []." }
     }
 
-    # Regression 2: one success, one dirty tree, one failure and one timeout
+    # Regression 2: a timeout at the start of one complete manual-attempt budget
+    # must persist the first deferred source as the next start. The following run
+    # therefore updates that source instead of starving the alphabetical tail.
+    $rotationRoot = Join-Path $fixtureRoot "rotation-$engineLabel"
+    $rotationSources = Join-Path $rotationRoot 'sources'
+    $rotationActive = Join-Path $rotationRoot 'active'
+    $rotationState = Join-Path $rotationRoot 'state'
+    $rotationReports = Join-Path $rotationRoot 'reports'
+    New-Item -ItemType Directory -Force -Path $rotationSources, $rotationActive, (Join-Path $rotationState 'sync-state'), $rotationReports | Out-Null
+    foreach ($repoName in @('a-timeout-repo', 'b-ok-repo', 'c-ok-repo')) {
+      $null = New-ManualRepo $rotationSources $repoName
+    }
+    $rotationConfig = Join-Path $rotationRoot 'skillhub.config.json'
+    Write-TestConfig $rotationConfig $rotationSources $rotationActive
+    Write-TestText (Join-Path $rotationState 'sync-state\git-update-cursor.json') '{broken cursor'
+
+    $firstRotation = Invoke-SyncFixture $engine $rotationConfig $rotationState $rotationReports $fakeGitBin -GitUpdateBudgetSeconds 14
+    if ($firstRotation.ExitCode -ne 0) {
+      throw "$engineLabel first rotation fixture failed: $($firstRotation.Stderr)"
+    }
+    $firstRotationSummary = Get-Content -LiteralPath (Join-Path $rotationReports 'last-sync.json') -Raw | ConvertFrom-Json
+    $cursorReadWarning = @($firstRotationSummary.repositories | Where-Object {
+      $_.Repository -eq '__rotation__' -and
+      $_.Action -eq 'cursor-read' -and
+      $_.Status -eq 'failed' -and
+      $_.Message -eq 'Saved update rotation could not be read; default order was used.'
+    })
+    if ($cursorReadWarning.Count -ne 1 -or
+        $firstRotation.Stdout -match '\{broken cursor' -or
+        $firstRotation.Stderr -match '\{broken cursor') {
+      throw "$engineLabel did not surface a generic, non-sensitive cursor-read warning."
+    }
+    $firstRotationStatuses = @{}
+    foreach ($repo in @($firstRotationSummary.repositories)) { $firstRotationStatuses[[string]$repo.Repository] = [string]$repo.Status }
+    if ($firstRotationStatuses['a-timeout-repo'] -ne 'timeout' -or
+        $firstRotationStatuses['b-ok-repo'] -ne 'skipped' -or
+        $firstRotationStatuses['c-ok-repo'] -ne 'skipped') {
+      throw "$engineLabel did not expose the partial first rotation: $($firstRotationSummary | ConvertTo-Json -Compress -Depth 6)"
+    }
+    $rotationCursor = Get-Content -LiteralPath (Join-Path $rotationState 'sync-state\git-update-cursor.json') -Raw | ConvertFrom-Json
+    if ($rotationCursor.manualNextRepository -ne 'b-ok-repo') {
+      throw "$engineLabel did not persist the first deferred source as the next rotation cursor."
+    }
+
+    $secondRotation = Invoke-SyncFixture $engine $rotationConfig $rotationState $rotationReports $fakeGitBin -GitUpdateBudgetSeconds 14
+    if ($secondRotation.ExitCode -ne 0) {
+      throw "$engineLabel second rotation fixture failed: $($secondRotation.Stderr)"
+    }
+    $secondRotationSummary = Get-Content -LiteralPath (Join-Path $rotationReports 'last-sync.json') -Raw | ConvertFrom-Json
+    $secondRotationRows = @($secondRotationSummary.repositories)
+    if ($secondRotationRows.Count -ne 3 -or
+        $secondRotationRows[0].Repository -ne 'b-ok-repo' -or
+        $secondRotationRows[0].Status -ne 'ok') {
+      throw "$engineLabel did not resume from the deferred source: $($secondRotationSummary | ConvertTo-Json -Compress -Depth 6)"
+    }
+
+    # Regression 3: configured repositories can consume their share of a
+    # bounded update window, but cannot starve manually discovered repositories.
+    # Each group keeps its own persisted rotation cursor across runs.
+    $fairRoot = Join-Path $fixtureRoot "fairness-$engineLabel"
+    $fairSources = Join-Path $fairRoot 'sources'
+    $fairActive = Join-Path $fairRoot 'active'
+    $fairState = Join-Path $fairRoot 'state'
+    $fairReports = Join-Path $fairRoot 'reports'
+    New-Item -ItemType Directory -Force -Path $fairSources, $fairActive, (Join-Path $fairState 'sync-state'), $fairReports | Out-Null
+    $configuredNames = @(
+      'a-config-slow-timeout-repo',
+      'b-config-slow-timeout-repo',
+      'c-config-slow-timeout-repo',
+      'd-config-slow-timeout-repo',
+      'e-config-slow-timeout-repo'
+    )
+    $manualNames = @('a-manual-ok-repo', 'b-manual-ok-repo')
+    foreach ($repoName in @($configuredNames + $manualNames)) {
+      $null = New-ManualRepo $fairSources $repoName
+    }
+    $configuredRows = @($configuredNames | ForEach-Object {
+      [PSCustomObject]@{
+        name = $_
+        url = "https://github.com/example/$_.git"
+      }
+    })
+    $fairConfig = Join-Path $fairRoot 'skillhub.config.json'
+    Write-TestConfig $fairConfig $fairSources $fairActive $configuredRows
+
+    $fairBudgetSeconds = 27
+    $firstFairRun = Invoke-SyncFixture $engine $fairConfig $fairState $fairReports $fakeGitBin -GitUpdateBudgetSeconds $fairBudgetSeconds
+    if ($firstFairRun.ExitCode -ne 0) {
+      throw "$engineLabel first configured/manual fairness run failed: $($firstFairRun.Stderr)"
+    }
+    $firstFairSummary = Get-Content -LiteralPath (Join-Path $fairReports 'last-sync.json') -Raw | ConvertFrom-Json
+    $firstFairRows = @($firstFairSummary.repositories)
+    $firstConfiguredTimedOut = @($firstFairRows | Where-Object { $configuredNames -contains $_.Repository -and $_.Status -eq 'timeout' })
+    if ($firstConfiguredTimedOut.Count -lt 1) {
+      throw "$engineLabel did not start a slow configured attempt despite a complete configured-plus-manual budget."
+    }
+    $firstManualOk = @($firstFairRows | Where-Object { $manualNames -contains $_.Repository -and $_.Status -eq 'ok' })
+    if ($firstManualOk.Count -lt 1) {
+      throw "$engineLabel let configured updates starve every manual source: $($firstFairSummary | ConvertTo-Json -Compress -Depth 6)"
+    }
+    $firstConfiguredDeferred = @($firstFairRows |
+      Where-Object { $configuredNames -contains $_.Repository -and $_.Status -eq 'skipped' } |
+      Select-Object -First 1)
+    if ($firstConfiguredDeferred.Count -ne 1) {
+      throw "$engineLabel fairness fixture did not exhaust the configured share as intended."
+    }
+    $firstFairCursor = Get-Content -LiteralPath (Join-Path $fairState 'sync-state\git-update-cursor.json') -Raw | ConvertFrom-Json
+    if ($firstFairCursor.configuredNextRepository -ne $firstConfiguredDeferred[0].Repository -or
+        $firstFairCursor.manualNextRepository -ne 'b-manual-ok-repo') {
+      throw "$engineLabel did not persist independent configured/manual cursors after the first fairness run."
+    }
+
+    if ($firstFairRun.ElapsedSeconds -gt ($fairBudgetSeconds + 3)) {
+      throw "$engineLabel exceeded the bounded configured/manual update window by a visible margin: $([Math]::Round($firstFairRun.ElapsedSeconds, 2)) seconds."
+    }
+
+    $secondFairRun = Invoke-SyncFixture $engine $fairConfig $fairState $fairReports $fakeGitBin -GitUpdateBudgetSeconds $fairBudgetSeconds
+    if ($secondFairRun.ExitCode -ne 0) {
+      throw "$engineLabel second configured/manual fairness run failed: $($secondFairRun.Stderr)"
+    }
+    $secondFairSummary = Get-Content -LiteralPath (Join-Path $fairReports 'last-sync.json') -Raw | ConvertFrom-Json
+    $secondFairRows = @($secondFairSummary.repositories)
+    $secondConfiguredFirst = @($secondFairRows | Where-Object { $configuredNames -contains $_.Repository } | Select-Object -First 1)
+    $secondManualFirst = @($secondFairRows | Where-Object { $manualNames -contains $_.Repository } | Select-Object -First 1)
+    if ($secondConfiguredFirst.Count -ne 1 -or
+        $secondConfiguredFirst[0].Repository -ne $firstFairCursor.configuredNextRepository -or
+        $secondManualFirst.Count -ne 1 -or
+        $secondManualFirst[0].Repository -ne $firstFairCursor.manualNextRepository -or
+        $secondManualFirst[0].Status -ne 'ok') {
+      throw "$engineLabel did not resume both update groups from their independent cursors: $($secondFairSummary | ConvertTo-Json -Compress -Depth 6)"
+    }
+    $secondFairCursor = Get-Content -LiteralPath (Join-Path $fairState 'sync-state\git-update-cursor.json') -Raw | ConvertFrom-Json
+    if ($secondFairCursor.configuredNextRepository -eq $firstFairCursor.configuredNextRepository -or
+        $secondFairCursor.manualNextRepository -eq $firstFairCursor.manualNextRepository) {
+      throw "$engineLabel did not advance both update-group cursors on the second fairness run."
+    }
+    Write-Host "PASS: $engineLabel reserves bounded update time for manual sources and rotates both groups independently."
+
+    # Regression 4: a cursor persistence failure remains non-fatal, is visible
+    # in last-sync, and never exposes a filesystem path or exception detail.
+    $cursorWriteRoot = Join-Path $fixtureRoot "cursor-write-$engineLabel"
+    $cursorWriteSources = Join-Path $cursorWriteRoot 'sources'
+    $cursorWriteActive = Join-Path $cursorWriteRoot 'active'
+    $cursorWriteState = Join-Path $cursorWriteRoot 'state'
+    $cursorWriteReports = Join-Path $cursorWriteRoot 'reports'
+    New-Item -ItemType Directory -Force -Path $cursorWriteSources, $cursorWriteActive, (Join-Path $cursorWriteState 'sync-state'), $cursorWriteReports | Out-Null
+    $null = New-ManualRepo $cursorWriteSources 'cursor-ok-repo'
+    $cursorWriteConfig = Join-Path $cursorWriteRoot 'skillhub.config.json'
+    Write-TestConfig $cursorWriteConfig $cursorWriteSources $cursorWriteActive
+    New-Item -ItemType Directory -Force -Path (Join-Path $cursorWriteState 'sync-state\git-update-cursor.json.skillhub-tmp') | Out-Null
+
+    $cursorWriteRun = Invoke-SyncFixture $engine $cursorWriteConfig $cursorWriteState $cursorWriteReports $fakeGitBin -GitUpdateBudgetSeconds 14
+    if ($cursorWriteRun.ExitCode -ne 0) {
+      throw "$engineLabel treated a cursor-write failure as a batch failure: $($cursorWriteRun.Stderr)"
+    }
+    $cursorWriteSummary = Get-Content -LiteralPath (Join-Path $cursorWriteReports 'last-sync.json') -Raw | ConvertFrom-Json
+    $cursorWriteWarning = @($cursorWriteSummary.repositories | Where-Object {
+      $_.Repository -eq '__rotation__' -and
+      $_.Action -eq 'cursor-write' -and
+      $_.Status -eq 'failed' -and
+      $_.Message -eq 'Update rotation could not be saved; repository results remain valid.'
+    })
+    if ($cursorWriteSummary.status -ne 'partial' -or
+        $cursorWriteWarning.Count -ne 1 -or
+        $cursorWriteRun.Stdout -match 'git-update-cursor\.json' -or
+        $cursorWriteRun.Stderr -match 'git-update-cursor\.json') {
+      throw "$engineLabel did not expose a generic, non-sensitive cursor-write warning: $($cursorWriteSummary | ConvertTo-Json -Compress -Depth 6)"
+    }
+    Write-Host "PASS: $engineLabel reports cursor persistence failures without leaking paths or exceptions."
+
+    # Regression 5: one success, one dirty tree, one failure and one timeout
     # must finish as a partial sync without changing or removing source trees.
     $updateRoot = Join-Path $fixtureRoot "updates-$engineLabel"
     $updateSources = Join-Path $updateRoot 'sources'

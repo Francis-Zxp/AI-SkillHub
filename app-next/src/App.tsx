@@ -20,17 +20,6 @@ import { CountUp, ParticleField, useCardGlow } from "./effects";
 import { LANG_OPTIONS, type Lang, categoryName, getLang, initialLang, setLang, t } from "./i18n";
 import { localizedSkillDescription } from "./localizedDescriptions";
 import { SkillUniverse } from "./SkillUniverse";
-import {
-  createPreviewSnapshot,
-  createPreviewSourceImportExecution,
-  createPreviewSourceImportPlan,
-  createPreviewSourceImportPromotion,
-  updatePreviewDesktopQaStatus,
-  updatePreviewEnabled,
-  updatePreviewOperationRunner,
-  updatePreviewRealWriteAuthorization,
-  updatePreviewSkillRating
-} from "./preview";
 import type {
   AgentSkillStatusCard,
   DesktopQaCheckCard,
@@ -81,6 +70,15 @@ type SourceDraft = {
   note: string;
   sourceType: SourceCard["sourceType"];
   tags: string;
+};
+type SourceMutationResult = {
+  source: SourceCard;
+  snapshot?: LegacySnapshot | null;
+  deliveryReconciled: boolean;
+};
+type SourcePopularityRefreshResult = {
+  sourcePopularity: SourcePopularityCard[];
+  summary: SourcePopularitySummary;
 };
 type QuickSourceDraft = Omit<SourceDraft, "name">;
 type ImportWizardDraft = {
@@ -360,6 +358,12 @@ const McpCenter = lazy(() => import("./McpCenter").then(module => ({ default: mo
 const CodexPluginDoctorPanel = lazy(() =>
   import("./CodexPluginDoctorPanel").then(module => ({ default: module.CodexPluginDoctorPanel }))
 );
+let previewModulePromise: Promise<typeof import("./preview")> | null = null;
+
+function loadPreviewModule() {
+  previewModulePromise ??= import("./preview");
+  return previewModulePromise;
+}
 const CATEGORY_IDS = [
   "academic-writing",
   "literature-research",
@@ -418,6 +422,8 @@ export function App() {
   const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [initialDeliveryBusy, setInitialDeliveryBusy] = useState(true);
+  const [popularityRefreshing, setPopularityRefreshing] = useState(false);
   const [operation, setOperation] = useState<OperationStatus | null>(null);
   const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
   const [globalSearch, setGlobalSearch] = useState("");
@@ -428,10 +434,16 @@ export function App() {
   const updateInstallInFlightRef = useRef<Promise<void> | null>(null);
   const updateCheckStartedAtRef = useRef(0);
   const updateRetryTimerRef = useRef<number | null>(null);
+  const initialUpdateTimerRef = useRef<number | null>(null);
+  const initialUpdateIdleRef = useRef<number | null>(null);
   const backgroundUpdateRetriesRef = useRef(0);
   const initialDeliveryCheckStartedRef = useRef(false);
+  const initialDeliveryInFlightRef = useRef(true);
+  const popularityRefreshInFlightRef = useRef<Promise<SourcePopularityRefreshResult | null> | null>(null);
+  const syncInFlightRef = useRef<Promise<LegacySnapshot | null> | null>(null);
   const runtimeAvailable = hasTauriRuntime();
   const realWritesEnabled = snapshot?.operatorConsent?.realWritesEnabled === true;
+  const mutationBusy = loading || initialDeliveryBusy || popularityRefreshing || Boolean(operation);
 
   useCardGlow();
 
@@ -471,6 +483,46 @@ export function App() {
 
   function toastMessage(message: string, tone: ToastTone = "info") {
     setToast({ message, tone });
+  }
+
+  function mutationBlockedBySync(notify = true) {
+    if (!syncInFlightRef.current && !initialDeliveryInFlightRef.current && !popularityRefreshInFlightRef.current) {
+      return false;
+    }
+    if (notify) toastMessage(t("toast.syncBusy"), "warn");
+    return true;
+  }
+
+  function scheduleInitialUpdateCheck() {
+    if (!runtimeAvailable || initialUpdateTimerRef.current !== null || initialUpdateIdleRef.current !== null) return;
+    initialUpdateTimerRef.current = window.setTimeout(() => {
+      initialUpdateTimerRef.current = null;
+      const idleWindow = window as typeof window & {
+        cancelIdleCallback?: (handle: number) => void;
+        requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      };
+      const run = () => {
+        initialUpdateIdleRef.current = null;
+        void checkForAppUpdate(true);
+      };
+      if (idleWindow.requestIdleCallback) {
+        initialUpdateIdleRef.current = idleWindow.requestIdleCallback(run, { timeout: 2_000 });
+      } else {
+        run();
+      }
+    }, 10_000);
+  }
+
+  function cancelInitialUpdateCheck() {
+    if (initialUpdateTimerRef.current !== null) {
+      window.clearTimeout(initialUpdateTimerRef.current);
+      initialUpdateTimerRef.current = null;
+    }
+    if (initialUpdateIdleRef.current !== null) {
+      const idleWindow = window as typeof window & { cancelIdleCallback?: (handle: number) => void };
+      idleWindow.cancelIdleCallback?.(initialUpdateIdleRef.current);
+      initialUpdateIdleRef.current = null;
+    }
   }
 
   async function openProjectHome() {
@@ -525,11 +577,13 @@ export function App() {
     }
     if (!silent) backgroundUpdateRetriesRef.current = 0;
 
-    const retryDelays = silent ? [0] : [0, 1_800];
+    const retryDelays = [0];
     let lastFailure: UpdateFailureKind = "unknown";
     for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
       const delay = retryDelays[attempt];
       if (delay > 0) {
+        if (silent) await waitFor(delay);
+        else {
         setAppUpdate(current => ({
           ...current,
           phase: "retrying",
@@ -539,7 +593,8 @@ export function App() {
           attempts: attempt + 1
         }));
         await waitFor(delay);
-      } else {
+        }
+      } else if (!silent) {
         setAppUpdate(current => ({
           ...current,
           phase: "checking",
@@ -551,7 +606,7 @@ export function App() {
       }
 
       try {
-        const nextUpdate = await check({ headers: UPDATE_CHECK_HEADERS, timeout: 18_000 });
+        const nextUpdate = await check({ headers: UPDATE_CHECK_HEADERS, timeout: 8_000 });
         backgroundUpdateRetriesRef.current = 0;
         clearStoredUpdateDiagnostic();
         if (!nextUpdate) {
@@ -690,10 +745,11 @@ export function App() {
     if (!options.background) setLoading(true);
     try {
       if (!runtimeAvailable) {
-        const preview = createPreviewSnapshot();
-        setSnapshot(preview);
+        const { createPreviewSnapshot } = await loadPreviewModule();
+        const previewSnapshot = createPreviewSnapshot();
+        setSnapshot(previewSnapshot);
         setLoadError("");
-        return preview;
+        return previewSnapshot;
       }
       const command = mode === "refresh"
         ? "run_skillhub_sync"
@@ -714,9 +770,11 @@ export function App() {
   }
 
   async function updateEnabled(command: string, id: string, enabled: boolean) {
+    if (mutationBlockedBySync()) return;
     setLoading(true);
     try {
       if (!runtimeAvailable) {
+        const { createPreviewSnapshot, updatePreviewEnabled } = await loadPreviewModule();
         setSnapshot(prev => updatePreviewEnabled(prev ?? createPreviewSnapshot(), command, id, enabled));
         setLoadError("");
         return;
@@ -733,9 +791,11 @@ export function App() {
   }
 
   async function updateDesktopQaStatus(id: string, status: "pending" | "passed" | "failed") {
+    if (mutationBlockedBySync()) return;
     setLoading(true);
     try {
       if (!runtimeAvailable) {
+        const { createPreviewSnapshot, updatePreviewDesktopQaStatus } = await loadPreviewModule();
         setSnapshot(prev => updatePreviewDesktopQaStatus(prev ?? createPreviewSnapshot(), id, status));
         return;
       }
@@ -753,6 +813,7 @@ export function App() {
     skill: SkillCard,
     draft: SkillDraft
   ): Promise<"failed" | "preview" | "saved"> {
+    if (mutationBlockedBySync()) return "failed";
     if (!runtimeAvailable) return "preview";
     setLoading(true);
     try {
@@ -781,6 +842,7 @@ export function App() {
   }
 
   async function updateSkillEnabled(skill: SkillCard, enabled: boolean): Promise<boolean> {
+    if (mutationBlockedBySync()) return false;
     if (!runtimeAvailable) return false;
     setLoading(true);
     try {
@@ -802,8 +864,10 @@ export function App() {
   }
 
   async function updateSkillRating(skill: SkillCard, rating: number): Promise<boolean> {
+    if (mutationBlockedBySync()) return false;
     const normalizedRating = Math.max(0, Math.min(5, Math.round(rating)));
     if (!runtimeAvailable) {
+      const { createPreviewSnapshot, updatePreviewSkillRating } = await loadPreviewModule();
       setSnapshot(prev =>
         updatePreviewSkillRating(prev ?? createPreviewSnapshot(), skill.folderName, normalizedRating)
       );
@@ -840,7 +904,9 @@ export function App() {
   }
 
   async function setSourceVersionPin(source: SourceCard, pinned: boolean): Promise<boolean> {
+    if (mutationBlockedBySync()) return false;
     if (!runtimeAvailable) {
+      const { createPreviewSnapshot } = await loadPreviewModule();
       setSnapshot(previous => {
         const current = previous ?? createPreviewSnapshot();
         return {
@@ -883,7 +949,9 @@ export function App() {
   }
 
   async function refreshSourceVersionStatus(source: SourceCard): Promise<boolean> {
+    if (mutationBlockedBySync()) return false;
     if (!runtimeAvailable) {
+      const { createPreviewSnapshot } = await loadPreviewModule();
       setSnapshot(previous => {
         const current = previous ?? createPreviewSnapshot();
         return {
@@ -917,7 +985,9 @@ export function App() {
   }
 
   async function rollbackSourceVersion(source: SourceCard): Promise<boolean> {
+    if (mutationBlockedBySync()) return false;
     if (!runtimeAvailable) {
+      const { createPreviewSnapshot } = await loadPreviewModule();
       setSnapshot(previous => {
         const current = previous ?? createPreviewSnapshot();
         return {
@@ -961,22 +1031,32 @@ export function App() {
     source: SourceCard,
     draft: SourceDraft
   ): Promise<"failed" | "preview" | "saved"> {
+    if (mutationBlockedBySync()) return "failed";
     if (!runtimeAvailable) return "preview";
     setLoading(true);
     try {
-      let result = await invoke<LegacySnapshot>("set_source_metadata", {
+      const result = await invoke<SourceMutationResult>("save_source_metadata", {
         sourceId: source.id,
         name: draft.name,
         sourceType: draft.sourceType,
         category: draft.category,
         note: draft.note,
-        enabled: draft.enabled
-      });
-      result = await invoke<LegacySnapshot>("set_source_tags", {
-        sourceId: source.id,
+        enabled: draft.enabled,
         tags: parseTagInput(draft.tags)
       });
-      setSnapshot(result);
+      startTransition(() => {
+        setSnapshot(current => {
+          if (result.snapshot) return result.snapshot;
+          if (!current) return current;
+          return {
+            ...current,
+            sources: current.sources.map(item => item.id === result.source.id ? result.source : item),
+            skills: current.skills.map(skill => skill.sourceId === result.source.id
+              ? { ...skill, source: result.source.name }
+              : skill)
+          };
+        });
+      });
       setLoadError("");
       toastMessage(t("toast.sourceSaved"), "ok");
       return "saved";
@@ -990,7 +1070,9 @@ export function App() {
   }
 
   async function deleteSource(source: SourceCard): Promise<"failed" | "preview" | "deleted"> {
+    if (mutationBlockedBySync()) return "failed";
     if (!runtimeAvailable) {
+      const { createPreviewSnapshot } = await loadPreviewModule();
       setSnapshot(prev => {
         const current = prev ?? createPreviewSnapshot();
         return {
@@ -1019,9 +1101,11 @@ export function App() {
   }
 
   async function runReleaseGateRunner(runnerId: string) {
+    if (mutationBlockedBySync()) return;
     setLoading(true);
     try {
       if (!runtimeAvailable) {
+        const { createPreviewSnapshot, updatePreviewOperationRunner } = await loadPreviewModule();
         setSnapshot(prev => updatePreviewOperationRunner(prev ?? createPreviewSnapshot(), runnerId));
         toastMessage(t("toast.previewRunnerSim"), "info");
         return;
@@ -1039,9 +1123,11 @@ export function App() {
   }
 
   async function updateRealWriteAuthorization(enabled: boolean) {
+    if (mutationBlockedBySync()) return;
     setLoading(true);
     try {
       if (!runtimeAvailable) {
+        const { createPreviewSnapshot, updatePreviewRealWriteAuthorization } = await loadPreviewModule();
         setSnapshot(prev => updatePreviewRealWriteAuthorization(prev ?? createPreviewSnapshot(), enabled));
         toastMessage(enabled ? t("toast.previewAuthOn") : t("toast.previewAuthOff"), "info");
         return;
@@ -1065,16 +1151,16 @@ export function App() {
     sourceName: string,
     eventType: string
   ) {
+    if (mutationBlockedBySync(false)) return;
     if (!runtimeAvailable) return;
     try {
-      const result = await invoke<LegacySnapshot>("record_usage_event", {
+      await invoke<void>("record_usage_event", {
         targetType,
         targetId,
         targetName,
         sourceName,
         eventType
       });
-      setSnapshot(result);
     } catch (error) {
       setLoadError(messageFromError(error));
     }
@@ -1082,19 +1168,44 @@ export function App() {
 
   async function refreshSourcePopularity(
     options: { quiet?: boolean; background?: boolean } = {}
-  ): Promise<LegacySnapshot | null> {
+  ): Promise<SourcePopularityRefreshResult | null> {
+    if (popularityRefreshInFlightRef.current) return popularityRefreshInFlightRef.current;
+    if (mutationBlockedBySync(!options.quiet)) return null;
+    const task = runSourcePopularityRefresh(options);
+    popularityRefreshInFlightRef.current = task;
+    setPopularityRefreshing(true);
+    try {
+      return await task;
+    } finally {
+      if (popularityRefreshInFlightRef.current === task) popularityRefreshInFlightRef.current = null;
+      setPopularityRefreshing(false);
+    }
+  }
+
+  async function runSourcePopularityRefresh(
+    options: { quiet?: boolean; background?: boolean }
+  ): Promise<SourcePopularityRefreshResult | null> {
     if (!runtimeAvailable) {
-      setSnapshot(prev => prev ?? createPreviewSnapshot());
+      const { createPreviewSnapshot } = await loadPreviewModule();
+      const previewSnapshot = snapshot ?? createPreviewSnapshot();
+      setSnapshot(previous => previous ?? previewSnapshot);
       if (!options.quiet) toastMessage(t("pop.previewToast"), "info");
-      return snapshot ?? createPreviewSnapshot();
+      return {
+        sourcePopularity: previewSnapshot.sourcePopularity,
+        summary: summarizeSourcePopularity(previewSnapshot)
+      };
     }
     if (!options.background) setLoading(true);
     try {
-      const result = await invoke<LegacySnapshot>("refresh_source_popularity");
-      applySnapshot(result, Boolean(options.background));
+      const result = await invoke<SourcePopularityRefreshResult>("refresh_source_popularity");
+      const applyPopularity = () => setSnapshot(current => current
+        ? { ...current, sourcePopularity: result.sourcePopularity }
+        : current);
+      if (options.background) startTransition(applyPopularity);
+      else applyPopularity();
       setLoadError("");
       if (!options.quiet) {
-        const summaryText = sourcePopularityRefreshMessage(summarizeSourcePopularity(result));
+        const summaryText = sourcePopularityRefreshMessage(result.summary);
         toastMessage(summaryText, "ok");
       }
       return result;
@@ -1108,7 +1219,9 @@ export function App() {
   }
 
   async function reanalyzeLibraryMetadata(): Promise<LegacySnapshot | null> {
+    if (mutationBlockedBySync()) return null;
     if (!runtimeAvailable) {
+      const { createPreviewSnapshot } = await loadPreviewModule();
       toastMessage(t("metadata.previewToast"), "info");
       return snapshot ?? createPreviewSnapshot();
     }
@@ -1135,53 +1248,63 @@ export function App() {
   }
 
   async function syncAndRefreshAll(): Promise<LegacySnapshot | null> {
-    if (operation) {
+    if (syncInFlightRef.current) {
       toastMessage(t("toast.syncBusy"), "warn");
-      return snapshot;
+      return syncInFlightRef.current;
     }
-    setOperation({ title: t("op.syncTitle"), detail: t("op.step1"), step: 1, total: 3, percent: 28 });
-    const refreshed = await loadSnapshot("refresh", { background: true, quiet: true });
-    if (!refreshed) {
-      toastMessage(t("toast.syncFailed"), "error");
-      setOperation(null);
-      return null;
-    }
-    if (!runtimeAvailable) {
-      setOperation(null);
+    const task = runCoreSync();
+    syncInFlightRef.current = task;
+    let refreshed: LegacySnapshot | null = null;
+    try {
+      refreshed = await task;
       return refreshed;
+    } finally {
+      if (syncInFlightRef.current === task) syncInFlightRef.current = null;
+      if (refreshed && runtimeAvailable) {
+        void refreshSourcePopularity({ background: true });
+      }
     }
-    setOperation({ title: t("op.syncTitle"), detail: t("op.step2"), step: 2, total: 3, percent: 68 });
-    const popularity = await refreshSourcePopularity({ quiet: true, background: true });
-    if (!popularity) {
-      toastMessage(t("toast.indexNoHeat"), "warn");
-      setOperation(null);
+  }
+
+  async function runCoreSync(): Promise<LegacySnapshot | null> {
+    setOperation({ title: t("op.syncTitle"), detail: t("op.step1"), step: 1, total: 1, percent: 28 });
+    try {
+      const refreshed = await loadSnapshot("refresh", { background: true, quiet: true });
+      if (!refreshed) {
+        toastMessage(t("toast.syncFailed"), "error");
+        return null;
+      }
+      if (!runtimeAvailable) return refreshed;
+      setOperation({ title: t("op.syncTitle"), detail: t("op.step3"), step: 1, total: 1, percent: 100 });
+      const syncSummary = refreshed.lastSyncSummary;
+      const syncTone = syncSummary?.status === "failed"
+        ? "error"
+        : syncSummary?.status === "partial" || syncSummary?.status === "no-network-update"
+          ? "warn"
+          : "ok";
+      const syncMessage = syncSummary?.status === "partial"
+        ? t("toast.syncPartial", { ok: syncSummary.succeeded, failed: syncSummary.failed, skipped: syncSummary.skipped })
+        : syncSummary?.status === "failed"
+          ? t("toast.syncAllFailed", { failed: syncSummary.failed })
+          : syncSummary?.status === "no-network-update"
+            ? t("toast.syncLocalOnly", { skipped: syncSummary.skipped })
+            : t("toast.syncDone");
+      toastMessage(syncMessage, syncTone);
+      await waitFor(650);
       return refreshed;
+    } finally {
+      setOperation(null);
     }
-    setOperation({ title: t("op.syncTitle"), detail: t("op.step3"), step: 3, total: 3, percent: 100 });
-    const syncSummary = popularity.lastSyncSummary ?? refreshed.lastSyncSummary;
-    const syncTone = syncSummary?.status === "failed"
-      ? "error"
-      : syncSummary?.status === "partial" || syncSummary?.status === "no-network-update"
-        ? "warn"
-        : "ok";
-    const syncMessage = syncSummary?.status === "partial"
-      ? t("toast.syncPartial", { ok: syncSummary.succeeded, failed: syncSummary.failed, skipped: syncSummary.skipped })
-      : syncSummary?.status === "failed"
-        ? t("toast.syncAllFailed", { failed: syncSummary.failed })
-        : syncSummary?.status === "no-network-update"
-          ? t("toast.syncLocalOnly", { skipped: syncSummary.skipped })
-          : t("toast.syncDone");
-    toastMessage(`${syncMessage} · ${sourcePopularityRefreshMessage(summarizeSourcePopularity(popularity))}`, syncTone);
-    window.setTimeout(() => setOperation(null), 900);
-    return popularity;
   }
 
   async function refreshLocalAgents(): Promise<LegacySnapshot | null> {
+    if (mutationBlockedBySync()) return null;
     if (!runtimeAvailable) {
-      const preview = createPreviewSnapshot();
-      setSnapshot(preview);
+      const { createPreviewSnapshot } = await loadPreviewModule();
+      const previewSnapshot = createPreviewSnapshot();
+      setSnapshot(previewSnapshot);
       toastMessage(t("agents.detectToast"), "ok");
-      return preview;
+      return previewSnapshot;
     }
     setLoading(true);
     try {
@@ -1206,6 +1329,7 @@ export function App() {
     options: ImportFeedbackOptions = {}
   ): Promise<SourceImportPlanCard> {
     if (!runtimeAvailable) {
+      const { createPreviewSourceImportPlan } = await loadPreviewModule();
       const preview = createPreviewSourceImportPlan(importKind, input, snapshot?.sources ?? []);
       if (!options.quiet) {
         toastMessage(
@@ -1234,6 +1358,7 @@ export function App() {
     options: ImportFeedbackOptions = {}
   ): Promise<SourceImportExecutionCard> {
     if (!runtimeAvailable) {
+      const { createPreviewSourceImportExecution } = await loadPreviewModule();
       const execution = createPreviewSourceImportExecution(importKind, input);
       if (!options.quiet) toastMessage(t("toast.previewStaging"), "info");
       return execution;
@@ -1273,6 +1398,7 @@ export function App() {
     options: ImportFeedbackOptions = {}
   ): Promise<SourceImportPromotionCard> {
     if (!runtimeAvailable) {
+      const { createPreviewSourceImportPromotion } = await loadPreviewModule();
       const promotion = createPreviewSourceImportPromotion(importKind, stagedPath, sourceName);
       if (!options.quiet) toastMessage(t("toast.previewPromotion"), "info");
       return promotion;
@@ -1290,8 +1416,10 @@ export function App() {
   }
 
   async function updateSourceRating(source: SourceCard, rating: number): Promise<boolean> {
+    if (mutationBlockedBySync()) return false;
     const normalizedRating = Math.max(0, Math.min(5, Math.round(rating)));
     if (!runtimeAvailable) {
+      const { createPreviewSnapshot } = await loadPreviewModule();
       setSnapshot(previous => {
         const current = previous ?? createPreviewSnapshot();
         return {
@@ -1338,14 +1466,16 @@ export function App() {
     args: Record<string, unknown>,
     successMessage: string
   ): Promise<LegacySnapshot | null> {
+    if (mutationBlockedBySync()) return snapshot;
     if (!runtimeAvailable) {
       toastMessage(t("folders.previewOnly"), "info");
       return snapshot;
     }
     try {
+      const currentSnapshot = snapshot ?? (await loadPreviewModule()).createPreviewSnapshot();
       const folders = await invoke<SkillFolderCard[]>(command, args);
       const result = applySkillFolderCommandResult(
-        snapshot ?? createPreviewSnapshot(),
+        currentSnapshot,
         command,
         args,
         folders
@@ -1369,9 +1499,9 @@ export function App() {
     initialDeliveryCheckStartedRef.current = true;
     let cancelled = false;
     void (async () => {
-      await loadSnapshot();
-      if (!runtimeAvailable || cancelled) return;
       try {
+        await loadSnapshot();
+        if (!runtimeAvailable || cancelled) return;
         const detected = await invoke<LegacySnapshot>("refresh_agent_detection");
         if (cancelled) return;
         applySnapshot(detected, true);
@@ -1387,6 +1517,12 @@ export function App() {
         }
       } catch (error) {
         if (!cancelled) setLoadError(messageFromError(error));
+      } finally {
+        initialDeliveryInFlightRef.current = false;
+        if (!cancelled) {
+          setInitialDeliveryBusy(false);
+          scheduleInitialUpdateCheck();
+        }
       }
     })();
     return () => {
@@ -1396,9 +1532,8 @@ export function App() {
 
   useEffect(() => {
     if (!runtimeAvailable) return;
-    const timer = window.setTimeout(() => void checkForAppUpdate(true), 2600);
     return () => {
-      window.clearTimeout(timer);
+      cancelInitialUpdateCheck();
       if (updateRetryTimerRef.current !== null) {
         window.clearTimeout(updateRetryTimerRef.current);
         updateRetryTimerRef.current = null;
@@ -1678,7 +1813,7 @@ export function App() {
           {active === "dashboard" && (
             <Dashboard
               immersive={dashboardImmersive}
-              loading={loading}
+              loading={mutationBusy}
               onCopySkill={skill => void copySkillPrompt(skill, recordUsage)}
               onOpenAdvanced={() => setActive("release")}
               onOpenAgents={() => setActive("agents")}
@@ -1702,7 +1837,7 @@ export function App() {
           )}
           {active === "library" && (
             <Library
-              loading={loading}
+              loading={mutationBusy}
               onDeleteSource={deleteSource}
               onCreateFolder={(name, note, color) => runSkillFolderCommand(
                 "create_skill_folder", { name, note, color }, t("folders.created")
@@ -1746,11 +1881,11 @@ export function App() {
             />
           )}
           {active === "workspaces" && (
-            <Workspaces disabled={loading} onToggle={updateEnabled} snapshot={snapshot} />
+            <Workspaces disabled={mutationBusy} onToggle={updateEnabled} snapshot={snapshot} />
           )}
           {active === "agents" && (
             <Agents
-              disabled={loading}
+              disabled={mutationBusy}
               onRefreshAgents={() => void refreshLocalAgents()}
               runtimeAvailable={runtimeAvailable}
               snapshot={snapshot}
@@ -1763,7 +1898,7 @@ export function App() {
           )}
           {(active === "release" || active === "snapshots") && (
             <Advanced
-              disabled={loading}
+              disabled={mutationBusy}
               onRealWriteAuthorization={updateRealWriteAuthorization}
               onRunRunner={runReleaseGateRunner}
               snapshot={snapshot}
@@ -1775,7 +1910,7 @@ export function App() {
               currentLang={lang}
               currentTextScale={textScale}
               currentTheme={theme}
-              disabled={loading}
+              disabled={mutationBusy}
               appUpdate={appUpdate}
               onChangeIconScale={changeIconScale}
               onChangeLang={changeLang}
@@ -2155,8 +2290,8 @@ function Dashboard({
           </div>
           {!atlasMode && (
             <div className="hero-actions">
-              <button className="secondary-action" disabled={loading} onClick={onSync} type="button">
-                <Icon className={loading ? "icon-spin" : ""} name="refresh" /> {syncing ? t("dash.syncing") : loading ? snapshot ? t("dash.processing") : t("dash.loadingIndex") : t("dash.sync")}
+              <button className="secondary-action" disabled={loading || syncing} onClick={onSync} type="button">
+                <Icon className={loading || syncing ? "icon-spin" : ""} name="refresh" /> {syncing ? t("dash.syncing") : loading ? snapshot ? t("dash.processing") : t("dash.loadingIndex") : t("dash.sync")}
               </button>
               <button className="primary-action" onClick={onOpenLibrary} type="button">
                 <Icon name="add" /> {t("dash.addSource")}
@@ -2201,8 +2336,8 @@ function Dashboard({
         />
         {atlasMode && (
           <div className="atlas-touchbar-actions">
-            <button disabled={loading} onClick={onSync} title={t("dash.sync")} type="button">
-              <Icon className={loading ? "icon-spin" : ""} name="refresh" />
+            <button disabled={loading || syncing} onClick={onSync} title={t("dash.sync")} type="button">
+              <Icon className={loading || syncing ? "icon-spin" : ""} name="refresh" />
               <span>{syncing ? t("dash.syncing") : loading ? snapshot ? t("dash.processing") : t("dash.loadingIndex") : t("dash.sync")}</span>
             </button>
             <button onClick={onOpenLibrary} title={t("dash.addSource")} type="button">
@@ -3169,35 +3304,18 @@ function Library(props: LibraryProps) {
                 <div className="source-group-meta">
                   <span
                     aria-label={t("folders.dragSource", { name: source.name })}
-                    aria-controls={`source-folder-${source.id}`}
-                    aria-haspopup="listbox"
                     className="source-folder-drag-handle"
-                    draggable
-                    onClick={() => {
-                      const select = document.getElementById(`source-folder-${source.id}`) as
-                        | (HTMLSelectElement & { showPicker?: () => void })
-                        | null;
-                      select?.focus();
-                      try {
-                        if (select?.showPicker) select.showPicker();
-                        else select?.click();
-                      } catch {
-                        select?.click();
-                      }
-                    }}
+                    draggable={!loading}
                     onDragStart={event => {
+                      if (loading) {
+                        event.preventDefault();
+                        return;
+                      }
                       event.dataTransfer.effectAllowed = "move";
                       event.dataTransfer.setData("application/x-ai-skillhub-source-id", source.id);
                       event.dataTransfer.setData("text/plain", source.id);
                     }}
-                    onKeyDown={event => {
-                      if (event.key !== "Enter" && event.key !== " ") return;
-                      event.preventDefault();
-                      event.currentTarget.click();
-                    }}
                     title={t("folders.dragSource", { name: source.name })}
-                    role="button"
-                    tabIndex={0}
                   >
                     <Icon name="grip" />
                     <small>{t("folders.dragShort")}</small>
@@ -3401,6 +3519,7 @@ function Library(props: LibraryProps) {
 
       {editingSkill && (
         <SkillEditPanel
+          disabled={loading}
           draft={skillDrafts[editingSkill.folderName]}
           folders={skillFolders}
           onClose={() => setEditingSkillId("")}
@@ -3420,6 +3539,7 @@ function Library(props: LibraryProps) {
       )}
       {editingSource && (
         <SourceEditPanel
+          disabled={loading}
           draft={sourceDrafts[editingSource.id]}
           onClose={() => setEditingSourceId("")}
           onDelete={() => void deleteSourceFromPanel(editingSource)}
@@ -3440,7 +3560,7 @@ function Library(props: LibraryProps) {
               void onRollbackSourceVersion(editingSource);
             }
           }}
-          onSave={draft => void saveSourceDraft(editingSource, draft)}
+          onSave={draft => saveSourceDraft(editingSource, draft)}
           onSetPinned={pinned => void onSetSourceVersionPin(editingSource, pinned)}
           governance={governanceById.get(editingSource.id)}
           popularity={popularityById.get(editingSource.id)}
@@ -3636,6 +3756,7 @@ function SkillFolderShelf({
   }
 
   function acceptDrop(event: DragEvent<HTMLElement>, folderId: string) {
+    if (disabled) return;
     event.preventDefault();
     setDropTarget("");
     const sourceId = event.dataTransfer.getData("application/x-ai-skillhub-source-id");
@@ -3649,7 +3770,7 @@ function SkillFolderShelf({
   }
 
   const renderTarget = (id: string, label: string, count: number, tone: string, noteText = "") => {
-    const acceptsDrop = id !== "all";
+    const acceptsDrop = !disabled && id !== "all";
     return (
       <button
         aria-pressed={selectedId === id}
@@ -3780,9 +3901,9 @@ function SkillRow({
   return (
     <article
       className={`skill-row glow-card ${skill.health}${isParent ? " is-parent" : ""}`}
-      draggable={Boolean(skill.id && !skill.sourceId)}
+      draggable={Boolean(!loading && skill.id && !skill.sourceId)}
       onDragStart={event => {
-        if (skill.sourceId) {
+        if (loading || skill.sourceId) {
           event.preventDefault();
           return;
         }
@@ -3798,6 +3919,17 @@ function SkillRow({
       <div className="skill-row-main">
         <header>
           <strong>{skill.name}</strong>
+          {!isParent && (
+            <button
+              aria-label={t("lib.copyName", { name: skill.name })}
+              className="skill-name-copy"
+              onClick={() => void copyTextToClipboard(skill.name, t("toast.skillNameCopied"))}
+              title={t("lib.copyName", { name: skill.name })}
+              type="button"
+            >
+              <Icon name="copy" />
+            </button>
+          )}
           <span
             className={`kind-chip ${isParent ? "router" : "child"}`}
             title={isParent ? t("lib.parentTip") : t("lib.childTip")}
@@ -3903,6 +4035,7 @@ function SkillRating({
 }
 
 function SkillEditPanel({
+  disabled,
   draft,
   folders,
   onClose,
@@ -3910,6 +4043,7 @@ function SkillEditPanel({
   onSave,
   skill
 }: {
+  disabled: boolean;
   draft?: SkillDraft;
   folders: SkillFolderCard[];
   onClose: () => void;
@@ -3936,6 +4070,7 @@ function SkillEditPanel({
       <label>
         {skill.sourceId ? t("folders.sourceTreeFolder") : t("folders.choose")}
         <select
+          disabled={disabled}
           onChange={event => void onMoveFolder(event.target.value)}
           value={skill.userFolderId ?? ""}
         >
@@ -3946,15 +4081,16 @@ function SkillEditPanel({
       </label>
       <label>
         {t("skillEditor.name")}
-        <input onChange={event => setName(event.target.value)} value={name} />
+        <input disabled={disabled} onChange={event => setName(event.target.value)} value={name} />
       </label>
       <label>
         {t("skillEditor.category")}
-        <input onChange={event => setCategory(event.target.value)} value={category} />
+        <input disabled={disabled} onChange={event => setCategory(event.target.value)} value={category} />
       </label>
       <label>
         {t("skillEditor.tags")}
         <input
+          disabled={disabled}
           onChange={event => setTags(event.target.value)}
           placeholder={t("skillEditor.tagsPlaceholder")}
           value={tags}
@@ -3962,11 +4098,12 @@ function SkillEditPanel({
       </label>
       <label>
         {t("skillEditor.description")}
-        <textarea onChange={event => setDescription(event.target.value)} rows={4} value={description} />
+        <textarea disabled={disabled} onChange={event => setDescription(event.target.value)} rows={4} value={description} />
       </label>
       <label>
         {t("skillEditor.note")}
         <textarea
+          disabled={disabled}
           onChange={event => setNote(event.target.value)}
           placeholder={t("skillEditor.notePlaceholder")}
           rows={3}
@@ -3977,6 +4114,7 @@ function SkillEditPanel({
         <button className="secondary-action" onClick={onClose} type="button">{t("common.cancel")}</button>
         <button
           className="primary-action"
+          disabled={disabled}
           onClick={() => onSave({ category, description, name, note, tags })}
           type="button"
         >
@@ -3988,6 +4126,7 @@ function SkillEditPanel({
 }
 
 function SourceEditPanel({
+  disabled,
   draft,
   folders,
   governance,
@@ -4003,6 +4142,7 @@ function SourceEditPanel({
   source,
   sourceSkills
 }: {
+  disabled: boolean;
   draft?: SourceDraft;
   folders: SkillFolderCard[];
   governance?: SourceGovernanceCard;
@@ -4012,7 +4152,7 @@ function SourceEditPanel({
   onMoveFolder: (folderId: string) => Promise<LegacySnapshot | null>;
   onRefreshVersion: () => void;
   onRollbackVersion: () => void;
-  onSave: (draft: SourceDraft) => void;
+  onSave: (draft: SourceDraft) => Promise<void>;
   onSetPinned: (pinned: boolean) => void;
   popularity?: SourcePopularityCard;
   source: SourceCard;
@@ -4024,6 +4164,8 @@ function SourceEditPanel({
   const [note, setNote] = useState(draft?.note ?? source.note ?? "");
   const [enabled, setEnabled] = useState(draft?.enabled ?? source.enabled);
   const [tags, setTags] = useState(draft?.tags ?? tagInputValue(source.tags ?? []));
+  const [saving, setSaving] = useState(false);
+  const formDisabled = disabled || saving;
   const totalSkillCount = Math.max(source.skillCount ?? 0, sourceSkills.length);
   const singleRootSkill = sourceSkills.length === 1;
   const routerSkills = singleRootSkill ? [] : sourceSkills.filter(isRouterHubSkill);
@@ -4038,13 +4180,24 @@ function SourceEditPanel({
     setNote(draft?.note ?? source.note ?? "");
     setEnabled(draft?.enabled ?? source.enabled);
     setTags(draft?.tags ?? tagInputValue(source.tags ?? []));
+    setSaving(false);
   }, [draft, source.id]);
+
+  async function submit() {
+    if (formDisabled) return;
+    setSaving(true);
+    try {
+      await onSave({ category, enabled, name, note, sourceType, tags });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <Drawer onClose={onClose} eyebrow={t("srcEditor.eyebrow")} title={source.name} wide>
       <label className="source-folder-drawer-field">
         {t("folders.sourceTreeFolder")}
-        <select onChange={event => void onMoveFolder(event.target.value)} value={source.userFolderId ?? ""}>
+        <select disabled={formDisabled} onChange={event => void onMoveFolder(event.target.value)} value={source.userFolderId ?? ""}>
           <option value="">{t("folders.unfiled")}</option>
           {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
         </select>
@@ -4110,11 +4263,12 @@ function SourceEditPanel({
             </dl>
             {governance.remoteSummary && <p>{governance.remoteSummary}</p>}
             <div className="source-governance-actions">
-              <button className="ghost-action small" onClick={onRefreshVersion} type="button">
+              <button className="ghost-action small" disabled={formDisabled} onClick={onRefreshVersion} type="button">
                 <Icon name="refresh" /> {t("governance.refresh")}
               </button>
               <button
                 className={governance.pinned ? "ghost-action small active" : "ghost-action small"}
+                disabled={formDisabled}
                 onClick={() => onSetPinned(!governance.pinned)}
                 type="button"
               >
@@ -4123,7 +4277,7 @@ function SourceEditPanel({
               </button>
               <button
                 className="ghost-action small"
-                disabled={!governance.canRollback}
+                disabled={formDisabled || !governance.canRollback}
                 onClick={onRollbackVersion}
                 title={
                   governance.canRollback
@@ -4164,11 +4318,11 @@ function SourceEditPanel({
       </div>
       <label>
         {t("srcEditor.name")}
-        <input onChange={event => setName(event.target.value)} value={name} />
+        <input disabled={formDisabled} onChange={event => setName(event.target.value)} value={name} />
       </label>
       <label>
         {t("srcEditor.type")}
-        <select onChange={event => setSourceType(event.target.value as SourceCard["sourceType"])} value={sourceType}>
+        <select disabled={formDisabled} onChange={event => setSourceType(event.target.value as SourceCard["sourceType"])} value={sourceType}>
           <option value="skill">{t("type.skill")}</option>
           <option value="prompt">{t("type.prompt")}</option>
           <option value="mixed">{t("type.mixed")}</option>
@@ -4176,11 +4330,12 @@ function SourceEditPanel({
       </label>
       <label>
         {t("srcEditor.category")}
-        <input onChange={event => setCategory(event.target.value)} value={category} />
+        <input disabled={formDisabled} onChange={event => setCategory(event.target.value)} value={category} />
       </label>
       <label>
         {t("srcEditor.tags")}
         <input
+          disabled={formDisabled}
           onChange={event => setTags(event.target.value)}
           placeholder={t("srcEditor.tagsPlaceholder")}
           value={tags}
@@ -4189,6 +4344,7 @@ function SourceEditPanel({
       <label>
         {t("srcEditor.note")}
         <textarea
+          disabled={formDisabled}
           onChange={event => setNote(event.target.value)}
           placeholder={t("srcEditor.notePlaceholder")}
           rows={3}
@@ -4201,24 +4357,25 @@ function SourceEditPanel({
           <span>{t("srcEditor.enableHint")}</span>
         </div>
         <ToggleSwitch
-          disabled={false}
+          disabled={formDisabled}
           enabled={enabled}
           label={enabled ? t("common.enabled") : t("common.disabled")}
           onClick={() => setEnabled(value => !value)}
         />
       </div>
       <footer>
-        <button className="danger-action" onClick={onDelete} type="button">
+        <button className="danger-action" disabled={formDisabled} onClick={onDelete} type="button">
           <Icon name="trash" /> {t("srcEditor.delete")}
         </button>
         <span className="footer-spacer" />
         <button className="secondary-action" onClick={onClose} type="button">{t("common.cancel")}</button>
         <button
           className="primary-action"
-          onClick={() => onSave({ category, enabled, name, note, sourceType, tags })}
+          disabled={formDisabled}
+          onClick={() => void submit()}
           type="button"
         >
-          {t("common.save")}
+          {saving ? `${t("common.save")}…` : t("common.save")}
         </button>
       </footer>
     </Drawer>

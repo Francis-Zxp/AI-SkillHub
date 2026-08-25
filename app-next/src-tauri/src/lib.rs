@@ -2,6 +2,7 @@ mod adapter_doctor;
 mod codex_plugin_doctor;
 mod legacy_cleanup;
 mod mcp_center;
+mod mcp_mutation;
 mod metadata;
 mod migration_v4;
 mod prompt_library;
@@ -21,6 +22,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use security_scan::SourceSecurityFinding;
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -57,6 +59,11 @@ const GITHUB_FALLBACK_MAX_BYTES: u64 = 80 * 1024 * 1024;
 const GITHUB_FALLBACK_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MANAGED_SOURCE_METADATA_FILE: &str = ".skillhub-source.json";
 static SNAPSHOT_SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+// Heavy reconciliation jobs touch the same SQLite index, generated routers and
+// recipient links. Keep them single-flight so a user action cannot overlap a
+// refresh and leave either side observing a half-reconciled catalog.
+static BACKGROUND_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static MCP_MUTATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static SOURCE_IMPORT_CANCELLATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
     OnceLock::new();
 const SOURCE_IMPORT_PROGRESS_EVENT: &str = "source-import-progress";
@@ -534,6 +541,19 @@ struct SourceCard {
     user_folder_color: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceMutationResult {
+    source: SourceCard,
+    snapshot: Option<LegacySnapshot>,
+    delivery_reconciled: bool,
+}
+
+struct CommittedSourceMetadata {
+    previous: SourceCard,
+    source: SourceCard,
+}
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SourcePopularityCard {
@@ -554,6 +574,23 @@ struct SourcePopularityCard {
     local_seven_day_count: usize,
     local_thirty_day_count: usize,
     trend_points: Vec<SourcePopularityTrendPointCard>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourcePopularityRefreshResult {
+    source_popularity: Vec<SourcePopularityCard>,
+    summary: SourcePopularityRefreshSummaryCard,
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct SourcePopularityRefreshSummaryCard {
+    github_total: usize,
+    fresh: usize,
+    deferred: usize,
+    failed: usize,
+    missing: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -1137,6 +1174,22 @@ async fn run_skillhub_sync() -> Result<LegacySnapshot, String> {
 }
 
 #[tauri::command]
+async fn save_source_metadata(
+    source_id: String,
+    name: String,
+    source_type: String,
+    category: String,
+    note: String,
+    enabled: bool,
+    tags: Vec<String>,
+) -> Result<SourceMutationResult, String> {
+    run_blocking_task(move || {
+        save_source_metadata_blocking(source_id, name, source_type, category, note, enabled, tags)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn ensure_agent_skill_delivery() -> Result<LegacySnapshot, String> {
     run_blocking_task(ensure_agent_skill_delivery_blocking).await
 }
@@ -1162,7 +1215,7 @@ async fn refresh_agent_detection() -> Result<LegacySnapshot, String> {
 }
 
 #[tauri::command]
-async fn refresh_source_popularity() -> Result<LegacySnapshot, String> {
+async fn refresh_source_popularity() -> Result<SourcePopularityRefreshResult, String> {
     run_blocking_task(refresh_source_popularity_blocking).await
 }
 
@@ -1247,6 +1300,29 @@ where
     tauri::async_runtime::spawn_blocking(task)
         .await
         .map_err(|error| format!("后台任务启动失败：{}", error))?
+}
+
+fn acquire_background_write_guard(
+    operation: &str,
+) -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    try_acquire_background_write_guard(
+        BACKGROUND_WRITE_LOCK.get_or_init(|| Mutex::new(())),
+        operation,
+    )
+}
+
+fn try_acquire_background_write_guard<'a>(
+    lock: &'a Mutex<()>,
+    operation: &str,
+) -> Result<std::sync::MutexGuard<'a, ()>, String> {
+    match lock.try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Ok(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => Err(format!(
+            "另一项刷新或写入任务正在运行；请等待其完成后再执行{}。",
+            operation
+        )),
+    }
 }
 
 fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
@@ -1555,6 +1631,7 @@ fn indexed_snapshot_needs_portable_source_refresh(root: &Path, snapshot: &Legacy
 }
 
 fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("完整同步")?;
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
 
@@ -1574,12 +1651,13 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     let _ = record_router_hub_audit(&connection, &report);
     let _ = sync_skill_conflict_dispatchers(&root, &connection);
     run_skillhub_script_no_pull(&root)?;
-    run_agent_link_script(&root)?;
+    run_agent_link_script(&root, &connection)?;
     run_diagnostics_export_script(&root)?;
     scan_legacy_snapshot_blocking()
 }
 
 fn ensure_agent_skill_delivery_blocking() -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("Agent Skill 交付")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
         let _ = scan_legacy_snapshot_blocking()?;
@@ -1651,7 +1729,7 @@ fn sync_local_sources_to_agents(root: &Path, connection: &Connection) -> Result<
     let _ = record_router_hub_audit(connection, &report);
     sync_skill_conflict_dispatchers(root, connection)?;
     run_skillhub_script_no_pull(root)?;
-    run_agent_link_script(root)?;
+    run_agent_link_script(root, connection)?;
     run_diagnostics_export_script(root)
 }
 
@@ -1700,7 +1778,7 @@ fn run_skillhub_script_with_options(root: &Path, no_pull: bool) -> Result<(), St
     Ok(())
 }
 
-fn run_agent_link_script(root: &Path) -> Result<(), String> {
+fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<(), String> {
     let script = agent_link_script_file(root);
     if !script.exists() {
         return Err(format!("找不到 AI 工具链接脚本：{}", script.display()));
@@ -1713,7 +1791,7 @@ fn run_agent_link_script(root: &Path) -> Result<(), String> {
         .arg("-Quiet");
     configure_user_data_command(&mut command, root);
     if database_file(root).exists() {
-        let allowlist = write_agent_skill_allowlist(root)?;
+        let allowlist = write_agent_skill_allowlist(root, connection)?;
         command.env("AI_SKILLHUB_AGENT_SKILL_ALLOWLIST", allowlist);
     }
     let output = command_output_with_timeout(
@@ -1944,8 +2022,7 @@ fn select_agent_skill_allowlist_entries(
     Ok(enabled)
 }
 
-fn write_agent_skill_allowlist(root: &Path) -> Result<PathBuf, String> {
-    let connection = open_index_database(root)?;
+fn write_agent_skill_allowlist(root: &Path, connection: &Connection) -> Result<PathBuf, String> {
     let mut statement = connection
         .prepare(
             "SELECT skills.folder_name,
@@ -2178,6 +2255,7 @@ fn set_skill_metadata(
 
 #[tauri::command]
 fn set_skill_enabled(folder_name: String, enabled: bool) -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("Skill 启用状态切换")?;
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_skill_enabled_override_in_connection(&connection, &folder_name, enabled)?;
@@ -2535,51 +2613,171 @@ fn move_skill_folder(folder_id: String, direction: String) -> Result<Vec<SkillFo
     read_indexed_skill_folders(&connection)
 }
 
-#[tauri::command]
-fn set_source_metadata(
+fn save_source_metadata_blocking(
     source_id: String,
     name: String,
     source_type: String,
     category: String,
     note: String,
     enabled: bool,
-) -> Result<LegacySnapshot, String> {
+    tags: Vec<String>,
+) -> Result<SourceMutationResult, String> {
+    let _write_guard = acquire_background_write_guard("来源保存")?;
     let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    let previous_enabled = read_indexed_sources(&connection)?
-        .into_iter()
-        .find(|source| source.id == source_id)
-        .map(|source| source.enabled);
-    set_source_metadata_override_in_connection(
-        &connection,
+    let mut connection = open_index_database(&root)?;
+    let committed = save_source_metadata_and_tags_with_delivery(
+        &mut connection,
         &source_id,
         &name,
         &source_type,
         &category,
         &note,
         enabled,
+        &tags,
+        |transaction| sync_local_sources_to_agents(&root, transaction),
     )?;
-    if previous_enabled != Some(enabled) {
-        sync_local_sources_to_agents(&root, &connection)?;
-        return scan_legacy_snapshot_blocking();
-    }
-    load_indexed_snapshot_blocking()
+    let delivery_reconciled = committed.previous.enabled != committed.source.enabled;
+    let structural_snapshot_required = delivery_reconciled
+        || committed.previous.name != committed.source.name
+        || committed.previous.source_type != committed.source.source_type
+        || committed.previous.category_id != committed.source.category_id;
+    let source = committed.source;
+    Ok(source_mutation_result_after_commit(
+        source,
+        delivery_reconciled,
+        structural_snapshot_required,
+        || {
+            if delivery_reconciled {
+                scan_legacy_snapshot_blocking()
+            } else {
+                load_indexed_snapshot_blocking()
+            }
+        },
+    ))
 }
 
-#[tauri::command]
-fn set_sources_bulk_metadata(
-    source_ids: Vec<String>,
-    category: String,
-    enabled: Option<bool>,
-) -> Result<LegacySnapshot, String> {
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    set_sources_bulk_metadata_in_connection(&connection, &source_ids, &category, enabled)?;
-    if enabled.is_some() {
-        sync_local_sources_to_agents(&root, &connection)?;
-        return scan_legacy_snapshot_blocking();
+fn source_mutation_result_after_commit<F>(
+    source: SourceCard,
+    delivery_reconciled: bool,
+    snapshot_required: bool,
+    load_snapshot: F,
+) -> SourceMutationResult
+where
+    F: FnOnce() -> Result<LegacySnapshot, String>,
+{
+    let snapshot = if snapshot_required {
+        load_snapshot()
+            .ok()
+            .filter(|snapshot| snapshot.sources.iter().any(|item| item.id == source.id))
+    } else {
+        None
+    };
+    SourceMutationResult {
+        source,
+        snapshot,
+        delivery_reconciled,
     }
-    load_indexed_snapshot_blocking()
+}
+
+#[allow(clippy::too_many_arguments)]
+#[cfg(test)]
+fn save_source_metadata_and_tags_in_connection(
+    connection: &mut Connection,
+    source_id: &str,
+    name: &str,
+    source_type: &str,
+    category: &str,
+    note: &str,
+    enabled: bool,
+    tags: &[String],
+) -> Result<bool, String> {
+    save_source_metadata_and_tags_with_delivery(
+        connection,
+        source_id,
+        name,
+        source_type,
+        category,
+        note,
+        enabled,
+        tags,
+        |_| Ok(()),
+    )
+    .map(|committed| committed.previous.enabled)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn save_source_metadata_and_tags_with_delivery<F>(
+    connection: &mut Connection,
+    source_id: &str,
+    name: &str,
+    source_type: &str,
+    category: &str,
+    note: &str,
+    enabled: bool,
+    tags: &[String],
+    mut reconcile_delivery: F,
+) -> Result<CommittedSourceMetadata, String>
+where
+    F: FnMut(&Connection) -> Result<(), String>,
+{
+    let previous = read_indexed_sources(connection)?
+        .into_iter()
+        .find(|source| source.id == source_id)
+        .ok_or_else(|| format!("Cannot find indexed source {}.", source_id))?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot start source metadata transaction: {}", error))?;
+    set_source_metadata_override_in_connection(
+        &transaction,
+        source_id,
+        name,
+        source_type,
+        category,
+        note,
+        enabled,
+    )?;
+    set_source_tags_in_connection(&transaction, source_id, tags)?;
+    let source = read_indexed_sources(&transaction)?
+        .into_iter()
+        .find(|source| source.id == source_id)
+        .ok_or_else(|| format!("Cannot find saved source {}.", source_id))?;
+
+    if previous.enabled == enabled {
+        transaction
+            .commit()
+            .map_err(|error| format!("Cannot commit source metadata transaction: {}", error))?;
+        return Ok(CommittedSourceMetadata { previous, source });
+    }
+
+    if let Err(delivery_error) = reconcile_delivery(&transaction) {
+        transaction
+            .rollback()
+            .map_err(|rollback_error| {
+                format!(
+                    "Agent Skill delivery failed ({delivery_error}); source metadata rollback also failed: {rollback_error}"
+                )
+            })?;
+        return match reconcile_delivery(connection) {
+            Ok(()) => Err(format!(
+                "Agent Skill delivery failed ({delivery_error}); source metadata was rolled back and the previous delivery state was restored."
+            )),
+            Err(compensation_error) => Err(format!(
+                "Agent Skill delivery failed ({delivery_error}); source metadata was rolled back, but restoring the previous delivery state also failed ({compensation_error})."
+            )),
+        };
+    }
+
+    if let Err(commit_error) = transaction.commit() {
+        return match reconcile_delivery(connection) {
+            Ok(()) => Err(format!(
+                "Agent Skill delivery completed, but source metadata commit failed ({commit_error}); the previous delivery state was restored."
+            )),
+            Err(compensation_error) => Err(format!(
+                "Agent Skill delivery completed, but source metadata commit failed ({commit_error}); restoring the previous delivery state also failed ({compensation_error})."
+            )),
+        };
+    }
+    Ok(CommittedSourceMetadata { previous, source })
 }
 
 #[tauri::command]
@@ -2600,6 +2798,7 @@ fn set_source_tags(source_id: String, tags: Vec<String>) -> Result<LegacySnapsho
 
 #[tauri::command]
 fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("来源删除")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
         let _ = scan_legacy_snapshot_blocking()?;
@@ -2696,48 +2895,126 @@ fn open_release_gate_export_path(path: String) -> Result<(), String> {
 #[tauri::command]
 async fn scan_mcp_connections() -> Result<mcp_center::McpInventory, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let home_dir = std::env::var_os("USERPROFILE")
-            .or_else(|| std::env::var_os("HOME"))
-            .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .ok_or_else(|| "无法确定当前用户目录；MCP 只读扫描未运行。".to_string())?;
-
+        let home_dir = resolve_mcp_home_dir()?;
         let root = resolve_legacy_root()?;
-        let db_file = database_file(&root);
-        let workspaces = if db_file.is_file() {
-            let connection = Connection::open_with_flags(
-                &db_file,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )
-            .map_err(|_| "无法以只读方式打开 AI SkillHub 工作区索引。".to_string())?;
-            read_indexed_workspaces(&connection)?
-        } else {
-            Vec::new()
-        };
-        let registered_workspaces = workspaces
-            .into_iter()
-            .filter(|workspace| workspace.enabled && workspace.scope != "global")
-            .filter_map(|workspace| {
-                let path = PathBuf::from(workspace.path);
-                path.is_absolute()
-                    .then_some(mcp_center::RegisteredWorkspace {
-                        id: workspace.id,
-                        display_name: workspace.name,
-                        path,
-                    })
-            })
-            .collect();
-
         Ok(mcp_center::scan_connections(mcp_center::McpScanRequest {
             home_dir,
-            registered_workspaces,
+            registered_workspaces: read_registered_mcp_workspaces(&root)?,
             registered_codex_profiles: Vec::new(),
             platform: Some(std::env::consts::OS.to_string()),
         }))
     })
     .await
     .map_err(|_| "MCP 只读扫描后台任务意外停止；没有修改任何配置。".to_string())?
+}
+
+fn resolve_mcp_home_dir() -> Result<PathBuf, String> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| "无法确定当前用户目录；MCP 配置操作未运行。".to_string())
+}
+
+fn read_registered_mcp_workspaces(
+    root: &Path,
+) -> Result<Vec<mcp_center::RegisteredWorkspace>, String> {
+    let db_file = database_file(root);
+    let workspaces = if db_file.is_file() {
+        let connection = Connection::open_with_flags(
+            &db_file,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|_| "无法以只读方式打开 AI SkillHub 工作区索引。".to_string())?;
+        read_indexed_workspaces(&connection)?
+    } else {
+        Vec::new()
+    };
+    Ok(workspaces
+        .into_iter()
+        .filter(|workspace| workspace.enabled && workspace.scope != "global")
+        .filter_map(|workspace| {
+            let path = PathBuf::from(workspace.path);
+            path.is_absolute()
+                .then_some(mcp_center::RegisteredWorkspace {
+                    id: workspace.id,
+                    display_name: workspace.name,
+                    path,
+                })
+        })
+        .collect())
+}
+
+fn mcp_mutation_context() -> Result<mcp_mutation::McpMutationContext, String> {
+    let root = resolve_legacy_root()?;
+    let registered_workspaces = read_registered_mcp_workspaces(&root)?
+        .into_iter()
+        .filter(|workspace| {
+            fs::symlink_metadata(&workspace.path)
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        })
+        .collect();
+    Ok(mcp_mutation::McpMutationContext {
+        home_dir: resolve_mcp_home_dir()?,
+        registered_workspaces,
+        private_state_dir: private_state_dir(&root),
+    })
+}
+
+fn acquire_mcp_mutation_guard() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    match MCP_MUTATION_LOCK.get_or_init(|| Mutex::new(())).try_lock() {
+        Ok(guard) => Ok(guard),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => Ok(poisoned.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            Err("另一项 MCP 配置操作正在运行；请等待其完成。".to_string())
+        }
+    }
+}
+
+#[tauri::command]
+async fn plan_mcp_changes(
+    request: mcp_mutation::McpMutationBatchRequest,
+) -> Result<mcp_mutation::McpMutationPlan, String> {
+    run_blocking_task(move || {
+        let _guard = acquire_mcp_mutation_guard()?;
+        mcp_mutation::plan_mcp_changes(&mcp_mutation_context()?, request)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn apply_mcp_plan(plan_id: String) -> Result<mcp_mutation::McpApplyResult, String> {
+    run_blocking_task(move || {
+        let _guard = acquire_mcp_mutation_guard()?;
+        mcp_mutation::apply_mcp_plan(&mcp_mutation_context()?, &plan_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn rollback_mcp_snapshot(
+    snapshot_id: String,
+) -> Result<mcp_mutation::McpRollbackResult, String> {
+    run_blocking_task(move || {
+        let _guard = acquire_mcp_mutation_guard()?;
+        mcp_mutation::rollback_mcp_snapshot(&mcp_mutation_context()?, &snapshot_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_mcp_rollback_snapshots() -> Result<Vec<mcp_mutation::McpRollbackSnapshot>, String> {
+    run_blocking_task(move || {
+        let _guard = acquire_mcp_mutation_guard()?;
+        mcp_mutation::list_mcp_rollback_snapshots(&mcp_mutation_context()?)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_mcp_mutation_targets() -> Result<Vec<mcp_mutation::McpMutationTargetOption>, String> {
+    run_blocking_task(move || mcp_mutation::list_mcp_mutation_targets(&mcp_mutation_context()?))
+        .await
 }
 
 /// Strictly read-only. The probe does not execute Codex, PowerShell, npm,
@@ -2974,6 +3251,7 @@ async fn promote_staged_source_import(
     security_review_confirmed: bool,
 ) -> Result<SourceImportPromotionCard, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let _write_guard = acquire_background_write_guard("来源导入")?;
         let root = resolve_legacy_root()?;
         let connection = open_index_database(&root)?;
         let mut promotion = promote_staged_source_import_in_connection(
@@ -3065,24 +3343,27 @@ async fn promote_staged_source_import(
 }
 
 #[tauri::command]
-fn record_usage_event(
+async fn record_usage_event(
     target_type: String,
     target_id: String,
     target_name: String,
     source_name: String,
     event_type: String,
-) -> Result<LegacySnapshot, String> {
-    record_usage_event_row(
-        &target_type,
-        &target_id,
-        &target_name,
-        &source_name,
-        &event_type,
-    )?;
-    load_indexed_snapshot_blocking()
+) -> Result<(), String> {
+    run_blocking_task(move || {
+        record_usage_event_row(
+            &target_type,
+            &target_id,
+            &target_name,
+            &source_name,
+            &event_type,
+        )
+    })
+    .await
 }
 
-fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
+fn refresh_source_popularity_blocking() -> Result<SourcePopularityRefreshResult, String> {
+    let _write_guard = acquire_background_write_guard("来源热度刷新")?;
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     let mut sources = read_indexed_sources(&connection)?;
@@ -3095,7 +3376,7 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
     let mut skipped_recent = 0usize;
     let mut batch_deferred_reason: Option<String> = None;
 
-    for source in sources {
+    for source in &sources {
         let Some((owner, repo)) = parse_github_repo(&source.url) else {
             continue;
         };
@@ -3115,7 +3396,7 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
             };
             upsert_source_popularity_cache(
                 &connection,
-                &source,
+                source,
                 &owner,
                 &repo,
                 &fallback,
@@ -3131,7 +3412,7 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
             Ok(popularity) => {
                 upsert_source_popularity_cache(
                     &connection,
-                    &source,
+                    source,
                     &owner,
                     &repo,
                     &popularity,
@@ -3152,7 +3433,7 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
                 };
                 upsert_source_popularity_cache(
                     &connection,
-                    &source,
+                    source,
                     &owner,
                     &repo,
                     &fallback,
@@ -3199,7 +3480,33 @@ fn refresh_source_popularity_blocking() -> Result<LegacySnapshot, String> {
         )
         .map_err(|error| format!("Cannot write source popularity audit event: {}", error))?;
 
-    scan_legacy_snapshot_blocking()
+    build_source_popularity_refresh_result(&connection, &sources)
+}
+
+fn build_source_popularity_refresh_result(
+    connection: &Connection,
+    sources: &[SourceCard],
+) -> Result<SourcePopularityRefreshResult, String> {
+    let usage_stats = read_indexed_usage_stats(connection)?;
+    let source_popularity = read_indexed_source_popularity(connection, sources, &usage_stats)?;
+    let mut summary = SourcePopularityRefreshSummaryCard {
+        github_total: source_popularity.len(),
+        ..SourcePopularityRefreshSummaryCard::default()
+    };
+
+    for card in &source_popularity {
+        match card.cache_status.as_str() {
+            "fresh" => summary.fresh += 1,
+            "missing" => summary.missing += 1,
+            "error" => summary.failed += 1,
+            _ => summary.deferred += 1,
+        }
+    }
+
+    Ok(SourcePopularityRefreshResult {
+        source_popularity,
+        summary,
+    })
 }
 
 fn resolve_legacy_root() -> Result<PathBuf, String> {
@@ -4423,6 +4730,7 @@ fn set_source_metadata_override_in_connection(
     Ok(())
 }
 
+#[cfg(test)]
 fn set_sources_bulk_metadata_in_connection(
     connection: &Connection,
     source_ids: &[String],
@@ -6640,7 +6948,7 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
                 COALESCE(NULLIF(skill_overrides.description, ''), skills.description) AS description,
                 COALESCE(skill_overrides.note, '') AS note,
                 COALESCE(skills.source_id, '') AS source_id,
-                COALESCE(sources.name, 'local') AS source_name,
+                COALESCE(NULLIF(source_overrides.display_name, ''), sources.name, 'local') AS source_name,
                 skills.health_status,
                 COALESCE(skill_overrides.enabled, skills.enabled) AS enabled,
                 COALESCE(skill_overrides.rating, 0) AS rating,
@@ -6672,6 +6980,7 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
                 COALESCE(skill_folders.color, '') AS user_folder_color
             FROM skills
             LEFT JOIN sources ON sources.id = skills.source_id
+            LEFT JOIN source_overrides ON source_overrides.source_id = sources.id
             LEFT JOIN skill_overrides ON skill_overrides.skill_id = skills.id
             LEFT JOIN skill_folder_memberships ON skill_folder_memberships.skill_id = skills.id
             LEFT JOIN source_folder_memberships ON source_folder_memberships.source_id = skills.source_id
@@ -6684,7 +6993,7 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
                     OR skills.description LIKE '%[CONFLICT-DISPATCHER]%'
                 )
             )
-            ORDER BY lower(display_name)",
+            ORDER BY lower(COALESCE(NULLIF(skill_overrides.display_name, ''), skills.name))",
         )
         .map_err(|error| format!("Cannot prepare indexed skill query: {}", error))?;
 
@@ -14957,15 +15266,55 @@ fn read_skill_description(path: &Path) -> String {
 
 /// Build the canonical router-hub Skill name for a collection.
 ///
-/// Per [skill-router-standard.md](../../../docs/skill-router-standard.md) rule 3, the parent
-/// Skill must remain callable by the **original** collection name (e.g. `/nature-skills`).
-/// We must NOT append a global suffix like `-hub`; doing so breaks every prompt that says
-/// "use the /nature-skills collection".
-///
-/// A source-root Skill may share this name. That is safe because recipients receive
-/// only the generated parent entry; the original source file remains a child route.
+/// Build the strict, deterministic parent name shared with the PowerShell
+/// generator. Already-safe names only fold ASCII case. Any lossy conversion or
+/// truncation receives a source-name hash so punctuation variants cannot share
+/// and overwrite one router directory.
 fn router_hub_skill_name(collection: &str) -> String {
-    normalize_skill_lookup(collection)
+    let trimmed = collection.trim();
+    let already_safe = trimmed.len() <= 64
+        && !trimmed.is_empty()
+        && trimmed.is_ascii()
+        && trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        && trimmed
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && trimmed
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric);
+    if already_safe {
+        return trimmed.to_ascii_lowercase();
+    }
+
+    let mut slug = String::with_capacity(trimmed.len().min(51));
+    let mut separator_pending = false;
+    for byte in trimmed.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            if separator_pending && !slug.is_empty() {
+                slug.push('-');
+            }
+            slug.push(char::from(byte.to_ascii_lowercase()));
+            separator_pending = false;
+        } else if !slug.is_empty() {
+            separator_pending = true;
+        }
+    }
+    let digest = format!("{:x}", Sha256::digest(trimmed.as_bytes()));
+    let suffix = &digest[..12];
+    if slug.is_empty() {
+        return format!("skill-{suffix}");
+    }
+    slug.truncate(slug.len().min(51));
+    let prefix = slug.trim_end_matches('-');
+    if prefix.is_empty() {
+        format!("skill-{suffix}")
+    } else {
+        format!("{prefix}-{suffix}")
+    }
 }
 
 /// Compose the body of a generated router-hub SKILL.md.
@@ -15957,6 +16306,7 @@ fn record_router_hub_audit(
 
 #[tauri::command]
 fn regenerate_router_hubs(commit: bool) -> Result<RouterHubReport, String> {
+    let _write_guard = acquire_background_write_guard("父 Skill 路由重建")?;
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     let consent = read_operator_consent(&connection).unwrap_or(OperatorConsentCard {
@@ -15989,6 +16339,7 @@ fn set_skill_conflict_choice(
         _ => return Err("Unsupported skill conflict status.".to_string()),
     };
 
+    let _write_guard = acquire_background_write_guard("Skill 冲突默认项保存")?;
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     let skills = read_indexed_skills(&connection)?;
@@ -16112,8 +16463,7 @@ pub fn run() {
             move_skill_to_folder,
             move_source_skills_to_folder,
             move_skill_folder,
-            set_source_metadata,
-            set_sources_bulk_metadata,
+            save_source_metadata,
             set_skill_tags,
             set_source_tags,
             delete_managed_source,
@@ -16122,6 +16472,11 @@ pub fn run() {
             run_release_gate_runner,
             open_release_gate_export_path,
             scan_mcp_connections,
+            plan_mcp_changes,
+            apply_mcp_plan,
+            rollback_mcp_snapshot,
+            list_mcp_rollback_snapshots,
+            list_mcp_mutation_targets,
             scan_codex_plugin_doctor,
             preview_source_import_candidate,
             stage_source_import_candidate,
@@ -16248,6 +16603,21 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.starts_with("preset-"));
         assert!(second.starts_with("preset-"));
+    }
+
+    #[test]
+    fn background_write_guard_is_fail_fast_and_reusable() {
+        let lock = Mutex::new(());
+        let first = try_acquire_background_write_guard(&lock, "测试写入")
+            .expect("first background writer should acquire the guard");
+        let blocked = try_acquire_background_write_guard(&lock, "第二项测试写入")
+            .expect_err("a concurrent background writer should fail fast");
+        assert!(blocked.contains("第二项测试写入"));
+
+        drop(first);
+        let second = try_acquire_background_write_guard(&lock, "第二项测试写入")
+            .expect("guard should be reusable after the first writer finishes");
+        drop(second);
     }
 
     fn test_skill_card(
@@ -16421,6 +16791,15 @@ mod tests {
         assert_eq!(skills[0].usage_guide, "自动 Skill 用法 v2");
         assert!(skills[0].metadata_origin.starts_with("manual+"));
         assert!(skills[0].tags.contains(&"人工 Skill 标签".to_string()));
+        assert_eq!(skills[0].source, sources[0].name);
+
+        let full_snapshot = read_snapshot_from_database(&root, &connection)
+            .expect("override-aware full snapshot should read");
+        assert_eq!(full_snapshot.sources[0].name, "人工来源名称");
+        assert!(full_snapshot
+            .skills
+            .iter()
+            .all(|skill| skill.source == full_snapshot.sources[0].name));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -16732,8 +17111,6 @@ mod tests {
                 params![&timestamp],
             )
             .expect("disabled override should insert");
-        drop(connection);
-
         for folder_name in ["enabled-skill", "disabled-skill", "source-disabled-skill"] {
             let skill_dir = active_skills_dir(&root).join(folder_name);
             fs::create_dir_all(&skill_dir).expect("active Skill folder should create");
@@ -16744,7 +17121,8 @@ mod tests {
             .expect("active Skill manifest should write");
         }
 
-        let allowlist_path = write_agent_skill_allowlist(&root).expect("allowlist should write");
+        let allowlist_path =
+            write_agent_skill_allowlist(&root, &connection).expect("allowlist should write");
         let enabled: Vec<String> = serde_json::from_str(
             &fs::read_to_string(&allowlist_path).expect("allowlist should read"),
         )
@@ -16799,8 +17177,6 @@ mod tests {
                 params![&timestamp],
             )
             .expect("disabled duplicate override should insert");
-        drop(connection);
-
         let active_root = active_skills_dir(&root);
         for (entry_name, body) in [
             (
@@ -16826,7 +17202,8 @@ mod tests {
                 .expect("generated active manifest should write");
         }
 
-        let allowlist_path = write_agent_skill_allowlist(&root).expect("allowlist should write");
+        let allowlist_path =
+            write_agent_skill_allowlist(&root, &connection).expect("allowlist should write");
         let enabled: Vec<String> = serde_json::from_str(
             &fs::read_to_string(&allowlist_path).expect("allowlist should read"),
         )
@@ -17182,15 +17559,28 @@ mod tests {
     }
 
     #[test]
-    fn router_hub_name_preserves_original_collection_name() {
-        // Per skill-router-standard.md rule 3, parent must remain callable as /<collection>.
-        // No global suffix — only normalize whitespace / case to match V1's Normalize-SkillLookupName.
+    fn router_hub_name_is_recipient_safe_and_collision_resistant() {
         assert_eq!(router_hub_skill_name("nature-skills"), "nature-skills");
-        assert_eq!(router_hub_skill_name("Nature Skills"), "nature-skills");
+        assert_eq!(router_hub_skill_name("PaperSpine"), "paperspine");
+        assert_eq!(
+            router_hub_skill_name("Nature Skills"),
+            "nature-skills-1bc393b2fce0"
+        );
         assert_eq!(
             router_hub_skill_name("research_writing_skill"),
-            "research-writing-skill"
+            "research-writing-skill-3d303a602b99"
         );
+        assert_eq!(router_hub_skill_name("技能"), "skill-99aea2f9131a");
+        assert_eq!(router_hub_skill_name("___"), "skill-bda251550bf0");
+        assert_eq!(router_hub_skill_name("a.b"), "a-b-2e7336dc8eba");
+        assert_eq!(router_hub_skill_name("a_b"), "a-b-648fa9b31bc7");
+        assert_ne!(router_hub_skill_name("a.b"), router_hub_skill_name("a_b"));
+        let long = format!("{}.Tail", "A".repeat(70));
+        let canonical = router_hub_skill_name(&long);
+        assert_eq!(canonical.len(), 64);
+        assert!(canonical
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'));
     }
 
     #[test]
@@ -17632,6 +18022,10 @@ mod tests {
             .iter()
             .find(|plan| plan.collection_name == "PaperSpine")
             .expect("PaperSpine plan should exist");
+        assert_eq!(
+            plan.router_skill_name, "paperspine",
+            "PowerShell and Rust must publish the same lower-case parent key"
+        );
         assert_eq!(
             plan.child_count, 2,
             "parent count must represent capabilities, not packaging paths"
@@ -18585,6 +18979,281 @@ mod tests {
             set_source_rating_override_in_connection(&connection, "source-impeccable", 6).is_err()
         );
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn committed_source_snapshot_reload_failure_returns_compact_success() {
+        let source = test_source_card(
+            "source-committed",
+            "committed-source",
+            Path::new("D:/committed-source"),
+            "https://github.com/example/committed-source.git",
+        );
+        let result = source_mutation_result_after_commit(source, true, true, || {
+            Err("injected snapshot reload failure".to_string())
+        });
+
+        assert_eq!(result.source.id, "source-committed");
+        assert_eq!(result.source.name, "committed-source");
+        assert!(result.delivery_reconciled);
+        assert!(result.snapshot.is_none());
+    }
+
+    #[test]
+    fn structural_source_edit_returns_refreshed_snapshot() {
+        let root = PathBuf::from("D:/structural-source");
+        let source = test_source_card(
+            "source-structural",
+            "structural-source",
+            &root,
+            "https://github.com/example/structural-source.git",
+        );
+        let expected = test_snapshot(&root, vec![source.clone()], Vec::new(), Vec::new());
+
+        let result = source_mutation_result_after_commit(source, false, true, || Ok(expected));
+
+        assert!(!result.delivery_reconciled);
+        assert_eq!(
+            result
+                .snapshot
+                .expect("snapshot should be returned")
+                .sources
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn note_only_source_edit_keeps_compact_result() {
+        let source = test_source_card(
+            "source-note-only",
+            "note-only-source",
+            Path::new("D:/note-only-source"),
+            "https://github.com/example/note-only-source.git",
+        );
+
+        let result = source_mutation_result_after_commit(source, false, false, || {
+            panic!("note-only edit must not reload the full snapshot")
+        });
+
+        assert!(!result.delivery_reconciled);
+        assert!(result.snapshot.is_none());
+    }
+
+    #[test]
+    fn source_metadata_and_tags_commit_once_and_roll_back_together() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-source-atomic-meta-test-{}",
+            unix_timestamp_string()
+        ));
+        let mut connection = open_index_database(&root).expect("test sqlite should open");
+        let timestamp = unix_timestamp_string();
+        connection
+            .execute(
+                "INSERT INTO sources (
+                    id, name, source_type, url, local_path, install_mode,
+                    category_id, note, enabled, created_at, updated_at
+                ) VALUES (
+                    'source-atomic', 'atomic-source', 'skill', '', '',
+                    'scan', 'auto', 'before', 1, ?1, ?1
+                )",
+                params![timestamp],
+            )
+            .expect("source row should be inserted");
+
+        let previous_enabled = save_source_metadata_and_tags_in_connection(
+            &mut connection,
+            "source-atomic",
+            "atomic-source-edited",
+            "mixed",
+            "论文科研",
+            "saved once",
+            false,
+            &["常用".to_string(), "研究".to_string()],
+        )
+        .expect("combined metadata transaction should save");
+        assert!(previous_enabled);
+
+        let source = read_indexed_sources(&connection)
+            .expect("source should reread")
+            .into_iter()
+            .find(|source| source.id == "source-atomic")
+            .expect("source should exist");
+        assert_eq!(source.name, "atomic-source-edited");
+        assert_eq!(source.note, "saved once");
+        assert!(!source.enabled);
+        assert_eq!(source.tags.len(), 2);
+        assert!(source.tags.contains(&"常用".to_string()));
+        assert!(source.tags.contains(&"研究".to_string()));
+
+        let invalid_tag = "x".repeat(41);
+        assert!(save_source_metadata_and_tags_in_connection(
+            &mut connection,
+            "source-atomic",
+            "must-roll-back",
+            "skill",
+            "broken",
+            "must roll back",
+            true,
+            &[invalid_tag],
+        )
+        .is_err());
+        let rolled_back = read_indexed_sources(&connection)
+            .expect("rolled-back source should reread")
+            .into_iter()
+            .find(|source| source.id == "source-atomic")
+            .expect("source should still exist");
+        assert_eq!(rolled_back.name, "atomic-source-edited");
+        assert_eq!(rolled_back.note, "saved once");
+        assert!(!rolled_back.enabled);
+        assert_eq!(rolled_back.tags.len(), 2);
+        assert!(rolled_back.tags.contains(&"常用".to_string()));
+        assert!(rolled_back.tags.contains(&"研究".to_string()));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_enabled_delivery_failure_rolls_back_database_and_restores_old_delivery() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-source-delivery-rollback-test-{}",
+            unix_timestamp_string()
+        ));
+        let mut connection = open_index_database(&root).expect("test sqlite should open");
+        let timestamp = unix_timestamp_string();
+        connection
+            .execute(
+                "INSERT INTO sources (
+                    id, name, source_type, url, local_path, install_mode,
+                    category_id, note, enabled, created_at, updated_at
+                ) VALUES (
+                    'source-delivery', 'before-name', 'skill', '', '',
+                    'scan', 'before-category', 'before-note', 1, ?1, ?1
+                )",
+                params![timestamp],
+            )
+            .expect("source row should be inserted");
+        set_source_tags_in_connection(&connection, "source-delivery", &["before-tag".to_string()])
+            .expect("initial source tag should save");
+
+        let delivery_calls = std::cell::Cell::new(0usize);
+        let error = save_source_metadata_and_tags_with_delivery(
+            &mut connection,
+            "source-delivery",
+            "after-name",
+            "mixed",
+            "after-category",
+            "after-note",
+            false,
+            &["after-tag".to_string()],
+            |view| {
+                let call = delivery_calls.get() + 1;
+                delivery_calls.set(call);
+                let source = read_indexed_sources(view)?
+                    .into_iter()
+                    .find(|source| source.id == "source-delivery")
+                    .expect("source should remain visible");
+                if call == 1 {
+                    assert_eq!(source.name, "after-name");
+                    assert!(!source.enabled);
+                    assert_eq!(source.tags, vec!["after-tag".to_string()]);
+                    Err("injected Agent delivery failure".to_string())
+                } else {
+                    assert_eq!(source.name, "before-name");
+                    assert!(source.enabled);
+                    assert_eq!(source.tags, vec!["before-tag".to_string()]);
+                    Ok(())
+                }
+            },
+        )
+        .err()
+        .expect("delivery failure must fail the save");
+
+        assert!(error.contains("injected Agent delivery failure"));
+        assert!(error.contains("rolled back"));
+        assert_eq!(delivery_calls.get(), 2);
+        let persisted = read_indexed_sources(&connection)
+            .expect("rolled-back source should reread")
+            .into_iter()
+            .find(|source| source.id == "source-delivery")
+            .expect("source should still exist");
+        assert_eq!(persisted.name, "before-name");
+        assert_eq!(persisted.category_id, "before-category");
+        assert_eq!(persisted.note, "before-note");
+        assert!(persisted.enabled);
+        assert_eq!(persisted.tags, vec!["before-tag".to_string()]);
+
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn source_metadata_commit_failure_compensates_using_old_database_state() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-source-commit-compensation-test-{}",
+            unix_timestamp_string()
+        ));
+        let mut connection = open_index_database(&root).expect("test sqlite should open");
+        let timestamp = unix_timestamp_string();
+        connection
+            .execute(
+                "INSERT INTO sources (
+                    id, name, source_type, url, local_path, install_mode,
+                    category_id, note, enabled, created_at, updated_at
+                ) VALUES (
+                    'source-commit', 'before-name', 'skill', '', '',
+                    'scan', 'before-category', 'before-note', 1, ?1, ?1
+                )",
+                params![timestamp],
+            )
+            .expect("source row should be inserted");
+
+        let delivery_calls = std::cell::Cell::new(0usize);
+        let error = save_source_metadata_and_tags_with_delivery(
+            &mut connection,
+            "source-commit",
+            "after-name",
+            "mixed",
+            "after-category",
+            "after-note",
+            false,
+            &[],
+            |view| {
+                let call = delivery_calls.get() + 1;
+                delivery_calls.set(call);
+                let source = read_indexed_sources(view)?
+                    .into_iter()
+                    .find(|source| source.id == "source-commit")
+                    .expect("source should remain visible");
+                if call == 1 {
+                    assert_eq!(source.name, "after-name");
+                    assert!(!source.enabled);
+                    view.execute_batch("ROLLBACK")
+                        .map_err(|error| format!("cannot inject commit failure: {error}"))?;
+                } else {
+                    assert_eq!(source.name, "before-name");
+                    assert!(source.enabled);
+                }
+                Ok(())
+            },
+        )
+        .err()
+        .expect("commit failure must fail the save");
+
+        assert!(error.contains("commit failed"));
+        assert!(error.contains("previous delivery state was restored"));
+        assert_eq!(delivery_calls.get(), 2);
+        let persisted = read_indexed_sources(&connection)
+            .expect("source should reread after failed commit")
+            .into_iter()
+            .find(|source| source.id == "source-commit")
+            .expect("source should still exist");
+        assert_eq!(persisted.name, "before-name");
+        assert_eq!(persisted.note, "before-note");
+        assert!(persisted.enabled);
+
+        drop(connection);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -20127,8 +20796,9 @@ mod tests {
         .expect("skill usage should save");
 
         let stats = read_indexed_usage_stats(&connection).expect("usage stats should read");
-        let popularity_cards = read_indexed_source_popularity(&connection, &[source], &stats)
-            .expect("source popularity should read");
+        let popularity_cards =
+            read_indexed_source_popularity(&connection, std::slice::from_ref(&source), &stats)
+                .expect("source popularity should read");
         let card = popularity_cards
             .first()
             .expect("popularity card should exist");
@@ -20140,6 +20810,16 @@ mod tests {
         assert_eq!(card.trend_points[0].stars, 1234);
         assert_eq!(card.local_total_count, 1);
         assert!(card.local_seven_day_count >= 1);
+
+        let refresh_result =
+            build_source_popularity_refresh_result(&connection, std::slice::from_ref(&source))
+                .expect("lightweight popularity refresh result should build");
+        assert_eq!(refresh_result.source_popularity.len(), 1);
+        assert_eq!(refresh_result.summary.github_total, 1);
+        assert_eq!(refresh_result.summary.fresh, 1);
+        assert_eq!(refresh_result.summary.deferred, 0);
+        assert_eq!(refresh_result.summary.failed, 0);
+        assert_eq!(refresh_result.summary.missing, 0);
 
         let _ = fs::remove_dir_all(root);
     }

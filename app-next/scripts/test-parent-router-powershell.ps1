@@ -4,7 +4,8 @@ param()
 $ErrorActionPreference = 'Stop'
 $workspaceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $runtimeScript = Join-Path $workspaceRoot 'runtime\SkillHub.ps1'
-$windowsPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$powerShellHost = (Get-Process -Id $PID).Path
+$powerShellVersion = $PSVersionTable.PSVersion.ToString()
 $tempBase = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
 $fixture = Join-Path $env:TEMP ('skillhub-parent-router-test-' + [guid]::NewGuid().ToString('N'))
 $fixture = [IO.Path]::GetFullPath($fixture)
@@ -38,6 +39,38 @@ try {
     )
   }
 
+  $unicodeOnlyCollection = -join ([char]0x6280, [char]0x80FD)
+  $unicodeMixedCollection = 'Lab.' + $unicodeOnlyCollection + '_Tool'
+  $longCollection = (('A' * 70) -join '') + '.Tail'
+  $canonicalNameFixtures = @(
+    [PSCustomObject]@{ Collection = 'Mixed.Case_Name'; Expected = 'mixed-case-name-138ec712f901'; Child = 'mixed-case-child' },
+    [PSCustomObject]@{ Collection = 'Space Name'; Expected = 'space-name-acd5492ddc47'; Child = 'space-name-child' },
+    [PSCustomObject]@{ Collection = $unicodeMixedCollection; Expected = 'lab-tool-e211d5936626'; Child = 'unicode-mixed-child' },
+    [PSCustomObject]@{ Collection = $unicodeOnlyCollection; Expected = 'skill-99aea2f9131a'; Child = 'unicode-only-child' },
+    [PSCustomObject]@{ Collection = '___'; Expected = 'skill-bda251550bf0'; Child = 'empty-normalized-child' },
+    [PSCustomObject]@{ Collection = $longCollection; Expected = ((('a' * 51) -join '') + '-6e12ecedb817'); Child = 'long-name-child' },
+    [PSCustomObject]@{ Collection = 'a.b'; Expected = 'a-b-2e7336dc8eba'; Child = 'dot-collision-child' },
+    [PSCustomObject]@{ Collection = 'a_b'; Expected = 'a-b-648fa9b31bc7'; Child = 'underscore-collision-child' }
+  )
+  foreach ($nameFixture in $canonicalNameFixtures) {
+    $fixtureSkill = Join-Path (Join-Path $sources $nameFixture.Collection) $nameFixture.Child
+    New-Item -ItemType Directory -Force -Path $fixtureSkill | Out-Null
+    [IO.File]::WriteAllText(
+      (Join-Path $fixtureSkill 'SKILL.md'),
+      "---`nname: $($nameFixture.Child)`ndescription: Canonical parent name fixture.`n---`n`n# Fixture`n",
+      [Text.UTF8Encoding]::new($false)
+    )
+  }
+
+  $staleRouterTarget = Join-Path $fixture 'removed-router-target'
+  $staleActiveEntry = Join-Path $active 'paperspine'
+  New-Item -ItemType Directory -Force -Path $staleRouterTarget | Out-Null
+  New-Item -ItemType Junction -Path $staleActiveEntry -Target $staleRouterTarget | Out-Null
+  Remove-Item -LiteralPath $staleRouterTarget -Recurse -Force
+  if (Test-Path -LiteralPath (Join-Path $staleActiveEntry 'SKILL.md') -PathType Leaf) {
+    throw 'Broken active-link fixture unexpectedly exposes a SKILL.md.'
+  }
+
   $configPath = Join-Path $fixture 'skillhub.config.json'
   $config = [ordered]@{
     version = 3
@@ -57,7 +90,7 @@ try {
   $env:AI_SKILLHUB_STATE = $state
   $env:AI_SKILLHUB_REPORTS = $reports
   try {
-    & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass -File $runtimeScript -NoPull
+    & $powerShellHost -NoProfile -ExecutionPolicy Bypass -File $runtimeScript -NoPull
     if ($LASTEXITCODE -ne 0) { throw "SkillHub.ps1 exited with $LASTEXITCODE" }
   } finally {
     $env:AI_SKILLHUB_CONFIG_PATH = $previousConfig
@@ -86,6 +119,29 @@ try {
   }
   if (Test-Path -LiteralPath (Join-Path $active 'scientific-figure-making')) {
     throw 'Child Skill leaked into the parent-first active catalog.'
+  }
+
+
+  foreach ($nameFixture in $canonicalNameFixtures) {
+    $canonicalRouter = Join-Path $sources (Join-Path 'AI-SkillHub-local-routers' (Join-Path $nameFixture.Expected 'SKILL.md'))
+    if (-not (Test-Path -LiteralPath $canonicalRouter -PathType Leaf)) {
+      throw "Canonical parent router was not generated: $($nameFixture.Collection) -> $($nameFixture.Expected)"
+    }
+    if ($nameFixture.Expected.Length -gt 64 -or
+        $nameFixture.Expected -cnotmatch '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$') {
+      throw "Test fixture itself violates the recipient-compatible name contract: $($nameFixture.Expected)"
+    }
+    $canonicalBody = [IO.File]::ReadAllText($canonicalRouter, [Text.UTF8Encoding]::new($false))
+    $canonicalNameLine = @($canonicalBody -split "`r?`n" | Where-Object { $_ -like 'name:*' } | Select-Object -First 1)
+    if ($canonicalNameLine.Count -ne 1 -or $canonicalNameLine[0].Trim() -cne ('name: ' + $nameFixture.Expected)) {
+      throw "Canonical parent manifest name does not match its directory: $($nameFixture.Expected)"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $active (Join-Path $nameFixture.Expected 'SKILL.md')) -PathType Leaf)) {
+      throw "Canonical parent was not published to the active catalog: $($nameFixture.Expected)"
+    }
+  }
+  if ($canonicalNameFixtures[-2].Expected -ceq $canonicalNameFixtures[-1].Expected) {
+    throw 'Lossy parent normalization did not isolate dot/underscore collisions.'
   }
 
   # This file has no UTF-8 BOM, so Windows PowerShell 5.1 reads it as ANSI.
@@ -122,9 +178,13 @@ try {
 
   Assert-DeclaredChildrenOpen $parent 'figures4papers router' $sourceFileLabel | Out-Null
 
-  $spinePath = Join-Path $sources 'AI-SkillHub-local-routers\PaperSpine\SKILL.md'
+  $spinePath = Join-Path $sources 'AI-SkillHub-local-routers\paperspine\SKILL.md'
   if (-not (Test-Path -LiteralPath $spinePath -PathType Leaf)) {
-    throw 'Same-name source did not receive a PaperSpine parent router.'
+    throw 'Mixed-case source did not receive the canonical lower-case paperspine parent router.'
+  }
+  $routerFolderNames = @(Get-ChildItem -LiteralPath (Join-Path $sources 'AI-SkillHub-local-routers') -Directory -Force | ForEach-Object Name)
+  if ($routerFolderNames -ccontains 'PaperSpine') {
+    throw 'PowerShell emitted a mixed-case router name that disagrees with the Rust generator.'
   }
   $spine = [IO.File]::ReadAllText($spinePath, [Text.UTF8Encoding]::new($false))
   $spineChildren = Assert-DeclaredChildrenOpen $spine 'PaperSpine router' $sourceFileLabel
@@ -144,8 +204,11 @@ try {
   # chain and confirm each declared child is still reachable from it.
   $deliveryRoot = Join-Path $fixture 'agent-home\skills'
   New-Item -ItemType Directory -Force -Path $deliveryRoot | Out-Null
-  $deliveredEntry = Join-Path $deliveryRoot 'PaperSpine'
-  $activeEntry = Join-Path $active 'PaperSpine'
+  $deliveredEntry = Join-Path $deliveryRoot 'paperspine'
+  $activeEntry = Join-Path $active 'paperspine'
+  if (-not (Test-Path -LiteralPath (Join-Path $activeEntry 'SKILL.md') -PathType Leaf)) {
+    throw 'PowerShell did not replace the dangling active parent link.'
+  }
   if (Test-Path -LiteralPath $activeEntry) {
     cmd /C mklink /J "$deliveredEntry" "$activeEntry" | Out-Null
     if ($LASTEXITCODE -eq 0) {
@@ -167,7 +230,7 @@ try {
     }
   }
 
-  Write-Host 'PASS: Windows PowerShell generates and activates a single-child figures4papers parent.'
+  Write-Host "PASS: PowerShell $powerShellVersion generates and activates recipient-compatible parent names."
 } finally {
   if (Test-Path -LiteralPath $fixture) {
     $resolved = [IO.Path]::GetFullPath($fixture)

@@ -18,16 +18,16 @@ test("Skill folders are SQLite metadata and never move or delete Skill files", (
   assert.doesNotMatch(folderCommands, /remove_dir|remove_file|rename\(|fs::copy/);
 });
 
-test("library supports drag, accessible select fallback and safe unfiling", () => {
+test("library keeps drag handles separate from the accessible folder select", () => {
   assert.match(app, /application\/x-ai-skillhub-skill-id/);
   assert.match(app, /application\/x-ai-skillhub-source-id/);
   assert.match(app, /source-folder-drag-handle/);
   assert.match(app, /<Icon name="grip"/);
   assert.match(app, /folders\.dragShort/);
-  assert.match(app, /showPicker/);
-  assert.match(app, /else select\?\.click\(\)/);
-  assert.match(app, /aria-haspopup="listbox"/);
-  assert.match(app, /role="button"/);
+  const sourceDragHandle = app.match(/<span\s+aria-label=\{t\("folders\.dragSource"[\s\S]*?className="source-folder-drag-handle"[\s\S]*?<\/span>/)?.[0] ?? "";
+  assert.match(sourceDragHandle, /draggable=\{!loading\}/);
+  assert.match(sourceDragHandle, /onDragStart=/);
+  assert.doesNotMatch(sourceDragHandle, /showPicker|onClick|onKeyDown|aria-haspopup|role="button"|tabIndex/);
   assert.match(app, /<select[\s\S]*folders\.choose/);
   assert.match(app, /skillMatchesUserFolder/);
   assert.match(app, /delete_skill_folder/);
@@ -51,7 +51,7 @@ test("library supports drag, accessible select fallback and safe unfiling", () =
 });
 
 test("the All filter cannot accept a classification drop", () => {
-  assert.match(app, /const acceptsDrop = id !== "all"/);
+  assert.match(app, /const acceptsDrop = !disabled && id !== "all"/);
   assert.match(app, /onDrop=\{acceptsDrop \? event => acceptDrop/);
 });
 

@@ -11,6 +11,12 @@ const files = {
   capabilities: await readFile(new URL("../src-tauri/capabilities/default.json", import.meta.url), "utf8"),
   backend: await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8"),
   mcp: await readFile(new URL("../src-tauri/src/mcp_center.rs", import.meta.url), "utf8"),
+  mcpMutation: await readFile(new URL("../src-tauri/src/mcp_mutation.rs", import.meta.url), "utf8").catch(
+    (error) => {
+      if (error?.code === "ENOENT") return "";
+      throw error;
+    },
+  ),
   doctor: await readFile(new URL("../src-tauri/src/codex_plugin_doctor.rs", import.meta.url), "utf8")
 };
 
@@ -45,7 +51,7 @@ test("anonymous per-blob GitHub fallback is refused before API download", () => 
   assert.match(files.backend, /已停止匿名 GitHub API 逐文件回退/);
 });
 
-test("MCP center is read-only, secret-safe and never probes live capabilities", () => {
+test("MCP scanner stays read-only, secret-safe and never probes live capabilities", () => {
   assert.match(files.mcp, /capability_state: "unprobed"\.to_string\(\)/);
   assert.match(files.mcp, /headersHelper/);
   assert.match(files.mcp, /Secret values[\s\S]*never enter the returned snapshot/);
@@ -53,6 +59,27 @@ test("MCP center is read-only, secret-safe and never probes live capabilities", 
   assert.match(files.mcpUi, /Capabilities not probed|mcp\.unprobed/);
   assert.match(files.mcpUi, /next\.bindings\.some\(item => item\.id === current\)/);
   assert.match(files.mcpUi, /mcp\.copyPath/);
+});
+
+test("optional MCP mutation module is gated, reversible and never starts a server", () => {
+  if (!files.mcpMutation) return;
+  for (const contract of [
+    /plan_mcp_changes/,
+    /apply_mcp_plan/,
+    /rollback_mcp_snapshot/,
+    /list_mcp_rollback_snapshots/,
+    /create_private_backup/,
+    /protect_private_backup/,
+    /write_atomic/,
+    /verify_written_config/,
+    /restore_batch_after_failure/,
+  ]) {
+    assert.match(files.mcpMutation, contract);
+  }
+  assert.doesNotMatch(files.mcpMutation, /Command::new|\.spawn\(/);
+  assert.doesNotMatch(files.mcpMutation, /secret_value|token_value|password_value/i);
+  assert.match(files.mcpMutation, /env_vars/);
+  assert.match(files.mcpMutation, /header_env/);
 });
 
 test("MCP read and parse failures remain visible even when no binding can be created", () => {

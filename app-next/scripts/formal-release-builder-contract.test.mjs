@@ -9,7 +9,9 @@ const read = (...parts) => fs.readFileSync(path.join(...parts), "utf8");
 const packageJson = JSON.parse(read(appRoot, "package.json"));
 const tauriConfig = JSON.parse(read(appRoot, "src-tauri", "tauri.conf.json"));
 const version = packageJson.version;
+const previousVersion = "3.1.12";
 const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const escapedPreviousVersion = previousVersion.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const builder = read(appRoot, "scripts", "build-formal-release.ps1");
 const nsisQa = read(appRoot, "scripts", "test-nsis-install-upgrade.ps1");
 
@@ -30,6 +32,11 @@ test("formal release version surfaces agree before signing", () => {
   assert.match(
     read(appRoot, "scripts", "test-nsis-install-upgrade.ps1"),
     new RegExp(`\\[string\\]\\$ExpectedVersion\\s*=\\s*'${escapedVersion}'`),
+  );
+  assert.match(builder, new RegExp(`\\[string\\]\\$PreviousVersion\\s*=\\s*'${escapedPreviousVersion}'`));
+  assert.match(
+    read(appRoot, "scripts", "test-nsis-install-upgrade.ps1"),
+    new RegExp(`\\[string\\]\\$PreviousExpectedVersion\\s*=\\s*'${escapedPreviousVersion}'`),
   );
 });
 

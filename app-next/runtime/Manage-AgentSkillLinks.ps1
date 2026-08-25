@@ -91,9 +91,19 @@ function Write-Step([string]$Message) {
   if (-not $Quiet) { Write-Host $Message }
 }
 
+function Get-PathItemNoFollow([string]$Path) {
+  try {
+    # Test-Path follows junction targets, so it reports false for the exact
+    # broken-link object that reconciliation needs to remove.
+    return Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+  } catch {
+    return $null
+  }
+}
+
 function Remove-ReparsePointPath([string]$Path) {
-  if (-not (Test-Path -LiteralPath $Path)) { return }
-  $item = Get-Item -LiteralPath $Path -Force
+  $item = Get-PathItemNoFollow $Path
+  if ($null -eq $item) { return }
   if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
     throw "Refusing to remove a real folder while cleaning links: $Path"
   }
@@ -167,11 +177,16 @@ function Test-OpenAIDesktopPresent {
   return $false
 }
 
+function Test-CanonicalParentSkillName([string]$Value) {
+  if ([string]::IsNullOrWhiteSpace($Value) -or $Value.Length -gt 64) { return $false }
+  return $Value -cmatch '^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$'
+}
+
 function Test-ValidSkillManifest([string]$SkillDirectory) {
   $manifest = Join-Path $SkillDirectory 'SKILL.md'
   if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { return $false }
   try {
-    $lines = @(Get-Content -LiteralPath $manifest -Encoding UTF8 -TotalCount 160)
+    $lines = @(Get-Content -LiteralPath $manifest -Encoding UTF8 -TotalCount 256)
     if ($lines.Count -lt 4 -or $lines[0].Trim() -ne '---') { return $false }
     $frontmatterEnd = -1
     for ($index = 1; $index -lt $lines.Count; $index += 1) {
@@ -183,12 +198,42 @@ function Test-ValidSkillManifest([string]$SkillDirectory) {
     if ($frontmatterEnd -lt 2) { return $false }
     $frontmatter = @($lines[1..($frontmatterEnd - 1)])
     $nameLine = $frontmatter | Where-Object { $_ -match '^\s*name\s*:' } | Select-Object -First 1
-    $descriptionLine = $frontmatter | Where-Object { $_ -match '^\s*description\s*:' } | Select-Object -First 1
+    $descriptionIndex = -1
+    for ($index = 0; $index -lt $frontmatter.Count; $index += 1) {
+      if ($frontmatter[$index] -match '^\s*description\s*:') {
+        $descriptionIndex = $index
+        break
+      }
+    }
+    $descriptionLine = if ($descriptionIndex -ge 0) { $frontmatter[$descriptionIndex] } else { $null }
     $quoteChars = [char[]]@('"', "'")
     $nameValue = if ($null -ne $nameLine) { (($nameLine -split ':', 2)[1]).Trim().Trim($quoteChars) } else { '' }
     $descriptionValue = if ($null -ne $descriptionLine) { (($descriptionLine -split ':', 2)[1]).Trim().Trim($quoteChars) } else { '' }
-    return -not [string]::IsNullOrWhiteSpace($nameValue) -and
-      -not [string]::IsNullOrWhiteSpace($descriptionValue)
+    if ($descriptionValue -match '^[>|][+-]?$') {
+      $descriptionParts = New-Object System.Collections.Generic.List[string]
+      for ($index = $descriptionIndex + 1; $index -lt $frontmatter.Count; $index += 1) {
+        $line = [string]$frontmatter[$index]
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($line -notmatch '^\s+') { break }
+        $descriptionParts.Add($line.Trim()) | Out-Null
+      }
+      $descriptionValue = ($descriptionParts -join ' ').Trim()
+    }
+    if ([string]::IsNullOrWhiteSpace($nameValue) -or
+        [string]::IsNullOrWhiteSpace($descriptionValue)) {
+      return $false
+    }
+
+    $isParentRouter = ($lines -join "`n").Contains('[ROUTER-HUB]')
+    if ($isParentRouter) {
+      $folderName = Split-Path -Leaf $SkillDirectory
+      if (-not (Test-CanonicalParentSkillName $folderName) -or
+          -not (Test-CanonicalParentSkillName $nameValue) -or
+          $folderName -cne $nameValue) {
+        return $false
+      }
+    }
+    return $true
   } catch {
     return $false
   }
@@ -288,8 +333,8 @@ function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot) {
   # Older SkillHub releases linked the entire recipient Skills directory to the
   # flat active catalog. Convert only that known managed junction into a real
   # directory. Any external/user-owned link is preserved and rejected.
-  if (Test-Path -LiteralPath $RecipientSkillsRoot) {
-    $rootItem = Get-Item -LiteralPath $RecipientSkillsRoot -Force
+  $rootItem = Get-PathItemNoFollow $RecipientSkillsRoot
+  if ($null -ne $rootItem) {
     if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
       $rootTarget = [string]$rootItem.Target
       if ([string]::IsNullOrWhiteSpace($rootTarget) -or
@@ -305,8 +350,8 @@ function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot) {
 
   foreach ($oldName in @('AI_global_skills')) {
     $oldPath = Join-Path $RecipientSkillsRoot $oldName
-    if (Test-Path -LiteralPath $oldPath) {
-      $oldItem = Get-Item -LiteralPath $oldPath -Force
+    $oldItem = Get-PathItemNoFollow $oldPath
+    if ($null -ne $oldItem) {
       if (($oldItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         Remove-ReparsePointPath $oldPath
       }
@@ -327,8 +372,8 @@ function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot) {
 
   foreach ($skill in $activeSkillDirs) {
     $dest = Join-Path $RecipientSkillsRoot $skill.Name
-    if (Test-Path -LiteralPath $dest) {
-      $item = Get-Item -LiteralPath $dest -Force
+    $item = Get-PathItemNoFollow $dest
+    if ($null -ne $item) {
       if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         $currentTarget = [string]$item.Target
         if ($currentTarget -eq $skill.FullName) { continue }

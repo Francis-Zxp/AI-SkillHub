@@ -156,7 +156,6 @@ struct RawBinding {
     transport: String,
     command: Option<String>,
     url: Option<String>,
-    safe_identity_arg: Option<String>,
     enabled: bool,
     required: bool,
     auth_kind: String,
@@ -567,40 +566,33 @@ impl ScanAccumulator<'_> {
         path_display: &str,
         raw: RawBinding,
     ) {
-        let (target_kind, target_display) = if let Some(url) = raw.url.as_deref() {
-            ("url", redact_url(url))
+        let (target_kind, target_display, target_identity) = if let Some(url) = raw.url.as_deref() {
+            ("url", redact_url(url), private_url_identity(url, &raw.name))
         } else if let Some(command) = raw.command.as_deref() {
-            let command = redact_home_string(command, &self.request.home_dir);
-            let display = raw
-                .safe_identity_arg
-                .as_deref()
-                .map(|argument| {
-                    let redacted_argument = redact_home_string(argument, &self.request.home_dir);
-                    format!(
-                        "{} · {}",
-                        command,
-                        sanitize_identity_arg(&redacted_argument)
-                    )
-                })
-                .unwrap_or(command);
-            ("command", display)
+            let (class_key, class_label) = command_classification(command);
+            (
+                "command",
+                format!("{class_label} · arguments redacted"),
+                format!("{class_key}:{}", raw.name.trim().to_lowercase()),
+            )
         } else {
-            ("unknown", "未声明目标".to_string())
+            (
+                "unknown",
+                "未声明目标".to_string(),
+                format!("unknown:{}", raw.name.trim().to_lowercase()),
+            )
         };
-        let fingerprint_source = format!(
-            "{}:{}:{}",
-            raw.transport,
-            target_kind,
-            target_display.to_lowercase()
-        );
-        let fingerprint = format!("mcp-{:016x}", fnv1a64(&fingerprint_source));
-        let server_id = if let Some(existing) = self.server_by_fingerprint.get(&fingerprint) {
+        // Keep raw endpoint identity only inside this bounded scan so equivalent
+        // host bindings can be grouped. The serialized id is an opaque sequence,
+        // never a hash derived from a potentially sensitive URL or argument.
+        let identity_key = format!("{}:{}:{}", raw.transport, target_kind, target_identity);
+        let server_id = if let Some(existing) = self.server_by_fingerprint.get(&identity_key) {
             existing.clone()
         } else {
-            let server_id = fingerprint.clone();
+            let server_id = format!("mcp-server-{:04}", self.servers.len() + 1);
             self.servers.push(McpServer {
                 id: server_id.clone(),
-                fingerprint: fingerprint.clone(),
+                fingerprint: server_id.clone(),
                 display_name: raw.name.clone(),
                 transport: raw.transport.clone(),
                 target_kind: target_kind.to_string(),
@@ -611,7 +603,7 @@ impl ScanAccumulator<'_> {
                 capability_state: "unprobed".to_string(),
             });
             self.server_by_fingerprint
-                .insert(fingerprint, server_id.clone());
+                .insert(identity_key, server_id.clone());
             server_id
         };
 
@@ -805,7 +797,6 @@ fn parse_codex_mcp_toml(text: &str) -> Result<Vec<RawBinding>, ()> {
             .map(|value| toml_string_array(value))
             .unwrap_or_default();
         collect_sensitive_args(&args, &mut requirements);
-        let safe_identity_arg = first_safe_identity_arg(&args);
         let enabled = values
             .get("enabled")
             .and_then(|value| parse_bool(value))
@@ -827,7 +818,6 @@ fn parse_codex_mcp_toml(text: &str) -> Result<Vec<RawBinding>, ()> {
             transport: transport.to_string(),
             command,
             url,
-            safe_identity_arg,
             enabled,
             required,
             auth_kind,
@@ -836,6 +826,13 @@ fn parse_codex_mcp_toml(text: &str) -> Result<Vec<RawBinding>, ()> {
         });
     }
     Ok(result)
+}
+
+/// Mutation code uses the same bounded static interpretation as the read-only
+/// inventory after an atomic write. This validates configuration structure
+/// only; it never starts a server or exposes parsed credential values.
+pub(crate) fn validate_codex_mcp_config(text: &str) -> bool {
+    parse_codex_mcp_toml(text).is_ok()
 }
 
 fn parse_mcp_toml_section(line: &str) -> Result<Option<(String, String)>, ()> {
@@ -1042,7 +1039,6 @@ fn json_mcp_binding(name: &str, value: &JsonValue) -> Option<RawBinding> {
         transport: transport.to_string(),
         command,
         url,
-        safe_identity_arg: first_safe_identity_arg(&args),
         enabled,
         required: false,
         auth_kind,
@@ -1069,6 +1065,13 @@ fn parse_json_or_jsonc(text: &str) -> Result<JsonValue, ()> {
     let stripped = strip_json_comments(text)?;
     let without_trailing_commas = strip_json_trailing_commas(&stripped);
     serde_json::from_str(&without_trailing_commas).map_err(|_| ())
+}
+
+/// Claude writes deliberately accept strict JSON only. The read-only scanner
+/// remains more tolerant, but a mutation must never erase JSONC comments or
+/// trailing commas as a side effect of serialisation.
+pub(crate) fn validate_claude_mcp_config_strict(text: &str) -> bool {
+    serde_json::from_str::<JsonValue>(text).is_ok_and(|value| value.as_object().is_some())
 }
 
 fn strip_json_comments(input: &str) -> Result<String, ()> {
@@ -1291,55 +1294,6 @@ fn collect_sensitive_args(args: &[String], requirements: &mut Vec<RawSecretRequi
     }
 }
 
-fn first_safe_identity_arg(args: &[String]) -> Option<String> {
-    args.iter().enumerate().find_map(|(index, argument)| {
-        let lower = argument.to_lowercase();
-        let sensitive = [
-            "token",
-            "secret",
-            "password",
-            "passwd",
-            "api-key",
-            "apikey",
-            "auth",
-            "credential",
-        ]
-        .iter()
-        .any(|marker| lower.contains(marker));
-        let preceded_by_sensitive_flag = index > 0
-            && [
-                "token",
-                "secret",
-                "password",
-                "passwd",
-                "api-key",
-                "apikey",
-                "auth",
-                "credential",
-            ]
-            .iter()
-            .any(|marker| args[index - 1].to_lowercase().contains(marker));
-        if !argument.starts_with('-')
-            && !sensitive
-            && !preceded_by_sensitive_flag
-            && argument.chars().count() <= 160
-        {
-            Some(argument.clone())
-        } else {
-            None
-        }
-    })
-}
-
-fn sanitize_identity_arg(value: &str) -> String {
-    let without_query = value.split(['?', '#']).next().unwrap_or_default();
-    if without_query.chars().count() > 120 {
-        format!("{}…", without_query.chars().take(120).collect::<String>())
-    } else {
-        without_query.to_string()
-    }
-}
-
 fn sanitize_identifier(value: &str) -> String {
     value
         .chars()
@@ -1352,22 +1306,86 @@ fn sanitize_identifier(value: &str) -> String {
 }
 
 fn redact_url(value: &str) -> String {
-    let mut base = value
-        .split(['?', '#'])
+    match url_scheme(value) {
+        Some("https") => "HTTPS remote endpoint · address redacted".to_string(),
+        Some("http") => "HTTP remote endpoint · address redacted".to_string(),
+        Some("sse") => "SSE remote endpoint · address redacted".to_string(),
+        _ => "Remote endpoint · address redacted".to_string(),
+    }
+}
+
+fn url_scheme(value: &str) -> Option<&str> {
+    let (scheme, _) = value.trim().split_once("://")?;
+    if scheme.eq_ignore_ascii_case("https") {
+        Some("https")
+    } else if scheme.eq_ignore_ascii_case("http") {
+        Some("http")
+    } else if scheme.eq_ignore_ascii_case("sse") {
+        Some("sse")
+    } else {
+        None
+    }
+}
+
+fn private_url_identity(value: &str, native_name: &str) -> String {
+    let without_query = value.split(['?', '#']).next().unwrap_or_default().trim();
+    let Some((scheme, remainder)) = without_query.split_once("://") else {
+        return format!("remote:{}", native_name.trim().to_lowercase());
+    };
+    let authority_end = remainder.find('/').unwrap_or(remainder.len());
+    let authority = remainder[..authority_end]
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(&remainder[..authority_end]);
+    if authority.is_empty() {
+        return format!("remote:{}", native_name.trim().to_lowercase());
+    }
+    format!(
+        "{}://{}{}",
+        scheme.to_lowercase(),
+        authority.to_lowercase(),
+        &remainder[authority_end..]
+    )
+}
+
+fn command_classification(command: &str) -> (&'static str, &'static str) {
+    let trimmed = command.trim();
+    let unquoted = if trimmed.len() >= 2
+        && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+            || (trimmed.starts_with('\'') && trimmed.ends_with('\'')))
+    {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed
+    };
+    let executable = unquoted
+        .rsplit(['/', '\\'])
         .next()
         .unwrap_or_default()
-        .to_string();
-    if let Some(scheme_index) = base.find("://") {
-        let authority_start = scheme_index + 3;
-        if let Some(at_offset) = base[authority_start..].find('@') {
-            let at_index = authority_start + at_offset;
-            base.replace_range(authority_start..=at_index, "***@");
-        }
+        .to_ascii_lowercase();
+    let executable = executable
+        .strip_suffix(".exe")
+        .or_else(|| executable.strip_suffix(".cmd"))
+        .or_else(|| executable.strip_suffix(".bat"))
+        .unwrap_or(&executable);
+    match executable {
+        "npx" => ("package-runner:npx", "npx package runner"),
+        "pnpx" => ("package-runner:pnpx", "pnpx package runner"),
+        "bunx" => ("package-runner:bunx", "bunx package runner"),
+        "uvx" => ("package-runner:uvx", "uvx package runner"),
+        "npm" => ("package-manager:npm", "npm package manager"),
+        "pnpm" => ("package-manager:pnpm", "pnpm package manager"),
+        "yarn" | "yarnpkg" => ("package-manager:yarn", "Yarn package manager"),
+        "node" => ("runtime:node", "Node.js runtime"),
+        "python" | "python3" | "py" => ("runtime:python", "Python runtime"),
+        "deno" => ("runtime:deno", "Deno runtime"),
+        "bun" => ("runtime:bun", "Bun runtime"),
+        "java" => ("runtime:java", "Java runtime"),
+        "dotnet" => ("runtime:dotnet", ".NET runtime"),
+        "docker" | "podman" => ("container-runtime", "Container runtime"),
+        "powershell" | "pwsh" | "cmd" | "bash" | "sh" | "zsh" => ("shell", "Shell executable"),
+        _ => ("custom-executable", "Custom executable"),
     }
-    if value.contains('?') {
-        base.push_str("?…");
-    }
-    base
 }
 
 fn display_config_path(
@@ -1406,26 +1424,6 @@ fn redact_path(path: &Path, home: &Path) -> String {
         return format!("~{}", &path_text[home_text.len()..]);
     }
     "<registered-path>".to_string()
-}
-
-fn redact_home_string(value: &str, home: &Path) -> String {
-    let normalized_value = value.replace('\\', "/");
-    let normalized_home = normalize_path(home);
-    if !normalized_home.is_empty()
-        && normalized_value
-            .to_lowercase()
-            .starts_with(&normalized_home.to_lowercase())
-    {
-        format!("~{}", &normalized_value[normalized_home.len()..])
-    } else if Path::new(value).is_absolute() {
-        Path::new(value)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("<executable>")
-            .to_string()
-    } else {
-        value.to_string()
-    }
 }
 
 fn normalize_path(path: &Path) -> String {
@@ -1794,6 +1792,77 @@ env = { PRIVATE_KEY = "SUPER_ENV_SECRET" }
         assert!(serialized.contains("PRIVATE_KEY"));
         assert!(serialized.contains("Authorization"));
         assert!(serialized.contains("unprobed"));
+    }
+
+    #[test]
+    fn target_displays_never_include_command_arguments_or_url_details() {
+        let root = TestDir::new("target-display-redaction");
+        write(
+            &root.path().join(".codex/config.toml"),
+            r#"
+[mcp_servers.keyed]
+command = "npx"
+args = ["--key", "KEY_VALUE_MUST_NOT_LEAK"]
+
+[mcp_servers.remote]
+url = "https://example.test/PATH_TOKEN_MUST_NOT_LEAK?token=QUERY_TOKEN_MUST_NOT_LEAK#FRAGMENT_TOKEN_MUST_NOT_LEAK"
+"#,
+        );
+        write(
+            &root.path().join(".claude.json"),
+            r#"{
+              "mcpServers": {
+                "positional": {
+                  "command": "python",
+                  "args": ["UNNAMED_POSITIONAL_TOKEN_MUST_NOT_LEAK"]
+                }
+              }
+            }"#,
+        );
+
+        let snapshot = scan_read_only(&request(root.path()));
+        let target_display = |native_name: &str| {
+            let binding = snapshot
+                .bindings
+                .iter()
+                .find(|binding| binding.native_name == native_name)
+                .unwrap();
+            snapshot
+                .servers
+                .iter()
+                .find(|server| server.id == binding.server_id)
+                .unwrap()
+                .target_display_redacted
+                .clone()
+        };
+
+        assert_eq!(
+            target_display("keyed"),
+            "npx package runner · arguments redacted"
+        );
+        assert_eq!(
+            target_display("positional"),
+            "Python runtime · arguments redacted"
+        );
+        assert_eq!(
+            target_display("remote"),
+            "HTTPS remote endpoint · address redacted"
+        );
+
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        for sensitive_value in [
+            "KEY_VALUE_MUST_NOT_LEAK",
+            "UNNAMED_POSITIONAL_TOKEN_MUST_NOT_LEAK",
+            "example.test",
+            "PATH_TOKEN_MUST_NOT_LEAK",
+            "QUERY_TOKEN_MUST_NOT_LEAK",
+            "FRAGMENT_TOKEN_MUST_NOT_LEAK",
+        ] {
+            assert!(
+                !serialized.contains(sensitive_value),
+                "leaked {sensitive_value}"
+            );
+        }
     }
 
     #[test]
