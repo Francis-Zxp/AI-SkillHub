@@ -60,7 +60,10 @@ test("core sync is single-flight and follows with a lightweight popularity refre
   assert.match(coreSync, /loadSnapshot\("refresh", \{ background: true, quiet: true \}\)/);
   assert.doesNotMatch(coreSync, /refreshSourcePopularity|sourcePopularityRefreshMessage/);
   const syncEntry = app.slice(app.indexOf("async function syncAndRefreshAll"), app.indexOf("async function runCoreSync"));
+  assert.match(syncEntry, /options: \{ refreshPopularity\?: boolean \} = \{\}/);
+  assert.match(syncEntry, /options\.refreshPopularity !== false/);
   assert.match(syncEntry, /void refreshSourcePopularity\(\{ background: true \}\)/);
+  assert.match(app, /syncAndRefreshAll\(\{ refreshPopularity: false \}\)/);
   const popularityStart = backend.indexOf("fn refresh_source_popularity_blocking");
   const popularityEnd = backend.indexOf("fn resolve_legacy_root", popularityStart);
   const popularityRefresh = backend.slice(popularityStart, popularityEnd);

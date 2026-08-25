@@ -6,7 +6,7 @@ name: AI SkillHub CI
 
 on:
   push:
-    branches: [main, "codex/v3.*"]
+    branches: [main]
     paths:
       - "app-next/**"
       - "updates/**"

@@ -93,5 +93,21 @@ test("large source trees render incrementally and folder edits keep whole-tree s
   assert.match(backend, /fn create_skill_folder\([\s\S]*?Result<Vec<SkillFolderCard>, String>/);
   assert.match(app, /invoke<SkillFolderCard\[\]>/);
   assert.match(app, /applySkillFolderCommandResult/);
+  assert.match(app, /setSnapshot\(current => applySkillFolderCommandResult\(/);
+  assert.match(app, /if \(mutationBlockedBySync\(\)\) return null/);
   assert.match(app, /const unfiledCount = useMemo/);
+});
+
+test("import finalization preserves metadata and stops on any failed follow-up write", () => {
+  const start = app.indexOf("async function promoteAndFinalize");
+  const end = app.indexOf("async function quickAdd", start);
+  const finalize = app.slice(start, end);
+  assert.match(app, /syncAndRefreshAll\(\{ refreshPopularity: false \}\)/);
+  assert.match(finalize, /if \(!refreshed\) throw new Error\(t\("toast\.syncFailed"\)\)/);
+  assert.match(finalize, /const saveResult = await onSaveSourceMetadata/);
+  assert.match(finalize, /if \(saveResult === "failed"\) throw new Error/);
+  assert.match(finalize, /const moved = await onMoveSourceSkillsToFolder/);
+  assert.match(finalize, /if \(!moved\) throw new Error\(t\("folders\.fileDuringImportFailed"\)\)/);
+  assert.equal([...app.matchAll(/"folders\.fileDuringImportFailed"/g)].length, 1);
+  assert.equal([...i18n.matchAll(/"folders\.fileDuringImportFailed":/g)].length, 3);
 });

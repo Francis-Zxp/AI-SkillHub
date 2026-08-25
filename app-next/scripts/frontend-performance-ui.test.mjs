@@ -43,7 +43,7 @@ test("folder drops and draggable rows honor the shared mutation busy state", () 
   assert.match(app, /draggable=\{!loading\}/);
   assert.match(app, /draggable=\{Boolean\(!loading && skill\.id && !skill\.sourceId\)\}/);
   assert.match(app, /disabled=\{loading\}[\s\S]*?draft=\{sourceDrafts/);
-  assert.match(app, /if \(mutationBlockedBySync\(\)\) return snapshot/);
+  assert.match(app, /if \(mutationBlockedBySync\(\)\) return null/);
 });
 
 test("source metadata and tags save through one compact background mutation", () => {
@@ -71,7 +71,10 @@ test("pending Skill saves and startup delivery lock only mutation controls", () 
   const editor = app.slice(skillStart, skillEnd);
   assert.equal((editor.match(/disabled=\{disabled\}/g) ?? []).length, 7);
   assert.match(app, /const \[initialDeliveryBusy, setInitialDeliveryBusy\] = useState\(true\)/);
-  assert.match(app, /const mutationBusy = loading \|\| initialDeliveryBusy \|\| popularityRefreshing \|\| Boolean\(operation\)/);
+  assert.match(app, /const \[indexRefreshing, setIndexRefreshing\] = useState\(false\)/);
+  assert.match(app, /const mutationBusy = loading \|\| initialDeliveryBusy \|\| indexRefreshing \|\| popularityRefreshing \|\| Boolean\(operation\)/);
+  assert.match(app, /indexRefreshInFlightRef\.current/);
+  assert.match(app, /const pending = loadSnapshot\("scan", \{ background: true, quiet: true \}\)/);
   assert.match(app, /initialDeliveryInFlightRef\.current = false/);
   assert.match(app, /setInitialDeliveryBusy\(false\)/);
 });

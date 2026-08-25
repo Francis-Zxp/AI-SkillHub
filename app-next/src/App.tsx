@@ -423,6 +423,7 @@ export function App() {
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
   const [initialDeliveryBusy, setInitialDeliveryBusy] = useState(true);
+  const [indexRefreshing, setIndexRefreshing] = useState(false);
   const [popularityRefreshing, setPopularityRefreshing] = useState(false);
   const [operation, setOperation] = useState<OperationStatus | null>(null);
   const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
@@ -439,11 +440,12 @@ export function App() {
   const backgroundUpdateRetriesRef = useRef(0);
   const initialDeliveryCheckStartedRef = useRef(false);
   const initialDeliveryInFlightRef = useRef(true);
+  const indexRefreshInFlightRef = useRef<Promise<LegacySnapshot | null> | null>(null);
   const popularityRefreshInFlightRef = useRef<Promise<SourcePopularityRefreshResult | null> | null>(null);
   const syncInFlightRef = useRef<Promise<LegacySnapshot | null> | null>(null);
   const runtimeAvailable = hasTauriRuntime();
   const realWritesEnabled = snapshot?.operatorConsent?.realWritesEnabled === true;
-  const mutationBusy = loading || initialDeliveryBusy || popularityRefreshing || Boolean(operation);
+  const mutationBusy = loading || initialDeliveryBusy || indexRefreshing || popularityRefreshing || Boolean(operation);
 
   useCardGlow();
 
@@ -486,7 +488,7 @@ export function App() {
   }
 
   function mutationBlockedBySync(notify = true) {
-    if (!syncInFlightRef.current && !initialDeliveryInFlightRef.current && !popularityRefreshInFlightRef.current) {
+    if (!syncInFlightRef.current && !initialDeliveryInFlightRef.current && !indexRefreshInFlightRef.current && !popularityRefreshInFlightRef.current) {
       return false;
     }
     if (notify) toastMessage(t("toast.syncBusy"), "warn");
@@ -1247,7 +1249,24 @@ export function App() {
     }
   }
 
-  async function syncAndRefreshAll(): Promise<LegacySnapshot | null> {
+  async function refreshLocalIndex(): Promise<LegacySnapshot | null> {
+    if (indexRefreshInFlightRef.current) return indexRefreshInFlightRef.current;
+    setIndexRefreshing(true);
+    const pending = loadSnapshot("scan", { background: true, quiet: true });
+    indexRefreshInFlightRef.current = pending;
+    try {
+      return await pending;
+    } finally {
+      if (indexRefreshInFlightRef.current === pending) {
+        indexRefreshInFlightRef.current = null;
+        setIndexRefreshing(false);
+      }
+    }
+  }
+
+  async function syncAndRefreshAll(
+    options: { refreshPopularity?: boolean } = {}
+  ): Promise<LegacySnapshot | null> {
     if (syncInFlightRef.current) {
       toastMessage(t("toast.syncBusy"), "warn");
       return syncInFlightRef.current;
@@ -1260,7 +1279,7 @@ export function App() {
       return refreshed;
     } finally {
       if (syncInFlightRef.current === task) syncInFlightRef.current = null;
-      if (refreshed && runtimeAvailable) {
+      if (refreshed && runtimeAvailable && options.refreshPopularity !== false) {
         void refreshSourcePopularity({ background: true });
       }
     }
@@ -1466,7 +1485,7 @@ export function App() {
     args: Record<string, unknown>,
     successMessage: string
   ): Promise<LegacySnapshot | null> {
-    if (mutationBlockedBySync()) return snapshot;
+    if (mutationBlockedBySync()) return null;
     if (!runtimeAvailable) {
       toastMessage(t("folders.previewOnly"), "info");
       return snapshot;
@@ -1474,16 +1493,21 @@ export function App() {
     try {
       const currentSnapshot = snapshot ?? (await loadPreviewModule()).createPreviewSnapshot();
       const folders = await invoke<SkillFolderCard[]>(command, args);
-      const result = applySkillFolderCommandResult(
+      const fallbackResult = applySkillFolderCommandResult(
         currentSnapshot,
         command,
         args,
         folders
       );
-      setSnapshot(result);
+      setSnapshot(current => applySkillFolderCommandResult(
+        current ?? currentSnapshot,
+        command,
+        args,
+        folders
+      ));
       setLoadError("");
       if (successMessage) toastMessage(successMessage, "ok");
-      return result;
+      return fallbackResult;
     } catch (error) {
       const message = messageFromError(error);
       setLoadError(message);
@@ -1851,8 +1875,8 @@ export function App() {
               onPromoteImport={promoteStagedSourceImport}
               onReanalyzeMetadata={reanalyzeLibraryMetadata}
               onRefreshIndex={localOnly => localOnly
-                ? loadSnapshot("scan", { background: true, quiet: true })
-                : syncAndRefreshAll()}
+                ? refreshLocalIndex()
+                : syncAndRefreshAll({ refreshPopularity: false })}
               onRecordUsage={recordUsage}
               onSaveSkillMetadata={updateSkillMetadata}
               onSaveSourceMetadata={updateSourceMetadata}
@@ -4721,9 +4745,11 @@ function ImportWizard({
       setStatus({ tone: "info", title: t("qa.statusRefreshing"), body: t("qa.statusRefreshingBody") });
       const reviewedLocalOnly = securityReviewConfirmed && promotion.securityStatus !== "passed";
       const refreshed = await onRefreshIndex(reviewedLocalOnly);
+      if (!refreshed) throw new Error(t("toast.syncFailed"));
       const promotedSource = refreshed?.sources.find(
         item => normalizeSourcePath(item.localPath) === normalizeSourcePath(promotion.targetPath)
       );
+      if (!promotedSource) throw new Error(t("qa.statusNotWritten"));
       if (promotedSource) {
         const detectedSourceType: SourceCard["sourceType"] =
           execution.skillCount === 0 && execution.promptCount > 0
@@ -4745,7 +4771,8 @@ function ImportWizard({
           tags: mergeTagInputs(tags, extraTags)
         };
         setProgress({ detail: t("qa.statusRefreshing"), percent: 96, step: 5, total: 5 });
-        await onSaveSourceMetadata(promotedSource, draft);
+        const saveResult = await onSaveSourceMetadata(promotedSource, draft);
+        if (saveResult === "failed") throw new Error(t("toast.sourceSaveFailed"));
         let resolvedFolderId = folderId;
         if (folderId === CREATE_IMPORT_FOLDER_VALUE) {
           const requestedName = customFolderName.trim();
@@ -4764,7 +4791,8 @@ function ImportWizard({
           }
         }
         if (resolvedFolderId) {
-          await onMoveSourceSkillsToFolder(promotedSource.id, resolvedFolderId);
+          const moved = await onMoveSourceSkillsToFolder(promotedSource.id, resolvedFolderId);
+          if (!moved) throw new Error(t("folders.fileDuringImportFailed"));
         }
       }
       setProgress({ detail: t("qa.statusAddedTitle"), percent: 100, step: 5, total: 5 });

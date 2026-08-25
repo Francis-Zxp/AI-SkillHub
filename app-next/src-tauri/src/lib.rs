@@ -18,7 +18,7 @@ mod source_governance;
 unsafe extern "C" {}
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use security_scan::SourceSecurityFinding;
 use serde::Serialize;
 use serde_json::Value;
@@ -1326,6 +1326,11 @@ fn try_acquire_background_write_guard<'a>(
 }
 
 fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("本地索引刷新")?;
+    scan_legacy_snapshot_under_write_guard()
+}
+
+fn scan_legacy_snapshot_under_write_guard() -> Result<LegacySnapshot, String> {
     // React development mode and overlapping desktop actions can request a scan
     // at the same time. Source migration owns resumable staging directories, so
     // only one scanner may copy/promote/finalize them inside this process.
@@ -1558,22 +1563,32 @@ fn scan_legacy_snapshot_blocking() -> Result<LegacySnapshot, String> {
 }
 
 fn load_indexed_snapshot_blocking() -> Result<LegacySnapshot, String> {
+    load_indexed_snapshot_with_fallback(scan_legacy_snapshot_blocking)
+}
+
+fn load_indexed_snapshot_under_write_guard() -> Result<LegacySnapshot, String> {
+    load_indexed_snapshot_with_fallback(scan_legacy_snapshot_under_write_guard)
+}
+
+fn load_indexed_snapshot_with_fallback<F>(mut scan_fallback: F) -> Result<LegacySnapshot, String>
+where
+    F: FnMut() -> Result<LegacySnapshot, String>,
+{
     let root = resolve_legacy_root()?;
     if migration_v4_is_pending(&root) {
-        return scan_legacy_snapshot_blocking();
+        return scan_fallback();
     }
     let db_file = database_file(&root);
 
     if !db_file.exists() {
-        return scan_legacy_snapshot_blocking();
+        return scan_fallback();
     }
 
     let connection = open_index_database(&root)?;
-    let snapshot = read_snapshot_from_database(&root, &connection)
-        .or_else(|_| scan_legacy_snapshot_blocking())?;
+    let snapshot = read_snapshot_from_database(&root, &connection).or_else(|_| scan_fallback())?;
 
     if indexed_snapshot_needs_portable_source_refresh(&root, &snapshot) {
-        return scan_legacy_snapshot_blocking();
+        return scan_fallback();
     }
 
     if !snapshot.skills.is_empty()
@@ -1588,7 +1603,7 @@ fn load_indexed_snapshot_blocking() -> Result<LegacySnapshot, String> {
             || snapshot.rollback_plan.is_empty()
             || snapshot.desktop_qa_checks.is_empty())
     {
-        return scan_legacy_snapshot_blocking();
+        return scan_fallback();
     }
 
     Ok(snapshot)
@@ -1653,14 +1668,14 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     run_skillhub_script_no_pull(&root)?;
     run_agent_link_script(&root, &connection)?;
     run_diagnostics_export_script(&root)?;
-    scan_legacy_snapshot_blocking()
+    scan_legacy_snapshot_under_write_guard()
 }
 
 fn ensure_agent_skill_delivery_blocking() -> Result<LegacySnapshot, String> {
     let _write_guard = acquire_background_write_guard("Agent Skill 交付")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
-        let _ = scan_legacy_snapshot_blocking()?;
+        let _ = scan_legacy_snapshot_under_write_guard()?;
     }
     let connection = open_index_database(&root)?;
     let snapshot = read_snapshot_from_database(&root, &connection)?;
@@ -1668,16 +1683,17 @@ fn ensure_agent_skill_delivery_blocking() -> Result<LegacySnapshot, String> {
         return Ok(snapshot);
     }
     sync_local_sources_to_agents(&root, &connection)?;
-    scan_legacy_snapshot_blocking()
+    scan_legacy_snapshot_under_write_guard()
 }
 
 fn set_source_version_pin_blocking(
     source_id: String,
     pinned: bool,
 ) -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("来源版本固定")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
-        let _ = scan_legacy_snapshot_blocking()?;
+        let _ = scan_legacy_snapshot_under_write_guard()?;
     }
     let connection = open_index_database(&root)?;
     source_governance::set_pin(&root, &connection, &source_id, pinned)?;
@@ -1685,9 +1701,10 @@ fn set_source_version_pin_blocking(
 }
 
 fn refresh_source_version_status_blocking(source_id: String) -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("来源版本检查")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
-        let _ = scan_legacy_snapshot_blocking()?;
+        let _ = scan_legacy_snapshot_under_write_guard()?;
     }
     let connection = open_index_database(&root)?;
     source_governance::refresh_status(&root, &connection, &source_id)?;
@@ -1695,22 +1712,24 @@ fn refresh_source_version_status_blocking(source_id: String) -> Result<LegacySna
 }
 
 fn rollback_source_to_latest_backup_blocking(source_id: String) -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("来源版本回滚")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
-        let _ = scan_legacy_snapshot_blocking()?;
+        let _ = scan_legacy_snapshot_under_write_guard()?;
     }
     let connection = open_index_database(&root)?;
     source_governance::rollback_latest(&root, &connection, &source_id)?;
     // The repository tree changed atomically; rebuild the index so the library
     // and generated parent/child routes reflect the restored commit.
-    scan_legacy_snapshot_blocking()
+    scan_legacy_snapshot_under_write_guard()
 }
 
 fn refresh_agent_detection_blocking() -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("AI 工具检测刷新")?;
     let root = resolve_legacy_root()?;
 
     if !database_file(&root).exists() {
-        return scan_legacy_snapshot_blocking();
+        return scan_legacy_snapshot_under_write_guard();
     }
 
     run_diagnostics_export_script(&root)?;
@@ -2260,7 +2279,7 @@ fn set_skill_enabled(folder_name: String, enabled: bool) -> Result<LegacySnapsho
     let connection = open_index_database(&root)?;
     set_skill_enabled_override_in_connection(&connection, &folder_name, enabled)?;
     sync_local_sources_to_agents(&root, &connection)?;
-    scan_legacy_snapshot_blocking()
+    scan_legacy_snapshot_under_write_guard()
 }
 
 #[tauri::command]
@@ -2648,9 +2667,9 @@ fn save_source_metadata_blocking(
         structural_snapshot_required,
         || {
             if delivery_reconciled {
-                scan_legacy_snapshot_blocking()
+                scan_legacy_snapshot_under_write_guard()
             } else {
-                load_indexed_snapshot_blocking()
+                load_indexed_snapshot_under_write_guard()
             }
         },
     ))
@@ -2782,18 +2801,20 @@ where
 
 #[tauri::command]
 fn set_skill_tags(folder_name: String, tags: Vec<String>) -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("Skill 标签保存")?;
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_skill_tags_in_connection(&connection, &folder_name, &tags)?;
-    load_indexed_snapshot_blocking()
+    load_indexed_snapshot_under_write_guard()
 }
 
 #[tauri::command]
 fn set_source_tags(source_id: String, tags: Vec<String>) -> Result<LegacySnapshot, String> {
+    let _write_guard = acquire_background_write_guard("来源标签保存")?;
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     set_source_tags_in_connection(&connection, &source_id, &tags)?;
-    load_indexed_snapshot_blocking()
+    load_indexed_snapshot_under_write_guard()
 }
 
 #[tauri::command]
@@ -2801,7 +2822,7 @@ fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
     let _write_guard = acquire_background_write_guard("来源删除")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
-        let _ = scan_legacy_snapshot_blocking()?;
+        let _ = scan_legacy_snapshot_under_write_guard()?;
     }
     let connection = open_index_database(&root)?;
     let sources = read_indexed_sources(&connection)?;
@@ -2851,7 +2872,7 @@ fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
     )?;
 
     sync_local_sources_to_agents(&root, &connection)?;
-    scan_legacy_snapshot_blocking()
+    scan_legacy_snapshot_under_write_guard()
 }
 
 #[tauri::command]
@@ -3266,7 +3287,7 @@ async fn promote_staged_source_import(
             let reviewed_local_only = promotion.security_review_confirmed
                 && promotion.security_status != "passed";
             if reviewed_local_only {
-                let indexed = scan_legacy_snapshot_blocking()?;
+                let indexed = scan_legacy_snapshot_under_write_guard()?;
                 let source = indexed
                     .sources
                     .iter()
@@ -6353,16 +6374,19 @@ fn set_source_rating_override_in_connection(
 fn persist_snapshot(root: &Path, snapshot: &LegacySnapshot) -> Result<IndexReport, String> {
     let db_file = database_file(root);
     let mut connection = open_index_database(root)?;
-    let enabled_state = load_enabled_state(&connection);
-    let source_tag_overrides = read_tag_overrides(&connection, "source")?;
-    let skill_tag_overrides = read_tag_overrides(&connection, "skill")?;
-    let preset_workspace_policies = read_preset_workspace_policies(&connection)?;
-
     let indexed_at = unix_timestamp_string();
     let snapshot_id = format!("legacy-import-{}", indexed_at);
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|error| format!("Cannot start v2 SQLite transaction: {}", error))?;
+    // Capture every table that is rebuilt only after the IMMEDIATE transaction
+    // owns the writer slot. A concurrent metadata save therefore commits before
+    // this snapshot reads it, or waits/fails without being overwritten by stale
+    // copies restored later in this transaction.
+    let enabled_state = load_enabled_state(&transaction);
+    let source_tag_overrides = read_tag_overrides(&transaction, "source")?;
+    let skill_tag_overrides = read_tag_overrides(&transaction, "skill")?;
+    let preset_workspace_policies = read_preset_workspace_policies(&transaction)?;
 
     transaction
         .execute("DELETE FROM skill_tags", [])
@@ -6680,9 +6704,12 @@ fn persist_agent_detection_refresh(
     connection: &mut Connection,
     diagnostics_json: Option<&Value>,
 ) -> Result<(), String> {
-    let enabled_state = load_enabled_state(connection);
-    let preset_workspace_policies = read_preset_workspace_policies(connection)?;
-    let mut snapshot = read_snapshot_from_database(root, connection)?;
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| format!("Cannot start agent detection transaction: {}", error))?;
+    let enabled_state = load_enabled_state(&transaction);
+    let preset_workspace_policies = read_preset_workspace_policies(&transaction)?;
+    let mut snapshot = read_snapshot_from_database(root, &transaction)?;
     snapshot.agents = parse_agents(diagnostics_json);
     snapshot.agent_adapters = derive_agent_adapters(&snapshot.agents);
     snapshot.adapter_safety_checks = derive_adapter_safety_checks(&snapshot.agent_adapters);
@@ -6704,10 +6731,6 @@ fn persist_agent_detection_refresh(
 
     let indexed_at = unix_timestamp_string();
     let snapshot_id = format!("agent-detection-{}", indexed_at);
-    let transaction = connection
-        .transaction()
-        .map_err(|error| format!("Cannot start agent detection transaction: {}", error))?;
-
     transaction
         .execute("DELETE FROM workspace_agents", [])
         .map_err(|error| format!("Cannot clear workspace agent index: {}", error))?;
@@ -16399,7 +16422,7 @@ fn set_skill_conflict_choice(
 
     sync_local_sources_to_agents(&root, &connection)?;
 
-    scan_legacy_snapshot_blocking()
+    scan_legacy_snapshot_under_write_guard()
 }
 
 fn normalize_source_type(value: &str) -> String {
@@ -16550,7 +16573,8 @@ mod tests {
 
     #[test]
     fn scan_legacy_snapshot_is_read_only_and_resolves_root() {
-        let snapshot = scan_legacy_snapshot_blocking().expect("legacy snapshot should scan");
+        let snapshot =
+            scan_legacy_snapshot_under_write_guard().expect("legacy snapshot should scan");
 
         assert_eq!(snapshot.mode, "read-only");
         assert!(Path::new(&snapshot.root).exists());
@@ -16576,7 +16600,7 @@ mod tests {
 
     #[test]
     fn load_indexed_snapshot_reads_from_sqlite() {
-        scan_legacy_snapshot_blocking().expect("legacy snapshot should seed sqlite");
+        scan_legacy_snapshot_under_write_guard().expect("legacy snapshot should seed sqlite");
         let snapshot = load_indexed_snapshot_blocking().expect("indexed snapshot should load");
 
         assert_eq!(snapshot.mode, "sqlite-index");
@@ -16618,6 +16642,61 @@ mod tests {
         let second = try_acquire_background_write_guard(&lock, "第二项测试写入")
             .expect("guard should be reusable after the first writer finishes");
         drop(second);
+    }
+
+    #[test]
+    fn snapshot_transaction_cannot_restore_over_a_concurrent_tag_save() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-snapshot-write-lock-test-{}",
+            unix_timestamp_string()
+        ));
+        let snapshot = test_snapshot(
+            &root,
+            Vec::new(),
+            vec![test_skill_card(
+                "paper-workflow",
+                "local",
+                "paper-workflow",
+                false,
+            )],
+            Vec::new(),
+        );
+        persist_snapshot(&root, &snapshot).expect("initial snapshot should persist");
+
+        let mut scan_connection = open_index_database(&root).expect("scan database should open");
+        let writer_connection = open_index_database(&root).expect("writer database should open");
+        let scan_transaction = scan_connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .expect("snapshot transaction should own the SQLite writer slot");
+        let captured = read_tag_overrides(&scan_transaction, "skill")
+            .expect("snapshot should capture current overrides");
+        assert!(captured.is_empty());
+
+        let blocked = set_skill_tags_in_connection(
+            &writer_connection,
+            "paper-workflow",
+            &["刚保存的标签".to_string()],
+        )
+        .expect_err("a concurrent tag save must not enter behind stale snapshot state");
+        assert!(blocked.to_ascii_lowercase().contains("locked"));
+
+        drop(scan_transaction);
+        set_skill_tags_in_connection(
+            &writer_connection,
+            "paper-workflow",
+            &["刚保存的标签".to_string()],
+        )
+        .expect("tag save should succeed after the snapshot writer releases");
+        drop(writer_connection);
+        drop(scan_connection);
+
+        persist_snapshot(&root, &snapshot).expect("refreshed snapshot should preserve overrides");
+        let connection = open_index_database(&root).expect("refreshed database should open");
+        let skills = read_indexed_skills(&connection).expect("skills should read");
+        assert!(skills[0].tags.contains(&"刚保存的标签".to_string()));
+
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
     }
 
     fn test_skill_card(
@@ -18621,7 +18700,8 @@ mod tests {
 
     #[test]
     fn rollback_plan_locks_real_restore_until_backup_exists() {
-        let snapshot = scan_legacy_snapshot_blocking().expect("legacy snapshot should scan");
+        let snapshot =
+            scan_legacy_snapshot_under_write_guard().expect("legacy snapshot should scan");
         let steps = rollback_plan_steps(&snapshot, "test-snapshot");
 
         assert_eq!(steps.len(), 5);
