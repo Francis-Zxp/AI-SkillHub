@@ -69,10 +69,11 @@ test("decorative canvases stop when hidden, unfocused, or outside the viewport",
   assert.match(app, /mode="backdrop"/);
 });
 
-test("the Skill universe keeps instant interaction and settles decorative idle motion", () => {
+test("the Skill universe rotates slowly only while the homepage is active", () => {
   assert.match(universe, /hasInteractiveMotion/);
-  assert.match(universe, /interactiveMotion \? 1000 \/ 60 : 1000 \/ 6/);
-  assert.match(universe, /performance\.now\(\) >= ambientUntil/);
+  assert.match(universe, /interactiveMotion \? 1000 \/ 60 : 1000 \/ 8/);
+  assert.match(universe, /if \(reducedMotion && !urgent\) return/);
+  assert.doesNotMatch(universe, /ambientUntil/);
   assert.match(universe, /Math\.min\(window\.devicePixelRatio \|\| 1, 1\.35, pixelBudgetScale\)/);
   assert.match(universe, /runtime\.requestDraw = \(\) => scheduleDraw\(true\)/);
   assert.match(universe, /window\.addEventListener\("focus", onFocus\)/);

@@ -13,6 +13,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 const MAX_CONFIG_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_CLAUDE_PROJECTS: usize = 128;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -399,6 +400,7 @@ fn scan_codex_config(
 }
 
 fn scan_claude(accumulator: &mut ScanAccumulator<'_>) {
+    let mut project_targets: Vec<(PathBuf, Option<RegisteredWorkspace>, usize)> = Vec::new();
     let user_path = accumulator.request.home_dir.join(".claude.json");
     let user_display = display_config_path(accumulator.request, &user_path, None);
     if let Some(read_result) = read_existing_config(&user_path) {
@@ -424,17 +426,44 @@ fn scan_claude(accumulator: &mut ScanAccumulator<'_>) {
                     }
 
                     let workspaces = accumulator.request.registered_workspaces.clone();
-                    for workspace in &workspaces {
-                        if let Some(project_servers) = claude_project_servers(&root, workspace) {
-                            for binding in json_mcp_servers(Some(project_servers)) {
-                                accumulator.add_binding(
-                                    "host-claude-code",
-                                    &location_id,
-                                    Some(workspace),
-                                    "local",
+                    if let Some(projects) = root.get("projects").and_then(JsonValue::as_object) {
+                        for (index, (configured_path, project)) in
+                            projects.iter().take(MAX_CLAUDE_PROJECTS).enumerate()
+                        {
+                            let workspace = workspaces
+                                .iter()
+                                .find(|workspace| {
+                                    paths_equivalent(configured_path, &workspace.path)
+                                })
+                                .cloned();
+                            let bindings = json_mcp_servers(project.get("mcpServers"));
+                            if !bindings.is_empty() {
+                                let local_display = claude_local_config_display(
                                     &user_display,
-                                    binding,
+                                    workspace.as_ref(),
+                                    configured_path,
+                                    index,
                                 );
+                                let local_location_id = accumulator.add_location(
+                                    "host-claude-code",
+                                    workspace.as_ref().map(|item| item.id.clone()),
+                                    "user/local",
+                                    local_display.clone(),
+                                    25,
+                                );
+                                for binding in bindings {
+                                    accumulator.add_binding(
+                                        "host-claude-code",
+                                        &local_location_id,
+                                        workspace.as_ref(),
+                                        "local",
+                                        &local_display,
+                                        binding,
+                                    );
+                                }
+                            }
+                            if let Some(project_path) = safe_claude_project_path(configured_path) {
+                                project_targets.push((project_path, workspace, index));
                             }
                         }
                     }
@@ -468,15 +497,30 @@ fn scan_claude(accumulator: &mut ScanAccumulator<'_>) {
     }
 
     let workspaces = accumulator.request.registered_workspaces.clone();
-    for workspace in &workspaces {
-        let project_path = workspace.path.join(".mcp.json");
-        let path_display = display_config_path(accumulator.request, &project_path, Some(workspace));
+    for workspace in workspaces {
+        if let Some(target) = project_targets
+            .iter_mut()
+            .find(|(path, _, _)| paths_equivalent(&workspace.path.to_string_lossy(), path))
+        {
+            target.1 = Some(workspace);
+        } else {
+            let index = project_targets.len();
+            project_targets.push((workspace.path.clone(), Some(workspace), index));
+        }
+    }
+
+    for (project_root, workspace, index) in project_targets {
+        let project_path = project_root.join(".mcp.json");
+        let path_display = workspace.as_ref().map_or_else(
+            || claude_project_config_display(&project_root, index),
+            |workspace| display_config_path(accumulator.request, &project_path, Some(workspace)),
+        );
         let Some(read_result) = read_existing_config(&project_path) else {
             continue;
         };
         let location_id = accumulator.add_location(
             "host-claude-code",
-            Some(workspace.id.clone()),
+            workspace.as_ref().map(|item| item.id.clone()),
             "project",
             path_display.clone(),
             20,
@@ -488,7 +532,7 @@ fn scan_claude(accumulator: &mut ScanAccumulator<'_>) {
                         accumulator.add_binding(
                             "host-claude-code",
                             &location_id,
-                            Some(workspace),
+                            workspace.as_ref(),
                             "project",
                             &path_display,
                             binding,
@@ -1047,18 +1091,56 @@ fn json_mcp_binding(name: &str, value: &JsonValue) -> Option<RawBinding> {
     })
 }
 
-fn claude_project_servers<'a>(
-    root: &'a JsonValue,
-    workspace: &RegisteredWorkspace,
-) -> Option<&'a JsonValue> {
-    let projects = root.get("projects")?.as_object()?;
-    projects.iter().find_map(|(configured_path, value)| {
-        if paths_equivalent(configured_path, &workspace.path) {
-            value.get("mcpServers")
-        } else {
-            None
-        }
-    })
+fn safe_claude_project_path(configured_path: &str) -> Option<PathBuf> {
+    let trimmed = configured_path.trim();
+    if trimmed.starts_with(r"\\") || trimmed.starts_with("//") {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return None;
+    }
+    Some(path)
+}
+
+fn claude_local_config_display(
+    user_display: &str,
+    workspace: Option<&RegisteredWorkspace>,
+    configured_path: &str,
+    index: usize,
+) -> String {
+    let project = workspace.map_or_else(
+        || claude_project_reference(configured_path, index),
+        |workspace| {
+            format!(
+                "${{workspace:{}}}",
+                sanitize_identifier(&workspace.display_name)
+            )
+        },
+    );
+    format!("{user_display} · {project}")
+}
+
+fn claude_project_config_display(project_root: &Path, index: usize) -> String {
+    format!(
+        "{}/.mcp.json",
+        claude_project_reference(&project_root.to_string_lossy(), index)
+    )
+}
+
+fn claude_project_reference(configured_path: &str, index: usize) -> String {
+    let label = configured_path
+        .trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .map(sanitize_identifier)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "project".to_string());
+    format!("${{claude-project:{label}-{}}}", index + 1)
 }
 
 fn parse_json_or_jsonc(text: &str) -> Result<JsonValue, ()> {
@@ -1920,20 +2002,28 @@ url = "https://mcp.example.test/api?token=FIRST"
             ),
             "${workspace:Paper Lab}/.mcp.json"
         );
+        assert_eq!(
+            claude_project_reference(r"C:\Users\Example\Private\SecretProject", 0),
+            "${claude-project:SecretProject-1}"
+        );
     }
 
     #[test]
-    fn claude_local_project_scope_is_limited_to_registered_workspaces() {
+    fn claude_known_projects_are_discovered_without_becoming_writable() {
         let root = TestDir::new("claude-local");
         let registered = root.path().join("registered");
         let unregistered = root.path().join("unregistered");
+        write(
+            &unregistered.join(".mcp.json"),
+            r#"{"mcpServers":{"project-file":{"command":"node","args":["project.js"]}}}"#,
+        );
         let json = serde_json::json!({
             "projects": {
                 registered.to_string_lossy().to_string(): {
                     "mcpServers": { "kept": { "command": "node", "args": ["server.js"] } }
                 },
                 unregistered.to_string_lossy().to_string(): {
-                    "mcpServers": { "ignored": { "command": "node", "args": ["other.js"] } }
+                    "mcpServers": { "jCodeMunch": { "command": "node", "args": ["other.js"] } }
                 }
             }
         });
@@ -1947,9 +2037,27 @@ url = "https://mcp.example.test/api?token=FIRST"
                 path: registered,
             });
         let snapshot = scan_read_only(&scan_request);
-        assert_eq!(snapshot.bindings.len(), 1);
-        assert_eq!(snapshot.bindings[0].native_name, "kept");
-        assert_eq!(snapshot.bindings[0].native_scope, "local");
+        assert_eq!(snapshot.bindings.len(), 3);
+        assert!(snapshot
+            .bindings
+            .iter()
+            .any(|binding| binding.native_name == "kept"
+                && binding.workspace_id.as_deref() == Some("registered")));
+        let discovered = snapshot
+            .bindings
+            .iter()
+            .find(|binding| binding.native_name == "jCodeMunch")
+            .expect("Claude-known local binding should be inventoried");
+        assert_eq!(discovered.native_scope, "local");
+        assert_eq!(discovered.workspace_id, None);
+        assert!(snapshot
+            .bindings
+            .iter()
+            .any(|binding| binding.native_name == "project-file"
+                && binding.native_scope == "project"
+                && binding.workspace_id.is_none()));
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        assert!(!serialized.contains(&unregistered.to_string_lossy().to_string()));
     }
 
     #[test]

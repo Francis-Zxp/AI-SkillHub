@@ -174,7 +174,7 @@ const identity = buildIdentity();
       paint,
       verifiedAt: new Date().toISOString()
     };
-    const reportDir = path.resolve(__dirname, "../reports/desktop/v3.2.0-startup-cache");
+    const reportDir = path.resolve(__dirname, "../reports/desktop/v3.2.1-startup-cache");
     fs.mkdirSync(reportDir, { recursive: true });
     fs.writeFileSync(path.join(reportDir, `${runLabel}-${qaRunId}.json`), JSON.stringify(report, null, 2));
     console.log("Tauri startup cache QA passed", report);

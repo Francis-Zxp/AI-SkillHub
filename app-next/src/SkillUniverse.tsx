@@ -241,7 +241,6 @@ export function SkillUniverse({
     let frame = 0;
     let frameTimer = 0;
     let lastDrawAt = 0;
-    let ambientUntil = performance.now() + 2400;
     let pageVisible = !document.hidden;
     let focused = document.hasFocus();
     let intersecting = host.getClientRects().length > 0;
@@ -273,15 +272,15 @@ export function SkillUniverse({
     };
 
     const scheduleDraw = (urgent = false) => {
-      if (!canRender() || frame || (!focused && !urgent)) return;
+      if (!canRender() || !focused || frame) return;
+      if (reducedMotion && !urgent) return;
       const interactiveMotion = hasInteractiveMotion();
-      if (!urgent && !interactiveMotion && performance.now() >= ambientUntil) return;
       if (frameTimer) {
         if (!urgent) return;
         window.clearTimeout(frameTimer);
         frameTimer = 0;
       }
-      const interval = interactiveMotion ? 1000 / 60 : 1000 / 6;
+      const interval = interactiveMotion ? 1000 / 60 : 1000 / 8;
       const wait = urgent ? 0 : Math.max(0, interval - (performance.now() - lastDrawAt));
       if (wait <= 1) {
         frame = window.requestAnimationFrame(draw);
@@ -346,7 +345,6 @@ export function SkillUniverse({
 
     const onFocus = () => {
       focused = true;
-      ambientUntil = performance.now() + 800;
       runtime.lastFrame = 0;
       lastDrawAt = 0;
       scheduleDraw(true);

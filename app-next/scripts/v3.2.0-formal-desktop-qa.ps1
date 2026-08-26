@@ -36,7 +36,7 @@ $executableSha256 = (Get-FileHash -LiteralPath $resolvedExecutable -Algorithm SH
 $temporaryRoot = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
 $qaRunId = [Guid]::NewGuid().ToString('N')
 $qaSourceName = "qa-source-alpha-$($qaRunId.Substring(0, 12))"
-$qaRoot = [IO.Path]::GetFullPath((Join-Path $env:TEMP "AI-SkillHub-v3.2.0-formal-desktop-qa-$qaRunId"))
+$qaRoot = [IO.Path]::GetFullPath((Join-Path $env:TEMP "AI-SkillHub-v3.2.1-formal-desktop-qa-$qaRunId"))
 if (-not $qaRoot.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) {
   throw "Refusing to create formal QA state outside TEMP: $qaRoot"
 }
@@ -272,8 +272,8 @@ Performs the isolated child capability check.
     Sha256 = $executableSha256
     IsolatedData = $true
     ClipboardUntouched = $true
-    StartupReport = (Join-Path $appNextRoot "reports\desktop\v3.2.0-startup-cache\formal-isolated-cache-$qaRunId.json")
-    DragReport = (Join-Path $appNextRoot "reports\desktop\v3.2.0-tauri-drag\state-$qaRunId.json")
+    StartupReport = (Join-Path $appNextRoot "reports\desktop\v3.2.1-startup-cache\formal-isolated-cache-$qaRunId.json")
+    DragReport = (Join-Path $appNextRoot "reports\desktop\v3.2.1-tauri-drag\state-$qaRunId.json")
   }
 } catch {
   $operationError = $_
