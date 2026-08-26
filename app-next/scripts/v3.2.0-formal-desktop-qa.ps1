@@ -118,7 +118,20 @@ function Start-VerifiedQaApp([bool]$ExpectCached, [string]$RunLabel) {
     $process = Start-Process -FilePath $resolvedExecutable -WindowStyle Hidden -PassThru
     Set-ProcessEnvironment 'AI_SKILLHUB_EXPECTED_PID' $process.Id.ToString()
 
-    $actualPath = [IO.Path]::GetFullPath((Get-Process -Id $process.Id -ErrorAction Stop).Path)
+    $rawPath = ''
+    for ($attempt = 0; $attempt -lt 40; $attempt += 1) {
+      $startedProcess = Get-Process -Id $process.Id -ErrorAction Stop
+      if ($startedProcess.HasExited) {
+        throw "Formal QA app exited before its executable path could be verified: $($startedProcess.ExitCode)"
+      }
+      $rawPath = [string]$startedProcess.Path
+      if (-not [string]::IsNullOrWhiteSpace($rawPath)) { break }
+      Start-Sleep -Milliseconds 100
+    }
+    if ([string]::IsNullOrWhiteSpace($rawPath)) {
+      throw 'Formal QA app did not expose a verifiable executable path.'
+    }
+    $actualPath = [IO.Path]::GetFullPath($rawPath)
     if (-not [string]::Equals($actualPath, $resolvedExecutable, [StringComparison]::OrdinalIgnoreCase)) {
       throw "Started process path does not match the formal executable: $actualPath"
     }
@@ -158,12 +171,20 @@ function Stop-VerifiedQaApp($App) {
   if (-not $App) { return }
   $process = Get-Process -Id $App.Process.Id -ErrorAction SilentlyContinue
   if ($process) {
-    $actualPath = [IO.Path]::GetFullPath($process.Path)
-    if (-not [string]::Equals($actualPath, $resolvedExecutable, [StringComparison]::OrdinalIgnoreCase)) {
-      throw "Refusing to stop an unexpected process: $actualPath"
+    if ($process.HasExited) {
+      $process = $null
+    } else {
+      $rawPath = [string]$process.Path
+      if ([string]::IsNullOrWhiteSpace($rawPath)) {
+        throw "Cannot verify the isolated QA process path before stopping it."
+      }
+      $actualPath = [IO.Path]::GetFullPath($rawPath)
+      if (-not [string]::Equals($actualPath, $resolvedExecutable, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to stop an unexpected process: $actualPath"
+      }
+      Stop-Process -Id $process.Id -Force
+      $process.WaitForExit(10000) | Out-Null
     }
-    Stop-Process -Id $process.Id -Force
-    $process.WaitForExit(10000) | Out-Null
   }
   for ($attempt = 0; $attempt -lt 40; $attempt += 1) {
     if (-not (Get-NetTCPConnection -LocalPort $App.Port -State Listen -ErrorAction SilentlyContinue)) { return }

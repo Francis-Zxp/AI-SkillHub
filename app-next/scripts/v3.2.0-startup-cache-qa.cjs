@@ -70,15 +70,6 @@ const identity = buildIdentity();
     const page = await waitForAppPage(browser);
 
     await page.locator(".shell").waitFor({ timeout: 30_000 });
-    const startupLoadPath = await page.waitForFunction(async () => {
-      const value = await window.__TAURI_INTERNALS__.invoke("get_startup_load_path");
-      return value === "unknown" ? false : value;
-    }, undefined, { timeout: 30_000, polling: 100 }).then(handle => handle.jsonValue());
-    assert.equal(
-      startupLoadPath,
-      expectCached ? "sqlite-cache" : "fallback-scan",
-      `startup used ${startupLoadPath} instead of the expected ${expectCached ? "SQLite cache" : "fallback scan"}`
-    );
     const indexed = await page.waitForFunction(() => {
       const tape = document.querySelector(".atlas-event-tape");
       const skills = Number(tape?.querySelector("span:nth-child(2) strong")?.textContent?.replace(/,/g, "") || 0);
@@ -91,6 +82,19 @@ const identity = buildIdentity();
         sources
       };
     }, undefined, { timeout: 30_000 }).then(handle => handle.jsonValue());
+
+    // The shell mounts before its asynchronous indexed snapshot completes.
+    // Check the backend diagnostic only after the visible index proves that
+    // load_indexed_snapshot has had a chance to record its actual load path.
+    const startupLoadPath = await page.waitForFunction(async () => {
+      const value = await window.__TAURI_INTERNALS__.invoke("get_startup_load_path");
+      return value === "unknown" ? false : value;
+    }, undefined, { timeout: 30_000, polling: 100 }).then(handle => handle.jsonValue());
+    assert.equal(
+      startupLoadPath,
+      expectCached ? "sqlite-cache" : "fallback-scan",
+      `startup used ${startupLoadPath} instead of the expected ${expectCached ? "SQLite cache" : "fallback scan"}`
+    );
 
     const button = page.locator(".topbar .primary-pill");
     await button.waitFor({ state: "visible" });
