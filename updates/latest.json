@@ -1,11 +1,11 @@
 {
-  "version": "3.2.0",
-  "notes": "AI SkillHub v3.2.0：刷新与来源编辑保持响应，修复 Skill 拖动、主题和 Claude/Codex 交付，并新增可预览、可回滚且不启动服务器的 MCP 配置管理。",
-  "pub_date": "2026-08-25T22:18:37Z",
+  "version": "3.2.1",
+  "notes": "Homepage-only data-ball motion and safe discovery of persisted Claude Code project MCP configurations.",
+  "pub_date": "2026-08-26T09:37:09Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVdGMTlSd3ZEUkxMTThrSUo0ajhRQnZraGNSN2cwYnJ1d2RTS0lPazM4RmlITm9BQURlWDVsbjZCUWNmQkJRVDl5dFd6YnRncHM1RmNSc1BWemw1TUFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3Njk2MzE2CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjBfeDY0LXNldHVwLmV4ZQplYjMvMkRnYm5uTXNUS29RZU52dkpZYWdrV3duUFFXU2Fxd21qY0xxbDlwK01DMkJsNG44ZE91ZjJiYkVCOWJGaWZrUkh5ZkJ4anNtK3ViWCsrbzRDUT09Cg==",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.0/AI-SkillHub-3.2.0-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcWVuNzVZUWE4bm53U2txNkNuVGR1cWNOMUtMMG9MNVgwMjlJdTZTYjgxSVJNUmlrZGwxdmhnUmQ0NmhERHhLUFFUdkQ0eDJHQ1NLZUlrWEVwc1dPRndJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzM3MDI4CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjFfeDY0LXNldHVwLmV4ZQpCUjhvTVBRcXBzTHU3WlZ0T2gwY3V0aTBTUm53eEExSnJtN0RVb1FoY3hZUFMxdVMyRnlFanlGRTc3bWFhSXdWR3l1SjVOK0E3QU5ZSS9zY2dVQ2VCdz09Cg==",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.1/AI-SkillHub-3.2.1-setup.exe"
     }
   }
 }
