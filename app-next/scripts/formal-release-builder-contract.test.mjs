@@ -86,5 +86,11 @@ test("formal desktop QA isolates host roots and waits for an app-side startup pa
   assert.match(formalDesktopQa, /Set-ProcessEnvironment 'CLAUDE_CONFIG_DIR' \(Join-Path \$qaProfileRoot '\.claude'\)/);
   assert.match(formalDesktopQa, /Set-ProcessEnvironment 'AI_SKILLHUB_ROOT' \$qaProjectRoot/);
   assert.match(formalDesktopQa, /Copy-Item -LiteralPath \(Join-Path \$appNextRoot "runtime\\\$runtimeFile"\)/);
+  assert.match(formalDesktopQa, /Formal QA app did not expose a verifiable executable path/);
+  assert.match(formalDesktopQa, /Cannot verify the isolated QA process path before stopping it/);
   assert.match(startupCacheQa, /value === "unknown" \? false : value/);
+  assert.ok(
+    startupCacheQa.indexOf("const indexed") < startupCacheQa.indexOf("const startupLoadPath"),
+    "startup path must be read after the indexed snapshot has completed",
+  );
 });
