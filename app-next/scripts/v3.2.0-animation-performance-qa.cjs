@@ -4,7 +4,7 @@ const path = require("node:path");
 const { chromium } = require("playwright");
 
 const baseUrl = process.env.AI_SKILLHUB_PREVIEW_URL || "http://127.0.0.1:4173";
-const reportDir = path.resolve(__dirname, "../reports/visual/v3.2.0-animation-performance");
+const reportDir = path.resolve(__dirname, "../reports/visual/v3.2.1-animation-performance");
 fs.mkdirSync(reportDir, { recursive: true });
 
 async function sampleDraws(page, durationMs) {
@@ -49,10 +49,11 @@ async function launchBrowser() {
   await openView(page, "nocturne", "dashboard");
   const universe = page.locator(".skill-universe-canvas");
   await universe.waitFor();
-  await page.waitForTimeout(3_000);
+  await page.waitForTimeout(1_000);
   const idleUniverse = await sampleDraws(page, 2_000);
-  const idleUniverseFrames = idleUniverse["skill-universe-canvas"] || 0;
-  assert.ok(idleUniverseFrames <= 1, `universe idle drew ${idleUniverseFrames} frames after settling`);
+  const homeIdleUniverseFrames = idleUniverse["skill-universe-canvas"] || 0;
+  assert.ok(homeIdleUniverseFrames >= 8, `homepage universe drew only ${homeIdleUniverseFrames} idle frames in 2s`);
+  assert.ok(homeIdleUniverseFrames <= 24, `homepage universe drew ${homeIdleUniverseFrames} idle frames in 2s`);
 
   const box = await universe.boundingBox();
   assert.ok(box, "universe canvas has no layout box");
@@ -87,6 +88,7 @@ async function launchBrowser() {
   await page.screenshot({ path: path.join(reportDir, "classic-dashboard.png"), fullPage: true });
 
   await openView(page, "nocturne", "library");
+  assert.equal(await page.locator(".skill-universe-canvas").count(), 0, "universe stayed mounted outside the homepage");
   const backdrop = page.locator(".particle-field-backdrop");
   await backdrop.waitFor({ state: "attached" });
   assert.equal(await backdrop.isVisible(), false, "operational-page backdrop unexpectedly changed the existing hidden UI");
@@ -118,9 +120,26 @@ async function launchBrowser() {
   assert.ok(highDpiGraphBacking.pixels <= 1_710_000, `4K classic graph backing store used ${highDpiGraphBacking.pixels} pixels`);
   await highDpiPage.close();
 
-  const result = { idleUniverseFrames, interactiveFrames, ambientFrames, graphFrames, backdropFrames, hiddenBackdropBacking, highDpiBacking, highDpiGraphBacking };
+  const reducedMotionPage = await browser.newPage({ reducedMotion: "reduce", viewport: { width: 1440, height: 900 } });
+  await reducedMotionPage.addInitScript(() => {
+    window.__aiSkillHubDrawCounts = {};
+    const originalClearRect = CanvasRenderingContext2D.prototype.clearRect;
+    CanvasRenderingContext2D.prototype.clearRect = function (...args) {
+      const className = typeof this.canvas?.className === "string" ? this.canvas.className : "unknown-canvas";
+      window.__aiSkillHubDrawCounts[className] = (window.__aiSkillHubDrawCounts[className] || 0) + 1;
+      return originalClearRect.apply(this, args);
+    };
+  });
+  await openView(reducedMotionPage, "nocturne", "dashboard");
+  await reducedMotionPage.locator(".skill-universe-canvas").waitFor();
+  const reducedMotionDraws = await sampleDraws(reducedMotionPage, 1_000);
+  const reducedMotionFrames = reducedMotionDraws["skill-universe-canvas"] || 0;
+  assert.ok(reducedMotionFrames <= 1, `reduced-motion universe drew ${reducedMotionFrames} idle frames`);
+  await reducedMotionPage.close();
+
+  const result = { homeIdleUniverseFrames, interactiveFrames, reducedMotionFrames, ambientFrames, graphFrames, backdropFrames, hiddenBackdropBacking, highDpiBacking, highDpiGraphBacking };
   fs.writeFileSync(path.join(reportDir, "qa.json"), JSON.stringify(result, null, 2));
-  console.log("v3.2.0 animation performance QA passed", result);
+  console.log("v3.2.1 animation performance QA passed", result);
   } finally {
     await browser?.close().catch(() => undefined);
   }

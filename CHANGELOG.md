@@ -2,6 +2,17 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.1 - Homepage motion and broader Claude MCP discovery
+
+### Fixed
+
+- Restores the dashboard data ball's slow rotation only while the visible, focused homepage is idle. It remains stopped on other pages, when the window is not active, when hidden, and when reduced motion is requested; direct interaction still wakes it at 60 fps.
+- Extends static, redacted Claude Code MCP inventory from registered SkillHub workspaces to all bounded known Claude project records and their safe project-root `.mcp.json` files. Unregistered projects remain read-only, so discovery never grants write access outside SkillHub-managed workspaces.
+
+### Verification
+
+- Re-runs frontend, Rust, desktop, installer, portable-recipient, signature, public-download, and update-channel gates for the signed v3.2.1 release.
+
 ## 3.2.0 - Responsive refresh and safe MCP management
 
 ### Changed

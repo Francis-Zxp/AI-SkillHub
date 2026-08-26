@@ -8,7 +8,7 @@ const reportDir = path.resolve(__dirname, "../reports/visual/v3.2-interaction");
 fs.mkdirSync(reportDir, { recursive: true });
 
 const report = {
-  version: "3.2.0",
+  version: "3.2.1",
   baseUrl,
   startedAt: new Date().toISOString(),
   passed: false,
