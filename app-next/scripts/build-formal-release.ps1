@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [string]$Version = '',
-  [string]$PreviousVersion = '3.2.0',
+  [string]$PreviousVersion = '3.2.1',
   [string]$ReleaseNotes = '',
   [switch]$SkipBuild,
   [string]$ExistingInstallerPath = '',
