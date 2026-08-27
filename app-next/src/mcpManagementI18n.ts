@@ -80,7 +80,14 @@ const en: Dictionary = {
   "mcp.managementLocationUnknown": "The configuration source cannot be matched safely, so this binding remains view only.",
   "mcp.managementParseFailed": "The configuration source did not pass static parsing, so this binding remains view only.",
   "mcp.managementWorkspaceMissing": "The binding's registered workspace is missing, so this binding remains view only.",
-  "mcp.claudeToggleInHost": "Enable or disable this per project in Claude Code /mcp."
+  "mcp.claudeToggleInHost": "Enable or disable this per project in Claude Code /mcp.",
+  "mcp.githubImportTitle": "Quick import from GitHub",
+  "mcp.githubImportBody": "Paste a public repository or owner/repo. Only its root .mcp.json or mcp.json is read; no server is started and no credential value is copied.",
+  "mcp.githubImportAction": "Read configuration",
+  "mcp.githubImporting": "Reading…",
+  "mcp.githubImportFound": "Found {n} safe draft(s) in {source}.",
+  "mcp.githubUseCandidate": "Use this server",
+  "mcp.githubHeadersManual": "This entry has header references. Add Header=ENV_NAME manually; no header value was copied."
 };
 
 const zh: Dictionary = {
@@ -160,7 +167,14 @@ const zh: Dictionary = {
   "mcp.managementLocationUnknown": "无法安全对应配置来源，因此此绑定仅供查看。",
   "mcp.managementParseFailed": "配置来源未通过静态解析，因此此绑定仅供查看。",
   "mcp.managementWorkspaceMissing": "未找到此绑定所属的已注册工作区，因此此绑定仅供查看。",
-  "mcp.claudeToggleInHost": "请在 Claude Code /mcp 中按项目启停。"
+  "mcp.claudeToggleInHost": "请在 Claude Code /mcp 中按项目启停。",
+  "mcp.githubImportTitle": "从 GitHub 快速导入",
+  "mcp.githubImportBody": "粘贴公开仓库地址或 owner/repo。只读取根目录的 .mcp.json 或 mcp.json；不启动服务器，也不会复制凭据值。",
+  "mcp.githubImportAction": "读取配置",
+  "mcp.githubImporting": "正在读取…",
+  "mcp.githubImportFound": "在 {source} 找到 {n} 个可安全带入的服务器。",
+  "mcp.githubUseCandidate": "带入此服务器",
+  "mcp.githubHeadersManual": "此条目含 Header 引用，请自行只填 Header=ENV_NAME；未复制任何 Header 值。"
 };
 
 const ko: Dictionary = {
@@ -240,7 +254,14 @@ const ko: Dictionary = {
   "mcp.managementLocationUnknown": "구성 출처를 안전하게 연결할 수 없어 이 바인딩은 보기 전용입니다.",
   "mcp.managementParseFailed": "구성 출처가 정적 구문 분석을 통과하지 못해 이 바인딩은 보기 전용입니다.",
   "mcp.managementWorkspaceMissing": "이 바인딩의 등록된 작업 공간이 없어 보기 전용으로 유지됩니다.",
-  "mcp.claudeToggleInHost": "Claude Code /mcp에서 프로젝트별로 활성화하거나 비활성화하세요."
+  "mcp.claudeToggleInHost": "Claude Code /mcp에서 프로젝트별로 활성화하거나 비활성화하세요.",
+  "mcp.githubImportTitle": "GitHub에서 빠르게 가져오기",
+  "mcp.githubImportBody": "공개 저장소 또는 owner/repo를 붙여 넣으세요. 루트의 .mcp.json 또는 mcp.json만 읽으며 서버를 시작하거나 자격 증명 값을 복사하지 않습니다.",
+  "mcp.githubImportAction": "구성 읽기",
+  "mcp.githubImporting": "읽는 중…",
+  "mcp.githubImportFound": "{source}에서 안전하게 가져올 수 있는 서버 {n}개를 찾았습니다.",
+  "mcp.githubUseCandidate": "이 서버 사용",
+  "mcp.githubHeadersManual": "이 항목에는 Header 참조가 있습니다. Header=ENV_NAME만 직접 추가하세요. Header 값은 복사되지 않았습니다."
 };
 
 const dictionaries: Record<Lang, Dictionary> = { en, zh, ko };

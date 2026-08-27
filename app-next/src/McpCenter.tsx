@@ -181,6 +181,21 @@ type McpMutationTargetOption = {
   pathDisplay: string;
 };
 
+type McpGithubImportCandidate = {
+  serverName: string;
+  transport: McpTransport;
+  command?: string | null;
+  args: string[];
+  url?: string | null;
+  envVars: string[];
+  needsManualHeaders: boolean;
+};
+
+type McpGithubImportPreview = {
+  sourceDisplay: string;
+  candidates: McpGithubImportCandidate[];
+};
+
 type McpFormDraft = {
   hostIds: Array<"host-codex" | "host-claude-code">;
   scope: "user" | "project" | "local";
@@ -289,9 +304,13 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
   const [rollbackSnapshots, setRollbackSnapshots] = useState<McpRollbackSnapshot[]>([]);
   const [mutationTargets, setMutationTargets] = useState<McpMutationTargetOption[]>([]);
   const [mutationNotice, setMutationNotice] = useState("");
+  const [githubSource, setGithubSource] = useState("");
+  const [githubPreview, setGithubPreview] = useState<McpGithubImportPreview | null>(null);
+  const [githubImportError, setGithubImportError] = useState("");
+  const [githubImporting, setGithubImporting] = useState(false);
   const mutationInFlightRef = useRef(false);
 
-  const mutationBusy = mutationPhase !== "";
+  const mutationBusy = mutationPhase !== "" || githubImporting;
 
   async function scan() {
     if (!runtimeAvailable) {
@@ -339,6 +358,9 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
     setFormError("");
     setMutationError("");
     setPendingPlan(null);
+    setGithubSource("");
+    setGithubPreview(null);
+    setGithubImportError("");
     setShowForm(true);
   }
 
@@ -346,6 +368,55 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
     if (mutationBusy) return;
     setShowForm(false);
     setFormError("");
+    setGithubPreview(null);
+    setGithubImportError("");
+  }
+
+  async function importGithubConfig() {
+    if (!runtimeAvailable) {
+      setGithubImportError(t("mcp.desktopOnly"));
+      return;
+    }
+    if (mutationInFlightRef.current) return;
+    mutationInFlightRef.current = true;
+    setGithubImporting(true);
+    setGithubImportError("");
+    setGithubPreview(null);
+    try {
+      const preview = await invoke<McpGithubImportPreview>("import_mcp_github_config", {
+        request: { source: githubSource }
+      });
+      setGithubPreview(preview);
+    } catch (reason) {
+      setGithubImportError(friendlyMessage(reason));
+    } finally {
+      mutationInFlightRef.current = false;
+      setGithubImporting(false);
+    }
+  }
+
+  function useGithubCandidate(candidate: McpGithubImportCandidate) {
+    let hostIds = formDraft.hostIds;
+    if (candidate.transport === "sse") {
+      hostIds = ["host-claude-code"];
+    } else if (!mcpServerNameCompatible(candidate.serverName, hostIds)) {
+      hostIds = ["host-codex"];
+    }
+    const next = normalizeMcpTarget({
+      ...formDraft,
+      hostIds,
+      serverName: candidate.serverName,
+      transport: candidate.transport,
+      command: candidate.command ?? "",
+      url: candidate.url ?? "",
+      argsText: candidate.args.join("\n"),
+      envVarsText: candidate.envVars.join(", "),
+      headerEnvText: "",
+      enabled: true,
+      required: false
+    }, mutationTargets);
+    setFormDraft(next);
+    setGithubImportError(candidate.needsManualHeaders ? t("mcp.githubHeadersManual") : "");
   }
 
   function startReconfigure(binding: McpBindingCard, location: McpConfigLocation | null) {
@@ -651,11 +722,18 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
           error={formError}
           mode={formMode}
           busy={mutationBusy}
+          githubImportError={githubImportError}
+          githubImporting={githubImporting}
+          githubPreview={githubPreview}
+          githubSource={githubSource}
           runtimeAvailable={runtimeAvailable}
           targetOptions={mutationTargets}
           onCancel={closeForm}
           onChange={setFormDraft}
+          onGithubSourceChange={setGithubSource}
+          onImportGithub={() => void importGithubConfig()}
           onSubmit={submitMcpDraft}
+          onUseGithubCandidate={useGithubCandidate}
         />
       )}
 
@@ -883,22 +961,36 @@ function McpManagementForm({
   busy,
   draft,
   error,
+  githubImportError,
+  githubImporting,
+  githubPreview,
+  githubSource,
   mode,
   runtimeAvailable,
   targetOptions,
   onCancel,
   onChange,
-  onSubmit
+  onGithubSourceChange,
+  onImportGithub,
+  onSubmit,
+  onUseGithubCandidate
 }: {
   busy: boolean;
   draft: McpFormDraft;
   error: string;
+  githubImportError: string;
+  githubImporting: boolean;
+  githubPreview: McpGithubImportPreview | null;
+  githubSource: string;
   mode: "add" | "reconfigure";
   runtimeAvailable: boolean;
   targetOptions: McpMutationTargetOption[];
   onCancel: () => void;
   onChange: (draft: McpFormDraft) => void;
+  onGithubSourceChange: (value: string) => void;
+  onImportGithub: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onUseGithubCandidate: (candidate: McpGithubImportCandidate) => void;
 }) {
   const compatibleTargets = commonMcpTargets(targetOptions, draft.hostIds);
   const scopeOptions = Array.from(new Set(compatibleTargets.map(target => target.scope)));
@@ -943,6 +1035,43 @@ function McpManagementForm({
       </header>
 
       <form className="mcp-management-form" onSubmit={onSubmit}>
+        {mode === "add" && (
+          <section aria-busy={githubImporting} className="mcp-github-import">
+            <div>
+              <strong>{t("mcp.githubImportTitle")}</strong>
+              <small>{t("mcp.githubImportBody")}</small>
+            </div>
+            <label>
+              <span className="sr-only">{t("mcp.githubImportTitle")}</span>
+              <input
+                autoComplete="off"
+                disabled={busy || !runtimeAvailable}
+                maxLength={360}
+                onChange={event => onGithubSourceChange(event.target.value)}
+                placeholder="owner/repo"
+                spellCheck={false}
+                value={githubSource}
+              />
+            </label>
+            <button className="secondary-action small" disabled={busy || !githubSource.trim() || !runtimeAvailable} onClick={onImportGithub} type="button">
+              <Icon name="download" /> {githubImporting ? t("mcp.githubImporting") : t("mcp.githubImportAction")}
+            </button>
+            {githubImportError && <p className="mcp-form-error" role="alert">{githubImportError}</p>}
+            {githubPreview && (
+              <div className="mcp-github-candidates">
+                <small>{t("mcp.githubImportFound", { source: githubPreview.sourceDisplay, n: githubPreview.candidates.length })}</small>
+                {githubPreview.candidates.map(candidate => (
+                  <article key={candidate.serverName}>
+                    <span><strong>{candidate.serverName}</strong><small>{candidate.transport}</small></span>
+                    <button className="ghost-action small" disabled={busy} onClick={() => onUseGithubCandidate(candidate)} type="button">
+                      {t("mcp.githubUseCandidate")}
+                    </button>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
         <fieldset className="mcp-host-picker">
           <legend>{t("mcp.chooseHosts")}</legend>
           <div>

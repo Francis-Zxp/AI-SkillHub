@@ -2,6 +2,21 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.2 - Adaptive dashboard motion and GitHub MCP quick import
+
+### Changed
+
+- Keeps the data ball smooth at a 36 fps ambient budget only while the visible, focused homepage is active. It now measures its own render cost and automatically reduces background cadence to 28 or 20 fps under load, while drag and zoom remain at 60 fps. Other pages, hidden windows, unfocused windows, and reduced-motion mode continue to draw zero sustained frames.
+- Adds GitHub MCP quick import: paste `owner/repo` or a public GitHub repository URL, choose a server from its root `.mcp.json` or `mcp.json`, then review the existing redacted change plan before applying it to Codex, Claude Code, or both.
+
+### Security
+
+- Quick import permits only bounded public GitHub repository identifiers, makes non-redirecting size-limited requests, and returns only supported command, argument, URL, and environment-variable names. It never starts a server, copies header or credential values, or bypasses the existing plan, confirmation, atomic write, and rollback safeguards.
+
+### Verification
+
+- Adds unit coverage for malformed URLs, bounded static configurations, credential-like argument rejection, and a read-only public `.mcp.json` integration check; re-runs the responsive refresh, child-copy, drag/drop, theme, MCP management, frontend, Rust, desktop, installer, recipient, signature, public-download, and updater-channel gates for the signed release.
+
 ## 3.2.1 - Homepage motion and broader Claude MCP discovery
 
 ### Fixed

@@ -54,6 +54,45 @@
 }
 
 .mcp-management-form { display: grid; gap: 18px; margin-top: 22px; }
+.mcp-github-import {
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-soft));
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(170px, 1fr) minmax(180px, 1.25fr) auto;
+  padding: 12px;
+}
+.mcp-github-import > div:first-child { display: grid; gap: 3px; }
+.mcp-github-import strong { color: var(--text); font-size: calc(.74rem * var(--ui-text-scale)); }
+.mcp-github-import small { color: var(--text-faint); font-size: calc(.65rem * var(--ui-text-scale)); line-height: 1.4; }
+.mcp-github-import label { min-width: 0; }
+.mcp-github-import input {
+  background: color-mix(in srgb, var(--surface-elevated) 80%, var(--surface-soft));
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  font: inherit;
+  font-size: calc(.73rem * var(--ui-text-scale));
+  min-height: 39px;
+  padding: 8px 10px;
+  width: 100%;
+}
+.mcp-github-import input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); outline: none; }
+.mcp-github-import > .mcp-form-error,
+.mcp-github-candidates { grid-column: 1 / -1; }
+.mcp-github-candidates { display: grid; gap: 7px; }
+.mcp-github-candidates > article {
+  align-items: center;
+  background: color-mix(in srgb, var(--surface-elevated) 74%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 8px 9px;
+}
+.mcp-github-candidates > article > span { display: grid; gap: 2px; min-width: 0; }
 .mcp-host-picker { border: 0; margin: 0; min-width: 0; padding: 0; }
 .mcp-host-picker legend,
 .mcp-form-grid label > span {
@@ -298,7 +337,8 @@
   .mcp-plan-confirmation > header > code { max-width: 100%; }
   .mcp-form-grid,
   .mcp-form-options,
-  .mcp-plan-diffs dl { grid-template-columns: 1fr; }
+  .mcp-plan-diffs dl,
+  .mcp-github-import { grid-template-columns: 1fr; }
   .mcp-plan-targets li { grid-template-columns: 1fr; }
   .mcp-plan-targets em { justify-self: start; }
   .mcp-management-form > footer,

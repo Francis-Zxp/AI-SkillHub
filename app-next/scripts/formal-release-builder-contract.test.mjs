@@ -9,7 +9,7 @@ const read = (...parts) => fs.readFileSync(path.join(...parts), "utf8");
 const packageJson = JSON.parse(read(appRoot, "package.json"));
 const tauriConfig = JSON.parse(read(appRoot, "src-tauri", "tauri.conf.json"));
 const version = packageJson.version;
-const previousVersion = "3.2.0";
+const previousVersion = "3.2.1";
 const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const escapedPreviousVersion = previousVersion.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const builder = read(appRoot, "scripts", "build-formal-release.ps1");

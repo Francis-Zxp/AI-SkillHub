@@ -2,6 +2,7 @@ mod adapter_doctor;
 mod codex_plugin_doctor;
 mod legacy_cleanup;
 mod mcp_center;
+mod mcp_github_import;
 mod mcp_mutation;
 mod metadata;
 mod migration_v4;
@@ -3777,6 +3778,15 @@ async fn scan_mcp_connections() -> Result<mcp_center::McpInventory, String> {
     })
     .await
     .map_err(|_| "MCP 只读扫描后台任务意外停止；没有修改任何配置。".to_string())?
+}
+
+/// Fetches a bounded public repository configuration and returns only a
+/// secret-free draft. It never starts an MCP server or writes a configuration.
+#[tauri::command]
+async fn import_mcp_github_config(
+    request: mcp_github_import::McpGithubImportRequest,
+) -> Result<mcp_github_import::McpGithubImportPreview, String> {
+    run_blocking_task(move || mcp_github_import::import_mcp_github_config(request)).await
 }
 
 fn resolve_mcp_home_dir() -> Result<PathBuf, String> {
@@ -17427,6 +17437,7 @@ pub fn run() {
             run_release_gate_runner,
             open_release_gate_export_path,
             scan_mcp_connections,
+            import_mcp_github_config,
             plan_mcp_changes,
             apply_mcp_plan,
             rollback_mcp_snapshot,
