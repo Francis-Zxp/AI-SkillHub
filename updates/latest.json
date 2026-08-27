@@ -1,11 +1,11 @@
 {
-  "version": "3.2.1",
-  "notes": "Homepage-only data-ball motion and safe discovery of persisted Claude Code project MCP configurations.",
-  "pub_date": "2026-08-26T09:37:09Z",
+  "version": "3.2.2",
+  "notes": "Adaptive home animation, fast safe MCP GitHub import, and release validation fixes.",
+  "pub_date": "2026-08-27T16:56:13Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcWVuNzVZUWE4bm53U2txNkNuVGR1cWNOMUtMMG9MNVgwMjlJdTZTYjgxSVJNUmlrZGwxdmhnUmQ0NmhERHhLUFFUdkQ0eDJHQ1NLZUlrWEVwc1dPRndJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3NzM3MDI4CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjFfeDY0LXNldHVwLmV4ZQpCUjhvTVBRcXBzTHU3WlZ0T2gwY3V0aTBTUm53eEExSnJtN0RVb1FoY3hZUFMxdVMyRnlFanlGRTc3bWFhSXdWR3l1SjVOK0E3QU5ZSS9zY2dVQ2VCdz09Cg==",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.1/AI-SkillHub-3.2.1-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVdrUmxha0N0dWMvaUpDaVlPcFRPWC9GOTVtL1Q5VElVeS9MOWZoQXNrUVJ2dFhOZW1aZU4zUng5N0lqZXlzQVlIbld1M01yM09vcFBVd1JycXp0R2dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3ODQ5NzcyCWZpbGU6QUkgU2tpbGxIdWJfMy4yLjJfeDY0LXNldHVwLmV4ZQpXOHhaSG9STmhpZmNTNnNSeUdwTlRaZUs0OUJkVHEzbUtjc1JiVFRyZ2wvMDVHcVp6amZpTjVCQW9qdjUrVnB4OXQ4OUZ5SUdNejF1blQzTDRlN25Cdz09Cg==",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.2/AI-SkillHub-3.2.2-setup.exe"
     }
   }
 }
