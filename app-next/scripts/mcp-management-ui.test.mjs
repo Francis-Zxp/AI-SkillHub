@@ -10,6 +10,7 @@ import {
 
 const files = {
   ui: await readFile(new URL("../src/McpCenter.tsx", import.meta.url), "utf8"),
+  githubImport: await readFile(new URL("../src-tauri/src/mcp_github_import.rs", import.meta.url), "utf8"),
   management: await readFile(new URL("../src/mcpManagement.ts", import.meta.url), "utf8"),
   managementI18n: await readFile(new URL("../src/mcpManagementI18n.ts", import.meta.url), "utf8"),
   managementStyles: await readFile(new URL("../src/McpCenter.css", import.meta.url), "utf8"),
@@ -84,6 +85,27 @@ test("add form offers only discovered host scopes and blocks obvious credential 
   assert.equal(containsObviousCredentialValue("--env\nAPI_TOKEN=ordinary-looking-value"), true);
   assert.equal(containsObviousCredentialValue("API_TOKEN=ordinary-looking-value"), true);
   assert.match(files.managementI18n, /不要输入凭据值，只填环境变量名/);
+});
+
+test("GitHub quick import is static, bounded, and only carries secret-free draft fields", () => {
+  assert.match(files.ui, /invoke<McpGithubImportPreview>\("import_mcp_github_config", \{\s*request: \{ source: githubSource \}/);
+  const form = section(files.ui, "function McpManagementForm", "function McpPlanConfirmation");
+  assert.match(form, /aria-busy=\{githubImporting\}/);
+  assert.match(form, /placeholder="owner\/repo"/);
+  assert.match(form, /onUseGithubCandidate\(candidate\)/);
+  assert.match(form, /"mcp\.githubImportBody"/);
+  assert.match(files.ui, /setGithubImportError\(candidate\.needsManualHeaders \? t\("mcp\.githubHeadersManual"\) : ""\)/);
+  assert.equal([...files.managementI18n.matchAll(/"mcp\.githubImportTitle":/g)].length, 3);
+  assert.match(files.managementI18n, /只读取根目录的 \.mcp\.json 或 mcp\.json；不启动服务器，也不会复制凭据值/);
+
+  assert.match(files.githubImport, /const MAX_CONFIG_BYTES: usize = 96 \* 1024/);
+  assert.match(files.githubImport, /\.redirects\(0\)/);
+  assert.match(files.githubImport, /\.take\(\(MAX_CONFIG_BYTES \+ 1\) as u64\)/);
+  assert.match(files.githubImport, /https:\/\/github\.com\/owner\/repo 或 owner\/repo/);
+  assert.match(files.githubImport, /env_vars: Vec<String>/);
+  assert.match(files.githubImport, /needs_manual_headers: bool/);
+  assert.doesNotMatch(files.githubImport, /Authorization.*Bearer \{token\}/);
+  assert.doesNotMatch(files.githubImport, /github_api_token/);
 });
 
 test("existing bindings expose planned enable, delete and blank-target reconfiguration", () => {

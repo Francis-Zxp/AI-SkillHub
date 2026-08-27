@@ -6,7 +6,7 @@ const { chromium } = require("playwright");
 
 const endpoint = process.env.AI_SKILLHUB_CDP_URL || "http://127.0.0.1:9339";
 const action = process.argv[2] || "move";
-const reportDir = path.resolve(__dirname, "../reports/desktop/v3.2.1-tauri-drag");
+const reportDir = path.resolve(__dirname, "../reports/desktop/v3.2.2-tauri-drag");
 
 function requiredEnvironment(name) {
   const value = process.env[name]?.trim();

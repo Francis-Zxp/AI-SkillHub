@@ -280,7 +280,12 @@ export function SkillUniverse({
         window.clearTimeout(frameTimer);
         frameTimer = 0;
       }
-      const interval = interactiveMotion ? 1000 / 60 : 1000 / 8;
+      // Keep the homepage smooth on a healthy renderer, then reduce only the
+      // background cadence when this device's actual draw cost needs it.
+      // Interaction remains immediate at 60 fps; non-home pages unmount this
+      // component, and visibility/focus guards above cancel all idle work.
+      const ambientInterval = runtime.drawMs > 18 ? 1000 / 20 : runtime.drawMs > 12 ? 1000 / 28 : 1000 / 36;
+      const interval = interactiveMotion ? 1000 / 60 : ambientInterval;
       const wait = urgent ? 0 : Math.max(0, interval - (performance.now() - lastDrawAt));
       if (wait <= 1) {
         frame = window.requestAnimationFrame(draw);
