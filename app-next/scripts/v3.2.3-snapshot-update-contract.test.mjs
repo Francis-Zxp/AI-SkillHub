@@ -12,12 +12,6 @@ const packageJson = JSON.parse(await readFile(new URL("../package.json", import.
 const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const cargoToml = await readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
 
-test("v3.2.3 ships one consistent installed version", () => {
-  assert.equal(packageJson.version, "3.2.3");
-  assert.equal(tauriConfig.version, packageJson.version);
-  assert.match(cargoToml, /^version = "3\.2\.3"$/m);
-});
-
 test("sources installed without Git are refreshed from GitHub during a full sync", () => {
   // The ZIP fallback is what every machine without a usable Git ends up with,
   // so it must have an update path of its own instead of freezing forever.

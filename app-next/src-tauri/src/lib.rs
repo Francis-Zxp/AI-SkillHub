@@ -1245,6 +1245,20 @@ async fn refresh_agent_detection() -> Result<LegacySnapshot, String> {
 }
 
 #[tauri::command]
+async fn read_git_runtime() -> Result<GitRuntimeCard, String> {
+    tauri::async_runtime::spawn_blocking(read_git_runtime_card)
+        .await
+        .map_err(|_| "Git 运行时检测意外停止，请重试。".to_string())
+}
+
+#[tauri::command]
+async fn install_git_runtime() -> Result<GitInstallResultCard, String> {
+    tauri::async_runtime::spawn_blocking(install_git_runtime_blocking)
+        .await
+        .map_err(|_| "Git 安装任务意外停止；本机没有发生改变。".to_string())?
+}
+
+#[tauri::command]
 async fn refresh_source_popularity() -> Result<SourcePopularityRefreshResult, String> {
     run_blocking_task(refresh_source_popularity_blocking).await
 }
@@ -6334,30 +6348,171 @@ fn run_release_gate_runner_in_connection(
     )
 }
 
-fn git_runtime_diagnostic() -> Value {
+/// Git for Windows is published by its own maintainers through the Microsoft
+/// package manager, so a one-click install shells out to winget rather than
+/// bundling or downloading any binary itself. Machines older than winget fall
+/// back to the official download page, which the UI opens in the system browser.
+const GIT_WINGET_PACKAGE_ID: &str = "Git.Git";
+const GIT_DOWNLOAD_PAGE_URL: &str = "https://git-scm.com/download/win";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRuntimeCard {
+    pub available: bool,
+    pub version: String,
+    pub error: String,
+    pub winget_available: bool,
+    pub package_id: String,
+    pub download_page_url: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitInstallResultCard {
+    pub status: String,
+    pub summary: String,
+    pub detail: String,
+    pub runtime: GitRuntimeCard,
+    pub restart_required: bool,
+}
+
+fn detect_git_version() -> (bool, String, String) {
     let mut command = Command::new("git");
     command.arg("--version");
     match command_output_with_timeout(&mut command, Duration::from_secs(5), "Git 版本检测超时。")
     {
-        Ok(output) if output.status.success() => serde_json::json!({
-            "available": true,
-            "version": compact_note(&String::from_utf8_lossy(&output.stdout)),
-            "error": ""
-        }),
-        Ok(output) => serde_json::json!({
-            "available": false,
-            "version": "",
-            "error": compact_note(&String::from_utf8_lossy(&output.stderr))
+        Ok(output) if output.status.success() => (
+            true,
+            compact_note(&String::from_utf8_lossy(&output.stdout)),
+            String::new(),
+        ),
+        Ok(output) => (
+            false,
+            String::new(),
+            compact_note(&String::from_utf8_lossy(&output.stderr))
                 .chars()
                 .take(240)
-                .collect::<String>()
-        }),
-        Err(error) => serde_json::json!({
-            "available": false,
-            "version": "",
-            "error": compact_note(&error).chars().take(240).collect::<String>()
-        }),
+                .collect::<String>(),
+        ),
+        Err(error) => (
+            false,
+            String::new(),
+            compact_note(&error).chars().take(240).collect::<String>(),
+        ),
     }
+}
+
+fn winget_is_available() -> bool {
+    let mut command = Command::new("winget");
+    command.arg("--version");
+    command_output_with_timeout(&mut command, Duration::from_secs(8), "winget 检测超时。")
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn read_git_runtime_card() -> GitRuntimeCard {
+    let (available, version, error) = detect_git_version();
+    GitRuntimeCard {
+        available,
+        version,
+        error,
+        // Probing winget costs a process spawn, so only ask when it could matter.
+        winget_available: if available {
+            false
+        } else {
+            winget_is_available()
+        },
+        package_id: GIT_WINGET_PACKAGE_ID.to_string(),
+        download_page_url: GIT_DOWNLOAD_PAGE_URL.to_string(),
+    }
+}
+
+fn install_git_runtime_blocking() -> Result<GitInstallResultCard, String> {
+    let before = read_git_runtime_card();
+    if before.available {
+        return Ok(GitInstallResultCard {
+            status: "already-installed".to_string(),
+            summary: "本机已经有可用的 Git，无需安装。".to_string(),
+            detail: before.version.clone(),
+            runtime: before,
+            restart_required: false,
+        });
+    }
+    if !before.winget_available {
+        return Ok(GitInstallResultCard {
+            status: "winget-missing".to_string(),
+            summary: "这台电脑没有 Windows 程序包管理器（winget），无法一键安装。".to_string(),
+            detail: "请点击下方链接，从 Git 官方网站下载安装程序。".to_string(),
+            runtime: before,
+            restart_required: false,
+        });
+    }
+
+    let mut command = Command::new("winget");
+    command.args([
+        "install",
+        "--id",
+        GIT_WINGET_PACKAGE_ID,
+        "--exact",
+        "--source",
+        "winget",
+        "--silent",
+        "--accept-source-agreements",
+        "--accept-package-agreements",
+        "--disable-interactivity",
+    ]);
+    let output = command_output_with_timeout(
+        &mut command,
+        Duration::from_secs(600),
+        "Git 安装超过 10 分钟，已停止等待。请打开官方下载页手动安装。",
+    )?;
+    let combined = format!(
+        "{} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let detail = compact_note(&combined)
+        .chars()
+        .take(400)
+        .collect::<String>();
+
+    // winget reports success before the new PATH reaches an already-running
+    // process, so a failed re-probe here does not mean the install failed.
+    let after = read_git_runtime_card();
+    if after.available {
+        return Ok(GitInstallResultCard {
+            status: "installed".to_string(),
+            summary: format!("Git 安装完成：{}。", after.version),
+            detail,
+            runtime: after,
+            restart_required: false,
+        });
+    }
+    if output.status.success() {
+        return Ok(GitInstallResultCard {
+            status: "restart-required".to_string(),
+            summary: "Git 已安装，但需要重启 AI SkillHub 才能识别到它。".to_string(),
+            detail,
+            runtime: after,
+            restart_required: true,
+        });
+    }
+    Ok(GitInstallResultCard {
+        status: "failed".to_string(),
+        summary: "Git 安装没有完成；本机文件和技能库都没有改变。".to_string(),
+        detail,
+        runtime: after,
+        restart_required: false,
+    })
+}
+
+fn git_runtime_diagnostic() -> Value {
+    let (available, version, error) = detect_git_version();
+    serde_json::json!({
+        "available": available,
+        "version": version,
+        "error": error
+    })
 }
 
 fn foreign_key_diagnostic(connection: &Connection) -> Result<Value, String> {
@@ -17783,6 +17938,8 @@ pub fn run() {
             set_real_write_authorization,
             run_release_gate_runner,
             open_release_gate_export_path,
+            read_git_runtime,
+            install_git_runtime,
             scan_mcp_connections,
             import_mcp_github_config,
             plan_mcp_changes,

@@ -21,6 +21,8 @@ import { LANG_OPTIONS, type Lang, categoryName, getLang, initialLang, setLang, t
 import { localizedSkillDescription } from "./localizedDescriptions";
 import { SkillUniverse } from "./SkillUniverse";
 import type {
+  GitInstallResultCard,
+  GitRuntimeCard,
   AgentSkillStatusCard,
   DesktopQaCheckCard,
   LegacyCleanupCandidateCard,
@@ -5955,6 +5957,9 @@ function Settings({
   const updateAvailable = appUpdate.phase === "available";
   const [cleanupCandidates, setCleanupCandidates] = useState<LegacyCleanupCandidateCard[]>([]);
   const [cleanupBusyId, setCleanupBusyId] = useState("");
+  const [gitRuntime, setGitRuntime] = useState<GitRuntimeCard | null>(null);
+  const [gitInstallBusy, setGitInstallBusy] = useState(false);
+  const [gitInstallResult, setGitInstallResult] = useState<GitInstallResultCard | null>(null);
   const updateStatus = t(`update.status.${appUpdate.phase}`, {
     progress: appUpdate.progress,
     version: appUpdate.version || APP_VERSION
@@ -5998,6 +6003,57 @@ function Settings({
       });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!hasTauriRuntime()) {
+      void loadPreviewModule().then(({ createPreviewGitRuntime }) => {
+        if (!cancelled) setGitRuntime(createPreviewGitRuntime());
+      });
+      return () => { cancelled = true; };
+    }
+    void invoke<GitRuntimeCard>("read_git_runtime")
+      .then(card => {
+        if (!cancelled) setGitRuntime(card);
+      })
+      .catch(() => {
+        if (!cancelled) setGitRuntime(null);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  async function installGitRuntime() {
+    setGitInstallBusy(true);
+    try {
+      const result = await invoke<GitInstallResultCard>("install_git_runtime");
+      setGitInstallResult(result);
+      setGitRuntime(result.runtime);
+      showUiToast(
+        result.summary,
+        result.status === "installed" || result.status === "already-installed"
+          ? "ok"
+          : result.status === "restart-required"
+            ? "warn"
+            : "error"
+      );
+    } catch (error) {
+      showUiToast(friendlyErrorMessage(messageFromError(error)), "error");
+    } finally {
+      setGitInstallBusy(false);
+    }
+  }
+
+  async function openExternalUrl(url: string) {
+    try {
+      if (hasTauriRuntime()) {
+        await invoke("plugin:opener|open_url", { url, with: null });
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    } catch {
+      showUiToast(t("project.openFailed"), "error");
+    }
+  }
 
   async function cleanupLegacyCandidate(candidate: LegacyCleanupCandidateCard) {
     const confirmed = window.confirm(
@@ -6097,6 +6153,54 @@ function Settings({
           </div>
         )}
       </section>
+
+      {gitRuntime && !gitRuntime.available && (
+        <section className="panel glow-card git-runtime-card" role="status">
+          <header className="panel-head">
+            <div>
+              <span className="eyebrow">{t("set.gitEyebrow")}</span>
+              <h3>{t("set.gitTitle")}</h3>
+              <p>{t("set.gitBody")}</p>
+            </div>
+          </header>
+          <div className="git-runtime-actions">
+            {gitRuntime.wingetAvailable ? (
+              <button
+                className="primary-action"
+                disabled={disabled || gitInstallBusy}
+                onClick={() => void installGitRuntime()}
+                type="button"
+              >
+                <Icon name="download" />
+                {gitInstallBusy ? t("set.gitInstalling") : t("set.gitInstall")}
+              </button>
+            ) : (
+              <p className="git-runtime-note">{t("set.gitNoWinget")}</p>
+            )}
+            <button
+              className="ghost-action"
+              onClick={() => void openExternalUrl(gitRuntime.downloadPageUrl)}
+              type="button"
+            >
+              {t("set.gitOpenDownloadPage")}
+            </button>
+          </div>
+          {gitInstallResult && (
+            <p className="git-runtime-result">{gitInstallResult.summary}</p>
+          )}
+        </section>
+      )}
+      {gitRuntime?.available && (
+        <section className="panel glow-card git-runtime-card is-ready" role="status">
+          <header className="panel-head">
+            <div>
+              <span className="eyebrow">{t("set.gitEyebrow")}</span>
+              <h3>{t("set.gitReadyTitle")}</h3>
+              <p>{t("set.gitReadyBody", { version: gitRuntime.version })}</p>
+            </div>
+          </header>
+        </section>
+      )}
 
       {sourceUpdateProblems.length > 0 && (
         <section className="panel glow-card source-update-problems" role="status">

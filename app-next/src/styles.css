@@ -2948,6 +2948,23 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   min-width: max-content;
   justify-self: end;
 }
+/* Git runtime card: the one-click install path for machines without Git. */
+.git-runtime-card .git-runtime-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+}
+.git-runtime-card .git-runtime-note,
+.git-runtime-card .git-runtime-result {
+  margin: 12px 0 0;
+  color: var(--text-soft);
+  font-size: calc(12px * var(--ui-text-scale, 1));
+  line-height: 1.7;
+}
+.git-runtime-card.is-ready .panel-head h3 { color: var(--success); }
+
 .source-update-problems {
   border-color: color-mix(in srgb, var(--warning) 32%, var(--border));
 }
