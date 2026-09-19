@@ -1,11 +1,11 @@
 {
-  "version": "3.2.2",
-  "notes": "Adaptive home animation, fast safe MCP GitHub import, and release validation fixes.",
-  "pub_date": "2026-08-27T16:56:13Z",
+  "version": "3.2.4",
+  "notes": "AI SkillHub v3.2.4: 设置页一键安装 Git；并入 v3.2.3 的浅色主题阴影修复与无 Git 电脑的来源更新。",
+  "pub_date": "2026-09-19T21:10:57Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVdrUmxha0N0dWMvaUpDaVlPcFRPWC9GOTVtL1Q5VElVeS9MOWZoQXNrUVJ2dFhOZW1aZU4zUng5N0lqZXlzQVlIbld1M01yM09vcFBVd1JycXp0R2dnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg3ODQ5NzcyCWZpbGU6QUkgU2tpbGxIdWJfMy4yLjJfeDY0LXNldHVwLmV4ZQpXOHhaSG9STmhpZmNTNnNSeUdwTlRaZUs0OUJkVHEzbUtjc1JiVFRyZ2wvMDVHcVp6amZpTjVCQW9qdjUrVnB4OXQ4OUZ5SUdNejF1blQzTDRlN25Cdz09Cg==",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.2/AI-SkillHub-3.2.2-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcWM0QXpHeE5CMUhZZ3NOb3ByNEVuTXdkYVBLbWNBVW9HSWVNR3prMlFtN1VZZmg3T1pkZlIzeFduWjVBSXhqZEQxZkZxMXpRVlA4YVY3V2oyUGFQWndzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5ODUyMjU2CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjRfeDY0LXNldHVwLmV4ZQpuSGo0bHY4WmVpK1d3ZEhMKzN5MDc3L1BHNXUwSWd6dUd2TG9FNmI3d2VjNmZsQ1MzZnR2T00yUC9iaFFIM2ZDRXVHUTEydWV5NzRXK2svOUw3cjNCdz09Cg==",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.4/AI-SkillHub-3.2.4-setup.exe"
     }
   }
 }
