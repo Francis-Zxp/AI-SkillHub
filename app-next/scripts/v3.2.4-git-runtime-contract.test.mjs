@@ -2,13 +2,18 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
-const backend = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
-const i18n = await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8");
-const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
+// git may check these sources out with CRLF, which would break every regex
+// that matches across a line break. Normalise once, at read time.
+const readText = async (relativePath) =>
+  (await readFile(new URL(relativePath, import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+
+const app = await readText("../src/App.tsx");
+const backend = await readText("../src-tauri/src/lib.rs");
+const i18n = await readText("../src/i18n.ts");
+const types = await readText("../src/types.ts");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
-const cargoToml = await readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
+const cargoToml = await readText("../src-tauri/Cargo.toml");
 
 test("v3.2.4 ships one consistent installed version", () => {
   assert.equal(packageJson.version, "3.2.4");
