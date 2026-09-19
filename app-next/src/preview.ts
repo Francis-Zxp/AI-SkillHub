@@ -890,7 +890,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         reportType: "diagnostics",
         status: "ok",
         generatedAt: new Date().toISOString(),
-        version: "v3.2.3",
+        version: "v3.2.4",
         ok: true,
         total: 9,
         passed: 6,
@@ -904,7 +904,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         reportType: "release-preflight",
         status: "ok",
         generatedAt: new Date().toISOString(),
-        version: "v3.2.3",
+        version: "v3.2.4",
         ok: true,
         total: 12,
         passed: 12,
@@ -918,7 +918,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         reportType: "share-recipient-test",
         status: "ok",
         generatedAt: new Date().toISOString(),
-        version: "v3.2.3",
+        version: "v3.2.4",
         ok: true,
         total: 8,
         passed: 8,
@@ -1305,7 +1305,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
     ],
     diagnostics: {
       available: false,
-      appVersion: "3.2.3 preview",
+      appVersion: "3.2.4 preview",
       generatedAt: new Date().toISOString(),
       overallStatus: "preview",
       ok: 6,
@@ -1448,3 +1448,16 @@ export function updatePreviewDesktopQaStatus(
   };
 }
 
+/* Browser preview has no desktop runtime, so the Git runtime card would never
+   render for visual QA. Report the "missing Git" state, which is the branch
+   with the install action. */
+export function createPreviewGitRuntime() {
+  return {
+    available: false,
+    version: "",
+    error: "git is not recognized as an internal or external command",
+    wingetAvailable: true,
+    packageId: "Git.Git",
+    downloadPageUrl: "https://git-scm.com/download/win"
+  };
+}

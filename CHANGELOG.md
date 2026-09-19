@@ -2,6 +2,20 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.4 - One-click Git install
+
+### Added
+
+- Settings now shows a Git runtime card. On a machine without Git it explains what Git buys (incremental pulls instead of re-downloading a whole snapshot, local-edit detection before an overwrite, private repositories) and offers a one-click install that runs `winget install --id Git.Git` against the official Microsoft package manager. Windows builds without winget, and anyone who prefers to install it themselves, get a button that opens the official git-scm.com download page instead. When Git is present the card simply confirms the detected version.
+
+### Security
+
+- The app bundles no Git binary and downloads no installer itself; winget resolves the official `Git.Git` package from its own source. The install runs non-interactively with a 10-minute ceiling, and a winget success that the running process cannot yet see on PATH is reported as "restart required" rather than as either success or failure.
+
+### Verification
+
+- Adds `scripts/v3.2.4-git-runtime-contract.test.mjs` covering the winget argument vector and timeout, every reported outcome, the command registration, the settings card branches, and the three-locale copy. The existing Git diagnostic now shares one detection routine with the new card so the two cannot drift apart.
+
 ## 3.2.3 - Updatable GitHub snapshots and clean light themes
 
 ### Fixed

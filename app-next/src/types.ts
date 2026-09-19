@@ -127,6 +127,23 @@ export type SyncSummaryCard = {
   }>;
 };
 
+export type GitRuntimeCard = {
+  available: boolean;
+  version: string;
+  error: string;
+  wingetAvailable: boolean;
+  packageId: string;
+  downloadPageUrl: string;
+};
+
+export type GitInstallResultCard = {
+  status: "installed" | "already-installed" | "restart-required" | "winget-missing" | "failed" | string;
+  summary: string;
+  detail: string;
+  runtime: GitRuntimeCard;
+  restartRequired: boolean;
+};
+
 export type SkillFolderCard = {
   id: string;
   name: string;
