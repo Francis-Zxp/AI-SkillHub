@@ -5970,8 +5970,11 @@ function Settings({
     actionableSourceUpdateStatuses.has(item.status.trim().toLowerCase())
   );
 
-  function sourceUpdateProblemMessage(status: string) {
+  function sourceUpdateProblemMessage(status: string, action = "") {
     const normalized = status.trim().toLowerCase();
+    // A snapshot refresh is the update path for copies installed without Git,
+    // so its failure needs its own wording instead of the git fast-forward hint.
+    if (action.trim().toLowerCase() === "snapshot-refresh") return t("set.sourceUpdatesSnapshot");
     if (normalized === "not-git") return t("set.sourceUpdatesNotGit");
     if (normalized === "dirty-blocked") return t("set.sourceUpdatesDirty");
     if (normalized === "timeout") return t("set.sourceUpdatesTimeout");
@@ -6111,7 +6114,7 @@ function Settings({
                 <span className="source-update-problem-icon" aria-hidden="true"><Icon name="alert" /></span>
                 <div>
                   <strong>{item.repository}</strong>
-                  <p>{sourceUpdateProblemMessage(item.status)}</p>
+                  <p>{sourceUpdateProblemMessage(item.status, item.action)}</p>
                 </div>
                 <span className={`qa-status ${item.status === "dirty-blocked" ? "planned" : "failed"}`}>
                   {item.status === "dirty-blocked"

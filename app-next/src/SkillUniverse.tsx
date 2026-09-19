@@ -1284,34 +1284,37 @@ type AtmospherePalette = {
   shell: string;
 };
 
+/* Light themes paint the same atmosphere with a translucent DARK tint, so a wide
+   aura reads as a dirty grey shadow instead of light. Keep the hue but drop the
+   aura/edge alpha far enough that only the nodes and rings stay legible. */
 function atmospherePalette(tone: UniverseTone, lightTheme: boolean): AtmospherePalette {
   if (tone === "prism") {
     return {
-      center: lightTheme ? "rgba(64, 104, 184, .13)" : "rgba(161, 190, 255, .16)",
-      mid: lightTheme ? "rgba(127, 91, 166, .055)" : "rgba(112, 90, 190, .07)",
-      edge: "rgba(71, 117, 198, .025)",
-      line: lightTheme ? "rgba(54, 83, 145, .12)" : "rgba(165, 194, 255, .11)",
-      shell: lightTheme ? "rgba(60, 85, 136, .24)" : "rgba(221, 232, 255, .27)",
-      dust: lightTheme ? "rgba(77, 91, 131, .12)" : "rgba(202, 217, 255, .14)"
+      center: lightTheme ? "rgba(64, 104, 184, .055)" : "rgba(161, 190, 255, .16)",
+      mid: lightTheme ? "rgba(127, 91, 166, .022)" : "rgba(112, 90, 190, .07)",
+      edge: lightTheme ? "rgba(71, 117, 198, .008)" : "rgba(71, 117, 198, .025)",
+      line: lightTheme ? "rgba(54, 83, 145, .085)" : "rgba(165, 194, 255, .11)",
+      shell: lightTheme ? "rgba(60, 85, 136, .2)" : "rgba(221, 232, 255, .27)",
+      dust: lightTheme ? "rgba(77, 91, 131, .085)" : "rgba(202, 217, 255, .14)"
     };
   }
   if (tone === "parchment") {
     return {
-      center: "rgba(154, 78, 48, .12)",
-      mid: "rgba(68, 91, 112, .055)",
-      edge: "rgba(122, 87, 55, .025)",
-      line: "rgba(122, 75, 49, .12)",
-      shell: "rgba(97, 73, 55, .23)",
-      dust: "rgba(108, 78, 55, .11)"
+      center: "rgba(154, 78, 48, .05)",
+      mid: "rgba(68, 91, 112, .022)",
+      edge: "rgba(122, 87, 55, .008)",
+      line: "rgba(122, 75, 49, .085)",
+      shell: "rgba(97, 73, 55, .19)",
+      dust: "rgba(108, 78, 55, .08)"
     };
   }
   return {
-    center: lightTheme ? "rgba(23, 121, 111, .15)" : "rgba(205, 255, 249, .18)",
-    mid: lightTheme ? "rgba(41, 90, 128, .065)" : "rgba(68, 188, 180, .072)",
-    edge: lightTheme ? "rgba(41, 90, 128, .025)" : "rgba(88, 129, 166, .026)",
-    line: lightTheme ? "rgba(25, 105, 99, .12)" : "rgba(176, 239, 232, .12)",
-    shell: lightTheme ? "rgba(27, 98, 93, .23)" : "rgba(213, 246, 242, .26)",
-    dust: lightTheme ? "rgba(22, 93, 88, .12)" : "rgba(212, 247, 243, .13)"
+    center: lightTheme ? "rgba(23, 121, 111, .06)" : "rgba(205, 255, 249, .18)",
+    mid: lightTheme ? "rgba(41, 90, 128, .024)" : "rgba(68, 188, 180, .072)",
+    edge: lightTheme ? "rgba(41, 90, 128, .008)" : "rgba(88, 129, 166, .026)",
+    line: lightTheme ? "rgba(25, 105, 99, .085)" : "rgba(176, 239, 232, .12)",
+    shell: lightTheme ? "rgba(27, 98, 93, .19)" : "rgba(213, 246, 242, .26)",
+    dust: lightTheme ? "rgba(22, 93, 88, .085)" : "rgba(212, 247, 243, .13)"
   };
 }
 
