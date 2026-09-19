@@ -10461,12 +10461,15 @@ fn refresh_snapshot_github_sources(
             continue;
         }
 
-        let (status, detail) =
-            match refresh_single_snapshot_source(root, connection, &normalized_url, &canonical_path)
-            {
-                Ok(outcome) => outcome,
-                Err(error) => ("failed".to_string(), compact_note(&error)),
-            };
+        let (status, detail) = match refresh_single_snapshot_source(
+            root,
+            connection,
+            &normalized_url,
+            &canonical_path,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => ("failed".to_string(), compact_note(&error)),
+        };
         entries.push(SnapshotSourceRefreshEntry {
             folder,
             source_name: source.name.clone(),
@@ -10510,8 +10513,10 @@ fn refresh_single_snapshot_source(
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| "source".to_string());
     let safe_folder_name = sanitize_source_folder_name(&folder_name);
-    let staged_path = source_import_staging_root(root)
-        .join(format!("snapshot-refresh-{}-{}", safe_folder_name, timestamp));
+    let staged_path = source_import_staging_root(root).join(format!(
+        "snapshot-refresh-{}-{}",
+        safe_folder_name, timestamp
+    ));
     if staged_path.exists() {
         let _ = fs::remove_dir_all(&staged_path);
     }
@@ -10568,7 +10573,8 @@ fn refresh_single_snapshot_source(
     let backup_root = private_state_dir(root)
         .join("backups")
         .join("snapshot-refresh");
-    fs::create_dir_all(&backup_root).map_err(|error| format!("无法创建快照刷新备份目录：{error}"))?;
+    fs::create_dir_all(&backup_root)
+        .map_err(|error| format!("无法创建快照刷新备份目录：{error}"))?;
     let backup_path = backup_root.join(format!("{safe_folder_name}-{timestamp}"));
     if let Err(error) = move_directory(target_path, &backup_path) {
         let _ = fs::remove_dir_all(&staged_path);
@@ -10591,7 +10597,9 @@ fn refresh_single_snapshot_source(
     prune_snapshot_refresh_backups(&backup_root, &safe_folder_name);
     Ok((
         "ok".to_string(),
-        format!("已从 GitHub 重新下载快照：{skill_count} 个 Skill、{prompt_count} 份 Prompt/说明文档。"),
+        format!(
+            "已从 GitHub 重新下载快照：{skill_count} 个 Skill、{prompt_count} 份 Prompt/说明文档。"
+        ),
     ))
 }
 
@@ -21653,8 +21661,11 @@ mod tests {
             snapshot_tree_fingerprint(&source_dir).expect("fingerprint should recompute")
         );
 
-        fs::write(source_dir.join("skill-a").join("SKILL.md"), "# One, revised")
-            .expect("skill file should update");
+        fs::write(
+            source_dir.join("skill-a").join("SKILL.md"),
+            "# One, revised",
+        )
+        .expect("skill file should update");
         assert_ne!(
             before,
             snapshot_tree_fingerprint(&source_dir).expect("fingerprint should recompute")
