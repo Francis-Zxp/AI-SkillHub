@@ -987,7 +987,6 @@ struct SourceImportControl {
 }
 
 impl SourceImportControl {
-    #[cfg(test)]
     fn detached(operation_id: impl Into<String>) -> Self {
         Self {
             operation_id: operation_id.into(),
@@ -1774,6 +1773,11 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     // Capture a verified revision ref before update and write the pin manifest
     // consumed by SkillHub.ps1. A pinned source is kept at its exact commit.
     source_governance::prepare_sync_backups(&root, &connection)?;
+    // Machines without a usable Git hold ZIP snapshots that `git pull` cannot
+    // reach. Refresh those from GitHub first, then let the script run its normal
+    // Git pass over the real clones.
+    let snapshot_refresh = refresh_snapshot_github_sources(&root, &connection);
+    write_snapshot_refresh_report(&root, &snapshot_refresh)?;
     run_skillhub_script(&root)?;
     source_governance::refresh_local_revisions(&root, &connection)?;
     // The full SkillHub script has already regenerated every parent and
@@ -9086,7 +9090,7 @@ fn stage_github_source_import_with_git_program_and_control(
         execution.download_method = download_method.to_string();
         execution.blocking_checks = vec![
             format!(
-                "Git 自动更新模式未建立：{} 内置 GitHub 下载器已接管（引用：{}）；此副本不含 .git，不能自动 pull。",
+                "Git 自动更新模式未建立：{} 内置 GitHub 下载器已接管（引用：{}）；此副本不含 .git，后续更新会改用“重新下载 GitHub 快照”，仍可随同步自动更新。",
                 friendly_git_import_failure(&git_failure), downloaded_ref
             ),
             "内置下载器只保留可安装的 Skill 目录；若仓库没有 SKILL.md，则在文件数、单文件与总容量上限内保留完整 Prompt 项目工作区。"
@@ -10346,6 +10350,341 @@ fn write_managed_source_metadata(
             .map_err(|error| format!("Cannot serialize managed source metadata: {}", error))?,
     )
     .map_err(|error| format!("Cannot write managed source metadata: {}", error))
+}
+
+const SNAPSHOT_REFRESH_BACKUP_KEEP: usize = 3;
+const SNAPSHOT_REFRESH_REPORT_FILE: &str = "snapshot-refresh.json";
+/// Whole-archive downloads are far heavier than a fast-forward, so one sync
+/// spends a bounded slice of time on them. Anything left over is picked up by
+/// the next sync, oldest snapshot first, so every source still rotates through.
+const SNAPSHOT_REFRESH_BUDGET: Duration = Duration::from_secs(150);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SnapshotSourceRefreshEntry {
+    folder: String,
+    source_name: String,
+    url: String,
+    status: String,
+    detail: String,
+}
+
+/// GitHub sources installed by the built-in ZIP downloader carry no `.git`
+/// metadata, so `git pull` can never reach them. That fallback is what every
+/// machine without a usable Git ends up using, which left those copies frozen at
+/// their install-time content forever. Re-download the snapshot from codeload
+/// before the sync script runs so those machines still receive creator updates,
+/// and report each folder so the sync summary stops calling them un-updatable.
+fn refresh_snapshot_github_sources(
+    root: &Path,
+    connection: &Connection,
+) -> Vec<SnapshotSourceRefreshEntry> {
+    let mut entries = Vec::new();
+    let Ok(mut sources) = read_indexed_sources(connection) else {
+        return entries;
+    };
+    hydrate_source_urls_from_git(root, &mut sources);
+    let Ok(canonical_sources_dir) = active_sources_dir(root).canonicalize() else {
+        return entries;
+    };
+    // Refresh the stalest snapshot first so the bounded budget below still
+    // reaches every source across consecutive syncs.
+    sources.sort_by_key(|source| {
+        source_candidate_paths(root, source)
+            .into_iter()
+            .find_map(|candidate| snapshot_downloaded_at(&candidate))
+            .unwrap_or_default()
+    });
+    let started_at = Instant::now();
+
+    for source in &sources {
+        let Some((owner, repo)) = parse_github_repo(&source.url) else {
+            continue;
+        };
+        let Some(path) = source_candidate_paths(root, source)
+            .into_iter()
+            .find(|candidate| candidate.is_dir())
+        else {
+            continue;
+        };
+        // Only ever touch folders the app manages inside its own sources root.
+        let Ok(canonical_path) = path.canonicalize() else {
+            continue;
+        };
+        if !canonical_path.starts_with(&canonical_sources_dir) {
+            continue;
+        }
+        if canonical_path.join(".git").exists() {
+            // A real clone is already covered by the Git fast-forward path.
+            continue;
+        }
+        if !canonical_path.join(MANAGED_SOURCE_METADATA_FILE).is_file() {
+            // Hand-placed folders keep their existing "no automatic update"
+            // report; the app never downloaded them and cannot re-download them.
+            continue;
+        }
+        let pinned = connection
+            .query_row(
+                "SELECT pinned FROM source_governance WHERE source_id = ?1",
+                params![source.id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .unwrap_or(0)
+            != 0;
+        let folder = canonical_path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| source.name.clone());
+        let normalized_url = normalized_github_repo_url(&owner, &repo);
+        if pinned {
+            entries.push(SnapshotSourceRefreshEntry {
+                folder,
+                source_name: source.name.clone(),
+                url: normalized_url,
+                status: "pinned".to_string(),
+                detail: "来源已固定版本；快照刷新已跳过。".to_string(),
+            });
+            continue;
+        }
+
+        if started_at.elapsed() >= SNAPSHOT_REFRESH_BUDGET {
+            entries.push(SnapshotSourceRefreshEntry {
+                folder,
+                source_name: source.name.clone(),
+                url: normalized_url,
+                status: "deferred".to_string(),
+                detail: "本次同步的快照刷新时间已用完；该来源会在下次同步时优先刷新。".to_string(),
+            });
+            continue;
+        }
+
+        let (status, detail) =
+            match refresh_single_snapshot_source(root, connection, &normalized_url, &canonical_path)
+            {
+                Ok(outcome) => outcome,
+                Err(error) => ("failed".to_string(), compact_note(&error)),
+            };
+        entries.push(SnapshotSourceRefreshEntry {
+            folder,
+            source_name: source.name.clone(),
+            url: normalized_url,
+            status,
+            detail,
+        });
+    }
+
+    entries
+}
+
+/// Sort key for the refresh rotation: the managed metadata download timestamp,
+/// or an empty string when it cannot be read so that copy is refreshed first.
+fn snapshot_downloaded_at(path: &Path) -> Option<String> {
+    let metadata = fs::read_to_string(path.join(MANAGED_SOURCE_METADATA_FILE)).ok()?;
+    let payload = serde_json::from_str::<Value>(&metadata).ok()?;
+    Some(
+        payload
+            .get("downloadedAt")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    )
+}
+
+fn refresh_single_snapshot_source(
+    root: &Path,
+    connection: &Connection,
+    normalized_url: &str,
+    target_path: &Path,
+) -> Result<(String, String), String> {
+    let plan = build_source_import_plan(root, connection, "github", normalized_url)?;
+    if plan.normalized_target.trim().is_empty() {
+        return Err("GitHub 地址无法解析，快照刷新已跳过。".to_string());
+    }
+
+    let timestamp = unix_timestamp_string();
+    let folder_name = target_path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "source".to_string());
+    let safe_folder_name = sanitize_source_folder_name(&folder_name);
+    let staged_path = source_import_staging_root(root)
+        .join(format!("snapshot-refresh-{}-{}", safe_folder_name, timestamp));
+    if staged_path.exists() {
+        let _ = fs::remove_dir_all(&staged_path);
+    }
+    fs::create_dir_all(&staged_path)
+        .map_err(|error| format!("无法创建快照刷新隔离目录：{error}"))?;
+
+    let control = SourceImportControl::detached(format!("snapshot-refresh-{safe_folder_name}"));
+    let staged_result =
+        stage_github_source_import_via_codeload_with_control(&plan, &staged_path, &control)
+            .and_then(|_| validate_staged_repository_bounds(&staged_path))
+            .and_then(|_| count_skill_dirs_in_path(&staged_path));
+
+    let (skill_count, prompt_count) = match staged_result {
+        Ok(counts) => counts,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staged_path);
+            return Err(error);
+        }
+    };
+    if skill_count == 0 && prompt_count == 0 {
+        let _ = fs::remove_dir_all(&staged_path);
+        return Err("下载的快照没有 Skill 或 Prompt 内容；本地副本保持不变。".to_string());
+    }
+
+    // A refresh that would install new high-risk content must not happen behind
+    // the user's back during a routine sync; keep the reviewed copy in place.
+    match security_scan::scan_source_tree(&staged_path) {
+        Ok(report) if report.status == "blocked" => {
+            let high = report
+                .findings
+                .iter()
+                .filter(|finding| finding.severity == "high")
+                .count();
+            let _ = fs::remove_dir_all(&staged_path);
+            return Err(format!(
+                "新快照未通过安全扫描（{high} 项高风险发现）；本地副本保持不变，请在“添加来源”中人工复核。"
+            ));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staged_path);
+            return Err(format!("新快照安全扫描未完成：{error}"));
+        }
+    }
+
+    if snapshot_tree_fingerprint(&staged_path)? == snapshot_tree_fingerprint(target_path)? {
+        let _ = fs::remove_dir_all(&staged_path);
+        return Ok((
+            "unchanged".to_string(),
+            "GitHub 快照与本地副本一致，无需重写。".to_string(),
+        ));
+    }
+
+    let backup_root = private_state_dir(root)
+        .join("backups")
+        .join("snapshot-refresh");
+    fs::create_dir_all(&backup_root).map_err(|error| format!("无法创建快照刷新备份目录：{error}"))?;
+    let backup_path = backup_root.join(format!("{safe_folder_name}-{timestamp}"));
+    if let Err(error) = move_directory(target_path, &backup_path) {
+        let _ = fs::remove_dir_all(&staged_path);
+        return Err(format!("无法备份现有来源副本：{error}"));
+    }
+    if let Err(error) = move_directory(&staged_path, target_path) {
+        // Put the verified copy back before reporting; a failed refresh must
+        // never leave the user without their Skills.
+        let restored = move_directory(&backup_path, target_path);
+        let _ = fs::remove_dir_all(&staged_path);
+        return Err(match restored {
+            Ok(()) => format!("写入新快照失败，已还原原有副本：{error}"),
+            Err(restore_error) => format!(
+                "写入新快照失败：{error}；自动还原也失败：{restore_error}。备份保留在 {}",
+                backup_path.display()
+            ),
+        });
+    }
+
+    prune_snapshot_refresh_backups(&backup_root, &safe_folder_name);
+    Ok((
+        "ok".to_string(),
+        format!("已从 GitHub 重新下载快照：{skill_count} 个 Skill、{prompt_count} 份 Prompt/说明文档。"),
+    ))
+}
+
+/// Metadata-only fingerprint (relative path + byte length) so an unchanged
+/// snapshot is detected without rewriting the folder on every sync. The managed
+/// metadata file is excluded because its download timestamp always differs.
+fn snapshot_tree_fingerprint(path: &Path) -> Result<u64, String> {
+    let metadata_marker = MANAGED_SOURCE_METADATA_FILE.to_ascii_lowercase();
+    let mut items: Vec<(String, u64)> = Vec::new();
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        let entries = fs::read_dir(&directory)
+            .map_err(|error| format!("无法读取 {}：{}", directory.display(), error))?;
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if metadata.is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                stack.push(entry_path);
+                continue;
+            }
+            let Ok(relative) = entry_path.strip_prefix(path) else {
+                continue;
+            };
+            let relative = normalize_path_for_compare(&relative.to_string_lossy());
+            if relative == metadata_marker {
+                continue;
+            }
+            items.push((relative, metadata.len()));
+        }
+    }
+    items.sort();
+    let mut hasher = DefaultHasher::new();
+    items.hash(&mut hasher);
+    Ok(hasher.finish())
+}
+
+fn move_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建目录 {}：{}", parent.display(), error))?;
+    }
+    if fs::rename(source, destination).is_ok() {
+        return Ok(());
+    }
+    // Rename fails across volumes; fall back to a copy and only drop the
+    // original once the copy is complete.
+    copy_directory_tree(source, destination)
+        .map_err(|error| format!("复制 {} 失败：{}", source.display(), error))?;
+    fs::remove_dir_all(source).map_err(|error| format!("清理 {} 失败：{}", source.display(), error))
+}
+
+fn prune_snapshot_refresh_backups(backup_root: &Path, prefix: &str) {
+    let Ok(entries) = fs::read_dir(backup_root) else {
+        return;
+    };
+    let marker = format!("{prefix}-");
+    let mut matches = entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&marker))
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    if matches.len() <= SNAPSHOT_REFRESH_BACKUP_KEEP {
+        return;
+    }
+    matches.sort();
+    let drop_count = matches.len() - SNAPSHOT_REFRESH_BACKUP_KEEP;
+    for path in matches.into_iter().take(drop_count) {
+        let _ = fs::remove_dir_all(path);
+    }
+}
+
+fn write_snapshot_refresh_report(
+    root: &Path,
+    entries: &[SnapshotSourceRefreshEntry],
+) -> Result<(), String> {
+    let state_dir = private_state_dir(root).join("sync-state");
+    fs::create_dir_all(&state_dir).map_err(|error| format!("无法创建同步状态目录：{error}"))?;
+    let payload = serde_json::json!({
+        "schemaVersion": 1,
+        "generatedAt": unix_timestamp_string(),
+        "sources": entries
+    });
+    fs::write(
+        state_dir.join(SNAPSHOT_REFRESH_REPORT_FILE),
+        serde_json::to_string_pretty(&payload)
+            .map_err(|error| format!("无法序列化快照刷新结果：{error}"))?,
+    )
+    .map_err(|error| format!("无法写入快照刷新结果：{error}"))
 }
 
 fn stage_local_source_import(
@@ -21278,6 +21617,88 @@ mod tests {
             Some("https://github.com/ChenLiu-1996/figures4papers.git")
         );
         assert!(!source_dir.join(".git").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn snapshot_fingerprint_ignores_managed_metadata_but_tracks_content() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-snapshot-fingerprint-test-{}",
+            unix_timestamp_string()
+        ));
+        let source_dir = root.join("source");
+        fs::create_dir_all(source_dir.join("skill-a")).expect("source dir should create");
+        fs::write(source_dir.join("skill-a").join("SKILL.md"), "# One")
+            .expect("skill file should write");
+        write_managed_source_metadata(
+            &source_dir,
+            "https://github.com/owner/repo.git",
+            "github-codeload",
+            "HEAD",
+        )
+        .expect("metadata should write");
+        let before = snapshot_tree_fingerprint(&source_dir).expect("fingerprint should compute");
+
+        // Re-downloading rewrites the metadata timestamp on every sync; that
+        // alone must not look like an upstream change.
+        write_managed_source_metadata(
+            &source_dir,
+            "https://github.com/owner/repo.git",
+            "github-codeload",
+            "some-longer-branch-name",
+        )
+        .expect("metadata should rewrite");
+        assert_eq!(
+            before,
+            snapshot_tree_fingerprint(&source_dir).expect("fingerprint should recompute")
+        );
+
+        fs::write(source_dir.join("skill-a").join("SKILL.md"), "# One, revised")
+            .expect("skill file should update");
+        assert_ne!(
+            before,
+            snapshot_tree_fingerprint(&source_dir).expect("fingerprint should recompute")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn snapshot_refresh_backup_move_is_reversible_and_pruned() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-snapshot-move-test-{}",
+            unix_timestamp_string()
+        ));
+        let source_dir = root.join("sources").join("demo");
+        fs::create_dir_all(&source_dir).expect("source dir should create");
+        fs::write(source_dir.join("SKILL.md"), "# Demo").expect("skill file should write");
+
+        let backup_root = root.join("backups");
+        let backup_path = backup_root.join("demo-1");
+        move_directory(&source_dir, &backup_path).expect("backup move should succeed");
+        assert!(!source_dir.exists());
+        assert!(backup_path.join("SKILL.md").is_file());
+
+        // A failed refresh must be able to put the verified copy straight back.
+        move_directory(&backup_path, &source_dir).expect("restore move should succeed");
+        assert!(source_dir.join("SKILL.md").is_file());
+        assert!(!backup_path.exists());
+
+        for index in 0..5 {
+            let path = backup_root.join(format!("demo-{index}"));
+            fs::create_dir_all(&path).expect("backup should create");
+            fs::write(path.join("SKILL.md"), "# Demo").expect("backup file should write");
+        }
+        fs::create_dir_all(backup_root.join("other-9")).expect("unrelated backup should create");
+        prune_snapshot_refresh_backups(&backup_root, "demo");
+        let remaining = fs::read_dir(&backup_root)
+            .expect("backup root should read")
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("demo-"))
+            .count();
+        assert_eq!(remaining, SNAPSHOT_REFRESH_BACKUP_KEEP);
+        assert!(backup_root.join("other-9").exists());
+
         let _ = fs::remove_dir_all(root);
     }
 

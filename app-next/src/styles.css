@@ -332,7 +332,8 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   --shadow-card: 0 24px 70px rgba(31, 68, 62, .12);
   --shadow-card-hover: 0 30px 82px rgba(31, 68, 62, .17);
   --shadow-glow: 0 0 72px var(--brand-glow);
-  --hero-grad: radial-gradient(circle at 66% 48%, rgba(22, 121, 111, .12), transparent 44%);
+  /* A dark tint over a light page reads as a smudge, so keep this wash faint. */
+  --hero-grad: radial-gradient(circle at 66% 48%, rgba(22, 121, 111, .05), transparent 52%);
   color: var(--text);
 }
 

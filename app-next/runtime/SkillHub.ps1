@@ -1109,6 +1109,7 @@ $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $ArchiveRoot = Join-Path $ArchivesRoot "replaced_active_skill_copies_$Stamp"
 $StatePath = Join-Path $StateRoot 'managed-links.json'
 $GitUpdateCursorPath = Join-Path $StateRoot 'git-update-cursor.json'
+$SnapshotRefreshPath = Join-Path $StateRoot 'snapshot-refresh.json'
 $ReportPath = Join-Path $ReportsRoot 'last-sync.md'
 $ReportJsonPath = Join-Path $ReportsRoot 'last-sync.json'
 $AgentLinkScript = Join-Path $AppRoot 'Manage-AgentSkillLinks.ps1'
@@ -1297,6 +1298,43 @@ $ManualAttemptCapSeconds = $GitStatusAttemptCapSeconds + $GitNetworkAttemptCapSe
 $ManualGitUpdateReserveSeconds = if ($ManualRepositories.Count -gt 0) { $ManualAttemptCapSeconds } else { 0 }
 $ConfiguredRepositories = @($Config.repositories)
 $ConfiguredRepositoriesForUpdate = @(Get-RotatedRepositories $ConfiguredRepositories ([string]$GitUpdateCursor.configuredNextRepository))
+# Sources installed by the built-in ZIP downloader (every machine without a
+# usable Git) have no .git metadata. The desktop app refreshes those from GitHub
+# before this script runs and records the outcome, so report the real result
+# instead of blanket-declaring them un-updatable.
+$SnapshotRefreshResults = @{}
+if (Test-Path -LiteralPath $SnapshotRefreshPath -PathType Leaf) {
+  try {
+    $snapshotPayload = Get-Content -LiteralPath $SnapshotRefreshPath -Raw | ConvertFrom-Json
+    foreach ($entry in @($snapshotPayload.sources)) {
+      if (-not [string]::IsNullOrWhiteSpace([string]$entry.folder)) {
+        $SnapshotRefreshResults[[string]$entry.folder] = $entry
+      }
+    }
+  } catch {
+    Write-Warning 'Snapshot refresh results could not be read; non-Git sources are reported as before.'
+  }
+}
+
+function Add-SnapshotSourceUpdateLog {
+  param(
+    [Parameter(Mandatory = $true)][string]$Name
+  )
+  $entry = $SnapshotRefreshResults[$Name]
+  if ($null -eq $entry) {
+    Add-RepoUpdateLog $Name 'reinstall' 'not-git' 'Local source has no .git metadata and no recorded GitHub origin; remove it and add its GitHub URL again to restore automatic updates.'
+    return
+  }
+  $detail = [string]$entry.detail
+  switch ([string]$entry.status) {
+    'ok' { Add-RepoUpdateLog $Name 'snapshot-refresh' 'ok' $detail }
+    'unchanged' { Add-RepoUpdateLog $Name 'snapshot-refresh' 'ok' $detail }
+    'pinned' { Add-RepoUpdateLog $Name 'snapshot-refresh' 'pinned' $detail }
+    'deferred' { Add-RepoUpdateLog $Name 'snapshot-refresh' 'skipped' $detail }
+    default { Add-RepoUpdateLog $Name 'snapshot-refresh' 'failed' $detail }
+  }
+}
+
 $NextConfiguredRepository = Get-NextRepositoryRotationName $ConfiguredRepositories ([string]$GitUpdateCursor.configuredNextRepository)
 $ConfiguredBudgetDeferred = ''
 foreach ($repo in $ConfiguredRepositoriesForUpdate) {
@@ -1389,8 +1427,8 @@ foreach ($repo in $ConfiguredRepositoriesForUpdate) {
       Add-RepoUpdateLog ([string]$repo.name) 'pull' 'skipped' 'NoPull enabled.'
     }
   } elseif (Test-Path -LiteralPath $target) {
-    Write-Warning "$target exists but is not a Git repository. Skipping clone."
-    Add-RepoUpdateLog ([string]$repo.name) 'reinstall' 'not-git' 'Target exists but has no .git metadata; automatic GitHub updates are unavailable.'
+    Write-Host "$($repo.name) has no .git metadata; reporting its GitHub snapshot refresh result."
+    Add-SnapshotSourceUpdateLog ([string]$repo.name)
   } else {
     if (-not (Test-GitUpdateBudget ($GitNetworkAttemptCapSeconds + $ManualGitUpdateReserveSeconds))) {
       if ([string]::IsNullOrWhiteSpace($ConfiguredBudgetDeferred)) { $ConfiguredBudgetDeferred = [string]$repo.name }
@@ -1521,7 +1559,7 @@ if (-not $ReportOnly -and -not $NoPull) {
       -not $alreadyLogged.ContainsKey($_.Name)
     })
   foreach ($source in $nonGitSources) {
-    Add-RepoUpdateLog $source.Name 'reinstall' 'not-git' 'Local source has no .git metadata; remove it and add its GitHub URL again to restore automatic updates.'
+    Add-SnapshotSourceUpdateLog $source.Name
   }
 }
 

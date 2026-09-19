@@ -2,6 +2,21 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.3 - Updatable GitHub snapshots and clean light themes
+
+### Fixed
+
+- Sources installed on a machine without a usable Git were downloaded as a GitHub ZIP snapshot, which has no `.git` metadata and therefore could never be updated by `git pull`. Those copies stayed frozen at their install-time content forever, and the sync report told the user the source simply could not auto-update. "Sync / refresh" now re-downloads each snapshot source from GitHub, and the sync report names the real result for every source.
+- Every light theme painted the capability atlas atmosphere as a wide, translucent *dark* tint, so a large grey smudge sat behind the homepage headline and washed out the whole window. The light-theme aura, rings, shell, and dust now use a much lower alpha, and the Living Atlas light hero gradient was softened to match. Dark themes are unchanged.
+
+### Security
+
+- A snapshot refresh only ever touches folders inside the app-managed sources root that carry the app's own `.skillhub-source.json`, never a real Git clone and never a pinned source. The new copy is security-scanned before it is installed, an unchanged snapshot is detected and skipped without rewriting anything, and the existing copy is moved to a retained backup first and restored automatically if the swap fails.
+
+### Verification
+
+- Adds Rust coverage for the snapshot fingerprint (metadata-only rewrites are not mistaken for upstream changes) and for the reversible backup move and its pruning, plus a v3.2.3 contract suite over the refresh wiring, the safety guards, the sync report wording, and the light-theme alpha budget. Re-runs the full Rust and frontend test suites.
+
 ## 3.2.2 - Adaptive dashboard motion and GitHub MCP quick import
 
 ### Changed
