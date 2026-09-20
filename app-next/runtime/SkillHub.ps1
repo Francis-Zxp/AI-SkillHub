@@ -1330,6 +1330,7 @@ function Add-SnapshotSourceUpdateLog {
     'ok' { Add-RepoUpdateLog $Name 'snapshot-refresh' 'ok' $detail }
     'unchanged' { Add-RepoUpdateLog $Name 'snapshot-refresh' 'ok' $detail }
     'pinned' { Add-RepoUpdateLog $Name 'snapshot-refresh' 'pinned' $detail }
+    'local-changes' { Add-RepoUpdateLog $Name 'snapshot-refresh' 'skipped' $detail }
     'deferred' { Add-RepoUpdateLog $Name 'snapshot-refresh' 'skipped' $detail }
     default { Add-RepoUpdateLog $Name 'snapshot-refresh' 'failed' $detail }
   }

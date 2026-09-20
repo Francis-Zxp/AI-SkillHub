@@ -2,6 +2,16 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.5 - Local Skills discovery and reliable rendering
+
+- Replaces oversized, dynamically colored shell shadows and overlapping backdrop blur with bounded, explicit RGBA shadows. Covers the sidebar, top bar, homepage controls and bottom metrics in light and dark themes.
+- Adds local Skills discovery to AI Tools: existing user and project Skills, client and management filters, original document preview, path copying, and safe import into the managed library. Existing import drafts remain intact until explicitly replaced.
+- Uses content SHA-256 for Git-less source snapshots, detecting equal-size edits. A stored download baseline protects local modifications; older snapshots only acquire a baseline when local and upstream content match.
+- Hardens local imports against aliases into private app data and nested directory links. Original external Skill folders remain unchanged.
+- Makes managed-source deletion recoverable: the source is first protected as a backup, runtime configuration is replaced atomically, and a failure restores the exact prior configuration and source before delivery is reconciled again.
+- Makes cross-volume source moves stage, hash-verify, and activate a complete copy before removing the original. A failed activation leaves no final partial directory; a failed source cleanup reports both preserved locations.
+- Includes browser regression scripts for shell rendering and local Skills workflows. Windows 10 recipient verification remains required before claiming machine-specific acceptance.
+
 ## 3.2.4 - One-click Git install
 
 ### Added

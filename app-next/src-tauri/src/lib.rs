@@ -1,5 +1,6 @@
 mod adapter_doctor;
 mod codex_plugin_doctor;
+mod external_skills;
 mod legacy_cleanup;
 mod mcp_center;
 mod mcp_github_import;
@@ -3702,14 +3703,14 @@ fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
         .cloned()
         .ok_or_else(|| format!("Cannot find indexed source {}.", source_id))?;
     let source_path = validate_managed_source_delete_path(&root, &source)?;
-    let mut backup_path = None;
+    let config_plan = prepare_runtime_config_source_removal(&root, &source)?;
+    let mut backup_path: Option<PathBuf> = None;
     let removed_folder = if source_path.exists() {
         let destination = deleted_source_backup_path(&root, &source)?;
-        fs::rename(&source_path, &destination).map_err(|error| {
+        move_directory(&source_path, &destination).map_err(|error| {
             format!(
-                "Cannot move source folder {} into the recoverable backup area: {}",
-                source_path.display(),
-                error
+                "Cannot move source folder {} into the recoverable backup area: {error}",
+                source_path.display()
             )
         })?;
         backup_path = Some(destination);
@@ -3717,11 +3718,46 @@ fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
     } else {
         false
     };
-    let config_pruned = remove_source_from_runtime_config(&root, &source)?;
-    cleanup_deleted_source_sqlite_state(&connection, &source.id)?;
-    source_governance::remove_source_state(&root, &connection, &source.id)?;
-    write_audit_event(
-        &connection,
+
+    if let Err(error) = config_plan.apply() {
+        return Err(recover_source_delete_failure(
+            &root,
+            &source_path,
+            backup_path.as_deref(),
+            &config_plan,
+            &format!("无法更新来源配置：{error}"),
+        ));
+    }
+
+    // Reconciliation rebuilds the SQLite index from the final filesystem state,
+    // then replaces the Agent allowlist. Do not prune SQLite before this point:
+    // a config, filesystem or delivery failure must be able to restore the exact
+    // previous source tree and then rebuild the previous index.
+    let snapshot = match reconcile_agent_skill_delivery(&root, &connection, false, false) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return Err(recover_source_delete_failure(
+                &root,
+                &source_path,
+                backup_path.as_deref(),
+                &config_plan,
+                &format!("AI 工具链接同步未完成：{error}"),
+            ));
+        }
+    };
+
+    let post_delete_connection = open_index_database(&root)?;
+    // These are post-rebuild housekeeping records. A future source must not
+    // inherit a deleted source's rating, pin or governance state. The active
+    // catalog is already healthy, so an audit-write failure must not falsely
+    // tell the user that the recoverable deletion failed.
+    let cleanup_warning = cleanup_deleted_source_sqlite_state(&post_delete_connection, &source.id)
+        .and_then(|_| {
+            source_governance::remove_source_state(&root, &post_delete_connection, &source.id)
+        })
+        .err();
+    let _ = write_audit_event(
+        &post_delete_connection,
         "source_deleted",
         &format!(
             "Moved managed source {} to a recoverable backup",
@@ -3737,11 +3773,124 @@ fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_default(),
-            "configPruned": config_pruned,
+            "configPruned": config_plan.changed,
+            "cleanupWarning": cleanup_warning,
         }),
-    )?;
+    );
 
-    reconcile_agent_skill_delivery(&root, &connection, false, false)
+    Ok(snapshot)
+}
+
+#[derive(Debug)]
+struct RuntimeConfigSourceRemovalPlan {
+    changed: bool,
+    path: PathBuf,
+    original: Vec<u8>,
+    replacement: Vec<u8>,
+}
+
+impl RuntimeConfigSourceRemovalPlan {
+    fn apply(&self) -> Result<(), String> {
+        if self.changed {
+            replace_file_atomically(&self.path, &self.replacement)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn restore(&self) -> Result<(), String> {
+        if self.changed {
+            replace_file_atomically(&self.path, &self.original)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn prepare_runtime_config_source_removal(
+    root: &Path,
+    source: &SourceCard,
+) -> Result<RuntimeConfigSourceRemovalPlan, String> {
+    let path = skillhub_config_file(root);
+    if !path.exists() {
+        return Ok(RuntimeConfigSourceRemovalPlan {
+            changed: false,
+            path,
+            original: Vec::new(),
+            replacement: Vec::new(),
+        });
+    }
+    let original = fs::read(&path)
+        .map_err(|error| format!("Cannot read runtime config {}: {error}", path.display()))?;
+    let raw = String::from_utf8(original.clone())
+        .map_err(|_| format!("Cannot parse runtime config {} as UTF-8.", path.display()))?;
+    let mut config: Value = serde_json::from_str(raw.trim_start_matches('\u{feff}'))
+        .map_err(|error| format!("Cannot parse runtime config: {error}"))?;
+    let Some(repositories) = config.get_mut("repositories").and_then(Value::as_array_mut) else {
+        return Ok(RuntimeConfigSourceRemovalPlan {
+            changed: false,
+            path,
+            original,
+            replacement: Vec::new(),
+        });
+    };
+    let before = repositories.len();
+    repositories.retain(|repo| !runtime_config_repo_matches_source(repo, source));
+    let changed = repositories.len() != before;
+    let replacement = if changed {
+        let text = serde_json::to_string_pretty(&config)
+            .map_err(|error| format!("Cannot serialize runtime config: {error}"))?;
+        format!("{text}\n").into_bytes()
+    } else {
+        Vec::new()
+    };
+    Ok(RuntimeConfigSourceRemovalPlan {
+        changed,
+        path,
+        original,
+        replacement,
+    })
+}
+
+fn recover_source_delete_failure(
+    root: &Path,
+    source_path: &Path,
+    backup_path: Option<&Path>,
+    config_plan: &RuntimeConfigSourceRemovalPlan,
+    reason: &str,
+) -> String {
+    let config_result = config_plan.restore();
+    let source_result = match backup_path {
+        Some(backup) if backup.exists() && !source_path.exists() => {
+            move_directory(backup, source_path)
+        }
+        _ => Ok(()),
+    };
+    let delivery_result = if config_result.is_ok() && source_result.is_ok() {
+        open_index_database(root)
+            .and_then(|connection| reconcile_agent_skill_delivery(root, &connection, false, false))
+            .map(|_| ())
+    } else {
+        Ok(())
+    };
+    let mut recovery = Vec::new();
+    if let Err(error) = config_result {
+        recovery.push(format!("配置恢复失败：{error}"));
+    }
+    if let Err(error) = source_result {
+        recovery.push(format!("来源恢复失败：{error}"));
+    }
+    if let Err(error) = delivery_result {
+        recovery.push(format!("链接恢复失败：{error}"));
+    }
+    if recovery.is_empty() {
+        format!("{reason}；已恢复原来源、配置和 AI 工具链接。")
+    } else {
+        format!(
+            "{reason}；自动恢复未完全完成：{}。原来源备份保留在可恢复备份目录。",
+            recovery.join("；")
+        )
+    }
 }
 
 #[tauri::command]
@@ -3984,6 +4133,39 @@ fn open_path_with_system(path: &Path) -> Result<(), String> {
             .map(|_| ())
             .map_err(|error| format!("打开文件管理器失败：{error}"))
     }
+}
+
+#[tauri::command]
+async fn scan_external_agent_skills(
+    project_path: Option<String>,
+) -> Result<external_skills::ExternalAgentSkillInventory, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = resolve_legacy_root()?;
+        let project = project_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .map(Path::new);
+        external_skills::scan(&root, &delivery_home_dir(), project)
+    })
+    .await
+    .map_err(|_| "外部 Skills 扫描未完成，请重试。".to_string())?
+}
+
+#[tauri::command]
+async fn read_external_agent_skill(
+    path: String,
+    project_path: Option<String>,
+) -> Result<external_skills::ExternalSkillDocument, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = resolve_legacy_root()?;
+        let project = project_path
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .map(Path::new);
+        external_skills::read(&root, &delivery_home_dir(), project, Path::new(&path))
+    })
+    .await
+    .map_err(|_| "Skill 正文读取未完成，请重新扫描。".to_string())?
 }
 
 #[tauri::command]
@@ -8543,40 +8725,6 @@ fn validate_managed_source_delete_path(
     Ok(source_path)
 }
 
-fn remove_source_from_runtime_config(root: &Path, source: &SourceCard) -> Result<bool, String> {
-    let config_file = skillhub_config_file(root);
-    if !config_file.exists() {
-        return Ok(false);
-    }
-    let raw = fs::read_to_string(&config_file).map_err(|error| {
-        format!(
-            "Cannot read runtime config {}: {}",
-            config_file.display(),
-            error
-        )
-    })?;
-    let mut config: Value = serde_json::from_str(raw.trim_start_matches('\u{feff}'))
-        .map_err(|error| format!("Cannot parse runtime config: {}", error))?;
-    let Some(repositories) = config.get_mut("repositories").and_then(Value::as_array_mut) else {
-        return Ok(false);
-    };
-    let before = repositories.len();
-    repositories.retain(|repo| !runtime_config_repo_matches_source(repo, source));
-    let changed = repositories.len() != before;
-    if changed {
-        let text = serde_json::to_string_pretty(&config)
-            .map_err(|error| format!("Cannot serialize runtime config: {}", error))?;
-        fs::write(&config_file, format!("{text}\n")).map_err(|error| {
-            format!(
-                "Cannot update runtime config {}: {}",
-                config_file.display(),
-                error
-            )
-        })?;
-    }
-    Ok(changed)
-}
-
 fn runtime_config_repo_matches_source(repo: &Value, source: &SourceCard) -> bool {
     let source_url = parse_github_repo(&source.url)
         .map(|(owner, repo)| normalized_github_repo_url(&owner, &repo))
@@ -10492,13 +10640,16 @@ fn write_managed_source_metadata(
     download_method: &str,
     default_branch: &str,
 ) -> Result<(), String> {
-    let payload = serde_json::json!({
-        "schemaVersion": 1,
+    let mut payload = serde_json::json!({
+        "schemaVersion": 2,
         "url": url,
         "downloadMethod": download_method,
         "defaultBranch": default_branch,
         "downloadedAt": unix_timestamp_string()
     });
+    if download_method != "git" {
+        payload["baselineSha256"] = Value::String(snapshot_tree_fingerprint(source_path)?);
+    }
     fs::write(
         source_path.join(MANAGED_SOURCE_METADATA_FILE),
         serde_json::to_string_pretty(&payload)
@@ -10717,12 +10868,10 @@ fn refresh_single_snapshot_source(
         }
     }
 
-    if snapshot_tree_fingerprint(&staged_path)? == snapshot_tree_fingerprint(target_path)? {
+    let staged_fingerprint = snapshot_tree_fingerprint(&staged_path)?;
+    if let Some(outcome) = snapshot_refresh_preflight(target_path, &staged_fingerprint)? {
         let _ = fs::remove_dir_all(&staged_path);
-        return Ok((
-            "unchanged".to_string(),
-            "GitHub 快照与本地副本一致，无需重写。".to_string(),
-        ));
+        return Ok(outcome);
     }
 
     let backup_root = private_state_dir(root)
@@ -10758,25 +10907,72 @@ fn refresh_single_snapshot_source(
     ))
 }
 
-/// Metadata-only fingerprint (relative path + byte length) so an unchanged
-/// snapshot is detected without rewriting the folder on every sync. The managed
-/// metadata file is excluded because its download timestamp always differs.
-fn snapshot_tree_fingerprint(path: &Path) -> Result<u64, String> {
+/// Old downloads have no trustworthy baseline. Adopt one only when a newly
+/// fetched snapshot exactly matches the current files; never assume local
+/// differences are disposable upstream changes.
+fn snapshot_refresh_preflight(
+    target_path: &Path,
+    incoming_fingerprint: &str,
+) -> Result<Option<(String, String)>, String> {
+    let current_fingerprint = snapshot_tree_fingerprint(target_path)?;
+    let metadata_path = target_path.join(MANAGED_SOURCE_METADATA_FILE);
+    let metadata_text =
+        fs::read_to_string(&metadata_path).map_err(|error| format!("无法读取快照基准：{error}"))?;
+    let mut metadata: Value = serde_json::from_str(&metadata_text)
+        .map_err(|error| format!("快照基准不可解析，本地副本保持不变：{error}"))?;
+    if !metadata.is_object() {
+        return Err("快照基准格式无效，本地副本保持不变。".to_string());
+    }
+    if current_fingerprint == incoming_fingerprint {
+        metadata["schemaVersion"] = Value::from(2);
+        metadata["baselineSha256"] = Value::String(current_fingerprint);
+        metadata["downloadedAt"] = Value::String(unix_timestamp_string());
+        fs::write(
+            &metadata_path,
+            serde_json::to_vec_pretty(&metadata)
+                .map_err(|error| format!("无法序列化快照基准：{error}"))?,
+        )
+        .map_err(|error| format!("无法保存快照基准：{error}"))?;
+        return Ok(Some((
+            "unchanged".to_string(),
+            "GitHub 快照与本地副本一致，已核验更新基准。".to_string(),
+        )));
+    }
+    match metadata.get("baselineSha256").and_then(Value::as_str) {
+        Some(baseline) if baseline == current_fingerprint => Ok(None),
+        Some(_) => Ok(Some((
+            "local-changes".to_string(),
+            "检测到本地内容修改，已保留本地副本并跳过更新。请先备份并处理本地修改，再重新导入上游版本。".to_string(),
+        ))),
+        None => Ok(Some((
+            "local-changes".to_string(),
+            "旧快照缺少更新基准，且与上游不同，无法区分本地修改；已保留本地副本。请先备份并复核差异，再重新导入上游版本。".to_string(),
+        ))),
+    }
+}
+
+/// Hash paths and file contents so equal-length upstream edits are detected.
+/// The managed metadata file is excluded because its download timestamp differs.
+fn snapshot_tree_fingerprint(path: &Path) -> Result<String, String> {
     let metadata_marker = MANAGED_SOURCE_METADATA_FILE.to_ascii_lowercase();
-    let mut items: Vec<(String, u64)> = Vec::new();
+    let mut items = Vec::new();
     let mut stack = vec![path.to_path_buf()];
     while let Some(directory) = stack.pop() {
         let entries = fs::read_dir(&directory)
             .map_err(|error| format!("无法读取 {}：{}", directory.display(), error))?;
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("无法读取目录条目：{error}"))?;
             let entry_path = entry.path();
-            let Ok(metadata) = entry.metadata() else {
-                continue;
-            };
-            if metadata.is_symlink() {
-                continue;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("无法读取 {}：{error}", entry_path.display()))?;
+            if external_skills::is_link(&entry_path) {
+                return Err(format!(
+                    "快照中存在链接 {}，已保留本地副本并停止自动替换。",
+                    entry_path.display()
+                ));
             }
-            if metadata.is_dir() {
+            if file_type.is_dir() {
                 stack.push(entry_path);
                 continue;
             }
@@ -10787,28 +10983,136 @@ fn snapshot_tree_fingerprint(path: &Path) -> Result<u64, String> {
             if relative == metadata_marker {
                 continue;
             }
-            items.push((relative, metadata.len()));
+            let mut file = fs::File::open(&entry_path)
+                .map_err(|error| format!("无法读取 {}：{error}", entry_path.display()))?;
+            let mut content_hasher = Sha256::new();
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let count = file
+                    .read(&mut buffer)
+                    .map_err(|error| format!("无法读取 {}：{error}", entry_path.display()))?;
+                if count == 0 {
+                    break;
+                }
+                content_hasher.update(&buffer[..count]);
+            }
+            items.push((relative, content_hasher.finalize()));
         }
     }
     items.sort();
-    let mut hasher = DefaultHasher::new();
-    items.hash(&mut hasher);
-    Ok(hasher.finish())
+    let mut hasher = Sha256::new();
+    for (relative, content_hash) in items {
+        update_delivery_hash(&mut hasher, &relative);
+        hasher.update(content_hash);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn replace_file_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Cannot resolve parent for {}.", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("Cannot create config folder {}: {error}", parent.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("config");
+    let token = unix_timestamp_string();
+    let staged = parent.join(format!(".{name}.skillhub-stage-{token}"));
+    let previous = parent.join(format!(".{name}.skillhub-previous-{token}"));
+    fs::write(&staged, bytes)
+        .map_err(|error| format!("Cannot stage {}: {error}", path.display()))?;
+    let had_previous = path.exists();
+    if had_previous {
+        if let Err(error) = fs::rename(path, &previous) {
+            let _ = fs::remove_file(&staged);
+            return Err(format!(
+                "Cannot protect previous {}: {error}",
+                path.display()
+            ));
+        }
+    }
+    if let Err(error) = fs::rename(&staged, path) {
+        if had_previous {
+            let _ = fs::rename(&previous, path);
+        }
+        let _ = fs::remove_file(&staged);
+        return Err(format!("Cannot activate {}: {error}", path.display()));
+    }
+    if had_previous {
+        if let Err(error) = fs::remove_file(&previous) {
+            return Err(format!(
+                "Updated {}, but the recoverable previous config remains at {}: {error}",
+                path.display(),
+                previous.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn move_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    move_directory_with_rename(source, destination, |from, to| fs::rename(from, to))
+}
+
+fn move_directory_with_rename<F>(source: &Path, destination: &Path, rename: F) -> Result<(), String>
+where
+    F: Fn(&Path, &Path) -> io::Result<()>,
+{
+    if destination.exists() {
+        return Err(format!(
+            "Destination already exists: {}",
+            destination.display()
+        ));
+    }
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("无法创建目录 {}：{}", parent.display(), error))?;
     }
-    if fs::rename(source, destination).is_ok() {
+    if rename(source, destination).is_ok() {
         return Ok(());
     }
-    // Rename fails across volumes; fall back to a copy and only drop the
-    // original once the copy is complete.
-    copy_directory_tree(source, destination)
-        .map_err(|error| format!("复制 {} 失败：{}", source.display(), error))?;
-    fs::remove_dir_all(source).map_err(|error| format!("清理 {} 失败：{}", source.display(), error))
+    // Cross-volume moves must never copy directly into the final destination:
+    // a failed copy would otherwise leave a mixed tree that later code could
+    // mistake for a complete backup. Stage beside the final path, verify the
+    // complete copy, then make one same-volume rename visible.
+    let parent = destination
+        .parent()
+        .expect("destination parent checked above");
+    let name = destination
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("source");
+    let staged = parent.join(format!(
+        ".{name}.skillhub-moving-{}",
+        unix_timestamp_string()
+    ));
+    copy_directory_tree(source, &staged)
+        .map_err(|error| format!("复制 {} 到隔离目录失败：{}", source.display(), error))?;
+    let source_fingerprint = snapshot_tree_fingerprint(source)?;
+    let staged_fingerprint = snapshot_tree_fingerprint(&staged)?;
+    if source_fingerprint != staged_fingerprint {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(format!(
+            "跨盘复制校验失败；原目录未删除：{}",
+            source.display()
+        ));
+    }
+    if let Err(error) = fs::rename(&staged, destination) {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(format!(
+            "无法激活已校验的跨盘副本 {}: {error}",
+            destination.display()
+        ));
+    }
+    fs::remove_dir_all(source).map_err(|error| {
+        format!(
+            "已创建经校验的副本 {}，但未能删除原目录 {}：{error}；两个目录均被保留。",
+            destination.display(),
+            source.display()
+        )
+    })
 }
 
 fn prune_snapshot_refresh_backups(backup_root: &Path, prefix: &str) {
@@ -10856,9 +11160,21 @@ fn stage_local_source_import(
     staged_path: &Path,
     execution: &mut SourceImportExecutionCard,
 ) -> Result<(), String> {
-    let source_path = PathBuf::from(&plan.normalized_target);
-    let app_private = user_data_root(root);
-    if source_path.starts_with(&app_private) {
+    // Resolve the selected root once: a legitimate client Skill junction is a
+    // readable source, but aliases must not bypass the private-data boundary.
+    let source_path = PathBuf::from(&plan.normalized_target)
+        .canonicalize()
+        .map_err(|_| "本地来源已移动或不可读，请重新选择文件夹。".to_string())?;
+    let private_paths = [
+        user_data_root(root),
+        private_state_dir(root),
+        active_skills_dir(root),
+        managed_sources_dir(root),
+    ];
+    if private_paths.iter().any(|path| {
+        let private_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+        source_path.starts_with(&private_path) || private_path.starts_with(&source_path)
+    }) {
         execution.status = "blocked".to_string();
         execution.summary =
             "Local staging refused because the source is inside SkillHub's private runtime folder."
@@ -12144,12 +12460,23 @@ fn local_copy_preflight(root: &Path) -> Result<(usize, u64), String> {
                 error
             )
         })?;
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry =
+                entry.map_err(|_| "本地来源中有无法读取的目录项，已停止导入。".to_string())?;
             let path = entry.path();
             let file_name = entry.file_name().to_string_lossy().to_string();
-            let Ok(file_type) = entry.file_type() else {
+            if should_skip_import_scan_dir(&file_name) {
                 continue;
-            };
+            }
+            if external_skills::is_link(&path) {
+                return Err(format!(
+                    "本地来源内含链接，无法安全复制完整资料：{}。请选择该链接的真实 Skill 文件夹。",
+                    path.display()
+                ));
+            }
+            let file_type = entry
+                .file_type()
+                .map_err(|_| "本地来源文件状态不可读，已停止导入。".to_string())?;
             if file_type.is_dir() {
                 if !should_skip_import_scan_dir(&file_name) {
                     stack.push((path, depth + 1));
@@ -12159,9 +12486,12 @@ fn local_copy_preflight(root: &Path) -> Result<(usize, u64), String> {
                 byte_count = byte_count.saturating_add(
                     entry
                         .metadata()
-                        .map(|metadata| metadata.len())
-                        .unwrap_or_default(),
+                        .map_err(|_| "无法确认本地来源文件大小，已停止导入。".to_string())?
+                        .len(),
                 );
+                if file_count > SOURCE_IMPORT_MAX_FILES || byte_count > GITHUB_FALLBACK_MAX_BYTES {
+                    return Ok((file_count, byte_count));
+                }
             }
         }
     }
@@ -17916,6 +18246,8 @@ pub fn run() {
             refresh_source_version_status,
             rollback_source_to_latest_backup,
             refresh_agent_detection,
+            scan_external_agent_skills,
+            read_external_agent_skill,
             set_agent_adapter_enabled,
             set_workspace_enabled,
             set_preset_enabled,
@@ -19110,6 +19442,71 @@ mod tests {
 
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn source_delete_config_plan_restores_exact_original_bytes() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-delete-config-{}",
+            unix_timestamp_string()
+        ));
+        let config_path = skillhub_config_file(&root);
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        let original = b"{\r\n  \"repositories\": [\r\n    { \"name\": \"paper-pack\", \"url\": \"https://github.com/example/paper-pack.git\" }\r\n  ]\r\n}\r\n";
+        fs::write(&config_path, original).unwrap();
+        let source = test_source_card(
+            "source-paper-pack",
+            "paper-pack",
+            Path::new("paper-pack"),
+            "https://github.com/example/paper-pack.git",
+        );
+
+        let plan = prepare_runtime_config_source_removal(&root, &source).unwrap();
+        assert!(plan.changed);
+        plan.apply().unwrap();
+        assert!(!fs::read_to_string(&config_path)
+            .unwrap()
+            .contains("paper-pack"));
+        plan.restore().unwrap();
+        assert_eq!(fs::read(&config_path).unwrap(), original);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cross_volume_move_stages_and_rejects_existing_destination() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-cross-volume-move-{}",
+            unix_timestamp_string()
+        ));
+        let source = root.join("source");
+        let destination = root.join("backup");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(
+            source.join("nested").join("SKILL.md"),
+            "---\nname: moved\n---\n",
+        )
+        .unwrap();
+
+        // Inject a failed direct rename to exercise the cross-volume path
+        // without relying on a second physical test drive.
+        move_directory_with_rename(&source, &destination, |_, _| {
+            Err(io::Error::new(io::ErrorKind::CrossesDevices, "fixture"))
+        })
+        .unwrap();
+        assert!(!source.exists());
+        assert_eq!(
+            fs::read_to_string(destination.join("nested").join("SKILL.md")).unwrap(),
+            "---\nname: moved\n---\n"
+        );
+
+        let replacement_source = root.join("replacement");
+        fs::create_dir_all(&replacement_source).unwrap();
+        assert!(move_directory(&replacement_source, &destination).is_err());
+        assert!(replacement_source.exists());
+        assert!(destination.join("nested").join("SKILL.md").exists());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -21818,17 +22215,112 @@ mod tests {
             snapshot_tree_fingerprint(&source_dir).expect("fingerprint should recompute")
         );
 
-        fs::write(
-            source_dir.join("skill-a").join("SKILL.md"),
-            "# One, revised",
-        )
-        .expect("skill file should update");
+        fs::write(source_dir.join("skill-a").join("SKILL.md"), "# Two")
+            .expect("skill file should update");
         assert_ne!(
             before,
             snapshot_tree_fingerprint(&source_dir).expect("fingerprint should recompute")
         );
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn snapshot_refresh_protects_local_changes_and_migrates_matching_legacy_copies() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-snapshot-baseline-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let local = root.join("local");
+        let upstream = root.join("upstream");
+        fs::create_dir_all(&local).unwrap();
+        fs::create_dir_all(&upstream).unwrap();
+        fs::write(local.join("SKILL.md"), "# One").unwrap();
+        fs::write(upstream.join("SKILL.md"), "# New").unwrap();
+        write_managed_source_metadata(
+            &local,
+            "https://github.com/owner/repo.git",
+            "github-codeload",
+            "main",
+        )
+        .unwrap();
+        let incoming = snapshot_tree_fingerprint(&upstream).unwrap();
+
+        // A clean downloaded copy may accept an upstream edit of the same length.
+        assert!(snapshot_refresh_preflight(&local, &incoming)
+            .unwrap()
+            .is_none());
+        let baseline_metadata = fs::read(local.join(MANAGED_SOURCE_METADATA_FILE)).unwrap();
+        fs::write(local.join("SKILL.md"), "# Own").unwrap();
+        assert_eq!(
+            snapshot_refresh_preflight(&local, &incoming)
+                .unwrap()
+                .unwrap()
+                .0,
+            "local-changes"
+        );
+        assert_eq!(fs::read(local.join("SKILL.md")).unwrap(), b"# Own");
+        assert_eq!(
+            fs::read(local.join(MANAGED_SOURCE_METADATA_FILE)).unwrap(),
+            baseline_metadata
+        );
+
+        // Local additions and deletions are also modifications, not just edits.
+        fs::write(local.join("SKILL.md"), "# One").unwrap();
+        fs::write(local.join("notes.md"), "my notes").unwrap();
+        assert_eq!(
+            snapshot_refresh_preflight(&local, &incoming)
+                .unwrap()
+                .unwrap()
+                .0,
+            "local-changes"
+        );
+        fs::remove_file(local.join("notes.md")).unwrap();
+        fs::remove_file(local.join("SKILL.md")).unwrap();
+        assert_eq!(
+            snapshot_refresh_preflight(&local, &incoming)
+                .unwrap()
+                .unwrap()
+                .0,
+            "local-changes"
+        );
+
+        // Legacy metadata cannot justify overwriting a differing local tree.
+        let legacy = br#"{"schemaVersion":1,"url":"https://github.com/owner/repo.git","downloadedAt":"0","unknownField":"preserved"}"#;
+        fs::write(local.join(MANAGED_SOURCE_METADATA_FILE), legacy).unwrap();
+        fs::write(local.join("SKILL.md"), "# One").unwrap();
+        assert_eq!(
+            snapshot_refresh_preflight(&local, &incoming)
+                .unwrap()
+                .unwrap()
+                .0,
+            "local-changes"
+        );
+        assert_eq!(
+            fs::read(local.join(MANAGED_SOURCE_METADATA_FILE)).unwrap(),
+            legacy
+        );
+
+        // Matching upstream safely establishes the baseline without replacing files.
+        fs::write(local.join("SKILL.md"), "# New").unwrap();
+        assert_eq!(
+            snapshot_refresh_preflight(&local, &incoming)
+                .unwrap()
+                .unwrap()
+                .0,
+            "unchanged"
+        );
+        let migrated = read_json(&local.join(MANAGED_SOURCE_METADATA_FILE)).unwrap();
+        assert_eq!(migrated["baselineSha256"], incoming);
+        assert_eq!(migrated["unknownField"], "preserved");
+        assert_ne!(migrated["downloadedAt"], "0");
+        fs::write(upstream.join("SKILL.md"), "# Two").unwrap();
+        assert!(
+            snapshot_refresh_preflight(&local, &snapshot_tree_fingerprint(&upstream).unwrap())
+                .unwrap()
+                .is_none()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

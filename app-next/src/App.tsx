@@ -20,6 +20,8 @@ import { CountUp, ParticleField, useCardGlow } from "./effects";
 import { LANG_OPTIONS, type Lang, categoryName, getLang, initialLang, setLang, t } from "./i18n";
 import { localizedSkillDescription } from "./localizedDescriptions";
 import { SkillUniverse } from "./SkillUniverse";
+import { externalSkillsText } from "./externalSkills";
+const ExternalSkillsPanel = lazy(() => import("./ExternalSkillsPanel").then(module => ({ default: module.ExternalSkillsPanel })));
 import type {
   GitInstallResultCard,
   GitRuntimeCard,
@@ -429,6 +431,7 @@ export function App() {
     return initial;
   });
   const [active, setActive] = useState<NavKey>(() => initialNavKey());
+  const [externalImportPath, setExternalImportPath] = useState("");
   const [theme, setTheme] = useState<ThemeName>(() => initialTheme());
   const [textScale, setTextScale] = useState<UiScalePreset>(() => initialUiScale(UI_TEXT_SCALE_STORAGE_KEY, "standard"));
   const [iconScale, setIconScale] = useState<UiScalePreset>(() => initialUiScale(UI_ICON_SCALE_STORAGE_KEY, "comfortable"));
@@ -2003,6 +2006,8 @@ export function App() {
           )}
           {active === "library" && (
             <Library
+              suggestedLocalPath={externalImportPath}
+              onDismissLocalImport={() => setExternalImportPath("")}
               loading={mutationBusy}
               onDeleteSource={deleteSource}
               onCreateFolder={(name, note, color) => runSkillFolderCommand(
@@ -2052,6 +2057,11 @@ export function App() {
           {active === "agents" && (
             <Agents
               disabled={mutationBusy}
+              onImportLocalSkill={path => {
+                setExternalImportPath(path);
+                setGlobalSearch("");
+                setActive("library");
+              }}
               onRefreshAgents={() => void refreshLocalAgents()}
               runtimeAvailable={runtimeAvailable}
               snapshot={snapshot}
@@ -3121,6 +3131,8 @@ function MiniTrendLine({ points }: { points: number[] }) {
    ============================================================= */
 
 type LibraryProps = {
+  suggestedLocalPath: string;
+  onDismissLocalImport: () => void;
   atlasMode: boolean;
   loading: boolean;
   onCancelImport: (operationId: string) => Promise<boolean>;
@@ -3199,7 +3211,7 @@ function Library(props: LibraryProps) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [editingSourceId, setEditingSourceId] = useState("");
   const [editingSkillId, setEditingSkillId] = useState("");
-  const [showImport, setShowImport] = useState(() => importWizardDraftHasContent(loadImportWizardDraft()));
+  const [showImport, setShowImport] = useState(() => Boolean(props.suggestedLocalPath) || importWizardDraftHasContent(loadImportWizardDraft()));
   const [showMaintenance, setShowMaintenance] = useState(false);
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
   const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
@@ -3427,6 +3439,8 @@ function Library(props: LibraryProps) {
 
       {showImport && (
         <ImportWizard
+          suggestedLocalPath={props.suggestedLocalPath}
+          onDismissLocalImport={props.onDismissLocalImport}
           disabled={loading}
           onCancel={onCancelImport}
           onCreateFolder={onCreateFolder}
@@ -4812,6 +4826,8 @@ function ParentIsolationPanel({ conflicts }: { conflicts: SkillConflictCard[] })
    ============================================================= */
 
 function ImportWizard({
+  suggestedLocalPath,
+  onDismissLocalImport,
   disabled,
   onCancel,
   onCreateFolder,
@@ -4824,6 +4840,8 @@ function ImportWizard({
   sources,
   skillFolders
 }: {
+  suggestedLocalPath: string;
+  onDismissLocalImport: () => void;
   disabled: boolean;
   onCancel: (operationId: string) => Promise<boolean>;
   onCreateFolder: (name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
@@ -5223,6 +5241,18 @@ function ImportWizard({
 
   return (
     <section className="import-wizard glow-card">
+      {suggestedLocalPath && <div className="external-import-suggestion">
+        <strong>{externalSkillsText("suggested")}</strong>
+        <p><code>{suggestedLocalPath}</code></p>
+        {importWizardDraftHasContent(initialDraft) && <p>{externalSkillsText("draftNote")}</p>}
+        <button className="secondary-action" disabled={isBusy} type="button" onClick={() => {
+          resetImportDraft();
+          setImportKind("local");
+          setInput(suggestedLocalPath);
+          onDismissLocalImport();
+        }}>{externalSkillsText("usePath")}</button>
+        <button className="ghost-action" disabled={isBusy} type="button" onClick={onDismissLocalImport}>{externalSkillsText("dismiss")}</button>
+      </div>}
       <header className="panel-head">
         <div>
           <span className="eyebrow"><Icon name="add" /> {t("qa.eyebrow")}</span>
@@ -5681,11 +5711,13 @@ function WorkspaceDetailPanel({
 
 function Agents({
   disabled,
+  onImportLocalSkill,
   onRefreshAgents,
   runtimeAvailable,
   snapshot
 }: {
   disabled: boolean;
+  onImportLocalSkill: (path: string) => void;
   onRefreshAgents: () => void;
   runtimeAvailable: boolean;
   snapshot: LegacySnapshot | null;
@@ -5714,6 +5746,10 @@ function Agents({
           </button>
         </div>
       </section>
+
+      <Suspense fallback={<DeferredSurface label={externalSkillsText("scanning")} />}>
+        <ExternalSkillsPanel disabled={disabled} onImport={onImportLocalSkill} runtimeAvailable={runtimeAvailable} />
+      </Suspense>
 
       <section className="panel glow-card">
         <header className="panel-head">
