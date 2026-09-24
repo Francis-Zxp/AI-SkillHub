@@ -79,7 +79,8 @@ test("startup verifies delivery without repeating the full Agent diagnostics sca
     rust.indexOf("fn write_source_import_promotion_report")
   );
   assert.match(promotion, /reconcile_agent_skill_delivery/);
-  assert.match(i18n, /ChatGPT 输入 @；Codex 输入 \/skills 或 \$。/);
+  assert.match(i18n, /选择来源查看调用方式/);
+  assert.doesNotMatch(i18n, /ChatGPT 输入 @/);
   assert.match(app, /return \/\^\[\\\/@\$\]\//);
 });
 

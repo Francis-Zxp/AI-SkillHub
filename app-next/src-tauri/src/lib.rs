@@ -7,9 +7,11 @@ mod mcp_github_import;
 mod mcp_mutation;
 mod metadata;
 mod migration_v4;
+mod prompt_launcher;
 mod prompt_library;
 mod security_scan;
 mod source_governance;
+mod source_identity;
 
 // Cargo builds `#[cfg(test)]` for the library test harness, which is a separate
 // Windows executable from the Tauri app binary. Pull the full Tauri-generated
@@ -1246,6 +1248,17 @@ async fn refresh_agent_detection() -> Result<LegacySnapshot, String> {
 }
 
 #[tauri::command]
+async fn connect_detected_agents() -> Result<LegacySnapshot, String> {
+    run_blocking_task(|| {
+        let _guard = acquire_background_write_guard("连接本机 AI 工具")?;
+        let root = resolve_legacy_root()?;
+        let connection = open_index_database(&root)?;
+        reconcile_agent_skill_delivery(&root, &connection, true, false)
+    })
+    .await
+}
+
+#[tauri::command]
 async fn read_git_runtime() -> Result<GitRuntimeCard, String> {
     tauri::async_runtime::spawn_blocking(read_git_runtime_card)
         .await
@@ -1347,13 +1360,41 @@ where
         .map_err(|error| format!("后台任务启动失败：{}", error))?
 }
 
-fn acquire_background_write_guard(
-    operation: &str,
-) -> Result<std::sync::MutexGuard<'static, ()>, String> {
-    try_acquire_background_write_guard(
+struct BackgroundWriteGuard {
+    // Close the file (releasing the OS lock) before releasing the process mutex.
+    _file: fs::File,
+    _process: std::sync::MutexGuard<'static, ()>,
+}
+
+fn acquire_background_file_lock(state_dir: &Path, operation: &str) -> Result<fs::File, String> {
+    fs::create_dir_all(state_dir)
+        .map_err(|error| format!("无法准备写入锁目录，未开始{operation}：{error}"))?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(state_dir.join("background-write.lock"))
+        .map_err(|error| format!("无法打开写入锁，未开始{operation}：{error}"))?;
+    file.try_lock().map_err(|error| format!(
+        "无法取得数据写入锁，其他 AI SkillHub 窗口或维护进程可能正在运行；请稍后重试{operation}：{error}"
+    ))?;
+    // Never delete this file: unlink/recreate would let processes lock different files.
+    Ok(file)
+}
+
+fn acquire_background_write_guard(operation: &str) -> Result<BackgroundWriteGuard, String> {
+    let process = try_acquire_background_write_guard(
         BACKGROUND_WRITE_LOCK.get_or_init(|| Mutex::new(())),
         operation,
-    )
+    )?;
+    let root = locate_legacy_root()?;
+    let file = acquire_background_file_lock(&private_state_dir(&root), operation)?;
+    prepare_user_data(&root)?;
+    Ok(BackgroundWriteGuard {
+        _file: file,
+        _process: process,
+    })
 }
 
 fn try_acquire_background_write_guard<'a>(
@@ -2782,6 +2823,28 @@ fn delivery_manifest_is_valid(skill_dir: &Path, canonical_sources_root: Option<&
     let Some(canonical_sources_root) = canonical_sources_root else {
         return false;
     };
+    let collection = raw
+        .lines()
+        .find_map(|line| markdown_code_value(line, &["- Managed source:", "- 管理来源："]))
+        .unwrap_or_else(|| name.clone());
+    let collection_path = Path::new(&collection);
+    let mut components = collection_path.components();
+    if !matches!(components.next(), Some(Component::Normal(_)))
+        || components.next().is_some()
+        || router_hub_skill_name(&collection) != name
+    {
+        return false;
+    }
+    let declared_collection = canonical_sources_root.join(collection_path);
+    if external_skills::is_link(&declared_collection) {
+        return false;
+    }
+    let Ok(canonical_collection) = declared_collection.canonicalize() else {
+        return false;
+    };
+    if canonical_collection.parent() != Some(canonical_sources_root) {
+        return false;
+    }
     let mut child_count = 0usize;
     for line in raw.lines().filter(|line| {
         line.trim_start()
@@ -2808,7 +2871,8 @@ fn delivery_manifest_is_valid(skill_dir: &Path, canonical_sources_root: Option<&
         let Ok(canonical_child) = declared.canonicalize() else {
             return false;
         };
-        if !canonical_child.starts_with(canonical_sources_root)
+        if external_skills::is_link(declared)
+            || !canonical_child.starts_with(&canonical_collection)
             || !canonical_child.is_file()
             || fs::File::open(&canonical_child).is_err()
         {
@@ -3688,6 +3752,259 @@ fn set_source_tags(source_id: String, tags: Vec<String>) -> Result<LegacySnapsho
     load_indexed_snapshot_under_write_guard()
 }
 
+/// Explicit maintenance action; every duplicate entry must survive in the primary.
+#[tauri::command]
+async fn consolidate_duplicate_sources() -> Result<LegacySnapshot, String> {
+    run_blocking_task(consolidate_duplicate_sources_blocking).await
+}
+
+fn repository_content_entries(root: &Path) -> Result<BTreeMap<String, String>, String> {
+    let mut stack = vec![root.to_path_buf()];
+    let mut entries = Vec::new();
+    while let Some(directory) = stack.pop() {
+        for entry in fs::read_dir(&directory).map_err(|error| error.to_string())? {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            let relative = path.strip_prefix(root).map_err(|error| error.to_string())?;
+            if relative == Path::new(".git") || relative == Path::new(MANAGED_SOURCE_METADATA_FILE)
+            {
+                continue;
+            }
+            if external_skills::is_link(&path) {
+                return Err("来源内含链接，请先检查链接，未合并目录。".into());
+            }
+            if path.is_dir() {
+                entries.push((
+                    relative.to_string_lossy().into_owned(),
+                    "directory".to_string(),
+                ));
+                stack.push(path);
+            } else {
+                let mut file = fs::File::open(&path).map_err(|error| error.to_string())?;
+                let mut hash = Sha256::new();
+                let mut buffer = [0_u8; 64 * 1024];
+                loop {
+                    let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+                    if count == 0 {
+                        break;
+                    }
+                    hash.update(&buffer[..count]);
+                }
+                entries.push((
+                    relative.to_string_lossy().into_owned(),
+                    format!("{:x}", hash.finalize()),
+                ));
+            }
+            if entries.len() > 100_000 {
+                return Err("来源文件过多，请逐项检查后合并。".into());
+            }
+        }
+    }
+    Ok(entries.into_iter().collect())
+}
+
+fn repository_content_is_contained(
+    primary: &BTreeMap<String, String>,
+    duplicate: &BTreeMap<String, String>,
+) -> bool {
+    !duplicate.is_empty()
+        && duplicate
+            .iter()
+            .all(|(path, hash)| primary.get(path) == Some(hash))
+}
+
+fn consolidate_duplicate_sources_blocking() -> Result<LegacySnapshot, String> {
+    let _guard = acquire_background_write_guard("合并重复来源")?;
+    let root = resolve_legacy_root()?;
+    let mut connection = open_index_database(&root)?;
+    let mut groups: BTreeMap<String, Vec<SourceCard>> = BTreeMap::new();
+    let mut sources = read_indexed_sources(&connection)?;
+    hydrate_source_urls_from_git(&root, &mut sources);
+    for mut source in sources {
+        let path = validate_managed_source_delete_path(&root, &source)?;
+        if let Some(url) = github_origin_at(&path)? {
+            let Some(identity) = source_identity::canonical_github_identity(&url) else {
+                continue;
+            };
+            source.url = url;
+            groups.entry(identity).or_default().push(source);
+        }
+    }
+    let mut pairs = Vec::new();
+    for mut group in groups.into_values().filter(|items| items.len() > 1) {
+        group.sort_by_key(|source| {
+            (
+                Path::new(&source.local_path)
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .contains("--"),
+                source.id.clone(),
+            )
+        });
+        let primary = group.remove(0);
+        let primary_path = validate_managed_source_delete_path(&root, &primary)?;
+        let fingerprint = repository_content_entries(&primary_path)?;
+        for duplicate in group {
+            let duplicate_path = validate_managed_source_delete_path(&root, &duplicate)?;
+            if primary_path == duplicate_path {
+                return Err("重复记录指向同一目录，请重新扫描索引。".into());
+            }
+            if !repository_content_is_contained(
+                &fingerprint,
+                &repository_content_entries(&duplicate_path)?,
+            ) {
+                return Err(format!(
+                    "{} 存在不同版本或本地修改，已保留两个副本。请先对比内容再合并。",
+                    primary.name
+                ));
+            }
+            let overrides: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM skills s WHERE s.source_id=?1 AND (
+                EXISTS(SELECT 1 FROM skill_overrides o WHERE o.skill_id=s.id) OR
+                EXISTS(SELECT 1 FROM skill_tag_overrides o WHERE o.skill_id=s.id) OR
+                EXISTS(SELECT 1 FROM skill_folder_memberships o WHERE o.skill_id=s.id))",
+                    [&duplicate.id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if overrides > 0 {
+                return Err(format!(
+                    "{} 含有单独编辑或评分的子 Skill；请先迁移这些设置，未移动来源。",
+                    duplicate.name
+                ));
+            }
+            pairs.push((primary.clone(), duplicate, duplicate_path));
+        }
+    }
+    if pairs.is_empty() {
+        return read_snapshot_from_database(&root, &connection);
+    }
+    let backup = private_state_dir(&root)
+        .join("backups")
+        .join(format!("source-merge-{}", unix_timestamp_string()));
+    fs::create_dir_all(&backup).map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "VACUUM INTO ?1",
+            [backup.join("before.sqlite3").to_string_lossy().as_ref()],
+        )
+        .map_err(|error| format!("无法备份来源索引：{error}"))?;
+    let config_path = skillhub_config_file(&root);
+    let original_config = if config_path.exists() {
+        fs::copy(&config_path, backup.join("skillhub.config.json"))
+            .map_err(|error| error.to_string())?;
+        Some(fs::read(&config_path).map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
+    let replacement_config = if let Some(original) = &original_config {
+        let text = std::str::from_utf8(original)
+            .map_err(|error| error.to_string())?
+            .trim_start_matches('\u{feff}');
+        let mut config: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
+        let targets: HashMap<String, String> = pairs
+            .iter()
+            .filter_map(|(primary, _, _)| {
+                Some((
+                    source_identity::canonical_github_identity(&primary.url)?,
+                    Path::new(&primary.local_path)
+                        .file_name()?
+                        .to_string_lossy()
+                        .into_owned(),
+                ))
+            })
+            .collect();
+        if let Some(repositories) = config.get_mut("repositories").and_then(Value::as_array_mut) {
+            let mut seen = HashSet::new();
+            repositories.retain_mut(|repo| {
+                let identity = repo
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .and_then(source_identity::canonical_github_identity);
+                if let Some((identity, name)) = identity
+                    .as_ref()
+                    .and_then(|id| targets.get(id).map(|name| (id, name)))
+                {
+                    if !seen.insert(identity.clone()) {
+                        return false;
+                    }
+                    repo["name"] = Value::String(name.clone());
+                }
+                true
+            });
+        }
+        Some(serde_json::to_vec_pretty(&config).map_err(|error| error.to_string())?)
+    } else {
+        None
+    };
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let operation = (|| -> Result<(), String> {
+        for (primary, duplicate, path) in pairs {
+            let report = source_identity::merge_source_metadata(
+                &mut connection,
+                &primary.id,
+                &duplicate.id,
+            )?;
+            let destination = backup.join(path.file_name().ok_or("来源路径无效")?);
+            let manifest = serde_json::json!({"report":report,"originalPath":path,"backupPath":destination,"databaseBackup":backup.join("before.sqlite3")});
+            fs::write(
+                backup.join(format!(
+                    "{}.json",
+                    sanitize_source_folder_name(&duplicate.id)
+                )),
+                serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            move_directory(&path, &destination)?;
+            moved.push((destination, path));
+            write_audit_event(
+                &connection,
+                "duplicate_source_consolidated",
+                "Consolidated identical repository copies with a recoverable backup",
+                manifest,
+            )?;
+        }
+        if let Some(bytes) = &replacement_config {
+            replace_file_atomically(&config_path, bytes)?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = operation {
+        if let Some(bytes) = &original_config {
+            let _ = replace_file_atomically(&config_path, bytes);
+        }
+        for (from, to) in moved.iter().rev() {
+            let _ = move_directory(from, to);
+        }
+        return Err(format!(
+            "合并中止，已尝试恢复目录；完整索引与恢复材料在 {}：{error}",
+            backup.display()
+        ));
+    }
+    match reconcile_agent_skill_delivery(&root, &connection, false, false) {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) => {
+            if let Some(bytes) = &original_config {
+                let _ = replace_file_atomically(&config_path, bytes);
+            }
+            for (from, to) in moved.iter().rev() {
+                let _ = move_directory(from, to);
+            }
+            let _ = reconcile_agent_skill_delivery(&root, &connection, false, false);
+            Err(format!(
+                "投递未完成，已尝试恢复原目录；元数据与完整索引备份在 {}：{error}",
+                backup.display()
+            ))
+        }
+    }
+}
+
+/// Headless entry for an explicitly requested local maintenance operation.
+pub fn run_source_consolidation() -> Result<(), String> {
+    consolidate_duplicate_sources_blocking().map(|_| ())
+}
+
 #[tauri::command]
 fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
     let _write_guard = acquire_background_write_guard("来源删除")?;
@@ -4278,6 +4595,46 @@ fn load_prompt_invocation(
     prompt_library::build_prompt_invocation(&managed_sources_dir(&root), source, hosts)
 }
 
+#[tauri::command]
+async fn create_prompt_launcher(source_id: String) -> Result<Value, String> {
+    run_blocking_task(move || {
+        let _guard = acquire_background_write_guard("创建 Prompt 调用入口")?;
+        let root = resolve_legacy_root()?;
+        let connection = open_index_database(&root)?;
+        let source = read_prompt_source_record(&connection, &source_id)?;
+        if source.source_type != "prompt" {
+            return Err("请选择 Prompt 来源。".into());
+        }
+        let original =
+            prompt_library::managed_prompt_source_path(&managed_sources_dir(&root), &source)?;
+        let path = prompt_launcher::create_prompt_launcher(
+            &managed_sources_dir(&root),
+            &source.id,
+            &source.name,
+            &original,
+        )?;
+        let mut warning = reconcile_agent_skill_delivery(&root, &connection, false, false).err();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        if let Err(error) = write_audit_event(
+            &connection,
+            "prompt_launcher_created",
+            "Created a separate Skill entry for a Prompt source",
+            serde_json::json!({"sourceId":source.id,"launcher":path,"originalUnchanged":true}),
+        ) {
+            warning = Some(format!(
+                "{}调用入口已创建，但日志写入失败：{error}",
+                warning.map(|text| format!("{text}；")).unwrap_or_default()
+            ));
+        }
+        Ok(serde_json::json!({"name":name,"path":path,"warning":warning}))
+    })
+    .await
+}
+
 fn read_prompt_source_record(
     connection: &Connection,
     source_id: &str,
@@ -4591,10 +4948,15 @@ fn build_source_popularity_refresh_result(
 }
 
 fn resolve_legacy_root() -> Result<PathBuf, String> {
+    let root = locate_legacy_root()?;
+    prepare_user_data(&root)?;
+    Ok(root)
+}
+
+fn locate_legacy_root() -> Result<PathBuf, String> {
     if let Ok(value) = std::env::var("AI_SKILLHUB_ROOT") {
         let root = PathBuf::from(value);
         if is_skillhub_root(&root) {
-            prepare_user_data(&root)?;
             return Ok(root);
         }
 
@@ -4607,7 +4969,6 @@ fn resolve_legacy_root() -> Result<PathBuf, String> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
             if let Some(root) = find_skillhub_root_from(parent) {
-                prepare_user_data(&root)?;
                 return Ok(root);
             }
         }
@@ -4615,7 +4976,6 @@ fn resolve_legacy_root() -> Result<PathBuf, String> {
 
     if let Ok(current_dir) = std::env::current_dir() {
         if let Some(root) = find_skillhub_root_from(&current_dir) {
-            prepare_user_data(&root)?;
             return Ok(root);
         }
     }
@@ -8143,7 +8503,9 @@ fn read_indexed_sources(connection: &Connection) -> Result<Vec<SourceCard>, Stri
                 sources.local_path,
                 sources.install_mode,
                 COALESCE(NULLIF(source_overrides.category_id, ''), sources.category_id) AS category_id,
-                COALESCE(NULLIF(source_overrides.note, ''), sources.note) AS note,
+                CASE WHEN source_overrides.display_name <> '' OR source_overrides.source_type <> ''
+                    OR source_overrides.category_id <> '' OR source_overrides.note <> ''
+                    THEN source_overrides.note ELSE sources.note END AS note,
                 COALESCE(source_overrides.enabled, sources.enabled) AS enabled,
                 COALESCE(source_overrides.rating, 0) AS rating,
                 sources.created_at,
@@ -8665,6 +9027,97 @@ fn staged_github_storage_name(staged_path: &Path, fallback: &str) -> String {
         }
     }
     sanitize_source_folder_name(fallback)
+}
+
+fn github_origin_at(path: &Path) -> Result<Option<String>, String> {
+    let marker = path.join(MANAGED_SOURCE_METADATA_FILE);
+    let mut recorded = None;
+    if fs::metadata(&marker).is_ok_and(|metadata| metadata.len() <= 128 * 1024) {
+        if let Some(payload) = read_json(&marker) {
+            if let Some(url) = payload.get("url").and_then(Value::as_str) {
+                if let Some((owner, repo)) = parse_github_repo(url) {
+                    recorded = Some(normalized_github_repo_url(&owner, &repo));
+                }
+            }
+        }
+    }
+    let actual = github_git_origin_at(path);
+    if let (Some(recorded), Some(actual)) = (&recorded, &actual) {
+        if source_identity::canonical_github_identity(recorded)
+            != source_identity::canonical_github_identity(actual)
+        {
+            return Err(format!(
+                "{} 的 Git 地址与导入记录不一致，请先核对仓库来源。",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ));
+        }
+    }
+    if path.join(".git").exists() && actual.is_none() {
+        return Err(format!(
+            "{} 的 Git 来源无法确认，未自动合并。",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        ));
+    }
+    Ok(actual.or(recorded))
+}
+
+fn github_git_origin_at(path: &Path) -> Option<String> {
+    let config = path.join(".git/config");
+    if fs::metadata(&config).ok()?.len() > 128 * 1024 {
+        return None;
+    }
+    let text = fs::read_to_string(config).ok()?;
+    let (owner, repo) = parse_github_repo(&parse_git_origin_url(&text)?)?;
+    Some(normalized_github_repo_url(&owner, &repo))
+}
+
+fn existing_github_source_path(root: &Path, url: &str) -> Result<Option<PathBuf>, String> {
+    let Some(identity) = source_identity::canonical_github_identity(url) else {
+        return Ok(None);
+    };
+    let sources_root = managed_sources_dir(root);
+    if !sources_root.exists() {
+        return Ok(None);
+    }
+    let canonical_root = sources_root
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(&sources_root)
+        .map_err(|error| error.to_string())?
+        .take(4096)
+    {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        if !path.is_dir() || external_skills::is_link(&path) {
+            continue;
+        }
+        let origin = github_origin_at(&path)?;
+        let matches = origin
+            .as_deref()
+            .and_then(source_identity::canonical_github_identity)
+            .is_some_and(|candidate| candidate == identity);
+        if matches
+            && path
+                .canonicalize()
+                .map_err(|error| error.to_string())?
+                .parent()
+                == Some(canonical_root.as_path())
+        {
+            paths.push(path);
+        }
+    }
+    // Keep existing basename installations stable. Directory naming is not repository identity.
+    paths.sort_by_key(|path| {
+        (
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .contains("--"),
+            path.clone(),
+        )
+    });
+    Ok(paths.into_iter().next())
 }
 
 fn validate_managed_source_delete_path(
@@ -11398,7 +11851,7 @@ fn promote_staged_source_import_in_connection(
     } else {
         source_name.clone()
     };
-    let target_path = PathBuf::from(source_import_target_path(root, &storage_name));
+    let mut target_path = PathBuf::from(source_import_target_path(root, &storage_name));
     let mut promotion = SourceImportPromotionCard {
         id: format!(
             "source-import-promote-{}-{}",
@@ -11446,7 +11899,6 @@ fn promote_staged_source_import_in_connection(
             .blocking_checks
             .push("staging 根目录不存在，请先执行隔离 staging。".to_string());
     }
-    let target_already_exists = target_path.exists();
 
     if promotion.blocking_checks.is_empty() {
         let canonical_staging_root = staging_root
@@ -11520,6 +11972,17 @@ fn promote_staged_source_import_in_connection(
         promotion.summary = "提升为受管理来源被阻止；没有写入正式来源目录。".to_string();
         return write_source_import_promotion_report(root, connection, promotion, &timestamp);
     }
+
+    // Recheck identity at the write boundary; a preview or directory basename is insufficient.
+    if normalized_kind == "github" {
+        if let Some(origin) = github_origin_at(&staged_candidate)? {
+            if let Some(existing) = existing_github_source_path(root, &origin)? {
+                target_path = existing;
+                promotion.target_path = target_path.to_string_lossy().into_owned();
+            }
+        }
+    }
+    let target_already_exists = target_path.exists();
 
     if target_already_exists {
         let copied_files = count_files_in_path(&target_path)?;
@@ -11789,7 +12252,9 @@ fn build_github_source_import_plan(
         .unwrap_or_default();
     let safe_to_continue = true;
     let storage_name = github_source_storage_name(&owner, &repo);
-    let target_path = source_import_target_path(root, &storage_name);
+    let target_path = existing_github_source_path(root, &normalized_target)?
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| source_import_target_path(root, &storage_name));
     let backup_path = source_import_backup_path(root, &storage_name);
     let mut blocking_checks = Vec::new();
     if !duplicate_reason.is_empty() {
@@ -17679,17 +18144,35 @@ fn strip_extended_length_prefix(value: &str) -> String {
 /// render time by [`build_router_hub_skill_md`] instead of being discarded.
 fn collect_child_skill_links_for_collection(collection_dir: &Path) -> Vec<RouterChildLink> {
     let mut links: Vec<RouterChildLink> = Vec::new();
+    if external_skills::is_link(collection_dir) {
+        return links;
+    }
+    let Ok(canonical_collection) = collection_dir.canonicalize() else {
+        return links;
+    };
     let mut pending = vec![collection_dir.to_path_buf()];
     let mut visited_dirs = 0usize;
 
     while let Some(dir) = pending.pop() {
+        if external_skills::is_link(&dir)
+            || !dir
+                .canonicalize()
+                .is_ok_and(|path| path.starts_with(&canonical_collection))
+        {
+            continue;
+        }
         visited_dirs += 1;
         if visited_dirs > SOURCE_IMPORT_MAX_FILES {
             break;
         }
 
         let skill_md = dir.join("SKILL.md");
-        if skill_md.is_file() {
+        if skill_md.is_file()
+            && !external_skills::is_link(&skill_md)
+            && skill_md
+                .canonicalize()
+                .is_ok_and(|path| path.starts_with(&canonical_collection))
+        {
             let name = read_skill_name(&skill_md).or_else(|| {
                 dir.file_name()
                     .and_then(|value| value.to_str())
@@ -17722,7 +18205,7 @@ fn collect_child_skill_links_for_collection(collection_dir: &Path) -> Vec<Router
             .flatten()
             .filter_map(|entry| {
                 let file_type = entry.file_type().ok()?;
-                if !file_type.is_dir() || file_type.is_symlink() {
+                if !file_type.is_dir() || external_skills::is_link(&entry.path()) {
                     return None;
                 }
                 let name = entry.file_name().to_string_lossy().to_string();
@@ -18246,6 +18729,7 @@ pub fn run() {
             refresh_source_version_status,
             rollback_source_to_latest_backup,
             refresh_agent_detection,
+            connect_detected_agents,
             scan_external_agent_skills,
             read_external_agent_skill,
             set_agent_adapter_enabled,
@@ -18266,6 +18750,7 @@ pub fn run() {
             set_skill_tags,
             set_source_tags,
             delete_managed_source,
+            consolidate_duplicate_sources,
             set_preset_workspace_enabled,
             set_real_write_authorization,
             run_release_gate_runner,
@@ -18284,6 +18769,7 @@ pub fn run() {
             stage_source_import_candidate,
             cancel_source_import,
             load_prompt_invocation,
+            create_prompt_launcher,
             open_prompt_source_folder,
             promote_staged_source_import,
             record_usage_event,
@@ -18489,6 +18975,24 @@ mod tests {
         let second = try_acquire_background_write_guard(&lock, "第二项测试写入")
             .expect("guard should be reusable after the first writer finishes");
         drop(second);
+    }
+
+    #[test]
+    fn background_file_lock_excludes_independent_handles_and_releases_on_drop() {
+        let state =
+            std::env::temp_dir().join(format!("skillhub-write-lock-{}", uuid::Uuid::new_v4()));
+        let first = acquire_background_file_lock(&state, "首次维护").unwrap();
+        let blocked = acquire_background_file_lock(&state, "并发维护").unwrap_err();
+        assert!(blocked.contains("并发维护"));
+        assert!(state.join("background-write.lock").is_file());
+        drop(first);
+        let second = acquire_background_file_lock(&state, "重新维护").unwrap();
+        let blocked = acquire_background_file_lock(&state, "第三次维护").unwrap_err();
+        assert!(blocked.contains("第三次维护"));
+        drop(second);
+        assert!(state.join("background-write.lock").is_file());
+        fs::remove_file(state.join("background-write.lock")).unwrap();
+        fs::remove_dir(state).unwrap();
     }
 
     #[test]
@@ -21747,6 +22251,169 @@ mod tests {
         assert!(plan.duplicate_reason.contains("已存在同源"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn github_reimport_reuses_legacy_directory_at_the_write_boundary() {
+        let root = std::env::temp_dir().join(format!("skillhub-reimport-{}", uuid::Uuid::new_v4()));
+        let existing = managed_sources_dir(&root).join("PaperSpine");
+        fs::create_dir_all(existing.join(".git")).unwrap();
+        fs::write(
+            existing.join(".git/config"),
+            "[remote \"origin\"]\nurl = https://github.com/WUBING2023/PaperSpine.git\n",
+        )
+        .unwrap();
+        fs::write(
+            existing.join("SKILL.md"),
+            "---\nname: paperspine\ndescription: Research workflows\n---\n",
+        )
+        .unwrap();
+        let staged = source_import_staging_root(&root).join("test");
+        fs::create_dir_all(&staged).unwrap();
+        fs::write(
+            staged.join("SKILL.md"),
+            "---\nname: paperspine\ndescription: Research workflows\n---\n",
+        )
+        .unwrap();
+        fs::write(
+            staged.join(MANAGED_SOURCE_METADATA_FILE),
+            r#"{"url":"https://github.com/wubing2023/paperspine.git"}"#,
+        )
+        .unwrap();
+        let connection = open_index_database(&root).unwrap();
+        let plan =
+            build_github_source_import_plan(&root, &[], "https://github.com/wubing2023/paperspine")
+                .unwrap();
+        assert_eq!(PathBuf::from(plan.target_path), existing);
+        let result = promote_staged_source_import_in_connection(
+            &root,
+            &connection,
+            "github",
+            &staged.to_string_lossy(),
+            "paperspine",
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.status, "already-managed");
+        assert_eq!(PathBuf::from(result.target_path), existing);
+        assert!(!managed_sources_dir(&root)
+            .join("wubing2023--paperspine")
+            .exists());
+        assert_eq!(
+            existing_github_source_path(&root, "https://github.com/another/paperspine").unwrap(),
+            None
+        );
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cleared_source_note_stays_empty_but_rating_only_keeps_inferred_note() {
+        let root =
+            std::env::temp_dir().join(format!("skillhub-empty-note-{}", uuid::Uuid::new_v4()));
+        let mut source = test_source_card(
+            "source-example",
+            "example",
+            &root.join("source"),
+            "https://github.com/test/example",
+        );
+        source.note = "Inferred description".into();
+        persist_snapshot(&root, &test_snapshot(&root, vec![source], vec![], vec![])).unwrap();
+        let connection = open_index_database(&root).unwrap();
+        set_source_rating_override_in_connection(&connection, "source-example", 5).unwrap();
+        assert_eq!(
+            read_indexed_sources(&connection).unwrap()[0].note,
+            "Inferred description"
+        );
+        set_source_metadata_override_in_connection(
+            &connection,
+            "source-example",
+            "example",
+            "skill",
+            "research",
+            "",
+            true,
+        )
+        .unwrap();
+        assert_eq!(read_indexed_sources(&connection).unwrap()[0].note, "");
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn repository_identity_rejects_stale_markers_and_reads_live_git_origin() {
+        let root = std::env::temp_dir().join(format!("skillhub-origin-{}", uuid::Uuid::new_v4()));
+        let source = managed_sources_dir(&root).join("example");
+        fs::create_dir_all(source.join(".git")).unwrap();
+        fs::write(
+            source.join(".git/config"),
+            "[remote \"origin\"]\nurl = https://github.com/second/example.git\n",
+        )
+        .unwrap();
+        fs::write(
+            source.join(MANAGED_SOURCE_METADATA_FILE),
+            r#"{"url":"https://github.com/first/example"}"#,
+        )
+        .unwrap();
+        assert!(github_origin_at(&source).is_err());
+        assert!(existing_github_source_path(&root, "https://github.com/first/example").is_err());
+        fs::remove_file(source.join(MANAGED_SOURCE_METADATA_FILE)).unwrap();
+        assert_eq!(
+            existing_github_source_path(&root, "https://github.com/first/example").unwrap(),
+            None
+        );
+        assert_eq!(
+            existing_github_source_path(&root, "https://github.com/second/example").unwrap(),
+            Some(source)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sparse_duplicate_merge_requires_every_file_and_directory_to_survive() {
+        let full = BTreeMap::from([
+            ("SKILL.md".into(), "one".into()),
+            ("docs".into(), "directory".into()),
+        ]);
+        let sparse = BTreeMap::from([("SKILL.md".into(), "one".into())]);
+        assert!(repository_content_is_contained(&full, &sparse));
+        assert!(repository_content_is_contained(&full, &full));
+        assert!(!repository_content_is_contained(&sparse, &full));
+        assert!(!repository_content_is_contained(
+            &full,
+            &BTreeMap::from([("SKILL.md".into(), "edited".into())])
+        ));
+        assert!(!repository_content_is_contained(&full, &BTreeMap::new()));
+    }
+
+    #[test]
+    fn repository_merge_fingerprint_tracks_content_and_empty_directories() {
+        let root =
+            std::env::temp_dir().join(format!("skillhub-merge-hash-{}", uuid::Uuid::new_v4()));
+        let a = root.join("a");
+        let b = root.join("b");
+        for path in [&a, &b] {
+            fs::create_dir_all(path.join(".git")).unwrap();
+            fs::write(path.join("SKILL.md"), "# One").unwrap();
+        }
+        fs::write(a.join(".git/config"), "local config").unwrap();
+        fs::write(b.join(MANAGED_SOURCE_METADATA_FILE), "bookkeeping").unwrap();
+        assert_eq!(
+            repository_content_entries(&a).unwrap(),
+            repository_content_entries(&b).unwrap()
+        );
+        fs::write(b.join("SKILL.md"), "# Two").unwrap();
+        assert_ne!(
+            repository_content_entries(&a).unwrap(),
+            repository_content_entries(&b).unwrap()
+        );
+        fs::write(b.join("SKILL.md"), "# One").unwrap();
+        fs::create_dir(b.join("user-notes")).unwrap();
+        assert_ne!(
+            repository_content_entries(&a).unwrap(),
+            repository_content_entries(&b).unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -39,7 +39,7 @@ test("same-name children are automatic parent isolation, not a manual decision w
   assert.doesNotMatch(app, /function SkillConflictPanel/);
   assert.doesNotMatch(app, /conf\.setDefault/);
   assert.match(rust, /Duplicate children are no longer published as global dispatchers/);
-  assert.match(i18n, /不需要选择默认项/);
+  assert.match(i18n, /可同时指定多个父 Skill 协作，不会只选一个/);
   assert.match(styles, /\.parent-isolation-panel/);
   assert.doesNotMatch(sync, /conflicts need manual config/);
   assert.doesNotMatch(sync, /需要人工处理的冲突/);

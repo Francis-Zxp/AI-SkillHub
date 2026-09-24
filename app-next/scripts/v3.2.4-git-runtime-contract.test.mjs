@@ -16,9 +16,9 @@ const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.j
 const cargoToml = await readText("../src-tauri/Cargo.toml");
 
 test("the Git runtime ships with one consistent installed version", () => {
-  assert.equal(packageJson.version, "3.2.5");
+  assert.equal(packageJson.version, "3.2.6");
   assert.equal(tauriConfig.version, packageJson.version);
-  assert.match(cargoToml, /^version = "3\.2\.5"$/m);
+  assert.match(cargoToml, /^version = "3\.2\.6"$/m);
 });
 
 test("one-click Git install goes through the official Microsoft package manager", () => {

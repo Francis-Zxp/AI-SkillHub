@@ -2,6 +2,16 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.6 - Clearer library, native 4K and illustrated islands
+
+- Adds an illustrated SVG island home, with real source/folder counts, pagination, keyboard navigation and the original star view retained. The star canvas now renders at native 4K and responds to monitor scale changes.
+- Distinguishes background sync from explicit local description extraction, preserves cleared manual notes, removes the unused inspector and aligns library counters.
+- Resolves GitHub identity independently from directory names, prevents repeat imports into owner-prefixed duplicates, and merges byte-identical copies with metadata and folder backups.
+- Groups local Skills by their actual path and paginates results. Different parents retain all their children, including same-name capabilities; cross-source and directory-link routing is rejected.
+- Adds Prompt task composition and a separate callable Skill wrapper that leaves the original Prompt intact. Adds explicit Skills connection refresh for supported installed clients.
+- Adds cross-process write exclusion and regression coverage for rendering, identity, parent routing and Prompt invocation.
+- Aligns diagnostics with the selected user profile so writable-directory probes honor isolated/custom profiles.
+
 ## 3.2.5 - Local Skills discovery and reliable rendering
 
 - Replaces oversized, dynamically colored shell shadows and overlapping backdrop blur with bounded, explicit RGBA shadows. Covers the sidebar, top bar, homepage controls and bottom metrics in light and dark themes.

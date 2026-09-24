@@ -20,6 +20,9 @@ import { CountUp, ParticleField, useCardGlow } from "./effects";
 import { LANG_OPTIONS, type Lang, categoryName, getLang, initialLang, setLang, t } from "./i18n";
 import { localizedSkillDescription } from "./localizedDescriptions";
 import { SkillUniverse } from "./SkillUniverse";
+const SkillArchipelago = lazy(() => import("./SkillArchipelago").then(module => ({ default: module.SkillArchipelago })));
+import { sourcePresentation } from "./sourceIdentity";
+import { PromptLauncherAction } from "./PromptLauncherAction";
 import { externalSkillsText } from "./externalSkills";
 const ExternalSkillsPanel = lazy(() => import("./ExternalSkillsPanel").then(module => ({ default: module.ExternalSkillsPanel })));
 import type {
@@ -438,6 +441,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [metadataAnalyzing, setMetadataAnalyzing] = useState(false);
   const [initialDeliveryBusy, setInitialDeliveryBusy] = useState(true);
   const [startupVerified, setStartupVerified] = useState(() => !hasTauriRuntime());
   const [runtimeHydrated, setRuntimeHydrated] = useState(() => !hasTauriRuntime());
@@ -1268,6 +1272,7 @@ export function App() {
       return snapshot ?? createPreviewSnapshot();
     }
     setLoading(true);
+    setMetadataAnalyzing(true);
     try {
       const result = await invoke<LegacySnapshot>("reanalyze_library_metadata");
       setSnapshot(result);
@@ -1285,6 +1290,7 @@ export function App() {
       toastMessage(t("metadata.failedToast"), "error");
       return null;
     } finally {
+      setMetadataAnalyzing(false);
       setLoading(false);
     }
   }
@@ -1356,7 +1362,7 @@ export function App() {
     }
   }
 
-  async function refreshLocalAgents(): Promise<LegacySnapshot | null> {
+  async function refreshLocalAgents(connect = false): Promise<LegacySnapshot | null> {
     if (mutationBlockedBySync()) return null;
     if (!runtimeAvailable) {
       const { createPreviewSnapshot } = await loadPreviewModule();
@@ -1367,10 +1373,10 @@ export function App() {
     }
     setLoading(true);
     try {
-      const refreshed = await invoke<LegacySnapshot>("refresh_agent_detection");
+      const refreshed = await invoke<LegacySnapshot>(connect ? "connect_detected_agents" : "refresh_agent_detection");
       setSnapshot(refreshed);
       setLoadError("");
-      toastMessage(t("agents.detectToast"), "ok");
+      toastMessage(t(connect ? "agents.connectToast" : "agents.detectToast"), "ok");
       return refreshed;
     } catch (error) {
       setLoadError(messageFromError(error));
@@ -2006,6 +2012,7 @@ export function App() {
           )}
           {active === "library" && (
             <Library
+              metadataAnalyzing={metadataAnalyzing}
               suggestedLocalPath={externalImportPath}
               onDismissLocalImport={() => setExternalImportPath("")}
               loading={mutationBusy}
@@ -2021,6 +2028,17 @@ export function App() {
               onStageImport={stageSourceImportCandidate}
               onPromoteImport={promoteStagedSourceImport}
               onReanalyzeMetadata={reanalyzeLibraryMetadata}
+              onConsolidateSources={async () => {
+                if (!runtimeAvailable || mutationBusy) return null;
+                setLoading(true);
+                try {
+                  const result = await invoke<LegacySnapshot>("consolidate_duplicate_sources");
+                  setSnapshot(result);
+                  toastMessage(getLang() === "zh" ? "重复来源已整理，备份已保留。" : getLang() === "ko" ? "중복 소스를 정리하고 백업을 보관했습니다." : "Duplicate sources consolidated; backups retained.", "ok");
+                  return result;
+                } catch (error) { setLoadError(messageFromError(error)); return null; }
+                finally { setLoading(false); }
+              }}
               onRefreshIndex={localOnly => localOnly
                 ? refreshLocalIndex()
                 : syncAndRefreshAll({ refreshPopularity: false })}
@@ -2063,6 +2081,7 @@ export function App() {
                 setActive("library");
               }}
               onRefreshAgents={() => void refreshLocalAgents()}
+              onConnectAgents={() => void refreshLocalAgents(true)}
               runtimeAvailable={runtimeAvailable}
               snapshot={snapshot}
             />
@@ -2103,9 +2122,8 @@ export function App() {
 
         <footer className="atlas-event-tape" aria-label={t("atlas.eventTape")}>
           <span><i /> {t("atlas.liveIndex")}</span>
-          <span>SKILLS <strong>{summary.skills.toLocaleString()}</strong></span>
-          <span>SOURCES <strong>{summary.sources.toLocaleString()}</strong></span>
-          <span>ROUTES <strong>{snapshot?.skillConflicts.length.toLocaleString() ?? "0"}</strong></span>
+          <span>Skills <strong>{summary.skills.toLocaleString()}</strong></span>
+          <span>{getLang() === "zh" ? "来源" : getLang() === "ko" ? "소스" : "Sources"} <strong>{summary.sources.toLocaleString()}</strong></span>
           <span className="atlas-event-mode">{runtimeAvailable ? t("atlas.desktopMode") : t("atlas.previewMode")}</span>
         </footer>
 
@@ -2367,6 +2385,14 @@ function Dashboard({
       return true;
     }
   });
+  const [homeVisual, setHomeVisual] = useState<"islands" | "universe">(() => {
+    try { return window.localStorage.getItem("skillhub-home-visual") === "universe" ? "universe" : "islands"; }
+    catch { return "islands"; }
+  });
+  const chooseHomeVisual = (value: "islands" | "universe") => {
+    setHomeVisual(value);
+    try { window.localStorage.setItem("skillhub-home-visual", value); } catch { /* Session preference remains usable. */ }
+  };
   const alerts = [
     {
       icon: "alert" as const,
@@ -2403,8 +2429,13 @@ function Dashboard({
 
   return (
     <div className="view dashboard-view">
-      <section className={`dashboard-hero glow-card${atlasMode && !atlasIntroVisible ? " intro-collapsed" : ""}`}>
-        {atlasMode && (
+      <section className={`dashboard-hero glow-card${atlasMode && (!atlasIntroVisible || homeVisual === "islands") ? " intro-collapsed" : ""}${atlasMode && homeVisual === "islands" ? " islands-home" : ""}`}>
+        {atlasMode && homeVisual === "islands" && (
+          <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
+            <SkillArchipelago centered lightTheme={isLightTheme(theme)} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} snapshot={snapshot} />
+          </Suspense>
+        )}
+        {atlasMode && homeVisual === "universe" && (
           <SkillUniverse
             centered={!atlasIntroVisible}
             lightTheme={isLightTheme(theme)}
@@ -2432,6 +2463,12 @@ function Dashboard({
           />
         )}
         {atlasMode && (
+          <div className="home-visual-switch" aria-label={getLang() === "zh" ? "首页视图" : getLang() === "ko" ? "홈 보기" : "Home view"}>
+            <button type="button" aria-pressed={homeVisual === "islands"} onClick={() => chooseHomeVisual("islands")}>{getLang() === "zh" ? "群岛" : getLang() === "ko" ? "섬" : "Islands"}</button>
+            <button type="button" aria-pressed={homeVisual === "universe"} onClick={() => chooseHomeVisual("universe")}>{getLang() === "zh" ? "星图" : getLang() === "ko" ? "별 지도" : "Star map"}</button>
+          </div>
+        )}
+        {atlasMode && (
           <button
             aria-pressed={immersive}
             className="atlas-immersive-toggle"
@@ -2443,7 +2480,7 @@ function Dashboard({
             <span>{immersive ? t("atlas.exitImmersive") : t("atlas.enterImmersive")}</span>
           </button>
         )}
-        {atlasMode && (
+        {atlasMode && homeVisual === "universe" && (
           <button
             aria-pressed={!atlasIntroVisible}
             className="atlas-intro-toggle"
@@ -2455,7 +2492,7 @@ function Dashboard({
             <span>{atlasIntroVisible ? t("atlas.hideIntro") : t("atlas.showIntro")}</span>
           </button>
         )}
-        <div aria-hidden={atlasMode && !atlasIntroVisible} className="dashboard-hero-inner">
+        <div aria-hidden={atlasMode && (!atlasIntroVisible || homeVisual === "islands")} className="dashboard-hero-inner">
           <div className="atlas-hero-copy">
             <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · {atlasMode ? t("atlas.releaseTag") : "3.0 / CLASSIC"}</span>
             <h2>{atlasMode ? t("atlas.heroTitle") : t("dash.title")}</h2>
@@ -3131,6 +3168,8 @@ function MiniTrendLine({ points }: { points: number[] }) {
    ============================================================= */
 
 type LibraryProps = {
+  metadataAnalyzing: boolean;
+  onConsolidateSources: () => Promise<LegacySnapshot | null>;
   suggestedLocalPath: string;
   onDismissLocalImport: () => void;
   atlasMode: boolean;
@@ -3357,9 +3396,6 @@ function Library(props: LibraryProps) {
   const githubSources = sources.filter(source => source.url).length;
   const localSources = sources.filter(source => !source.url && source.localPath).length;
   const enabledSkillCount = skills.filter(skill => skill.enabled).length;
-  const topRatedSkill = [...skills]
-    .filter(skill => (skill.rating ?? 0) > 0 && !isRouterHubSkill(skill))
-    .sort((left, right) => (right.rating ?? 0) - (left.rating ?? 0) || left.name.localeCompare(right.name))[0];
 
   return (
     <div className="view library-view">
@@ -3410,7 +3446,7 @@ function Library(props: LibraryProps) {
             title={t("metadata.reanalyzeTip")}
             type="button"
           >
-            <Icon className={loading ? "icon-spin" : ""} name="sparkle" />
+            <Icon className={props.metadataAnalyzing ? "icon-spin" : ""} name="refresh" />
             {t("metadata.reanalyze")}
           </button>
           <button
@@ -3457,6 +3493,11 @@ function Library(props: LibraryProps) {
 
       {showMaintenance && (
         <div className="library-maintenance">
+          <section className="panel duplicate-source-maintenance">
+            <h3>{getLang() === "zh" ? "重复仓库" : getLang() === "ko" ? "중복 저장소" : "Duplicate repositories"}</h3>
+            <p>{getLang() === "zh" ? "同一 GitHub 仓库且文件内容相同的副本可合并。保留原分类、评分与备注，并备份移出的副本。不同作者的同名技能不合并。" : getLang() === "ko" ? "동일한 GitHub 저장소의 내용이 같은 복사본만 병합합니다. 분류, 평점, 메모와 백업을 보존합니다." : "Consolidate identical copies of the same repository, retaining metadata and backups. Skills from different authors remain separate."}</p>
+            <button className="secondary-action" type="button" disabled={loading} onClick={() => void props.onConsolidateSources()}>{getLang() === "zh" ? "合并相同副本" : getLang() === "ko" ? "동일 복사본 병합" : "Consolidate identical copies"}</button>
+          </section>
           {atlasMode && skillConflicts.length > 0 && (
             <ParentIsolationPanel conflicts={skillConflicts} />
           )}
@@ -3486,7 +3527,7 @@ function Library(props: LibraryProps) {
         {atlasMode && (
           <aside className="atlas-library-filter-deck" aria-label={t("atlas.filterDeck")}>
             <header>
-              <span>INDEX / FILTER</span>
+              <span>{t("nav.library")}</span>
               <b>{visibleSources.length.toString().padStart(2, "0")}</b>
             </header>
             <div className="atlas-filter-meter">
@@ -3498,9 +3539,7 @@ function Library(props: LibraryProps) {
               <div><dt>{t("atlas.skillSources")}</dt><dd>{sources.filter(source => source.sourceType === "skill").length}</dd></div>
               <div><dt>{t("atlas.promptSources")}</dt><dd>{sources.filter(source => source.sourceType === "prompt").length}</dd></div>
               <div><dt>{t("atlas.otherSources")}</dt><dd>{sources.filter(source => source.sourceType !== "skill" && source.sourceType !== "prompt").length}</dd></div>
-              <div><dt>{t("atlas.routeGroups")}</dt><dd>{skillConflicts.length}</dd></div>
             </dl>
-            <p>{t("atlas.filterDeckV0")}</p>
           </aside>
         )}
 
@@ -3547,8 +3586,9 @@ function Library(props: LibraryProps) {
                     <Icon name={source.url ? sourceTypeIcon(source.sourceType) : "sources"} />
                   </span>
                   <div className="source-group-title">
-                    <strong title={source.name}>{source.name}</strong>
+                    <strong title={source.name}>{sourcePresentation(source).title}</strong>
                     <span>
+                      {sourcePresentation(source).owner && <em className="source-author">{sourcePresentation(source).owner} · </em>}
                       {displayCategoryName(source.categoryId)} · {sourceTypeLabel(source.sourceType)} ·{" "}
                       {skillCountText}
                     </span>
@@ -3754,32 +3794,6 @@ function Library(props: LibraryProps) {
         )}
         </section>
 
-        {atlasMode && (
-          <aside className="atlas-library-inspector" aria-label={t("atlas.inspector")}>
-            <header>
-              <span>INSPECTOR / V0</span>
-              <i aria-hidden="true" />
-            </header>
-            {topRatedSkill ? (
-              <>
-                <div className="atlas-inspector-glyph" aria-hidden="true"><Icon name="sparkle" /></div>
-                <span>{t("atlas.topRated")}</span>
-                <h3>{topRatedSkill.name}</h3>
-                <p>{localizedSkillDescription(topRatedSkill, getLang()) || displayCategoryName(topRatedSkill.category)}</p>
-                <dl>
-                  <div><dt>{t("atlas.rating")}</dt><dd>{topRatedSkill.rating.toFixed(1)} / 5</dd></div>
-                  <div><dt>{t("atlas.source")}</dt><dd>{topRatedSkill.source || t("lib.localGroup")}</dd></div>
-                  <div><dt>{t("atlas.state")}</dt><dd>{topRatedSkill.enabled ? t("common.enabled") : t("common.disabled")}</dd></div>
-                </dl>
-                <button onClick={() => void copySkillPrompt(topRatedSkill, onRecordUsage)} type="button">
-                  <Icon name="copy" /> {t("search.copy")}
-                </button>
-              </>
-            ) : (
-              <p className="atlas-inspector-empty">{t("atlas.inspectorEmpty")}</p>
-            )}
-          </aside>
-        )}
       </div>
 
       {editingSkill && (
@@ -3798,6 +3812,7 @@ function Library(props: LibraryProps) {
       {promptInvocation && (
         <PromptInvocationPanel
           card={promptInvocation}
+          onCreated={() => onRefreshIndex(true)}
           onClose={() => setPromptInvocation(null)}
           onRecordUsage={onRecordUsage}
         />
@@ -3840,15 +3855,23 @@ function Library(props: LibraryProps) {
 
 function PromptInvocationPanel({
   card,
+  onCreated,
   onClose,
   onRecordUsage
 }: {
   card: PromptInvocationCard;
+  onCreated: () => Promise<unknown>;
   onClose: () => void;
   onRecordUsage: LibraryProps["onRecordUsage"];
 }) {
+  const [task, setTask] = useState("");
+  const lang = getLang();
+  const promptCopy = lang === "zh" ? { task: "本次任务", placeholder: "说明目标、材料与输出要求…", preview: "查看将复制的完整内容" }
+    : lang === "ko" ? { task: "이번 작업", placeholder: "목표, 자료와 출력 요구사항…", preview: "복사할 내용 보기" }
+      : { task: "Your task", placeholder: "Goal, inputs, and expected output…", preview: "Preview copied instructions" };
+  const invocationText = task.trim() ? `${card.copyText}\n\n## ${promptCopy.task}\n${task.trim()}` : card.copyText;
   async function copyInvocation() {
-    await copyTextToClipboard(card.copyText, t("lib.promptCopied"));
+    await copyTextToClipboard(invocationText, t("lib.promptCopied"));
     await onRecordUsage("prompt", card.sourceId, card.sourceName, card.sourceName, "copy_prompt");
   }
 
@@ -3927,6 +3950,13 @@ function PromptInvocationPanel({
           {card.warnings.map(warning => <li key={warning}>{warning}</li>)}
         </ul>
       )}
+
+      <section className="prompt-compose">
+        <label htmlFor="prompt-task">{promptCopy.task}</label>
+        <textarea id="prompt-task" value={task} onChange={event => setTask(event.target.value)} placeholder={promptCopy.placeholder} />
+        <details><summary>{promptCopy.preview}</summary><pre>{invocationText}</pre></details>
+      </section>
+      <PromptLauncherAction sourceId={card.sourceId} onCreated={onCreated} />
 
       <footer>
         <button className="secondary-action" onClick={() => void openSourceFolder()} type="button">
@@ -5003,7 +5033,7 @@ function ImportWizard({
         item => normalizeSourcePath(item.localPath) === normalizeSourcePath(promotion.targetPath)
       );
       if (!promotedSource) throw new Error(t("qa.statusNotWritten"));
-      if (promotedSource) {
+      if (promotedSource && promotion.status !== "already-managed") {
         const detectedSourceType: SourceCard["sourceType"] =
           execution.skillCount === 0 && execution.promptCount > 0
             ? "prompt"
@@ -5713,12 +5743,14 @@ function Agents({
   disabled,
   onImportLocalSkill,
   onRefreshAgents,
+  onConnectAgents,
   runtimeAvailable,
   snapshot
 }: {
   disabled: boolean;
   onImportLocalSkill: (path: string) => void;
   onRefreshAgents: () => void;
+  onConnectAgents: () => void;
   runtimeAvailable: boolean;
   snapshot: LegacySnapshot | null;
 }) {
@@ -5743,6 +5775,9 @@ function Agents({
           </div>
           <button className="secondary-action" disabled={disabled} onClick={onRefreshAgents} type="button">
             <Icon className={disabled ? "icon-spin" : ""} name="refresh" /> {disabled ? t("agents.detecting") : t("agents.detectNow")}
+          </button>
+          <button className="primary-action" disabled={disabled || !runtimeAvailable} onClick={onConnectAgents} type="button">
+            <Icon name="connections" /> {t("agents.connectNow")}
           </button>
         </div>
       </section>

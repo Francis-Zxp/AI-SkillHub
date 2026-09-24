@@ -1,0 +1,58 @@
+.skill-archipelago {
+  --arch-ink: #dce9ec;
+  --arch-muted: #a3b8c2;
+  --arch-line: rgba(173, 213, 224, .19);
+  --arch-panel: rgba(16, 30, 43, .96);
+  position: absolute;
+  inset: 150px 30px 110px 42%;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-height: 350px;
+  color: var(--arch-ink);
+  font: 400 13px/1.45 var(--ui-font);
+  isolation: isolate;
+}
+.skill-archipelago.is-centered { left: clamp(32px, 5vw, 90px); right: clamp(32px, 5vw, 90px); }
+.skill-archipelago.is-light { --arch-ink: #243e4a; --arch-muted: #536d79; --arch-line: rgba(50, 90, 110, .2); --arch-panel: rgba(247, 251, 253, .97); }
+.archipelago-header, .archipelago-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.archipelago-header { padding-bottom: 12px; border-bottom: 1px solid var(--arch-line); }
+.archipelago-switch { display: flex; gap: 18px; }
+.archipelago-switch button { min-height: 38px; padding: 5px 2px; color: var(--arch-muted); border-bottom: 2px solid transparent; font-weight: 550; }
+.archipelago-switch button[aria-pressed="true"] { color: var(--arch-ink); border-bottom-color: currentColor; }
+.archipelago-total { color: var(--arch-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.archipelago-sky { position: absolute; inset: 0 -25px 0; z-index: -1; overflow: hidden; pointer-events: none; }
+.archipelago-sky span { position: absolute; width: 210px; height: 38px; border-radius: 50%; background: linear-gradient(90deg, transparent, rgba(155, 200, 214, .055), transparent); transform: rotate(-14deg); }
+.archipelago-sky span:nth-child(1) { left: 0; top: 24%; }
+.archipelago-sky span:nth-child(2) { right: -30px; top: 55%; width: 300px; }
+.archipelago-sky span:nth-child(3) { left: 27%; bottom: 8%; }
+.archipelago-islands { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); align-content: center; gap: 0 8px; padding: 8px 0 14px; }
+.is-centered .archipelago-islands { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 24px; }
+.archipelago-island { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 0; min-height: 0; color: inherit; padding: 0 4px 7px; border: 1px solid transparent; border-radius: 12px; background: transparent; transition: background .2s, border-color .2s; }
+.archipelago-island:hover { border-color: var(--arch-line); background: rgba(148, 191, 211, .045); }
+.archipelago-island:focus-visible, .skill-archipelago button:focus-visible { outline: 2px solid var(--brand-strong); outline-offset: 4px; }
+.archipelago-art { display: block; flex: 1 1 auto; width: min(100%, 270px); max-height: 210px; min-height: 70px; overflow: visible; }
+.is-centered .archipelago-art { width: min(100%, clamp(210px, 17vw, 420px)); max-height: clamp(150px, 24vh, 330px); }
+.archipelago-float { animation: archipelago-drift 6s ease-in-out infinite; animation-delay: var(--island-delay); }
+.archipelago-island:hover .archipelago-float, .archipelago-island:focus-visible .archipelago-float { animation-play-state: paused; }
+.archipelago-island-label { flex: 0 0 auto; display: grid; gap: 4px; width: 100%; text-align: center; }
+.archipelago-island-label > strong { font-size: 13px; font-weight: 550; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.is-centered .archipelago-island-label > strong { font-size: clamp(13px, 1vw, 16px); }
+.archipelago-island-label > small { color: var(--arch-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.archipelago-island-label > span { font-size: 11px; color: var(--arch-muted); }
+.archipelago-island-label b { font-size: 14px; color: var(--arch-ink); font-weight: 550; font-variant-numeric: tabular-nums; }
+.archipelago-island-label em { font-style: normal; font-size: 10px; }
+.archipelago-island.is-paused .archipelago-art { opacity: .6; }
+.archipelago-footer { padding-top: 10px; border-top: 1px solid var(--arch-line); color: var(--arch-muted); font-size: 11px; }
+.archipelago-footer small { display: block; margin-top: 3px; font-size: 10px; }
+.archipelago-pagination { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.archipelago-pagination button { width: 36px; min-height: 36px; background: var(--arch-panel); border: 1px solid var(--arch-line); border-radius: 9px; color: var(--arch-ink); }
+.archipelago-pagination span { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+.archipelago-empty { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 7px; text-align: center; color: var(--arch-muted); }
+.archipelago-empty strong { font-size: 18px; color: var(--arch-ink); font-weight: 500; }
+.archipelago-empty p { max-width: 32ch; font-size: 13px; margin: 0; }
+.archipelago-back { align-self: start; min-height: 32px; margin-top: 5px; color: var(--arch-muted); }
+@keyframes archipelago-drift { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@media (max-width: 1150px) { .skill-archipelago:not(.is-centered) { left: 40%; right: 24px; } .archipelago-islands { gap: 0 2px; } .archipelago-island-label > strong { font-size: 11px; } }
+@media (max-height: 740px) { .skill-archipelago { top: 130px; bottom: 95px; min-height: 330px; } .archipelago-art { max-height: 138px; } }
+@media (prefers-reduced-motion: reduce) { .archipelago-float { animation: none; } .archipelago-island { transition: none; } }

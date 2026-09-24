@@ -11,7 +11,9 @@ $environmentNames = @(
   'AI_SKILLHUB_SOURCES',
   'AI_SKILLHUB_CONFIG_PATH',
   'AI_SKILLHUB_REPORTS',
-  'AI_SKILLHUB_STATE'
+  'AI_SKILLHUB_STATE',
+  'USERPROFILE',
+  'CLAUDE_CONFIG_DIR'
 )
 
 function Assert-Equal([object]$Actual, [object]$Expected, [string]$Message) {
@@ -59,6 +61,8 @@ try {
   $env:AI_SKILLHUB_CONFIG_PATH = $configPath
   $env:AI_SKILLHUB_REPORTS = $reports
   $env:AI_SKILLHUB_STATE = $state
+  $env:USERPROFILE = Join-Path $sandboxRoot 'profile'
+  $env:CLAUDE_CONFIG_DIR = Join-Path $env:USERPROFILE '.claude'
 
   & $diagnosticsScript -Quiet
   $payload = Get-Content -LiteralPath (Join-Path $reports 'latest-diagnostics.json') -Raw -Encoding UTF8 | ConvertFrom-Json

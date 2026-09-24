@@ -92,7 +92,7 @@ type UniverseRuntime = {
   zoom: number;
 };
 
-type SkillUniverseProps = {
+export type SkillUniverseProps = {
   centered: boolean;
   lightTheme: boolean;
   mode?: SkillUniverseMode;
@@ -301,13 +301,16 @@ export function SkillUniverse({
       const rect = host.getBoundingClientRect();
       width = Math.max(1, Math.floor(rect.width));
       height = Math.max(1, Math.floor(rect.height));
-      const pixelBudgetScale = Math.sqrt(1_700_000 / Math.max(1, width * height));
-      dpr = Math.min(window.devicePixelRatio || 1, 1.35, pixelBudgetScale);
+      // Preserve native 4K detail (8.3M pixels). Adaptive frame rate / LOD already
+      // bound animation cost; a 1.7M backing store blurred every large display.
+      const pixelBudgetScale = Math.sqrt(16_777_216 / Math.max(1, width * height));
+      dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, pixelBudgetScale));
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      canvas.dataset.renderScale = String(dpr);
       scheduleDraw(true);
     };
 
@@ -384,6 +387,16 @@ export function SkillUniverse({
 
     const observer = new ResizeObserver(resize);
     observer.observe(host);
+    // Moving a window between monitors can change DPR without changing its CSS
+    // size. Re-arm the query after each change to keep the backing store sharp.
+    let resolutionQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    const onResolutionChange = () => {
+      resolutionQuery.removeEventListener("change", onResolutionChange);
+      resolutionQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      resolutionQuery.addEventListener("change", onResolutionChange);
+      resize();
+    };
+    resolutionQuery.addEventListener("change", onResolutionChange);
     const intersectionObserver = new IntersectionObserver(entries => {
       intersecting = entries.some(entry => entry.isIntersecting);
       cancelScheduledDraw();
@@ -402,6 +415,7 @@ export function SkillUniverse({
 
     return () => {
       observer.disconnect();
+      resolutionQuery.removeEventListener("change", onResolutionChange);
       intersectionObserver.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", onFocus);

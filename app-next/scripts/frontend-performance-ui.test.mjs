@@ -75,7 +75,9 @@ test("the Skill universe rotates slowly only while the homepage is active", () =
   assert.match(universe, /const interval = interactiveMotion \? 1000 \/ 60 : ambientInterval/);
   assert.match(universe, /if \(reducedMotion && !urgent\) return/);
   assert.doesNotMatch(universe, /ambientUntil/);
-  assert.match(universe, /Math\.min\(window\.devicePixelRatio \|\| 1, 1\.35, pixelBudgetScale\)/);
+  assert.match(universe, /Math\.sqrt\(16_777_216 \/ Math\.max\(1, width \* height\)\)/);
+  assert.match(universe, /Math\.max\(1, Math\.min\(window\.devicePixelRatio \|\| 1, pixelBudgetScale\)\)/);
+  assert.match(universe, /resolutionQuery\.addEventListener\("change", onResolutionChange\)/);
   assert.match(universe, /runtime\.requestDraw = \(\) => scheduleDraw\(true\)/);
   assert.match(universe, /window\.addEventListener\("focus", onFocus\)/);
   assert.match(universe, /window\.addEventListener\("blur", onBlur\)/);

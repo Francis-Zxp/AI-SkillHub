@@ -1,0 +1,37 @@
+/* Library: align every label/value on one grid and reserve width for actual content. */
+.home-visual-switch { position: absolute; top: 100px; left: 24px; z-index: 5; display: flex; gap: 4px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+.home-visual-switch button { padding: 7px 14px; color: var(--text-soft); border-radius: 8px; font: 600 13px var(--ui-font); background: transparent; }
+.home-visual-switch button[aria-pressed="true"] { background: var(--brand); color: var(--bg); }
+.islands-home .dashboard-hero-inner { display: none; }
+.theme-family-atlas.page-dashboard .islands-home .atlas-immersive-toggle { top: 100px; right: 24px; }
+.browser-preview-shell.theme-family-atlas.page-dashboard .islands-home .atlas-immersive-toggle { top: 166px; }
+.theme-family-atlas .atlas-library-stage { grid-template-columns: 202px minmax(0, 1fr); }
+.theme-family-atlas .atlas-library-filter-deck { min-height: 0; align-self: start; }
+.theme-family-atlas .atlas-filter-meter { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; padding: 18px 16px; }
+.theme-family-atlas .atlas-filter-meter strong { font-family: var(--ui-font); font-size: 23px; font-variant-numeric: tabular-nums; text-align: right; }
+.theme-family-atlas .atlas-filter-meter i { grid-column: 1 / -1; }
+.theme-family-atlas .atlas-library-filter-deck dl { padding: 0 16px 12px; }
+.theme-family-atlas .atlas-library-filter-deck dl div { display: grid; grid-template-columns: minmax(0, 1fr) 4ch; align-items: baseline; gap: 12px; padding: 12px 0; }
+.theme-family-atlas .atlas-library-filter-deck dd { justify-self: end; font-family: var(--ui-font); font-variant-numeric: tabular-nums; line-height: 1.5; }
+.theme-family-atlas .atlas-library-filter-deck dt { line-height: 1.5; }
+.theme-family-atlas .source-group-title strong { font-weight: 650; line-height: 1.45; }
+.source-author { font-style: normal; color: var(--text-soft); }
+.theme-family-atlas .library-toolbar { row-gap: 12px; }
+.prompt-compose { display: grid; gap: 10px; margin-block: 18px; }
+.prompt-compose label { font-weight: 600; }
+.prompt-compose textarea { min-height: 96px; resize: vertical; padding: 12px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); color: var(--text); font: inherit; line-height: 1.6; }
+.prompt-compose details { border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.prompt-compose summary { cursor: pointer; color: var(--text-soft); }
+.prompt-compose pre { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--ui-mono); }
+.view button:focus-visible, .view summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.view input, .view textarea { caret-color: var(--brand); }
+::selection { background: color-mix(in srgb, var(--brand) 28%, transparent); }
+@media (max-width: 1080px) {
+  .theme-family-atlas .atlas-library-stage { grid-template-columns: minmax(0, 1fr); }
+  .theme-family-atlas .atlas-library-filter-deck { display: block; position: static; }
+  .theme-family-atlas .atlas-library-filter-deck header { display: none; }
+  .theme-family-atlas .atlas-library-filter-deck dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+}
+@media (max-width: 700px) {
+  .theme-family-atlas .atlas-library-filter-deck dl { grid-template-columns: 1fr; gap: 0; }
+}

@@ -1,5 +1,6 @@
 ﻿[CmdletBinding()]
 param(
+  [string]$HomePath = '',
   [switch]$Quiet,
   [switch]$SimulateMissingCodex,
   [switch]$SimulateMissingGit,
@@ -23,7 +24,13 @@ $DiagnosticsRoot = Join-Path $ReportsRoot 'diagnostics'
 $StateRoot = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_STATE)) { [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_STATE) } else { Join-Path $V2Root '.skillhub-next' }
 $StatePath = Join-Path $StateRoot 'sync-state\managed-links.json'
 $LastSyncPath = Join-Path $ReportsRoot 'last-sync.md'
-$HomePath = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+$HomePath = if (-not [string]::IsNullOrWhiteSpace($HomePath)) {
+  [IO.Path]::GetFullPath($HomePath)
+} elseif (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+  [IO.Path]::GetFullPath($env:USERPROFILE)
+} else {
+  [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+}
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
 $Checks = New-Object System.Collections.Generic.List[object]
 $Agents = New-Object System.Collections.Generic.List[object]
