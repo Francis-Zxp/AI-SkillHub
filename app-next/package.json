@@ -1,6 +1,6 @@
 {
   "name": "ai-skillhub-next",
-  "version": "3.2.6",
+  "version": "3.2.7",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.2.2",
@@ -39,12 +39,14 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "three": "0.160.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.2",
     "@types/react": "19.2.15",
     "@types/react-dom": "19.2.3",
+    "@types/three": "0.160.0",
     "@vitejs/plugin-react": "6.0.2",
     "typescript": "6.0.3",
     "vite": "8.0.14"

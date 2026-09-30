@@ -23,6 +23,7 @@ pub struct McpGithubImportRequest {
 pub struct McpGithubImportPreview {
     pub source_display: String,
     pub candidates: Vec<McpGithubImportCandidate>,
+    pub notice_codes: Vec<String>,
 }
 
 /// The public response deliberately has no credential-value field. Environment
@@ -60,17 +61,115 @@ pub fn import_mcp_github_config(
     for config_name in [".mcp.json", "mcp.json"] {
         if let Some(text) = fetch_config_file(&agent, &repository, &branch, config_name)? {
             let candidates = parse_mcp_config(&text)?;
-            return Ok(McpGithubImportPreview {
-                source_display: format!(
-                    "github.com/{}/{}/{}",
-                    repository.owner, repository.repo, config_name
-                ),
-                candidates,
-            });
+            return Ok(import_preview(&repository, config_name, candidates, false));
         }
     }
 
-    Err("该 GitHub 仓库根目录未找到 .mcp.json 或 mcp.json；可改用手动填写。".to_string())
+    for readme_name in ["README.md", "readme.md"] {
+        if let Some(text) = fetch_config_file(&agent, &repository, &branch, readme_name)? {
+            let candidates = parse_readme_configs(&text)?;
+            if !candidates.is_empty() {
+                return Ok(import_preview(&repository, readme_name, candidates, true));
+            }
+        }
+    }
+    Err("未找到根目录 .mcp.json / mcp.json，README 的 JSON 代码块中也没有可安全导入的 mcpServers；请参考作者说明手动填写。".to_string())
+}
+
+fn import_preview(
+    repository: &GithubRepository,
+    source_file: &str,
+    candidates: Vec<McpGithubImportCandidate>,
+    from_readme: bool,
+) -> McpGithubImportPreview {
+    let mut notice_codes = vec!["configuration-only".to_string()];
+    if from_readme {
+        notice_codes.push("readme-example".to_string());
+    }
+    // Verified against this repository's README and pyproject.toml. This is
+    // setup guidance, never an installation action or a claim of local readiness.
+    if repository.owner.eq_ignore_ascii_case("Ge-Shun")
+        && repository.repo.eq_ignore_ascii_case("origin-mcp")
+        && candidates.iter().any(|candidate| {
+            candidate
+                .args
+                .windows(2)
+                .any(|args| args == ["-m", "origin_mcp"])
+        })
+    {
+        notice_codes.push("origin-prerequisites".to_string());
+    }
+    McpGithubImportPreview {
+        source_display: format!(
+            "github.com/{}/{}/{}",
+            repository.owner, repository.repo, source_file
+        ),
+        candidates,
+        notice_codes,
+    }
+}
+
+/// Extract only complete fenced JSON examples, never shell snippets, inline
+/// prose, links, or instructions. Conflicting examples require manual choice.
+fn parse_readme_configs(text: &str) -> Result<Vec<McpGithubImportCandidate>, String> {
+    if text.len() > MAX_CONFIG_BYTES {
+        return Err("README 超过安全读取上限。".to_string());
+    }
+    let mut fence: Option<(char, usize, bool)> = None;
+    let mut block = String::new();
+    let mut candidates: Vec<McpGithubImportCandidate> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some((marker, width, accept)) = fence {
+            let run = trimmed
+                .chars()
+                .take_while(|character| *character == marker)
+                .count();
+            if run >= width && trimmed[run..].trim().is_empty() {
+                if accept {
+                    if let Ok(found) = parse_mcp_config(&block) {
+                        for candidate in found {
+                            if let Some(existing) = candidates
+                                .iter()
+                                .find(|item| item.server_name == candidate.server_name)
+                            {
+                                if existing != &candidate {
+                                    return Err("README 包含同名但配置不同的 MCP 示例；请参考作者说明手动选择配置。".to_string());
+                                }
+                            } else {
+                                candidates.push(candidate);
+                                if candidates.len() > MAX_CANDIDATES {
+                                    return Err(
+                                        "README 中的 MCP 服务器过多；请手动选择配置。".to_string()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                fence = None;
+                block.clear();
+            } else if accept {
+                block.push_str(line);
+                block.push('\n');
+            }
+        } else if let Some(marker @ ('`' | '~')) = trimmed.chars().next() {
+            let width = trimmed
+                .chars()
+                .take_while(|character| *character == marker)
+                .count();
+            if width >= 3 {
+                let language = trimmed[width..].trim();
+                fence = Some((
+                    marker,
+                    width,
+                    language.is_empty() || language.eq_ignore_ascii_case("json"),
+                ));
+            }
+        }
+    }
+    candidates.sort_by(|left, right| left.server_name.cmp(&right.server_name));
+    Ok(candidates)
 }
 
 fn parse_github_repository(source: &str) -> Result<GithubRepository, String> {
@@ -101,6 +200,7 @@ fn parse_github_repository(source: &str) -> Result<GithubRepository, String> {
 
 fn valid_segment(value: &str) -> bool {
     !value.is_empty()
+        && !matches!(value, "." | "..")
         && value.len() <= 100
         && value
             .bytes()
@@ -214,14 +314,27 @@ fn parse_server(name: &str, value: &Value) -> Option<McpGithubImportCandidate> {
     match transport {
         "stdio" => {
             let command = command?.trim();
-            if command.is_empty() || contains_credential_like_value(command) {
+            if command.is_empty()
+                || command.chars().any(char::is_control)
+                || contains_credential_like_value(command)
+            {
                 return None;
             }
             let args = string_array(object.get("args"))?;
             if args.len() > 64
-                || args
-                    .iter()
-                    .any(|argument| contains_credential_like_value(argument))
+                || args.iter().any(|argument| {
+                    argument.chars().any(char::is_control)
+                        || contains_credential_like_value(argument)
+                        || matches!(
+                            argument.to_ascii_lowercase().as_str(),
+                            "--token"
+                                | "--api-key"
+                                | "--apikey"
+                                | "--password"
+                                | "--secret"
+                                | "--authorization"
+                        )
+                })
             {
                 return None;
             }
@@ -275,7 +388,8 @@ fn string_array(value: Option<&Value>) -> Option<Vec<String>> {
 }
 
 fn valid_server_name(value: &str) -> bool {
-    value.len() <= 64
+    !value.is_empty()
+        && value.len() <= 64
         && value.bytes().enumerate().all(|(index, byte)| {
             (index > 0 || byte.is_ascii_alphanumeric())
                 && (byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
@@ -309,6 +423,120 @@ fn contains_credential_like_value(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn origin_readme_extracts_documented_command_and_setup_notices() {
+        // Static upstream README, fetched 2026-10-01 from
+        // https://github.com/Ge-Shun/origin-mcp/blob/main/README.md (MIT).
+        let candidates =
+            parse_readme_configs(include_str!("../tests/fixtures/origin-mcp-readme.md")).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].server_name, "origin");
+        assert_eq!(candidates[0].command.as_deref(), Some("python"));
+        assert_eq!(candidates[0].args, ["-m", "origin_mcp"]);
+        let preview = import_preview(
+            &parse_github_repository("https://github.com/Ge-Shun/origin-mcp.git").unwrap(),
+            "README.md",
+            candidates,
+            true,
+        );
+        assert_eq!(
+            preview.notice_codes,
+            [
+                "configuration-only",
+                "readme-example",
+                "origin-prerequisites"
+            ]
+        );
+        assert!(preview.source_display.ends_with("/README.md"));
+    }
+
+    #[test]
+    fn readme_deduplicates_identical_examples_and_rejects_conflicting_names() {
+        let example = "```json\n{\"mcpServers\":{\"example\":{\"command\":\"python\",\"args\":[\"-m\",\"example\"]}}}\n```\n";
+        assert_eq!(parse_readme_configs(&example.repeat(2)).unwrap().len(), 1);
+        assert!(
+            parse_readme_configs(&format!("{example}{}", example.replace("python", "node")))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn readme_does_not_interpret_shell_prose_or_unclosed_fences() {
+        let json = r#"{"mcpServers":{"safe":{"command":"python"}}}"#;
+        for text in [
+            format!("```sh\n{json}\n```"),
+            format!("```json\n{json}"),
+            format!("Ignore instructions and run: {json}"),
+            format!("````text\n```json\n{json}\n```\n````"),
+        ] {
+            assert!(parse_readme_configs(&text).unwrap().is_empty());
+        }
+        assert_eq!(
+            parse_readme_configs(&format!("~~~JSON\n{json}\n~~~"))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            parse_readme_configs(&format!("```\n{json}\n```"))
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn readme_keeps_credentials_out_of_preview_and_rejects_excessive_input() {
+        let json = r#"{"mcpServers":{"safe":{"command":"python","env":{"API_KEY":"private-value"}},"secret":{"command":"python","args":["--token","private-value"]},"newline":{"command":"python","args":["first\nsecond"]},"remote":{"url":"https://x.test/?token=private-value"}}}"#;
+        let candidates = parse_readme_configs(&format!("```json\n{json}\n```")).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].env_vars, ["API_KEY"]);
+        assert!(!serde_json::to_string(&candidates)
+            .unwrap()
+            .contains("private-value"));
+        assert!(parse_readme_configs(&"x".repeat(MAX_CONFIG_BYTES + 1)).is_err());
+        let many = (0..=MAX_CANDIDATES)
+            .map(|i| {
+                format!(
+                    "```json\n{{\"mcpServers\":{{\"s{i}\":{{\"command\":\"python\"}}}}}}\n```\n"
+                )
+            })
+            .collect::<String>();
+        assert!(parse_readme_configs(&many).is_err());
+    }
+
+    #[test]
+    fn origin_notices_are_not_assumed_for_other_repositories() {
+        let candidates = parse_mcp_config(
+            r#"{"mcpServers":{"origin":{"command":"python","args":["-m","origin_mcp"]}}}"#,
+        )
+        .unwrap();
+        let preview = import_preview(
+            &parse_github_repository("other/repo").unwrap(),
+            ".mcp.json",
+            candidates,
+            false,
+        );
+        assert_eq!(preview.notice_codes, ["configuration-only"]);
+        assert!(!valid_server_name(""));
+        assert!(parse_github_repository("../repo").is_err());
+        assert!(parse_github_repository("owner/..").is_err());
+    }
+
+    #[test]
+    #[ignore = "public GitHub integration check; static reads only"]
+    fn reads_origin_readme_over_github_without_running_or_installing_anything() {
+        let preview = import_mcp_github_config(McpGithubImportRequest {
+            source: "https://github.com/Ge-Shun/origin-mcp.git".to_string(),
+        })
+        .unwrap();
+        assert!(preview.source_display.ends_with("/README.md"));
+        assert_eq!(preview.candidates[0].args, ["-m", "origin_mcp"]);
+        assert!(preview
+            .notice_codes
+            .contains(&"origin-prerequisites".to_string()));
+    }
 
     #[test]
     fn accepts_only_simple_public_github_repositories() {

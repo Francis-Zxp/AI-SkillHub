@@ -1,145 +1,71 @@
-import { type CSSProperties, useId, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getLang } from "./i18n";
-import { sourcePresentation } from "./sourceIdentity";
+import { buildSkyIslands } from "./skyIslandModel";
+import type { SkyScene } from "./skyIslandScene";
 import type { SkillUniverseProps } from "./SkillUniverse";
-import type { SkillCard, SourceCard } from "./types";
 import "./SkillArchipelago.css";
 
-type Island = {
-  id: string;
-  name: string;
-  owner?: string;
-  count: number;
-  enabled: boolean;
-  hue: number;
-  source?: SourceCard;
-  skill?: SkillCard;
-  folderId?: string;
-};
-
-export type SkillArchipelagoProps = SkillUniverseProps & {
-  onOpenFolder?: (folderId: string) => void;
-};
-
+export type SkillArchipelagoProps = SkillUniverseProps & { onOpenFolder?: (folderId: string) => void };
 const copy = {
-  zh: { sources: "来源群岛", folders: "我的文件夹", title: "技能群岛", guide: "选择岛屿，查看并管理其中的 Skills。", scale: "岛屿大小按 Skills 数量分档：0–9 / 10–49 / 50+", loading: "正在读取你的能力地图…", empty: "还没有岛屿", emptyHint: "添加来源或创建文件夹后，它们会出现在这里。", previous: "上一组", next: "下一组", page: "组", paused: "已停用", prompt: "Prompt 来源", unfiled: "未归档", local: "独立 Skill", open: "打开", legend: "数量不包含父路由入口", islands: "座岛" },
-  en: { sources: "Source islands", folders: "My folders", title: "Skill islands", guide: "Choose an island to explore and manage its Skills.", scale: "Island sizes by Skill count: 0–9 / 10–49 / 50+", loading: "Loading your capability map…", empty: "No islands yet", emptyHint: "Add a source or create a folder to see it here.", previous: "Previous", next: "Next", page: "page", paused: "Disabled", prompt: "Prompt source", unfiled: "Unfiled", local: "Local Skill", open: "Open", legend: "Counts exclude parent routers", islands: "islands" },
-  ko: { sources: "소스 섬", folders: "내 폴더", title: "Skill 섬", guide: "섬을 선택하여 Skills를 살펴보고 관리하세요.", scale: "Skill 수에 따른 섬 크기: 0–9 / 10–49 / 50+", loading: "역량 지도를 불러오는 중…", empty: "아직 섬이 없습니다", emptyHint: "소스를 추가하거나 폴더를 만들면 여기에 표시됩니다.", previous: "이전", next: "다음", page: "페이지", paused: "비활성", prompt: "Prompt 소스", unfiled: "미분류", local: "로컬 Skill", open: "열기", legend: "상위 라우터를 제외한 수", islands: "개 섬" }
+  zh: { title: "我的天空岛", guide: "每座岛，都是你的一类收藏。", unfiled: "未归档", search: "寻找分类", reset: "回到全景", pause: "暂停动画", play: "播放动画", loading: "正在准备天空岛…", fallback: "当前使用简洁分类视图", empty: "从一个分类开始", emptyHint: "在技能库创建分类，你的天空岛便会出现在这里。", open: "打开分类", prompts: "Prompt 来源", folders: "个分类", hint: "拖动探索 · 滚轮缩放 · 点击进入分类", scale: "岛屿面积随 Skills 与 Prompt 来源总数增加", noMatch: "没有匹配的分类", browse: "分类导航", collapse: "收起导航", focus: "在地图中定位", retry: "重新加载场景" },
+  en: { title: "My sky islands", guide: "A little world for every collection.", unfiled: "Unfiled", search: "Find a category", reset: "Show all", pause: "Pause motion", play: "Play motion", loading: "Preparing your islands…", fallback: "Using the category view", empty: "Start with a category", emptyHint: "Create a category in your library to see it here.", open: "Open category", prompts: "Prompt sources", folders: "categories", hint: "Drag to explore · Scroll to zoom · Click to open", scale: "Island area grows with Skills and Prompt sources", noMatch: "No matching categories", browse: "Categories", collapse: "Close navigation", focus: "Locate on map", retry: "Reload scene" },
+  ko: { title: "나의 하늘섬", guide: "분류마다 하나의 작은 세계.", unfiled: "미분류", search: "분류 찾기", reset: "전체 보기", pause: "애니메이션 정지", play: "애니메이션 재생", loading: "하늘섬을 준비하는 중…", fallback: "분류 보기 사용 중", empty: "분류부터 시작하세요", emptyHint: "라이브러리에서 분류를 만들면 여기에 표시됩니다.", open: "분류 열기", prompts: "Prompt 소스", folders: "개 분류", hint: "드래그 탐색 · 스크롤 확대 · 클릭 열기", scale: "Skills와 Prompt 소스 수에 따라 섬 면적이 커집니다", noMatch: "일치하는 분류가 없습니다", browse: "분류 탐색", collapse: "탐색 닫기", focus: "지도에서 찾기", retry: "장면 다시 로드" }
 };
 
-const normalize = (value: string) => value.trim().toLowerCase();
-const isRouter = (skill: SkillCard) => skill.isRouterHub ?? (skill.description.includes("[ROUTER-HUB]") || skill.relativePath.includes("AI-SkillHub-local-routers"));
-const hueFor = (id: string) => [164, 174, 211, 224][[...id].reduce((value, char) => (value * 31 + char.charCodeAt(0)) >>> 0, 7) % 4];
-
-export function SkillArchipelago({ centered, lightTheme, snapshot, onOpenSource, onOpenSkill, onOpenFolder }: SkillArchipelagoProps) {
+export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder }: SkillArchipelagoProps) {
   const words = copy[getLang()];
-  const [grouping, setGrouping] = useState<"sources" | "folders">("sources");
-  const [page, setPage] = useState(0);
-  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
-  const islands = useMemo(() => {
-    if (!snapshot) return [];
-    const children = snapshot.skills.filter(skill => !isRouter(skill));
-    const sources = snapshot.sources;
-    const sourceById = new Map(sources.map(source => [source.id, source]));
-    const sourceByName = new Map(sources.flatMap(source => [source.name, source.id].map(name => [normalize(name), source] as const)));
-    const owner = (skill: SkillCard) => skill.sourceId
-      ? sourceById.get(skill.sourceId)
-      : sourceByName.get(normalize(skill.source));
-    const folderFor = (skill: SkillCard) => skill.userFolderId || owner(skill)?.userFolderId || "";
-    if (grouping === "folders" && selectedFolder === null) {
-      const items: Island[] = (snapshot.skillFolders ?? []).map(folder => ({
-        id: `folder:${folder.id}`, folderId: folder.id, name: folder.name,
-        count: children.filter(skill => folderFor(skill) === folder.id).length,
-        enabled: true, hue: hueFor(folder.id)
-      }));
-      const unfiled = children.filter(skill => !folderFor(skill));
-      if (unfiled.length) items.push({ id: "folder:unfiled", folderId: "", name: words.unfiled, count: unfiled.length, enabled: true, hue: 208 });
-      return items;
-    }
-    const items: Island[] = sources.filter(source => selectedFolder === null || (source.userFolderId || "") === selectedFolder || children.some(skill => owner(skill)?.id === source.id && folderFor(skill) === selectedFolder)).map(source => {
-      const matched = children.filter(skill => owner(skill)?.id === source.id && (selectedFolder === null || folderFor(skill) === selectedFolder));
-      const presentation = sourcePresentation(source);
-      return { id: source.id, name: presentation.title, owner: presentation.owner, count: matched.length, source,
-        enabled: source.enabled, hue: hueFor(source.id) };
-    });
-    for (const skill of children.filter(skill => !owner(skill) && (selectedFolder === null || folderFor(skill) === selectedFolder))) {
-      items.push({ id: `skill:${skill.id || skill.relativePath}`, name: skill.name, count: 1, skill, enabled: skill.enabled, hue: hueFor(skill.name) });
-    }
-    return items;
-  }, [snapshot, grouping, selectedFolder, words.unfiled]);
-  const pageSize = centered ? 8 : 6;
-  const pages = Math.max(1, Math.ceil(islands.length / pageSize));
-  const currentPage = Math.min(page, pages - 1);
-  const visible = islands.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
-  const chooseGrouping = (next: "sources" | "folders") => { setGrouping(next); setSelectedFolder(null); setPage(0); };
-  const open = (island: Island) => {
-    if (island.source) onOpenSource(island.source);
-    else if (island.skill) onOpenSkill(island.skill);
-    else if (island.folderId !== undefined) {
-      if (onOpenFolder) onOpenFolder(island.folderId);
-      else { setSelectedFolder(island.folderId); setPage(0); }
-    }
-  };
-
-  return <section className={`skill-archipelago${centered ? " is-centered" : ""}${lightTheme ? " is-light" : ""}`} aria-label={words.title}>
-    <div className="archipelago-sky" aria-hidden="true"><span /><span /><span /></div>
-    <header className="archipelago-header">
-      <div className="archipelago-switch" role="group" aria-label={words.title}>
-        <button type="button" aria-pressed={grouping === "sources"} onClick={() => chooseGrouping("sources")}>{words.sources}</button>
-        <button type="button" aria-pressed={grouping === "folders"} onClick={() => chooseGrouping("folders")}>{words.folders}</button>
-      </div>
-      <span className="archipelago-total">{islands.length} {words.islands}</span>
-    </header>
-    {selectedFolder !== null && <button type="button" className="archipelago-back" onClick={() => { setSelectedFolder(null); setPage(0); }}>← {words.folders}</button>}
-    {!snapshot ? <p className="archipelago-empty" role="status">{words.loading}</p>
-      : !islands.length ? <div className="archipelago-empty"><strong>{words.empty}</strong><p>{words.emptyHint}</p></div>
-      : <div className="archipelago-islands" aria-label={words.guide}>
-        {visible.map((island, index) => <button key={island.id} type="button" className={`archipelago-island${island.enabled ? "" : " is-paused"}`} onClick={() => open(island)}
-          style={{ "--island-hue": island.hue, "--island-delay": `${index * -.63}s` } as CSSProperties}
-          aria-label={`${words.open} ${island.name} · ${island.count} Skills${island.enabled ? "" : ` · ${words.paused}`}`}>
-          <IslandArtwork count={island.count} index={index} folder={island.folderId !== undefined} />
-          <span className="archipelago-island-label"><strong title={island.name}>{island.name}</strong>
-            {island.owner && <small title={island.owner}>{island.owner}</small>}
-            <span><b>{island.count}</b> Skills {island.source?.sourceType === "prompt" && <em> · {words.prompt}</em>}{!island.enabled && <em> · {words.paused}</em>}</span>
-          </span>
-        </button>)}
-      </div>}
-    <footer className="archipelago-footer">
-      <div><span>{words.scale}</span><small>{words.legend}</small></div>
-      {pages > 1 && <nav className="archipelago-pagination" aria-label={words.page}>
-        <button type="button" disabled={currentPage === 0} aria-label={words.previous} onClick={() => setPage(currentPage - 1)}>←</button>
-        <span aria-live="polite">{currentPage + 1} / {pages}</span>
-        <button type="button" disabled={currentPage === pages - 1} aria-label={words.next} onClick={() => setPage(currentPage + 1)}>→</button>
-      </nav>}
-    </footer>
+  const islands = useMemo(() => buildSkyIslands(snapshot, words.unfiled), [snapshot, words.unfiled]);
+  // Unrelated sync progress must not rebuild the GPU scene or reset its camera.
+  const modelKey = JSON.stringify(islands);
+  const stableIslands = useMemo(() => islands, [modelKey]);
+  const host = useRef<HTMLDivElement>(null), scene = useRef<SkyScene | null>(null);
+  const labels = useRef(new Map<string, HTMLButtonElement>());
+  const openRef = useRef(onOpenFolder); openRef.current = onOpenFolder;
+  const [status, setStatus] = useState<"loading" | "ready" | "fallback">("loading");
+  const [paused, setPaused] = useState(() => localStorage.getItem("skillhub-sky-paused") === "1" || window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const [query, setQuery] = useState(""), [navigation, setNavigation] = useState(false), [retry, setRetry] = useState(0);
+  const [hovered, setHovered] = useState<string | null>(null);
+  const visibleIslands = islands.filter(island => island.name.toLocaleLowerCase().includes(query.toLocaleLowerCase().trim()));
+  const currentPaused = useRef(paused); currentPaused.current = paused;
+  useEffect(() => {
+    if (!host.current || !stableIslands.length) return;
+    let cancelled = false; setStatus("loading");
+    import("./skyIslandScene").then(({ createSkyScene }) => {
+      if (cancelled || !host.current) return;
+      try {
+        scene.current = createSkyScene({ host: host.current, islands: stableIslands, labels: labels.current, dark: !lightTheme, paused: currentPaused.current,
+          onOpen: id => openRef.current?.(id), onHover: setHovered, onFailure: () => { scene.current?.dispose(); scene.current = null; setStatus("fallback"); } });
+        setStatus("ready");
+      } catch { setStatus("fallback"); }
+    }).catch(() => { if (!cancelled) setStatus("fallback"); });
+    return () => { cancelled = true; scene.current?.dispose(); scene.current = null; };
+  }, [stableIslands, lightTheme, retry]);
+  useEffect(() => { scene.current?.setPaused(paused); localStorage.setItem("skillhub-sky-paused", paused ? "1" : "0"); }, [paused]);
+  const open = (id: string) => openRef.current?.(id);
+  return <section className={`skill-archipelago sky-islands${lightTheme ? " is-light" : ""}${status === "fallback" ? " is-fallback" : ""}`} aria-label={words.title} data-status={status}>
+    <div className="sky-horizon" aria-hidden="true" />
+    <header className="sky-heading"><h2>{words.title}</h2><p>{words.guide}</p></header>
+    <div className="sky-controls">
+      <button type="button" onClick={() => { scene.current?.reset(); setQuery(""); }} title={words.reset} aria-label={words.reset}><span aria-hidden="true">⌖</span><span>{words.reset}</span></button>
+      <button type="button" aria-pressed={paused} onClick={() => setPaused(value => !value)} title={paused ? words.play : words.pause}><span aria-hidden="true">{paused ? "▷" : "Ⅱ"}</span><span>{paused ? words.play : words.pause}</span></button>
+      <button type="button" aria-expanded={navigation} onClick={() => setNavigation(value => !value)}>{navigation ? words.collapse : words.browse}<span aria-hidden="true">{navigation ? "−" : "+"}</span></button>
+    </div>
+    <div className="sky-scene-host" ref={host}>
+      {status === "ready" && <div className="sky-map-labels">{islands.map(island => <button key={island.id} ref={element => { if (element) labels.current.set(island.id, element); else labels.current.delete(island.id); }}
+        type="button" className={`sky-island-label${hovered === island.id ? " is-hovered" : ""}`} onClick={() => open(island.id)} onFocus={() => scene.current?.focus(island.id)}
+        aria-label={`${words.open} ${island.name} · ${island.skillCount} Skills${island.promptCount ? ` · ${island.promptCount} ${words.prompts}` : ""}`}>
+        <strong>{island.name}</strong><span><b>{island.skillCount.toLocaleString()}</b> Skills{island.promptCount > 0 && <> · <b>{island.promptCount}</b> {words.prompts}</>}</span>
+      </button>)}</div>}
+    </div>
+    {(navigation || status === "fallback") && <aside className="sky-navigation" aria-label={words.browse}>
+      <label className="sky-search"><span aria-hidden="true">⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder={words.search} aria-label={words.search} /></label>
+      <div className="sky-navigation-list">{visibleIslands.map(island => <div className="sky-navigation-row" key={island.id}>
+        <button type="button" onClick={() => open(island.id)}><strong>{island.name}</strong><span>{island.skillCount.toLocaleString()} Skills{island.promptCount > 0 ? ` · ${island.promptCount} ${words.prompts}` : ""}</span></button>
+        {status !== "fallback" && <button type="button" className="sky-locate" title={words.focus} aria-label={`${words.focus} ${island.name}`} onClick={() => { scene.current?.focus(island.id); setHovered(island.id); }}>⌖</button>}
+      </div>)}{!visibleIslands.length && <p>{words.noMatch}</p>}</div>
+      {status === "fallback" && <div className="sky-fallback-note"><span>{words.fallback}</span><button type="button" onClick={() => setRetry(value => value + 1)}>{words.retry}</button></div>}
+    </aside>}
+    {!snapshot ? <div className="sky-empty" role="status">{words.loading}</div> : !islands.length ? <div className="sky-empty"><h3>{words.empty}</h3><p>{words.emptyHint}</p><button type="button" onClick={() => open("all")}>{words.browse} →</button></div> : status === "loading" ? <div className="sky-loading" role="status">{words.loading}</div> : null}
+    <footer className="sky-caption"><span>{islands.length} {words.folders}</span><span title={words.scale}>{words.hint}</span></footer>
   </section>;
-}
-
-function IslandArtwork({ count, index, folder }: { count: number; index: number; folder: boolean }) {
-  const id = useId().replace(/:/g, "");
-  const scale = count >= 50 ? 1.12 : count >= 10 ? .94 : .76;
-  return <svg className="archipelago-art" viewBox="0 0 240 180" aria-hidden="true" focusable="false">
-    <defs>
-      <linearGradient id={`${id}-cliff`} x1="0" x2=".8" y2="1"><stop stopColor="hsl(var(--island-hue), 23%, 38%)" /><stop offset="1" stopColor="hsl(var(--island-hue), 32%, 16%)" /></linearGradient>
-      <linearGradient id={`${id}-grass`} x1="0" x2="1" y2="1"><stop stopColor="hsl(var(--island-hue), 44%, 79%)" /><stop offset="1" stopColor="hsl(var(--island-hue), 42%, 43%)" /></linearGradient>
-      <linearGradient id={`${id}-water`} x1="0" x2="1"><stop stopColor="#cdf5fa" stopOpacity=".9" /><stop offset="1" stopColor="#b7eafa" stopOpacity="0" /></linearGradient>
-    </defs>
-    <g className="archipelago-float">
-      <g transform={`translate(120 88) scale(${scale}) translate(-120 -88)`}>
-        <path d="M33 84 59 67 113 57 176 65 207 85 195 111 169 125 145 157 122 142 97 150 78 120 52 110Z" fill={`url(#${id}-cliff)`} />
-        <path d="m59 86 19 34 19 30 5-49m39-1 4 57 24-32 9-36m17-4v26l12-26" fill="none" stroke="hsl(var(--island-hue), 28%, 58%)" strokeOpacity=".42" strokeWidth="1.4" />
-        <path d="m33 84 26-17 54-10 63 8 31 20-36 22-49 7-51-12Z" fill={`url(#${id}-grass)`} />
-        <path d="m34 84 38 18 51 12 48-7 36-22" fill="none" stroke="hsl(var(--island-hue), 53%, 82%)" strokeWidth="2" />
-        <path d="m114 73 9 9-18 13-3 23-5 32-3 17" fill="none" stroke={`url(#${id}-water)`} strokeWidth="8" />
-        <path d="m120 77 7 5-18 14-5 22" fill="none" stroke="#edfaff" strokeOpacity=".75" strokeWidth="1.5" />
-        <ellipse cx="139" cy="75" rx="31" ry="11" fill="hsl(var(--island-hue), 28%, 24%)" opacity=".16" />
-        {folder ? <g transform="translate(139 54)"><path d="m-23-7 20-5 9 6 17-3v33l-46 10Z" fill="#f3d5a0" stroke="#c8a273" /><path d="m-23 3 46-9-7 34-39 6Z" fill="#ffe9bb" /><path d="m-17 10 29-6" stroke="#caa872" strokeWidth="2" /></g>
-          : <g transform="translate(139 48)"><path d="m-16-12 19-6 17 9v33l-20 7-16-8Z" fill="#e8ecea" /><path d="m3-18 17 9v33L0 31V-9Z" fill="#bbcdd0" /><path d="m-21-11 23-13 24 15-25 8Z" fill="hsl(var(--island-hue), 41%, 38%)" /><path d="m-12-2 7-2v9l-7 2m17-7 7 3v8l-7-2" fill="#fff6c8" /><path d="M-4 29V15l7-1v16" fill="#617f81" /><path d="M2-24V-41" stroke="#819d9e" strokeWidth="1.5" /><path d="m3-41 14 4-14 5" fill="#edbd85" /></g>}
-        <g transform="translate(73 68)"><path d="M0 16V-10" stroke="#617566" strokeWidth="3" /><path d="m0-22-13 25H13Z" fill="hsl(var(--island-hue), 29%, 32%)" /><path d="m0-31-10 24h20Z" fill="hsl(var(--island-hue), 32%, 47%)" /></g>
-        <g transform={`translate(${index % 2 ? 181 : 59} 88) scale(.6)`}><path d="M0 14V-15" stroke="#678479" strokeWidth="3" /><path d="m0-32-13 31H13Z" fill="hsl(var(--island-hue), 31%, 41%)" /></g>
-        <path d="m51 90 6-3 7 4-6 3Zm119 8 7-4 9 4-6 5Z" fill="#edf4d9" opacity=".85" />
-        <path d="m85 137 5 8-5 6-4-8Zm77 22 3 5-5 6-3-6Z" fill="hsl(var(--island-hue), 30%, 48%)" opacity=".75" />
-      </g>
-    </g>
-  </svg>;
 }

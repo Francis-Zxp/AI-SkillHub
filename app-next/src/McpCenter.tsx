@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Icon } from "./icons";
 import { mt as t } from "./mcpManagementI18n";
+import { getLang } from "./i18n";
 import { containsObviousCredentialValue, evaluateMcpBindingManagement, mcpServerNameCompatible } from "./mcpManagement";
 import type { McpManagementBlockReason } from "./mcpManagement";
 import "./McpCenter.css";
@@ -194,7 +195,34 @@ type McpGithubImportCandidate = {
 type McpGithubImportPreview = {
   sourceDisplay: string;
   candidates: McpGithubImportCandidate[];
+  noticeCodes?: string[];
 };
+
+function githubImportCopy(code: string): string {
+  const messages: Record<string, { zh: string; en: string; ko: string }> = {
+    body: {
+      zh: "读取公开仓库根目录 MCP 配置；没有配置文件时查找 README 的 JSON 示例。只生成待审核草稿，不安装依赖、不启动服务。",
+      en: "Read root MCP configuration or JSON examples in the README. Creates a draft for review; does not install dependencies or start servers.",
+      ko: "저장소 루트 MCP 구성 또는 README의 JSON 예제를 읽습니다. 검토용 초안만 만들며 의존성 설치나 서버 실행은 하지 않습니다.",
+    },
+    "configuration-only": {
+      zh: "导入配置不等于安装成功：请先按作者文档安装所需运行环境和依赖，并核对命令路径。应用前仍需审核更改。",
+      en: "Importing configuration does not install the server. Follow the author's setup instructions, check the runtime and command path, then review before applying.",
+      ko: "구성 가져오기는 서버 설치가 아닙니다. 작성자의 설치 안내에 따라 런타임과 의존성을 준비하고 명령 경로를 확인한 뒤 변경을 검토하세요.",
+    },
+    "readme-example": {
+      zh: "来自 README 示例；请核对是否适用于你的电脑。安装脚本与文档指令不会执行。",
+      en: "From a README example; check that it fits your computer. Documentation instructions and installation scripts are not executed.",
+      ko: "README 예제입니다. 현재 컴퓨터에 맞는지 확인하세요. 문서의 지시나 설치 스크립트는 실행하지 않습니다.",
+    },
+    "origin-prerequisites": {
+      zh: "origin-mcp：需要 Windows、已授权的 Origin/OriginPro、Python 3.10+，并在该 Python 环境安装 origin-mcp。作者当前目标为 Origin 2026/2026b；还需按文档安装并注册 Origin Start/Stop Apps，每次 Origin 会话启动 Bridge。必要时将 python 改为对应 python.exe 的绝对路径。本工具未检测这些前提是否满足。",
+      en: "origin-mcp requires Windows, licensed Origin/OriginPro, Python 3.10+, and origin-mcp installed in that Python environment. The author currently targets Origin 2026/2026b. Install/register the Origin Start/Stop Apps and start the Bridge each Origin session. Use the matching absolute python.exe path if needed. These prerequisites have not been checked locally.",
+      ko: "origin-mcp는 Windows, 정품 Origin/OriginPro, Python 3.10+ 및 해당 Python 환경에 설치된 origin-mcp가 필요합니다. 작성자의 현재 대상은 Origin 2026/2026b입니다. Origin Start/Stop Apps를 설치·등록하고 Origin 세션마다 Bridge를 시작하세요. 필요하면 해당 python.exe의 절대 경로를 사용하세요. 로컬 설치 여부는 확인하지 않았습니다.",
+    },
+  };
+  return messages[code]?.[getLang()] ?? "";
+}
 
 type McpFormDraft = {
   hostIds: Array<"host-codex" | "host-claude-code">;
@@ -1039,7 +1067,7 @@ function McpManagementForm({
           <section aria-busy={githubImporting} className="mcp-github-import">
             <div>
               <strong>{t("mcp.githubImportTitle")}</strong>
-              <small>{t("mcp.githubImportBody")}</small>
+              <small>{githubImportCopy("body")}</small>
             </div>
             <label>
               <span className="sr-only">{t("mcp.githubImportTitle")}</span>
@@ -1060,6 +1088,7 @@ function McpManagementForm({
             {githubPreview && (
               <div className="mcp-github-candidates">
                 <small>{t("mcp.githubImportFound", { source: githubPreview.sourceDisplay, n: githubPreview.candidates.length })}</small>
+                {(githubPreview.noticeCodes ?? []).map(code => githubImportCopy(code) && <p key={code}>{githubImportCopy(code)}</p>)}
                 {githubPreview.candidates.map(candidate => (
                   <article key={candidate.serverName}>
                     <span><strong>{candidate.serverName}</strong><small>{candidate.transport}</small></span>

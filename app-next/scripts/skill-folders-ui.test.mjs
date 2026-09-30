@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const skyModel = await readFile(new URL("../src/skyIslandModel.ts", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 const universe = await readFile(new URL("../src/SkillUniverse.tsx", import.meta.url), "utf8");
 const i18n = await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8");
@@ -86,7 +87,8 @@ test("homepage folder mode only reflects user folders and keeps unassigned Skill
 
 test("source identity is exact and a generic repository named skills cannot absorb other children", () => {
   assert.match(backend, /source_id: String/);
-  assert.match(app, /if \(skill\.sourceId\) return skill\.sourceId === source\.id/);
+  assert.match(skyModel, /if \(skill\.sourceId\) return skill\.sourceId === source\.id/);
+  assert.match(app, /return modelSkillBelongsToSource\(skill, source\)/);
   assert.doesNotMatch(app, /skillPathSegments\.includes\(sourceFolder\)/);
   assert.match(universe, /if \(skill\.sourceId\)/);
   assert.doesNotMatch(universe, /path\.includes\(`\/\$\{normalize\(source\.name\)\}\/`\)/);
@@ -105,7 +107,7 @@ test("large source trees render incrementally and folder edits keep whole-tree s
   assert.match(app, /applySkillFolderCommandResult/);
   assert.match(app, /setSnapshot\(current => applySkillFolderCommandResult\(/);
   assert.match(app, /if \(mutationBlockedBySync\(\)\) return null/);
-  assert.match(app, /const unfiledCount = useMemo/);
+  assert.match(app, /const unfiledCount = folderCounts\.get\("unfiled"\) \?\? 0/);
 });
 
 test("import finalization preserves metadata and stops on any failed follow-up write", () => {

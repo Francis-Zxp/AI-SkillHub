@@ -2,6 +2,14 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.7 - 2026-10-01 - Category sky islands and documented MCP imports (in progress)
+
+- Replaces the flat island home with a locally bundled Three.js r160 scene and original procedural island models. Each island represents a user category; its area reflects Skills and Prompt-source counts, with stable layouts and an unfiled category.
+- Adds map panning and zooming, category search and keyboard-accessible navigation, focus/reset controls, motion pause and a category-list fallback when the 3D scene is unavailable. Existing category-opening actions remain connected to the real library.
+- Adds bounded README JSON-code-block extraction for GitHub MCP imports when root MCP configuration files are absent. Identical examples are deduplicated, conflicting same-name examples are rejected, and executable prose and credential values are not imported.
+- Records code-level study of 13 open-source rendering projects, with fixed revisions and license evidence; third-party demos and installation scripts were not executed.
+- Validation is pending: final automated/visual QA, signed packaging, local installation and source push have not yet been completed for this candidate. Windows 10 recipient acceptance remains pending; the public updater manifest is not advanced by these source changes.
+
 ## 3.2.6 - Clearer library, native 4K and illustrated islands
 
 - Adds an illustrated SVG island home, with real source/folder counts, pagination, keyboard navigation and the original star view retained. The star canvas now renders at native 4K and responds to monitor scale changes.

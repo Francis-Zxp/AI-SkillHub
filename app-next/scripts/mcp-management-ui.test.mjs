@@ -93,10 +93,12 @@ test("GitHub quick import is static, bounded, and only carries secret-free draft
   assert.match(form, /aria-busy=\{githubImporting\}/);
   assert.match(form, /placeholder="owner\/repo"/);
   assert.match(form, /onUseGithubCandidate\(candidate\)/);
-  assert.match(form, /"mcp\.githubImportBody"/);
+  assert.match(form, /githubImportCopy\("body"\)/);
+  assert.match(form, /githubPreview\.noticeCodes/);
   assert.match(files.ui, /setGithubImportError\(candidate\.needsManualHeaders \? t\("mcp\.githubHeadersManual"\) : ""\)/);
   assert.equal([...files.managementI18n.matchAll(/"mcp\.githubImportTitle":/g)].length, 3);
-  assert.match(files.managementI18n, /只读取根目录的 \.mcp\.json 或 mcp\.json；不启动服务器，也不会复制凭据值/);
+  assert.match(files.ui, /没有配置文件时查找 README 的 JSON 示例/);
+  assert.match(files.ui, /"origin-prerequisites"/);
 
   assert.match(files.githubImport, /const MAX_CONFIG_BYTES: usize = 96 \* 1024/);
   assert.match(files.githubImport, /\.redirects\(0\)/);

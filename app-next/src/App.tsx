@@ -22,6 +22,7 @@ import { localizedSkillDescription } from "./localizedDescriptions";
 import { SkillUniverse } from "./SkillUniverse";
 const SkillArchipelago = lazy(() => import("./SkillArchipelago").then(module => ({ default: module.SkillArchipelago })));
 import { sourcePresentation } from "./sourceIdentity";
+import { buildSkyIslands, isRouterHubSkill as modelIsRouterHubSkill, skillBelongsToSource as modelSkillBelongsToSource } from "./skyIslandModel";
 import { PromptLauncherAction } from "./PromptLauncherAction";
 import { externalSkillsText } from "./externalSkills";
 const ExternalSkillsPanel = lazy(() => import("./ExternalSkillsPanel").then(module => ({ default: module.ExternalSkillsPanel })));
@@ -452,6 +453,11 @@ export function App() {
   const [operation, setOperation] = useState<OperationStatus | null>(null);
   const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
   const [globalSearch, setGlobalSearch] = useState("");
+  const [libraryFolderId, setLibraryFolderId] = useState("all");
+  function openLibrary(folderId = "all") {
+    setLibraryFolderId(folderId || "unfiled");
+    setActive("library");
+  }
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>(() => initialAppUpdateState());
   const [dashboardImmersive, setDashboardImmersive] = useState(false);
   const updateRef = useRef<Update | null>(null);
@@ -1816,7 +1822,7 @@ export function App() {
             <button
               className={active === item.key ? "nav-item active" : "nav-item"}
               key={item.key}
-              onClick={() => setActive(item.key)}
+              onClick={() => item.key === "library" ? openLibrary() : setActive(item.key)}
               type="button"
             >
               <span className="nav-icon" aria-hidden="true"><Icon name={item.icon} /></span>
@@ -1860,7 +1866,7 @@ export function App() {
               aria-label="Search"
               onChange={event => setGlobalSearch(event.target.value)}
               onKeyDown={event => {
-                if (event.key === "Enter" && globalSearch.trim()) setActive("library");
+                if (event.key === "Enter" && globalSearch.trim()) openLibrary();
               }}
               placeholder={t("topbar.searchPlaceholder")}
               value={globalSearch}
@@ -1977,7 +1983,7 @@ export function App() {
           {globalSearch.trim() && (
             <GlobalSearchResults
               onClear={() => setGlobalSearch("")}
-              onOpenLibrary={() => setActive("library")}
+              onOpenLibrary={() => openLibrary()}
               onCopySkill={skill => void copySkillPrompt(skill, recordUsage)}
               query={globalSearch}
               skills={globalSearchResults.skills}
@@ -1992,14 +1998,18 @@ export function App() {
               onCopySkill={skill => void copySkillPrompt(skill, recordUsage)}
               onOpenAdvanced={() => setActive("release")}
               onOpenAgents={() => setActive("agents")}
-              onOpenLibrary={() => setActive("library")}
+              onOpenLibrary={() => openLibrary()}
+              onOpenFolder={folderId => {
+                setGlobalSearch("");
+                openLibrary(folderId);
+              }}
               onOpenSkill={skill => {
                 setGlobalSearch(`$${skill.name}`);
-                setActive("library");
+                openLibrary();
               }}
               onOpenSource={source => {
                 setGlobalSearch(source.name);
-                setActive("library");
+                openLibrary();
               }}
               onRefreshPopularity={() => void refreshSourcePopularity()}
               onSync={() => void syncAndRefreshAll()}
@@ -2066,6 +2076,8 @@ export function App() {
               atlasMode={atlasMode}
               realWritesEnabled={realWritesEnabled}
               searchQuery={globalSearch}
+              selectedFolderId={libraryFolderId}
+              onSelectFolder={setLibraryFolderId}
               snapshot={snapshot}
             />
           )}
@@ -2078,7 +2090,7 @@ export function App() {
               onImportLocalSkill={path => {
                 setExternalImportPath(path);
                 setGlobalSearch("");
-                setActive("library");
+                openLibrary();
               }}
               onRefreshAgents={() => void refreshLocalAgents()}
               onConnectAgents={() => void refreshLocalAgents(true)}
@@ -2348,6 +2360,7 @@ function Dashboard({
   onOpenAdvanced,
   onOpenAgents,
   onOpenLibrary,
+  onOpenFolder,
   onOpenSkill,
   onOpenSource,
   onRefreshPopularity,
@@ -2364,6 +2377,7 @@ function Dashboard({
   onOpenAdvanced: () => void;
   onOpenAgents: () => void;
   onOpenLibrary: () => void;
+  onOpenFolder: (folderId: string) => void;
   onOpenSkill: (skill: SkillCard) => void;
   onOpenSource: (source: SourceCard) => void;
   onRefreshPopularity: () => void;
@@ -2432,7 +2446,7 @@ function Dashboard({
       <section className={`dashboard-hero glow-card${atlasMode && (!atlasIntroVisible || homeVisual === "islands") ? " intro-collapsed" : ""}${atlasMode && homeVisual === "islands" ? " islands-home" : ""}`}>
         {atlasMode && homeVisual === "islands" && (
           <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
-            <SkillArchipelago centered lightTheme={isLightTheme(theme)} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} snapshot={snapshot} />
+            <SkillArchipelago centered lightTheme={isLightTheme(theme)} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} snapshot={snapshot} />
           </Suspense>
         )}
         {atlasMode && homeVisual === "universe" && (
@@ -3209,6 +3223,8 @@ type LibraryProps = {
   onStageImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
   realWritesEnabled: boolean;
   searchQuery: string;
+  selectedFolderId: string;
+  onSelectFolder: (folderId: string) => void;
   snapshot: LegacySnapshot | null;
 };
 
@@ -3240,11 +3256,14 @@ function Library(props: LibraryProps) {
     onStageImport,
     realWritesEnabled,
     searchQuery,
+    selectedFolderId,
+    onSelectFolder: setSelectedFolderId,
     snapshot
   } = props;
   const sources = snapshot?.sources ?? [];
   const skills = snapshot?.skills ?? [];
   const skillFolders = snapshot?.skillFolders ?? [];
+  const folderCounts = useMemo(() => new Map(buildSkyIslands(snapshot, "").map(island => [island.id, island.skillCount])), [snapshot]);
   const skillConflicts = snapshot?.skillConflicts ?? [];
   const [sortKey, setSortKey] = useState<SourceSortKey>("recent");
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -3254,7 +3273,6 @@ function Library(props: LibraryProps) {
   const [showMaintenance, setShowMaintenance] = useState(false);
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
   const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
-  const [selectedFolderId, setSelectedFolderId] = useState("all");
   const [childLimits, setChildLimits] = useState<Record<string, number>>({});
   const [promptInvocation, setPromptInvocation] = useState<PromptInvocationCard | null>(null);
   const [promptInvocationPending, setPromptInvocationPending] = useState("");
@@ -3262,7 +3280,7 @@ function Library(props: LibraryProps) {
   const skillsBySourceId = useMemo(() => {
     const grouped = new Map<string, SkillCard[]>();
     for (const skill of skills) {
-      const sourceId = skill.sourceId || sources.find(source => skillBelongsToSource(skill, source))?.id;
+      const sourceId = resolveSkillSource(skill, sources)?.id;
       if (!sourceId) continue;
       grouped.set(sourceId, [...(grouped.get(sourceId) ?? []), skill]);
     }
@@ -3270,11 +3288,14 @@ function Library(props: LibraryProps) {
   }, [skills, sources]);
 
   useEffect(() => {
-    if (!searchQuery.trim()) return;
+    if (!searchQuery.trim() && selectedFolderId === "all") return;
     const matchingSourceIds = sources
       .filter(source =>
-        sourceMatchesSearch(source, searchQuery) ||
-        (skillsBySourceId.get(source.id) ?? []).some(skill => skillMatchesSearch(skill, searchQuery))
+        searchQuery.trim()
+          ? sourceMatchesSearch(source, searchQuery) ||
+            (skillsBySourceId.get(source.id) ?? []).some(skill => skillMatchesSearch(skill, searchQuery))
+          : (skillsBySourceId.get(source.id) ?? []).some(skill =>
+              !isRouterHubSkill(skill) && skillMatchesUserFolder(skill, selectedFolderId, source, skillFolders))
       )
       .map(source => source.id);
     if (!matchingSourceIds.length) return;
@@ -3283,7 +3304,12 @@ function Library(props: LibraryProps) {
       matchingSourceIds.forEach(sourceId => next.add(sourceId));
       return next;
     });
-  }, [searchQuery, skillsBySourceId, sources]);
+  }, [searchQuery, selectedFolderId, skillsBySourceId, sources, skillFolders]);
+
+  useEffect(() => {
+    if (snapshot && selectedFolderId !== "all" && selectedFolderId !== "unfiled" &&
+        !skillFolders.some(folder => folder.id === selectedFolderId)) setSelectedFolderId("all");
+  }, [snapshot, selectedFolderId, skillFolders, setSelectedFolderId]);
 
   const popularityById = useMemo(
     () => new Map((snapshot?.sourcePopularity ?? []).map(item => [item.sourceId, item])),
@@ -3305,7 +3331,9 @@ function Library(props: LibraryProps) {
     const drafted = sources.map(source => applySourceDraft(source, sourceDrafts[source.id]));
     const folderFiltered = selectedFolderId === "all"
       ? drafted
-      : drafted.filter(source => sourceMatchesUserFolder(source, selectedFolderId));
+      : drafted.filter(source => sourceMatchesUserFolder(source, selectedFolderId, skillFolders) ||
+          (skillsBySourceId.get(source.id) ?? []).some(skill =>
+            !isRouterHubSkill(skill) && skillMatchesUserFolder(skill, selectedFolderId, source, skillFolders)));
     const filtered = searchQuery.trim()
       ? folderFiltered.filter(
           source =>
@@ -3314,20 +3342,20 @@ function Library(props: LibraryProps) {
         )
       : folderFiltered;
     return sortSources(filtered, sortKey, popularityById, skills);
-  }, [popularityById, selectedFolderId, skills, skillsBySourceId, sources, sourceDrafts, sortKey, searchQuery]);
+  }, [popularityById, selectedFolderId, skills, skillsBySourceId, sources, sourceDrafts, sortKey, searchQuery, skillFolders]);
 
   const localSkills = useMemo(() => {
     const filtered = skills
       .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
       .filter(skill => {
-        if (skill.sourceId) {
+        if (resolveSkillSource(skill, sources)) {
           return false;
         }
-        if (!skillMatchesUserFolder(skill, selectedFolderId)) return false;
+        if (!skillMatchesUserFolder(skill, selectedFolderId, undefined, skillFolders)) return false;
         return searchQuery.trim() ? skillMatchesSearch(skill, searchQuery) : true;
       });
     return sortSkills(filtered, sortKey);
-  }, [skillDrafts, skills, selectedFolderId, searchQuery, sortKey]);
+  }, [skillDrafts, skills, sources, selectedFolderId, searchQuery, sortKey, skillFolders]);
 
   const totalMatches =
     visibleSources.length +
@@ -3511,6 +3539,7 @@ function Library(props: LibraryProps) {
       <SkillFolderShelf
         disabled={loading}
         folders={skillFolders}
+        folderCounts={folderCounts}
         onCreate={onCreateFolder}
         onDelete={onDeleteFolder}
         onDropSkill={(skillId, folderId) => onMoveSkillToFolder(skillId, folderId)}
@@ -3520,7 +3549,6 @@ function Library(props: LibraryProps) {
         onUpdate={onUpdateFolder}
         selectedId={selectedFolderId}
         skills={skills}
-        sources={sources}
       />
 
       <div className={atlasMode ? "library-stage atlas-library-stage" : "library-stage"}>
@@ -3549,6 +3577,7 @@ function Library(props: LibraryProps) {
           const sourceSkills = sortSkills(
             (skillsBySourceId.get(source.id) ?? [])
               .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
+              .filter(skill => skillMatchesUserFolder(skill, selectedFolderId, source, skillFolders))
               .filter(skill => !searchQuery.trim() || skillMatchesSearch(skill, searchQuery) || sourceMatchesSearch(source, searchQuery)),
             sortKey
           );
@@ -3986,6 +4015,7 @@ const SKILL_FOLDER_COLOR_HEX: Record<string, string> = {
 function SkillFolderShelf({
   disabled,
   folders,
+  folderCounts,
   onCreate,
   onDelete,
   onDropSkill,
@@ -3994,11 +4024,11 @@ function SkillFolderShelf({
   onSelect,
   onUpdate,
   selectedId,
-  skills,
-  sources
+  skills
 }: {
   disabled: boolean;
   folders: SkillFolderCard[];
+  folderCounts: Map<string, number>;
   onCreate: (name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
   onDelete: (folderId: string) => Promise<LegacySnapshot | null>;
   onDropSkill: (skillId: string, folderId: string) => Promise<LegacySnapshot | null>;
@@ -4008,7 +4038,6 @@ function SkillFolderShelf({
   onUpdate: (folderId: string, name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
   selectedId: string;
   skills: SkillCard[];
-  sources: SourceCard[];
 }) {
   const [editingId, setEditingId] = useState("");
   const [showEditor, setShowEditor] = useState(false);
@@ -4016,14 +4045,7 @@ function SkillFolderShelf({
   const [note, setNote] = useState("");
   const [color, setColor] = useState("cyan");
   const [dropTarget, setDropTarget] = useState("");
-  const unfiledCount = useMemo(() => {
-    const unfiledSourceIds = new Set(
-      sources.filter(source => !source.userFolderId).map(source => source.id)
-    );
-    return skills.filter(skill => skill.sourceId
-      ? unfiledSourceIds.has(skill.sourceId)
-      : !skill.userFolderId).length;
-  }, [skills, sources]);
+  const unfiledCount = folderCounts.get("unfiled") ?? 0;
   const editingIndex = folders.findIndex(folder => folder.id === editingId);
 
   function openCreate() {
@@ -4106,10 +4128,10 @@ function SkillFolderShelf({
         </button>
       </header>
       <div className="skill-folder-strip">
-        {renderTarget("all", t("folders.all"), skills.length, "slate")}
+        {renderTarget("all", t("folders.all"), skills.filter(skill => !isRouterHubSkill(skill)).length, "slate")}
         {folders.map(folder => (
           <div className="skill-folder-item" key={folder.id}>
-            {renderTarget(folder.id, folder.name, folder.skillCount, folder.color, folder.note)}
+            {renderTarget(folder.id, folder.name, folderCounts.get(folder.id) ?? 0, folder.color, folder.note)}
             <button
               aria-label={t("folders.manage", { name: folder.name })}
               className="skill-folder-manage"
@@ -7001,12 +7023,13 @@ function normalizeSourcePath(path: string) {
 }
 
 function skillBelongsToSource(skill: SkillCard, source: SourceCard): boolean {
-  if (skill.sourceId) return skill.sourceId === source.id;
-  const sourceKey = normalizeLookup(source.name);
-  const skillSource = normalizeLookup(skill.source);
-  if (sourceKey && skillSource === sourceKey) return true;
-  const sourceUrlName = normalizeLookup((source.url.split("/").pop() ?? "").replace(/\.git$/i, ""));
-  return Boolean(sourceUrlName && skillSource === sourceUrlName);
+  return modelSkillBelongsToSource(skill, source);
+}
+
+function resolveSkillSource(skill: SkillCard, sources: SourceCard[]): SourceCard | undefined {
+  if (skill.sourceId) return sources.find(source => source.id === skill.sourceId);
+  const matches = sources.filter(source => skillBelongsToSource(skill, source));
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function normalizeLookup(value: string) {
@@ -7018,27 +7041,22 @@ function clampNumber(value: number, min: number, max: number) {
 }
 
 function isRouterHubSkill(skill: SkillCard): boolean {
-  if (typeof skill.isRouterHub === "boolean") return skill.isRouterHub;
-  const description = String(skill.description || "");
-  if (description.indexOf("[ROUTER-HUB]") !== -1) return true;
-  const source = String(skill.source || skill.relativePath || "");
-  if (source.indexOf("AI-SkillHub-local-routers") !== -1) return true;
-  if (skill.folderName && skill.source && normalizeLookup(skill.folderName) === normalizeLookup(skill.source)) {
-    return true;
-  }
-  return false;
+  return modelIsRouterHubSkill(skill);
 }
 
-function skillMatchesUserFolder(skill: SkillCard, selectedFolderId: string) {
+function skillMatchesUserFolder(skill: SkillCard, selectedFolderId: string, source?: SourceCard, folders?: SkillFolderCard[]) {
   if (selectedFolderId === "all") return true;
-  if (selectedFolderId === "unfiled") return !skill.userFolderId;
-  return skill.userFolderId === selectedFolderId;
+  const assigned = skill.userFolderId || source?.userFolderId || "";
+  const folderId = folders && !folders.some(folder => folder.id === assigned) ? "" : assigned;
+  if (selectedFolderId === "unfiled") return !folderId;
+  return folderId === selectedFolderId;
 }
 
-function sourceMatchesUserFolder(source: SourceCard, selectedFolderId: string) {
+function sourceMatchesUserFolder(source: SourceCard, selectedFolderId: string, folders?: SkillFolderCard[]) {
   if (selectedFolderId === "all") return true;
-  if (selectedFolderId === "unfiled") return !source.userFolderId;
-  return source.userFolderId === selectedFolderId;
+  const folderId = folders && !folders.some(folder => folder.id === source.userFolderId) ? "" : source.userFolderId;
+  if (selectedFolderId === "unfiled") return !folderId;
+  return folderId === selectedFolderId;
 }
 
 function stableSkillClientId(skill: SkillCard) {
