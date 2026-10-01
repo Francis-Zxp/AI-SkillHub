@@ -25,6 +25,8 @@ pub(crate) struct SourceRunEntry {
     pub detail: String,
     /// What the clone follows, for example `origin/main`; empty for snapshots.
     pub tracking: String,
+    /// Canonical lowercase `owner/repo`; empty for local folders.
+    pub identity: String,
     pub checked_at: String,
     pub added_skills: Vec<String>,
     pub removed_paths: Vec<String>,
@@ -171,6 +173,15 @@ pub(crate) fn tracked_branch(repo: &Path) -> String {
     }
 }
 
+/// Canonical `owner/repo` from the clone's origin or the managed metadata.
+fn source_identity_at(repo: &Path) -> String {
+    crate::github_origin_at(repo)
+        .ok()
+        .flatten()
+        .and_then(|url| crate::source_identity::canonical_github_identity(&url))
+        .unwrap_or_default()
+}
+
 fn apply_scope(entry: &mut SourceRunEntry, scope: &SparseScopeOutcome) {
     entry.added_skills = scope.added_skills.clone();
     entry.removed_paths = scope.removed_paths.clone();
@@ -254,6 +265,7 @@ pub(crate) fn round_entries(
             folder.clone(),
             SourceRunEntry {
                 tracking: tracked_branch(&sources_dir.join(&folder)),
+                identity: source_identity_at(&sources_dir.join(&folder)),
                 folder,
                 outcome: outcome.to_string(),
                 detail,
@@ -273,6 +285,7 @@ pub(crate) fn round_entries(
                 folder: scope.folder.clone(),
                 outcome: "unchanged".to_string(),
                 tracking: tracked_branch(&sources_dir.join(&scope.folder)),
+                identity: source_identity_at(&sources_dir.join(&scope.folder)),
                 checked_at: checked_at.clone(),
                 ..SourceRunEntry::default()
             });

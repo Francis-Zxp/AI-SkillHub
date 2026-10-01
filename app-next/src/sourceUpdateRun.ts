@@ -72,11 +72,12 @@ export function shouldAutoContinue(run: SourceUpdateRun | null | undefined, roun
   return summarizeSourceUpdateRun(run).pending > 0 && roundsThisClick < MAX_AUTO_CONTINUE_ROUNDS;
 }
 
-/** `owner--repo` folders read as `repo · owner`; plain folders stay as they are. */
-export function sourceFolderLabel(folder: string): { title: string; owner: string } {
-  const separator = folder.indexOf("--");
-  if (separator <= 0 || separator >= folder.length - 2) return { title: folder, owner: "" };
-  return { title: folder.slice(separator + 2), owner: folder.slice(0, separator) };
+/** Project name first, author second, from the repository identity; a
+ * folder name alone is shown as it is (its `--` order varies across versions). */
+export function sourceFolderLabel(folder: string, identity = ""): { title: string; owner: string } {
+  const [owner, repo] = identity.split("/");
+  if (owner && repo) return { title: repo, owner };
+  return { title: folder, owner: "" };
 }
 
 /** Short leaf name for a Skill path such as `skills/research/foo` → `foo`. */

@@ -1,9 +1,10 @@
 //! Source identity, display and invocation-name unification.
 //!
 //! A GitHub source is identified by its canonical `owner/repo`, never by its
-//! folder. New imports already store `owner--repo`; sources installed by older
-//! versions may live in a bare `repo` folder, so their parent invocation name
-//! carries no author and two authors' `skills` repositories could collide.
+//! folder. Folders and parent invocation names use `repo--owner` (project first,
+//! author as suffix). Sources installed by older versions live in a bare `repo`
+//! or an `owner--repo` folder; the bare ones carry no author, so two authors'
+//! `skills` repositories could collide.
 //!
 //! `build_plan` is read-only. `apply` renames only folders the app manages,
 //! after a SQLite backup and a journal, and remaps every row keyed by the old
@@ -92,10 +93,13 @@ fn recorded_identity(path: &Path) -> Option<String> {
     canonical_github_identity(payload.get("url").and_then(Value::as_str)?)
 }
 
-/// The folder a source with this identity should live in.
+/// The folder (and therefore the parent invocation name) for an identity:
+/// project first, author as the disambiguating suffix. People remember and
+/// type the project name, client pickers prefix-match it, and lists sort by
+/// project instead of by a wall of author prefixes.
 pub(crate) fn target_folder_for(identity: &str) -> Option<String> {
     let (owner, repo) = identity.split_once('/')?;
-    Some(format!("{owner}--{repo}"))
+    Some(format!("{repo}--{owner}"))
 }
 
 fn github_cache(connection: &Connection, source_id: &str) -> (Option<i64>, String) {
@@ -676,11 +680,11 @@ mod tests {
     fn entry() -> JournalEntry {
         JournalEntry {
             old_folder: "gstack".into(),
-            new_folder: "garrytan--gstack".into(),
+            new_folder: "gstack--garrytan".into(),
             old_source_id: stable_id("source", "gstack"),
-            new_source_id: stable_id("source", "garrytan--gstack"),
+            new_source_id: stable_id("source", "gstack--garrytan"),
             old_parent: "gstack".into(),
-            new_parent: "garrytan--gstack".into(),
+            new_parent: "gstack--garrytan".into(),
             state: "moved".into(),
         }
     }
@@ -728,7 +732,7 @@ mod tests {
         assert_eq!(count("SELECT COUNT(*) FROM source_overrides"), 1);
         assert_eq!(
             count(&format!(
-                "SELECT COUNT(*) FROM source_governance WHERE source_id = '{}' AND source_folder = 'garrytan--gstack' AND pinned = 1",
+                "SELECT COUNT(*) FROM source_governance WHERE source_id = '{}' AND source_folder = 'gstack--garrytan' AND pinned = 1",
                 entry.new_source_id
             )),
             1
@@ -736,7 +740,7 @@ mod tests {
         assert_eq!(
             count(&format!(
                 "SELECT COUNT(*) FROM skill_overrides WHERE skill_id = '{}'",
-                stable_id("skill", "garrytan--gstack")
+                stable_id("skill", "gstack--garrytan")
             )),
             1
         );
@@ -748,11 +752,11 @@ mod tests {
             1
         );
         assert_eq!(
-            count("SELECT COUNT(*) FROM usage_events WHERE source_name = 'garrytan--gstack'"),
+            count("SELECT COUNT(*) FROM usage_events WHERE source_name = 'gstack--garrytan'"),
             2
         );
         assert_eq!(
-            count("SELECT COUNT(*) FROM usage_events WHERE target_name = 'garrytan--gstack'"),
+            count("SELECT COUNT(*) FROM usage_events WHERE target_name = 'gstack--garrytan'"),
             2
         );
 
@@ -842,10 +846,15 @@ mod tests {
         );
         library.add(
             &connection,
-            "Yuan1z0825--nature-skills",
+            "Nature-Skills--Yuan1z0825",
             Some("https://github.com/Yuan1z0825/nature-skills"),
         );
         library.add(&connection, "my-local-pack", None);
+        library.add(
+            &connection,
+            "acme--legacy-order",
+            Some("https://github.com/acme/legacy-order"),
+        );
         library.add(
             &connection,
             "skills",
@@ -857,7 +866,7 @@ mod tests {
             Some("git@github.com:MattPocock/Skills.git"),
         );
         library.add(&connection, "taken", Some("https://github.com/acme/taken"));
-        fs::create_dir_all(library.sources().join("acme--taken")).unwrap();
+        fs::create_dir_all(library.sources().join("taken--acme")).unwrap();
         let plan = build_plan(&library.root, &connection).unwrap();
         assert_eq!(action(&plan, "gstack"), "rename");
         let gstack = plan
@@ -865,17 +874,19 @@ mod tests {
             .iter()
             .find(|entry| entry.folder == "gstack")
             .unwrap();
-        assert_eq!(gstack.target_folder, "garrytan--gstack");
-        assert_eq!(gstack.target_parent, "garrytan--gstack");
+        assert_eq!(gstack.target_folder, "gstack--garrytan");
+        assert_eq!(gstack.target_parent, "gstack--garrytan");
         assert_eq!(gstack.identity, "garrytan/gstack");
         // Case and `.git` differences are one identity; the parent is already aligned.
-        assert_eq!(action(&plan, "Yuan1z0825--nature-skills"), "aligned");
+        assert_eq!(action(&plan, "Nature-Skills--Yuan1z0825"), "aligned");
+        // The earlier owner--repo order migrates to the same project-first rule.
+        assert_eq!(action(&plan, "acme--legacy-order"), "rename");
         assert_eq!(action(&plan, "my-local-pack"), "local");
         // The same repository in two folders is never merged by URL alone.
         assert_eq!(action(&plan, "skills"), "ambiguous");
         assert_eq!(action(&plan, "mattpocock-copy"), "ambiguous");
         assert_eq!(action(&plan, "taken"), "blocked");
-        assert_eq!(plan.rename_count, 1);
+        assert_eq!(plan.rename_count, 2);
     }
 
     #[test]
@@ -900,14 +911,14 @@ mod tests {
         assert_eq!(journal.entries.len(), 1);
         assert!(library
             .sources()
-            .join("garrytan--gstack/skills/one/SKILL.md")
+            .join("gstack--garrytan/skills/one/SKILL.md")
             .is_file());
         assert!(!library.sources().join("gstack").exists());
         assert!(
             library.sources().join("other").exists(),
             "unselected sources stay"
         );
-        let new_id = stable_id("source", "garrytan--gstack");
+        let new_id = stable_id("source", "gstack--garrytan");
         let note: String = connection
             .query_row(
                 "SELECT note FROM source_overrides WHERE source_id = ?1",
@@ -919,7 +930,7 @@ mod tests {
         let metadata = read_json(
             &library
                 .sources()
-                .join("garrytan--gstack")
+                .join("gstack--garrytan")
                 .join(MANAGED_SOURCE_METADATA_FILE),
         )
         .unwrap();
@@ -929,7 +940,7 @@ mod tests {
             .is_file());
 
         let again = build_plan(&library.root, &connection).unwrap();
-        assert_eq!(action(&again, "garrytan--gstack"), "aligned");
+        assert_eq!(action(&again, "gstack--garrytan"), "aligned");
         assert_eq!(again.rename_count, 1, "only `other` still needs a rename");
         assert!(!again.interrupted);
     }
@@ -945,7 +956,7 @@ mod tests {
         // Crash after the folder move, before the database transaction.
         fs::rename(
             library.sources().join("gstack"),
-            library.sources().join("garrytan--gstack"),
+            library.sources().join("gstack--garrytan"),
         )
         .unwrap();
         let journal = Journal {
@@ -953,11 +964,11 @@ mod tests {
             backup_dir: String::new(),
             entries: vec![JournalEntry {
                 old_folder: "gstack".into(),
-                new_folder: "garrytan--gstack".into(),
+                new_folder: "gstack--garrytan".into(),
                 old_source_id: old_id.clone(),
-                new_source_id: stable_id("source", "garrytan--gstack"),
+                new_source_id: stable_id("source", "gstack--garrytan"),
                 old_parent: "gstack".into(),
-                new_parent: "garrytan--gstack".into(),
+                new_parent: "gstack--garrytan".into(),
                 state: "moved".into(),
             }],
             completed: false,
@@ -969,7 +980,7 @@ mod tests {
         let moved: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM sources WHERE id = ?1",
-                [stable_id("source", "garrytan--gstack")],
+                [stable_id("source", "gstack--garrytan")],
                 |row| row.get(0),
             )
             .unwrap();
@@ -987,20 +998,20 @@ mod tests {
             entries: vec![
                 JournalEntry {
                     old_folder: "alpha".into(),
-                    new_folder: "acme--alpha".into(),
+                    new_folder: "alpha--acme".into(),
                     old_source_id: stable_id("source", "alpha"),
-                    new_source_id: stable_id("source", "acme--alpha"),
+                    new_source_id: stable_id("source", "alpha--acme"),
                     old_parent: "alpha".into(),
-                    new_parent: "acme--alpha".into(),
+                    new_parent: "alpha--acme".into(),
                     state: "planned".into(),
                 },
                 JournalEntry {
                     old_folder: "vanished".into(),
-                    new_folder: "acme--vanished".into(),
+                    new_folder: "vanished--acme".into(),
                     old_source_id: stable_id("source", "vanished"),
-                    new_source_id: stable_id("source", "acme--vanished"),
+                    new_source_id: stable_id("source", "vanished--acme"),
                     old_parent: "vanished".into(),
-                    new_parent: "acme--vanished".into(),
+                    new_parent: "vanished--acme".into(),
                     state: "planned".into(),
                 },
             ],
@@ -1010,7 +1021,7 @@ mod tests {
         let error = resume(&library.root, &mut connection, journal).unwrap_err();
         assert!(error.contains("已恢复"), "{error}");
         assert!(library.sources().join("alpha").is_dir());
-        assert!(!library.sources().join("acme--alpha").exists());
+        assert!(!library.sources().join("alpha--acme").exists());
         assert!(read_journal(&library.root).is_none());
     }
 
@@ -1050,14 +1061,14 @@ mod tests {
     fn target_folder_is_lowercase_owner_double_dash_repo() {
         assert_eq!(
             target_folder_for("mattpocock/skills").as_deref(),
-            Some("mattpocock--skills")
+            Some("skills--mattpocock")
         );
         assert_eq!(target_folder_for("bad"), None);
         // Dots and underscores are folder-safe but not invocation-safe: the
         // parent name gets a stable digest, exactly like every other parent.
-        let parent = router_hub_skill_name("owner--my.repo_name");
-        assert!(parent.starts_with("owner-my-repo-name-"));
+        let parent = router_hub_skill_name("my.repo_name--owner");
+        assert!(parent.starts_with("my-repo-name-owner-"));
         assert!(parent.len() <= 64);
-        assert_eq!(parent, router_hub_skill_name("owner--my.repo_name"));
+        assert_eq!(parent, router_hub_skill_name("my.repo_name--owner"));
     }
 }

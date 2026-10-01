@@ -9227,9 +9227,10 @@ fn source_import_target_path(root: &Path, display_name: &str) -> String {
 }
 
 fn github_source_storage_name(owner: &str, repo: &str) -> String {
-    // Lowercase `owner--repo`: the folder, the source id and the parent
-    // invocation name then all agree with the canonical repository identity.
-    sanitize_source_folder_name(&format!("{}--{}", owner.trim(), repo.trim())).to_lowercase()
+    // Lowercase `repo--owner` (project first, author as suffix): the folder,
+    // the source id and the parent invocation name all derive from it, and it
+    // matches `identity_migration::target_folder_for`.
+    sanitize_source_folder_name(&format!("{}--{}", repo.trim(), owner.trim())).to_lowercase()
 }
 
 fn staged_github_storage_name(staged_path: &Path, fallback: &str) -> String {
@@ -24897,14 +24898,14 @@ mod tests {
             Some("source-existing-skills")
         );
         assert_eq!(
-            github_source_storage_name("emilkowalski", "skills"),
-            "emilkowalski--skills"
+            github_source_storage_name("EmilKowalski", "Skills"),
+            "skills--emilkowalski"
         );
         let root = PathBuf::from("C:\\AI-SkillHub-Test");
         let plan =
             build_github_source_import_plan(&root, &[], "https://github.com/emilkowalski/skills")
                 .expect("generic repository plan should build");
-        assert!(normalize_path_for_compare(&plan.target_path).ends_with("\\emilkowalski--skills"));
+        assert!(normalize_path_for_compare(&plan.target_path).ends_with("\\skills--emilkowalski"));
     }
 
     #[test]

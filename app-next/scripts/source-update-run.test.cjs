@@ -72,8 +72,10 @@ test("attention-first ordering and owner--repo labels", () => {
     entry("later", "deferred")
   ]).map(item => item.folder);
   assert.deepEqual([...ordered], ["broken", "later", "fresh", "z-ok"]);
-  assert.deepEqual({ ...sourceFolderLabel("Yuan1z0825--nature-skills") }, { title: "nature-skills", owner: "Yuan1z0825" });
-  assert.deepEqual({ ...sourceFolderLabel("gstack") }, { title: "gstack", owner: "" });
+  // Identity decides; the folder's `--` order differs between versions.
+  assert.deepEqual({ ...sourceFolderLabel("nature-skills--yuan1z0825", "yuan1z0825/nature-skills") }, { title: "nature-skills", owner: "yuan1z0825" });
+  assert.deepEqual({ ...sourceFolderLabel("Yuan1z0825--nature-skills", "yuan1z0825/nature-skills") }, { title: "nature-skills", owner: "yuan1z0825" });
+  assert.deepEqual({ ...sourceFolderLabel("my-local-pack") }, { title: "my-local-pack", owner: "" });
   assert.equal(skillPathLeaf("skills/中文 技能/"), "中文 技能");
 });
 

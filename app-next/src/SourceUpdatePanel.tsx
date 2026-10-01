@@ -128,7 +128,7 @@ export function SourceUpdatePanel({ run, busy, onContinue, compact = false }: Pr
 
 function SourceRunRow({ entry }: { entry: SourceUpdateRunEntry }) {
   const outcome = normalizeOutcome(entry.outcome);
-  const label = sourceFolderLabel(entry.folder);
+  const label = sourceFolderLabel(entry.folder, entry.identity);
   const hintKey = `hint.${outcome}`;
   const hint = entry.detail || (["local-changes", "deferred", "not-git", "pinned"].includes(outcome) ? rt(hintKey) : "");
   return (

@@ -143,6 +143,8 @@ export type SourceUpdateRunEntry = {
   outcome: SourceUpdateOutcome | string;
   detail: string;
   tracking: string;
+  /** Canonical lowercase owner/repo; empty for local folders. */
+  identity?: string;
   checkedAt: string;
   addedSkills: string[];
   removedPaths: string[];
