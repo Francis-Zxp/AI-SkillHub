@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { McpRecipeCard } from "./McpRecipeCard";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Icon } from "./icons";
@@ -692,6 +693,14 @@ export function McpCenter({ runtimeAvailable }: McpCenterProps) {
           </button>
         </div>
       </section>
+
+      <McpRecipeCard
+        onConfigChanged={() => {
+          void loadManagementState();
+          void scan();
+        }}
+        runtimeAvailable={runtimeAvailable}
+      />
 
       <section className="mcp-metrics" aria-label={t("mcp.summary") }>
         <Metric label={t("mcp.hosts")} value={summary.hosts} />

@@ -6,6 +6,7 @@ mod legacy_cleanup;
 mod mcp_center;
 mod mcp_github_import;
 mod mcp_mutation;
+mod mcp_recipes;
 mod metadata;
 mod migration_v4;
 mod prompt_launcher;
@@ -4413,6 +4414,55 @@ async fn scan_mcp_connections() -> Result<mcp_center::McpInventory, String> {
     })
     .await
     .map_err(|_| "MCP 只读扫描后台任务意外停止；没有修改任何配置。".to_string())?
+}
+
+fn mcp_recipe_context() -> Result<mcp_recipes::RecipeContext, String> {
+    let root = resolve_legacy_root()?;
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .ok_or_else(|| "无法确定本机应用数据目录；MCP 安装未运行。".to_string())?;
+    Ok(mcp_recipes::RecipeContext {
+        runtime_dir: user_data_root(&root)
+            .join("mcp-runtimes")
+            .join(mcp_recipes::ORIGIN_RECIPE_ID),
+        home_dir: resolve_mcp_home_dir()?,
+        local_app_data,
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+    })
+}
+
+/// Read-only status of the Origin MCP recipe (prerequisites, runtime, client
+/// entries, last verification). Starts no MCP server.
+#[tauri::command]
+async fn detect_mcp_recipe() -> Result<mcp_recipes::RecipeStatus, String> {
+    run_blocking_task(|| Ok(mcp_recipes::detect(&mcp_recipe_context()?))).await
+}
+
+/// Creates the isolated runtime with the verified origin-mcp version and
+/// stages the Origin Apps. The interpreter is chosen here from detected
+/// candidates; the webview cannot supply a program path.
+#[tauri::command]
+async fn install_mcp_recipe() -> Result<mcp_recipes::RecipeStatus, String> {
+    run_blocking_task(|| {
+        let _guard = acquire_mcp_mutation_guard()?;
+        let context = mcp_recipe_context()?;
+        let (base, _) = mcp_recipes::find_base_pythons(&context.home_dir, &context.local_app_data)
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                "没有找到 Python 3.10–3.14。请先安装 Python，再点击安装。".to_string()
+            })?;
+        mcp_recipes::install(&context, &base)
+    })
+    .await
+}
+
+/// Real MCP handshake plus one read-only Origin call; the result is stored
+/// with the app and package versions so an update never inherits "ready".
+#[tauri::command]
+async fn verify_mcp_recipe() -> Result<mcp_recipes::RecipeStatus, String> {
+    run_blocking_task(|| Ok(mcp_recipes::verify(&mcp_recipe_context()?))).await
 }
 
 /// Fetches a bounded public repository configuration and returns only a
@@ -18941,6 +18991,9 @@ pub fn run() {
             delete_managed_source,
             consolidate_duplicate_sources,
             plan_source_identity_migration,
+            detect_mcp_recipe,
+            install_mcp_recipe,
+            verify_mcp_recipe,
             apply_source_identity_migration,
             set_preset_workspace_enabled,
             set_real_write_authorization,
