@@ -25,6 +25,7 @@ import { sourcePresentation } from "./sourceIdentity";
 import { buildSkyIslands, isRouterHubSkill as modelIsRouterHubSkill, skillBelongsToSource as modelSkillBelongsToSource } from "./skyIslandModel";
 import { PromptLauncherAction } from "./PromptLauncherAction";
 import { SourceUpdatePanel } from "./SourceUpdatePanel";
+import { SourceIdentityPanel } from "./SourceIdentityPanel";
 import { rt, shouldAutoContinue, sourceUpdateToast, summarizeSourceUpdateRun } from "./sourceUpdateRun";
 import { externalSkillsText } from "./externalSkills";
 const ExternalSkillsPanel = lazy(() => import("./ExternalSkillsPanel").then(module => ({ default: module.ExternalSkillsPanel })));
@@ -2175,6 +2176,11 @@ export function App() {
               onOpenOfficialReleases={() => void openOfficialReleases()}
               onOpenAdvanced={() => setActive("release")}
               onContinueSourceUpdate={() => void syncAndRefreshAll({ continueRun: true, refreshPopularity: false })}
+              onSnapshotChange={next => {
+                setSnapshot(next);
+                toastMessage(getLang() === "zh" ? "来源命名已统一，索引与 AI 工具链接已重建。" : getLang() === "ko" ? "소스 이름을 통일하고 인덱스와 AI 도구 링크를 다시 만들었습니다." : "Source names unified; index and AI tool links rebuilt.", "ok");
+              }}
+              onError={message => setLoadError(message)}
               snapshot={snapshot}
             />
           )}
@@ -6089,6 +6095,8 @@ function Settings({
   onOpenOfficialReleases,
   onOpenAdvanced,
   onContinueSourceUpdate,
+  onSnapshotChange,
+  onError,
   snapshot
 }: {
   appUpdate: AppUpdateState;
@@ -6106,6 +6114,8 @@ function Settings({
   onOpenOfficialReleases: () => void;
   onOpenAdvanced: () => void;
   onContinueSourceUpdate: () => void;
+  onSnapshotChange: (snapshot: LegacySnapshot) => void;
+  onError: (message: string) => void;
   snapshot: LegacySnapshot | null;
 }) {
   const updateBusy =
@@ -6397,6 +6407,13 @@ function Settings({
           </div>
         </section>
       )}
+
+      <SourceIdentityPanel
+        disabled={disabled}
+        onApplied={onSnapshotChange}
+        onError={onError}
+        runtimeAvailable={hasTauriRuntime()}
+      />
 
       <section className="preset-concept-strip glow-card">
         <article><Icon name="folder" /><div><strong>{t("preset.folderTitle")}</strong><span>{t("preset.folderBody")}</span></div></article>

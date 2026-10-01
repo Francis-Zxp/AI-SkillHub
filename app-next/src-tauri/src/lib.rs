@@ -1,6 +1,7 @@
 mod adapter_doctor;
 mod codex_plugin_doctor;
 mod external_skills;
+mod identity_migration;
 mod legacy_cleanup;
 mod mcp_center;
 mod mcp_github_import;
@@ -638,6 +639,10 @@ struct GithubPopularityFetch {
     forks: u64,
     open_issues: u64,
     last_updated_at: String,
+    /// Stable GitHub repository id; survives renames and transfers.
+    repo_id: Option<i64>,
+    /// `owner/repo` as GitHub reports it now (after any redirect).
+    full_name: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -3859,6 +3864,51 @@ async fn consolidate_duplicate_sources() -> Result<LegacySnapshot, String> {
     run_blocking_task(consolidate_duplicate_sources_blocking).await
 }
 
+/// Read-only: which sources would get an `owner--repo` folder and parent name.
+#[tauri::command]
+async fn plan_source_identity_migration() -> Result<identity_migration::IdentityPlan, String> {
+    run_blocking_task(|| {
+        let root = resolve_legacy_root()?;
+        let connection = open_index_database(&root)?;
+        identity_migration::build_plan(&root, &connection)
+    })
+    .await
+}
+
+/// Explicit, per-source action from Settings. Backs up SQLite and the config,
+/// journals each folder move, remaps every keyed row, then rebuilds parents,
+/// the catalog and the index. An interrupted run is finished first.
+#[tauri::command]
+async fn apply_source_identity_migration(
+    source_ids: Vec<String>,
+) -> Result<LegacySnapshot, String> {
+    run_blocking_task(move || {
+        let _guard = acquire_background_write_guard("统一来源命名")?;
+        let root = resolve_legacy_root()?;
+        let mut connection = open_index_database(&root)?;
+        let journal = identity_migration::apply(&root, &mut connection, &source_ids)?;
+        let _ = write_audit_event(
+            &connection,
+            "source_identity_migrated",
+            &format!(
+                "Unified {} source folder(s) to owner--repo",
+                journal.entries.len()
+            ),
+            serde_json::json!({
+                "backup": journal.backup_dir,
+                "renamed": journal.entries.iter().map(|entry| serde_json::json!({
+                    "from": entry.old_folder,
+                    "to": entry.new_folder,
+                    "parentFrom": entry.old_parent,
+                    "parentTo": entry.new_parent,
+                })).collect::<Vec<_>>()
+            }),
+        );
+        reconcile_agent_skill_delivery(&root, &connection, false, false)
+    })
+    .await
+}
+
 fn repository_content_entries(root: &Path) -> Result<BTreeMap<String, String>, String> {
     let mut stack = vec![root.to_path_buf()];
     let mut entries = Vec::new();
@@ -4932,6 +4982,8 @@ fn refresh_source_popularity_blocking() -> Result<SourcePopularityRefreshResult,
                 forks: 0,
                 open_issues: 0,
                 last_updated_at: String::new(),
+                repo_id: None,
+                full_name: String::new(),
             };
             upsert_source_popularity_cache(
                 &connection,
@@ -4969,6 +5021,8 @@ fn refresh_source_popularity_blocking() -> Result<SourcePopularityRefreshResult,
                     forks: 0,
                     open_issues: 0,
                     last_updated_at: String::new(),
+                    repo_id: None,
+                    full_name: String::new(),
                 };
                 upsert_source_popularity_cache(
                     &connection,
@@ -5808,6 +5862,12 @@ fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
             "TEXT NOT NULL DEFAULT 'legacy'",
         ),
         ("sources", "metadata_confidence", "REAL NOT NULL DEFAULT 0"),
+        ("source_popularity_cache", "github_repo_id", "INTEGER"),
+        (
+            "source_popularity_cache",
+            "github_full_name",
+            "TEXT NOT NULL DEFAULT ''",
+        ),
     ] {
         ensure_column(connection, table, column, definition)?;
     }
@@ -9117,7 +9177,9 @@ fn source_import_target_path(root: &Path, display_name: &str) -> String {
 }
 
 fn github_source_storage_name(owner: &str, repo: &str) -> String {
-    sanitize_source_folder_name(&format!("{}--{}", owner.trim(), repo.trim()))
+    // Lowercase `owner--repo`: the folder, the source id and the parent
+    // invocation name then all agree with the canonical repository identity.
+    sanitize_source_folder_name(&format!("{}--{}", owner.trim(), repo.trim())).to_lowercase()
 }
 
 fn staged_github_storage_name(staged_path: &Path, fallback: &str) -> String {
@@ -13404,6 +13466,12 @@ fn fetch_github_popularity(owner: &str, repo: &str) -> Result<GithubPopularityFe
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string(),
+        repo_id: payload.get("id").and_then(Value::as_i64),
+        full_name: payload
+            .get("full_name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
     })
 }
 
@@ -13588,9 +13656,13 @@ fn upsert_source_popularity_cache(
         .execute(
             "INSERT INTO source_popularity_cache (
                 source_id, source_name, url, owner, repo, created_at, stars, forks,
-                open_issues, last_updated_at, fetched_at, cache_status, error
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                open_issues, last_updated_at, fetched_at, cache_status, error,
+                github_repo_id, github_full_name
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ON CONFLICT(source_id) DO UPDATE SET
+                github_repo_id = COALESCE(excluded.github_repo_id, source_popularity_cache.github_repo_id),
+                github_full_name = CASE WHEN excluded.github_full_name <> ''
+                    THEN excluded.github_full_name ELSE source_popularity_cache.github_full_name END,
                 source_name = excluded.source_name,
                 url = excluded.url,
                 owner = excluded.owner,
@@ -13616,7 +13688,9 @@ fn upsert_source_popularity_cache(
                 &popularity.last_updated_at,
                 fetched_at,
                 cache_status,
-                compact_note(error)
+                compact_note(error),
+                popularity.repo_id,
+                &popularity.full_name
             ],
         )
         .map_err(|error| format!("Cannot write source popularity cache: {}", error))?;
@@ -18866,6 +18940,8 @@ pub fn run() {
             set_source_tags,
             delete_managed_source,
             consolidate_duplicate_sources,
+            plan_source_identity_migration,
+            apply_source_identity_migration,
             set_preset_workspace_enabled,
             set_real_write_authorization,
             run_release_gate_runner,
@@ -23989,6 +24065,8 @@ mod tests {
             forks: 56,
             open_issues: 7,
             last_updated_at: "2026-05-29T00:00:00Z".to_string(),
+            repo_id: Some(42),
+            full_name: "owner/repo".to_string(),
         };
 
         upsert_source_popularity_cache(
