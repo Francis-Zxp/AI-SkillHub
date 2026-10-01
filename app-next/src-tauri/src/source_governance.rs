@@ -38,6 +38,11 @@ pub(crate) struct SourceGovernanceCard {
     pub can_rollback: bool,
     pub status: String,
     pub message: String,
+    /// What a sync fast-forwards, for example `origin/main`.
+    pub tracking_branch: String,
+    /// GitHub's default branch seen by the last version check. When it
+    /// differs from the tracked branch the user decides; sync never switches.
+    pub remote_default_branch: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -154,7 +159,26 @@ pub(crate) fn ensure_schema(connection: &Connection) -> Result<(), String> {
                 checked_at TEXT NOT NULL DEFAULT ''
             );",
         )
-        .map_err(|error| format!("Cannot ensure source governance schema: {error}"))
+        .map_err(|error| format!("Cannot ensure source governance schema: {error}"))?;
+    let has_default_branch = connection
+        .prepare("PRAGMA table_info(source_governance)")
+        .and_then(|mut statement| {
+            let names = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(names.iter().any(|name| name == "remote_default_branch"))
+        })
+        .map_err(|error| format!("Cannot inspect source governance schema: {error}"))?;
+    if !has_default_branch {
+        connection
+            .execute(
+                "ALTER TABLE source_governance
+                 ADD COLUMN remote_default_branch TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .map_err(|error| format!("Cannot extend source governance schema: {error}"))?;
+    }
+    Ok(())
 }
 
 pub(crate) fn read_governance_cards(
@@ -189,7 +213,8 @@ fn read_governance_cards_with_revision_probe(
                 "SELECT
                     pinned, pinned_revision, current_revision, remote_revision,
                     relation, ahead_count, behind_count, changed_files, additions,
-                    deletions, remote_summary, last_checked_at, diff_source, status, message
+                    deletions, remote_summary, last_checked_at, diff_source, status, message,
+                    remote_default_branch
                  FROM source_governance WHERE source_id = ?1",
                 params![source.id],
                 |row| {
@@ -209,6 +234,7 @@ fn read_governance_cards_with_revision_probe(
                         row.get::<_, String>(12)?,
                         row.get::<_, String>(13)?,
                         row.get::<_, String>(14)?,
+                        row.get::<_, String>(15)?,
                     ))
                 },
             )
@@ -224,6 +250,11 @@ fn read_governance_cards_with_revision_probe(
         } else {
             String::new()
         };
+        let tracking_branch = path
+            .as_deref()
+            .filter(|path| is_git_repository(path))
+            .map(super::update_run::tracked_branch)
+            .unwrap_or_default();
         let support_status = if path.as_deref().is_some_and(is_git_repository) {
             "git".to_string()
         } else if source.url.trim().is_empty() {
@@ -247,6 +278,7 @@ fn read_governance_cards_with_revision_probe(
             diff_source,
             mut status,
             mut message,
+            remote_default_branch,
         ) = cached.unwrap_or_else(|| {
             (
                 false,
@@ -263,6 +295,7 @@ fn read_governance_cards_with_revision_probe(
                 String::new(),
                 "none".to_string(),
                 "not-inspected".to_string(),
+                String::new(),
                 String::new(),
             )
         });
@@ -330,6 +363,8 @@ fn read_governance_cards_with_revision_probe(
             can_rollback,
             status,
             message,
+            tracking_branch,
+            remote_default_branch,
         });
     }
 
@@ -622,6 +657,20 @@ pub(crate) fn refresh_status(
         GIT_FETCH_TIMEOUT,
     );
     let remote = resolve_upstream_revision(&path);
+    // GitHub may rename or change its default branch. Record it so the user
+    // sees the difference; the tracked branch is never switched silently.
+    let remote_default_branch = if fetch_result.is_ok() {
+        run_git(
+            &path,
+            &["ls-remote", "--symref", "origin", "HEAD"],
+            GIT_FETCH_TIMEOUT,
+        )
+        .ok()
+        .and_then(|listing| parse_symref_head(&listing))
+        .unwrap_or_default()
+    } else {
+        String::new()
+    };
 
     let (diff, diff_source, status, message) = match remote {
         Ok((remote_ref, remote_revision)) => {
@@ -688,8 +737,8 @@ pub(crate) fn refresh_status(
                 source_id, source_folder, pinned, current_revision, remote_revision,
                 relation, ahead_count, behind_count, changed_files, additions,
                 deletions, remote_summary, last_checked_at, diff_source, status,
-                message, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?13)
+                message, updated_at, remote_default_branch
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?13, ?17)
              ON CONFLICT(source_id) DO UPDATE SET
                 source_folder = excluded.source_folder,
                 current_revision = excluded.current_revision,
@@ -707,7 +756,10 @@ pub(crate) fn refresh_status(
                 message = CASE WHEN source_governance.pinned = 1
                     THEN 'Sync will keep the pinned revision.'
                     ELSE excluded.message END,
-                updated_at = excluded.updated_at",
+                updated_at = excluded.updated_at,
+                remote_default_branch = CASE WHEN excluded.remote_default_branch = ''
+                    THEN source_governance.remote_default_branch
+                    ELSE excluded.remote_default_branch END",
             params![
                 source.id,
                 folder,
@@ -724,7 +776,8 @@ pub(crate) fn refresh_status(
                 timestamp,
                 diff_source,
                 status,
-                message
+                message,
+                remote_default_branch
             ],
         )
         .map_err(|error| format!("Cannot cache source revision comparison: {error}"))?;
@@ -1169,6 +1222,17 @@ fn git_revision(path: &Path) -> Result<String, String> {
         return Err("Git HEAD did not resolve to a full verifiable commit.".to_string());
     }
     Ok(revision)
+}
+
+/// `ref: refs/heads/main<TAB>HEAD` from `git ls-remote --symref origin HEAD`.
+fn parse_symref_head(listing: &str) -> Option<String> {
+    listing.lines().find_map(|line| {
+        let (reference, name) = line.split_once('\t')?;
+        (name.trim() == "HEAD")
+            .then_some(reference)?
+            .strip_prefix("ref: refs/heads/")
+            .map(|branch| branch.trim().to_string())
+    })
 }
 
 fn resolve_upstream_revision(path: &Path) -> Result<(String, String), String> {
@@ -1622,6 +1686,45 @@ fn compact_error(value: impl AsRef<str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn symref_listing_yields_the_remote_default_branch() {
+        let listing =
+            "ref: refs/heads/trunk\tHEAD\n0123456789abcdef0123456789abcdef01234567\tHEAD\n";
+        assert_eq!(parse_symref_head(listing).as_deref(), Some("trunk"));
+        assert_eq!(parse_symref_head("0123\tHEAD\n"), None);
+        assert_eq!(parse_symref_head(""), None);
+    }
+
+    #[test]
+    fn schema_upgrade_adds_default_branch_once_and_keeps_rows() {
+        let connection = Connection::open_in_memory().expect("memory database");
+        connection
+            .execute_batch(
+                "CREATE TABLE source_governance (
+                    source_id TEXT PRIMARY KEY, source_folder TEXT NOT NULL DEFAULT '',
+                    pinned INTEGER NOT NULL DEFAULT 0, pinned_revision TEXT NOT NULL DEFAULT '',
+                    current_revision TEXT NOT NULL DEFAULT '', remote_revision TEXT NOT NULL DEFAULT '',
+                    relation TEXT NOT NULL DEFAULT 'unknown', ahead_count INTEGER NOT NULL DEFAULT 0,
+                    behind_count INTEGER NOT NULL DEFAULT 0, changed_files INTEGER NOT NULL DEFAULT 0,
+                    additions INTEGER NOT NULL DEFAULT 0, deletions INTEGER NOT NULL DEFAULT 0,
+                    remote_summary TEXT NOT NULL DEFAULT '', last_checked_at TEXT NOT NULL DEFAULT '',
+                    diff_source TEXT NOT NULL DEFAULT 'none', status TEXT NOT NULL DEFAULT 'not-inspected',
+                    message TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '');
+                 INSERT INTO source_governance (source_id, pinned) VALUES ('kept', 1);",
+            )
+            .expect("legacy schema");
+        ensure_schema(&connection).expect("first upgrade");
+        ensure_schema(&connection).expect("second upgrade is a no-op");
+        let (pinned, branch): (i64, String) = connection
+            .query_row(
+                "SELECT pinned, remote_default_branch FROM source_governance WHERE source_id = 'kept'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("row survives");
+        assert_eq!((pinned, branch.as_str()), (1, ""));
+    }
 
     fn run(path: &Path, args: &[&str]) {
         let status = Command::new("git")

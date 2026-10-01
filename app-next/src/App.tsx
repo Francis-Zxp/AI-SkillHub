@@ -24,6 +24,8 @@ const SkillArchipelago = lazy(() => import("./SkillArchipelago").then(module => 
 import { sourcePresentation } from "./sourceIdentity";
 import { buildSkyIslands, isRouterHubSkill as modelIsRouterHubSkill, skillBelongsToSource as modelSkillBelongsToSource } from "./skyIslandModel";
 import { PromptLauncherAction } from "./PromptLauncherAction";
+import { SourceUpdatePanel } from "./SourceUpdatePanel";
+import { rt, shouldAutoContinue, sourceUpdateToast, summarizeSourceUpdateRun } from "./sourceUpdateRun";
 import { externalSkillsText } from "./externalSkills";
 const ExternalSkillsPanel = lazy(() => import("./ExternalSkillsPanel").then(module => ({ default: module.ExternalSkillsPanel })));
 import type {
@@ -282,7 +284,7 @@ type ImportFeedbackOptions = {
   operationId?: string;
   onProgress?: (event: SourceImportProgressEvent) => void;
 };
-type OperationStatus = { title: string; detail: string; step: number; total: number; percent: number };
+type OperationStatus = { title: string; detail: string; step: number; total: number; percent: number; stoppable?: boolean };
 type SourceSortKey = "recent" | "rating" | "usage" | "heat" | "skillCount" | "health" | "name";
 type ToastTone = "info" | "ok" | "warn" | "error";
 type AppUpdatePhase =
@@ -477,6 +479,8 @@ export function App() {
   const indexRefreshInFlightRef = useRef<Promise<LegacySnapshot | null> | null>(null);
   const popularityRefreshInFlightRef = useRef<Promise<SourcePopularityRefreshResult | null> | null>(null);
   const syncInFlightRef = useRef<Promise<LegacySnapshot | null> | null>(null);
+  // Set by the operation banner: finish the current round, then stop chaining.
+  const updateRunStopRef = useRef(false);
   const runtimeAvailable = hasTauriRuntime();
   const realWritesEnabled = snapshot?.operatorConsent?.realWritesEnabled === true;
   const mutationBusy = loading || initialDeliveryBusy || indexRefreshing || popularityRefreshing || Boolean(operation);
@@ -791,7 +795,7 @@ export function App() {
 
   async function loadSnapshot(
     mode: "indexed" | "refresh" | "scan" = "indexed",
-    options: { background?: boolean; quiet?: boolean } = {}
+    options: { background?: boolean; quiet?: boolean; continueRun?: boolean } = {}
   ): Promise<LegacySnapshot | null> {
     if (!options.background) setLoading(true);
     try {
@@ -807,7 +811,9 @@ export function App() {
         : mode === "scan"
           ? "scan_legacy_snapshot"
           : "load_indexed_snapshot";
-      const result = await invoke<LegacySnapshot>(command);
+      const result = mode === "refresh" && options.continueRun
+        ? await invoke<LegacySnapshot>(command, { continueRun: true })
+        : await invoke<LegacySnapshot>(command);
       applySnapshot(result, Boolean(options.background));
       if (mode === "indexed") markAfterNextPaint("ai-skillhub-index-visible");
       setLoadError("");
@@ -1317,13 +1323,13 @@ export function App() {
   }
 
   async function syncAndRefreshAll(
-    options: { refreshPopularity?: boolean } = {}
+    options: { refreshPopularity?: boolean; continueRun?: boolean } = {}
   ): Promise<LegacySnapshot | null> {
     if (syncInFlightRef.current) {
       toastMessage(t("toast.syncBusy"), "warn");
       return syncInFlightRef.current;
     }
-    const task = runCoreSync();
+    const task = runCoreSync(Boolean(options.continueRun));
     syncInFlightRef.current = task;
     let refreshed: LegacySnapshot | null = null;
     try {
@@ -1337,16 +1343,45 @@ export function App() {
     }
   }
 
-  async function runCoreSync(): Promise<LegacySnapshot | null> {
+  async function runCoreSync(continueRun = false): Promise<LegacySnapshot | null> {
+    updateRunStopRef.current = false;
     setOperation({ title: t("op.syncTitle"), detail: t("op.step1"), step: 1, total: 1, percent: 28 });
     try {
-      const refreshed = await loadSnapshot("refresh", { background: true, quiet: true });
+      let refreshed = await loadSnapshot("refresh", { background: true, quiet: true, continueRun });
       if (!refreshed) {
         toastMessage(t("toast.syncFailed"), "error");
         return null;
       }
       if (!runtimeAvailable) return refreshed;
+      // One click finishes the whole run: sources the Git budget could not
+      // reach are continued in further bounded rounds, never silently dropped.
+      let rounds = 1;
+      while (shouldAutoContinue(refreshed.lastSyncSummary?.updateRun, rounds, updateRunStopRef.current)) {
+        const run = summarizeSourceUpdateRun(refreshed.lastSyncSummary?.updateRun);
+        rounds += 1;
+        setOperation({
+          title: t("op.syncTitle"),
+          detail: rt("run.continuing", { n: run.pending, round: rounds }),
+          step: run.checked,
+          total: run.total,
+          percent: run.total > 0 ? (run.checked / run.total) * 100 : 50,
+          stoppable: true
+        });
+        const next = await loadSnapshot("refresh", { background: true, quiet: true, continueRun: true });
+        if (!next) break;
+        refreshed = next;
+      }
       setOperation({ title: t("op.syncTitle"), detail: t("op.step3"), step: 1, total: 1, percent: 100 });
+      const runToast = sourceUpdateToast(refreshed.lastSyncSummary?.updateRun);
+      if (runToast) {
+        const stoppedEarly = updateRunStopRef.current && summarizeSourceUpdateRun(refreshed.lastSyncSummary?.updateRun).pending > 0;
+        toastMessage(
+          stoppedEarly ? rt("run.stopped", { n: summarizeSourceUpdateRun(refreshed.lastSyncSummary?.updateRun).pending }) : runToast.message,
+          stoppedEarly ? "warn" : runToast.tone
+        );
+        await waitFor(650);
+        return refreshed;
+      }
       const syncSummary = refreshed.lastSyncSummary;
       const syncTone = syncSummary?.status === "failed"
         ? "error"
@@ -1948,6 +1983,18 @@ export function App() {
                 <span>{operation.detail}</span>
               </div>
               <em>{operationProgress}% · {operation.step}/{operation.total}</em>
+              {operation.stoppable && (
+                <button
+                  className="ghost-action small"
+                  onClick={() => {
+                    updateRunStopRef.current = true;
+                    setOperation(current => current ? { ...current, stoppable: false } : current);
+                  }}
+                  type="button"
+                >
+                  {rt("run.stop")}
+                </button>
+              )}
               <i style={{ "--operation-progress": `${operationProgress}%` } as CSSProperties} />
             </section>
           )}
@@ -2127,6 +2174,7 @@ export function App() {
               onInstallUpdate={() => void installAppUpdate()}
               onOpenOfficialReleases={() => void openOfficialReleases()}
               onOpenAdvanced={() => setActive("release")}
+              onContinueSourceUpdate={() => void syncAndRefreshAll({ continueRun: true, refreshPopularity: false })}
               snapshot={snapshot}
             />
           )}
@@ -4586,6 +4634,22 @@ function SourceEditPanel({
                 <dd>{governance.backupCount}</dd>
               </div>
             </dl>
+            {governance.trackingBranch && (
+              <p className="source-governance-branch">
+                {t("governance.tracking", { branch: governance.trackingBranch })}
+              </p>
+            )}
+            {governance.remoteDefaultBranch
+              && governance.trackingBranch
+              && !governance.trackingBranch.endsWith(`/${governance.remoteDefaultBranch}`)
+              && governance.trackingBranch !== governance.remoteDefaultBranch && (
+              <p className="source-governance-branch-warning" role="note">
+                {t("governance.defaultBranchChanged", {
+                  remote: governance.remoteDefaultBranch,
+                  branch: governance.trackingBranch
+                })}
+              </p>
+            )}
             {governance.remoteSummary && <p>{governance.remoteSummary}</p>}
             <div className="source-governance-actions">
               <button className="ghost-action small" disabled={formDisabled} onClick={onRefreshVersion} type="button">
@@ -6024,6 +6088,7 @@ function Settings({
   onInstallUpdate,
   onOpenOfficialReleases,
   onOpenAdvanced,
+  onContinueSourceUpdate,
   snapshot
 }: {
   appUpdate: AppUpdateState;
@@ -6040,6 +6105,7 @@ function Settings({
   onInstallUpdate: () => void;
   onOpenOfficialReleases: () => void;
   onOpenAdvanced: () => void;
+  onContinueSourceUpdate: () => void;
   snapshot: LegacySnapshot | null;
 }) {
   const updateBusy =
@@ -6295,7 +6361,13 @@ function Settings({
         </section>
       )}
 
-      {sourceUpdateProblems.length > 0 && (
+      {snapshot?.lastSyncSummary?.updateRun ? (
+        <SourceUpdatePanel
+          busy={disabled}
+          onContinue={onContinueSourceUpdate}
+          run={snapshot.lastSyncSummary.updateRun}
+        />
+      ) : sourceUpdateProblems.length > 0 && (
         <section className="panel glow-card source-update-problems" role="status">
           <header className="panel-head">
             <div>

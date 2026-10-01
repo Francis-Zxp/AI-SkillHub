@@ -55,12 +55,16 @@ test("Skill source sync reports partial failures instead of claiming universal s
 test("core sync is single-flight and follows with a lightweight popularity refresh", () => {
   assert.match(app, /const syncInFlightRef = useRef<Promise<LegacySnapshot \| null> \| null>\(null\)/);
   assert.match(app, /if \(syncInFlightRef\.current\)[\s\S]*?return syncInFlightRef\.current/);
-  assert.match(app, /const task = runCoreSync\(\);\s*syncInFlightRef\.current = task/);
+  assert.match(app, /const task = runCoreSync\(Boolean\(options\.continueRun\)\);\s*syncInFlightRef\.current = task/);
+  // One click finishes the run: deferred sources continue in bounded rounds
+  // that the user can stop; nothing is reported as done while still waiting.
+  assert.match(app, /while \(shouldAutoContinue\(refreshed\.lastSyncSummary\?\.updateRun, rounds, updateRunStopRef\.current\)\)/);
+  assert.match(app, /loadSnapshot\("refresh", \{ background: true, quiet: true, continueRun: true \}\)/);
   const coreSync = app.slice(app.indexOf("async function runCoreSync"), app.indexOf("async function refreshLocalAgents"));
-  assert.match(coreSync, /loadSnapshot\("refresh", \{ background: true, quiet: true \}\)/);
+  assert.match(coreSync, /loadSnapshot\("refresh", \{ background: true, quiet: true, continueRun \}\)/);
   assert.doesNotMatch(coreSync, /refreshSourcePopularity|sourcePopularityRefreshMessage/);
   const syncEntry = app.slice(app.indexOf("async function syncAndRefreshAll"), app.indexOf("async function runCoreSync"));
-  assert.match(syncEntry, /options: \{ refreshPopularity\?: boolean \} = \{\}/);
+  assert.match(syncEntry, /options: \{ refreshPopularity\?: boolean; continueRun\?: boolean \} = \{\}/);
   assert.match(syncEntry, /options\.refreshPopularity !== false/);
   assert.match(syncEntry, /void refreshSourcePopularity\(\{ background: true \}\)/);
   assert.match(app, /syncAndRefreshAll\(\{ refreshPopularity: false \}\)/);
@@ -74,7 +78,7 @@ test("core sync is single-flight and follows with a lightweight popularity refre
 });
 
 test("full sync publishes once while local mutations still generate parents before publish", () => {
-  const fullStart = backend.indexOf("fn run_skillhub_sync_blocking()");
+  const fullStart = backend.indexOf("fn run_skillhub_sync_blocking(");
   const fullEnd = backend.indexOf("fn ensure_agent_skill_delivery_blocking", fullStart);
   const localStart = backend.indexOf("fn sync_local_sources_to_agents(");
   const localEnd = backend.indexOf("fn run_skillhub_script(", localStart);
@@ -88,6 +92,15 @@ test("full sync publishes once while local mutations still generate parents befo
   assert.ok(localSync.indexOf("plan_or_write_router_hubs") < localSync.indexOf("run_skillhub_script_no_pull"));
   assert.match(localSync, /let report = plan_or_write_router_hubs\(root, true, true\)\?;/);
   assert.doesNotMatch(localSync, /if let Ok\(report\) = plan_or_write_router_hubs/);
+  // v3.2.8: a pull never widens a sparse cone. Scope reconciliation must run
+  // after the Git pass, and a widened tree must rebuild parents and the index.
+  const pull = fullSync.indexOf("run_skillhub_script(&root)");
+  const scope = fullSync.indexOf("reconcile_sparse_source_scopes(&root)");
+  const rebuild = fullSync.indexOf("reconcile_agent_skill_delivery(&root, &connection, false, false)");
+  assert.ok(pull >= 0 && scope > pull, "scope reconciliation follows the pull");
+  assert.ok(rebuild > scope, "a changed scope rebuilds routers, catalog and SQLite");
+  assert.match(fullSync, /if scope_report\.changed_files\(\)/);
+  assert.match(fullSync, /record_update_round\(&root, &scope_report, continue_run\)/);
 });
 
 test("source updates preserve dirty work and clear stale version comparisons", () => {

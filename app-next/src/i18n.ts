@@ -177,8 +177,8 @@ const en: Dict = {
 
   // Topbar
   "topbar.searchPlaceholder": "Search sources and skills, e.g. /nature or research-writing",
-  "topbar.sync": "Sync & Refresh",
-  "topbar.refreshIndex": "Refresh Index",
+  "topbar.sync": "Update all sources",
+  "topbar.refreshIndex": "Refresh local index",
   "topbar.syncing": "Syncing…",
   "topbar.loadingIndex": "Loading local index…",
   "topbar.verifyingIndex": "Showing saved index · checking and repairing AI tool Skill entries…",
@@ -264,8 +264,8 @@ const en: Dict = {
   // Preview banner / operation / errors
   "preview.title": "Browser preview mode",
   "preview.body": "No real SQLite is read and no local AI tools are touched. Open the Tauri desktop window to see real data.",
-  "op.syncTitle": "Sync & Refresh",
-  "op.step1": "Updating GitHub sources and syncing AI tool links.",
+  "op.syncTitle": "Update all sources",
+  "op.step1": "Pulling GitHub sources, adding new Skills and delivering them to AI tools.",
   "op.step2": "Refreshing GitHub stars, forks and popularity cache.",
   "op.step3": "Done. Updating the interface.",
   "error.title": "Operation did not finish",
@@ -288,7 +288,7 @@ const en: Dict = {
   // Dashboard
   "dash.title": "Skill Overview",
   "dash.subtitle": "System overview and AI skill deployment status.",
-  "dash.sync": "Sync / Refresh",
+  "dash.sync": "Update all sources",
   "dash.syncing": "Syncing…",
   "dash.loadingIndex": "Loading local index…",
   "dash.processing": "Processing…",
@@ -742,17 +742,17 @@ const en: Dict = {
   "quality.factor.actual-usage": "Actual local use",
   "quality.factor.security": "Security scan",
   "governance.title": "Source version governance",
-  "governance.eyebrow": "VERSION CONTROL",
+  "governance.eyebrow": "Version",
   "governance.pinned": "Pinned to an exact revision",
   "governance.autoUpdate": "Automatic updates enabled",
   "governance.localOnly": "Local source · no Git revision",
-  "governance.cached": "Cached comparison",
+  "governance.cached": "Offline · cached comparison",
   "governance.current": "Current",
   "governance.upstream": "Upstream",
   "governance.diff": "Cached diff",
   "governance.diffValue": "{files} files · +{additions} / −{deletions}",
   "governance.backups": "Verified backups",
-  "governance.refresh": "Check upstream",
+  "governance.refresh": "Check for a new version",
   "governance.pin": "Pin current",
   "governance.unpin": "Unpin",
   "governance.rollback": "Roll back",
@@ -1209,7 +1209,9 @@ const en: Dict = {
 
   // Copy prompt template
   "copy.template": "Please invoke the skill \"{name}\" for the current task. Best for: {context}",
-  "copy.fallbackContext": "the current context"
+  "copy.fallbackContext": "the current context",
+  "governance.tracking": "Tracks {branch}. Checking only compares; “Update all sources” installs.",
+  "governance.defaultBranchChanged": "GitHub's default branch is now {remote}; this source still tracks {branch} and is not switched automatically."
 };
 
 const zh: Dict = {
@@ -1372,8 +1374,8 @@ const zh: Dict = {
   "qa.measuring": "正在测量",
 
   "topbar.searchPlaceholder": "搜索来源和 Skills；例如 /nature 或 research-writing",
-  "topbar.sync": "同步并刷新",
-  "topbar.refreshIndex": "刷新索引",
+  "topbar.sync": "更新全部来源",
+  "topbar.refreshIndex": "刷新本地索引",
   "topbar.syncing": "正在同步…",
   "topbar.loadingIndex": "正在载入本地索引…",
   "topbar.verifyingIndex": "已显示上次索引 · 正在核对并修复 AI 工具技能入口…",
@@ -1458,8 +1460,8 @@ const zh: Dict = {
 
   "preview.title": "当前是浏览器预览模式",
   "preview.body": "这里不会读取真实 SQLite，也不会接管本机 AI 工具；用 Tauri 桌面窗口打开时会显示真实数据。",
-  "op.syncTitle": "同步并刷新",
-  "op.step1": "正在更新 GitHub 来源并同步 AI 工具链接。",
+  "op.syncTitle": "更新全部来源",
+  "op.step1": "正在拉取 GitHub 来源、补齐新增 Skill，并投递到 AI 工具。",
   "op.step2": "正在刷新 GitHub 星标、Fork 和热度缓存。",
   "op.step3": "完成，正在更新界面。",
   "error.title": "操作未完成",
@@ -1480,7 +1482,7 @@ const zh: Dict = {
 
   "dash.title": "技能总览",
   "dash.subtitle": "系统总览与 AI Skill 部署状态。",
-  "dash.sync": "同步 / 刷新",
+  "dash.sync": "更新全部来源",
   "dash.syncing": "正在同步…",
   "dash.loadingIndex": "正在载入本地索引…",
   "dash.processing": "正在处理…",
@@ -1925,17 +1927,17 @@ const zh: Dict = {
   "quality.factor.actual-usage": "真实本地使用",
   "quality.factor.security": "安全扫描",
   "governance.title": "来源版本治理",
-  "governance.eyebrow": "VERSION CONTROL",
+  "governance.eyebrow": "版本",
   "governance.pinned": "已锁定到精确版本",
   "governance.autoUpdate": "自动更新已开启",
   "governance.localOnly": "本地来源 · 无 Git 版本",
-  "governance.cached": "缓存对比",
+  "governance.cached": "离线 · 缓存对比",
   "governance.current": "当前版本",
   "governance.upstream": "远端版本",
   "governance.diff": "差异摘要",
   "governance.diffValue": "{files} 个文件 · +{additions} / −{deletions}",
   "governance.backups": "已验证备份",
-  "governance.refresh": "检查远端",
+  "governance.refresh": "检查新版本",
   "governance.pin": "锁定当前版",
   "governance.unpin": "解除锁定",
   "governance.rollback": "一键回滚",
@@ -2383,7 +2385,9 @@ const zh: Dict = {
   "toast.promotedNeedAuth": "来源已加入技能库并刷新索引；打开授权后点击同步即可写入 AI 工具。",
 
   "copy.template": "请调用 {name} 这个 Skill，处理当前任务。适用场景：{context}",
-  "copy.fallbackContext": "当前上下文"
+  "copy.fallbackContext": "当前上下文",
+  "governance.tracking": "跟踪 {branch}。“检查新版本”只做比较，安装请用“更新全部来源”。",
+  "governance.defaultBranchChanged": "GitHub 默认分支已改为 {remote}；此来源仍跟踪 {branch}，不会自动切换。"
 };
 
 const ko: Dict = {
@@ -2546,8 +2550,8 @@ const ko: Dict = {
   "qa.measuring": "측정 중",
 
   "topbar.searchPlaceholder": "소스와 스킬 검색 — 예: /nature 또는 research-writing",
-  "topbar.sync": "동기화 및 새로고침",
-  "topbar.refreshIndex": "인덱스 새로고침",
+  "topbar.sync": "모든 소스 업데이트",
+  "topbar.refreshIndex": "로컬 인덱스 새로고침",
   "topbar.syncing": "동기화 중…",
   "topbar.loadingIndex": "로컬 인덱스 불러오는 중…",
   "topbar.verifyingIndex": "저장된 인덱스 표시 중 · AI 도구 Skill 진입점 확인 및 복구 중…",
@@ -2632,8 +2636,8 @@ const ko: Dict = {
 
   "preview.title": "브라우저 미리보기 모드",
   "preview.body": "실제 SQLite를 읽지 않으며 로컬 AI 도구도 변경하지 않습니다. 실제 데이터는 Tauri 데스크톱 창에서 확인하세요.",
-  "op.syncTitle": "동기화 및 새로고침",
-  "op.step1": "GitHub 소스를 업데이트하고 AI 도구 링크를 동기화하는 중입니다.",
+  "op.syncTitle": "모든 소스 업데이트",
+  "op.step1": "GitHub 소스를 가져오고 새 Skill을 추가한 뒤 AI 도구에 전달하는 중입니다.",
   "op.step2": "GitHub 스타, 포크, 인기 캐시를 새로고침하는 중입니다.",
   "op.step3": "완료. 화면을 업데이트하는 중입니다.",
   "error.title": "작업이 완료되지 않았습니다",
@@ -2654,7 +2658,7 @@ const ko: Dict = {
 
   "dash.title": "스킬 현황",
   "dash.subtitle": "시스템 전체 현황과 AI 스킬 배포 상태입니다.",
-  "dash.sync": "동기화 / 새로고침",
+  "dash.sync": "모든 소스 업데이트",
   "dash.syncing": "동기화 중…",
   "dash.loadingIndex": "로컬 인덱스 불러오는 중…",
   "dash.processing": "처리 중…",
@@ -3099,17 +3103,17 @@ const ko: Dict = {
   "quality.factor.actual-usage": "실제 로컬 사용",
   "quality.factor.security": "보안 검사",
   "governance.title": "소스 버전 관리",
-  "governance.eyebrow": "VERSION CONTROL",
+  "governance.eyebrow": "버전",
   "governance.pinned": "정확한 리비전에 고정됨",
   "governance.autoUpdate": "자동 업데이트 활성",
   "governance.localOnly": "로컬 소스 · Git 리비전 없음",
-  "governance.cached": "캐시 비교",
+  "governance.cached": "오프라인 · 캐시 비교",
   "governance.current": "현재",
   "governance.upstream": "업스트림",
   "governance.diff": "차이 요약",
   "governance.diffValue": "파일 {files}개 · +{additions} / −{deletions}",
   "governance.backups": "검증된 백업",
-  "governance.refresh": "업스트림 확인",
+  "governance.refresh": "새 버전 확인",
   "governance.pin": "현재 버전 고정",
   "governance.unpin": "고정 해제",
   "governance.rollback": "롤백",
@@ -3557,7 +3561,9 @@ const ko: Dict = {
   "toast.promotedNeedAuth": "소스가 라이브러리에 추가되고 인덱스가 갱신되었습니다. 승인을 켠 뒤 동기화하면 AI 도구에 기록됩니다.",
 
   "copy.template": "현재 작업에 \"{name}\" 스킬을 호출해 주세요. 적합한 상황: {context}",
-  "copy.fallbackContext": "현재 컨텍스트"
+  "copy.fallbackContext": "현재 컨텍스트",
+  "governance.tracking": "{branch} 추적. 확인은 비교만 하며 설치는 “모든 소스 업데이트”로 합니다.",
+  "governance.defaultBranchChanged": "GitHub 기본 브랜치가 {remote}(으)로 바뀌었습니다. 이 소스는 계속 {branch}을(를) 추적하며 자동으로 바꾸지 않습니다."
 };
 
 const dictionaries: Record<Lang, Dict> = { en, zh, ko };

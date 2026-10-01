@@ -125,6 +125,41 @@ export type SyncSummaryCard = {
     status: string;
     message: string;
   }>;
+  /** Every round of the current "update all sources" run, merged per source. */
+  updateRun?: SourceUpdateRun | null;
+};
+
+export type SourceUpdateOutcome =
+  | "updated"
+  | "unchanged"
+  | "pinned"
+  | "local-changes"
+  | "failed"
+  | "deferred"
+  | "not-git";
+
+export type SourceUpdateRunEntry = {
+  folder: string;
+  outcome: SourceUpdateOutcome | string;
+  detail: string;
+  tracking: string;
+  checkedAt: string;
+  addedSkills: string[];
+  removedPaths: string[];
+  addedDependencies: string[];
+  /** New upstream Skills outside an explicit selection: found, not enabled. */
+  discoveredSkills: string[];
+  /** New files where a local file already existed; the local copy was kept. */
+  keptLocalPaths: string[];
+};
+
+export type SourceUpdateRun = {
+  schemaVersion: number;
+  runId: string;
+  startedAt: string;
+  updatedAt: string;
+  rounds: number;
+  sources: SourceUpdateRunEntry[];
 };
 
 export type GitRuntimeCard = {
@@ -314,6 +349,10 @@ export type SourceGovernanceCard = {
   latestBackupRevision: string;
   latestBackupAt: string;
   canRollback: boolean;
+  /** What sync fast-forwards, for example origin/main. */
+  trackingBranch?: string;
+  /** GitHub default branch at the last version check; never switched automatically. */
+  remoteDefaultBranch?: string;
   status: string;
   message: string;
 };

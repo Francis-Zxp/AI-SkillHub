@@ -12,6 +12,8 @@ mod prompt_library;
 mod security_scan;
 mod source_governance;
 mod source_identity;
+mod sparse_scope;
+mod update_run;
 
 // Cargo builds `#[cfg(test)]` for the library test harness, which is a separate
 // Windows executable from the Tauri app binary. Pull the full Tauri-generated
@@ -159,6 +161,8 @@ struct SyncSummaryCard {
     skipped: usize,
     active_skills: usize,
     repositories: Vec<SyncRepositoryCard>,
+    /// Every round of the current "update all" run, merged per source.
+    update_run: Option<update_run::UpdateRun>,
 }
 
 #[derive(Serialize)]
@@ -1202,8 +1206,9 @@ async fn hydrate_runtime_snapshot() -> Result<RuntimeSnapshotHydration, String> 
 }
 
 #[tauri::command]
-async fn run_skillhub_sync() -> Result<LegacySnapshot, String> {
-    run_blocking_task(run_skillhub_sync_blocking).await
+async fn run_skillhub_sync(continue_run: Option<bool>) -> Result<LegacySnapshot, String> {
+    let continue_run = continue_run.unwrap_or(false);
+    run_blocking_task(move || run_skillhub_sync_blocking(continue_run)).await
 }
 
 #[tauri::command]
@@ -1821,7 +1826,7 @@ fn indexed_snapshot_needs_portable_source_refresh(root: &Path, snapshot: &Legacy
     })
 }
 
-fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
+fn run_skillhub_sync_blocking(continue_run: bool) -> Result<LegacySnapshot, String> {
     let _write_guard = acquire_background_write_guard("完整同步")?;
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
@@ -1835,7 +1840,17 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     let snapshot_refresh = refresh_snapshot_github_sources(&root, &connection);
     write_snapshot_refresh_report(&root, &snapshot_refresh)?;
     run_skillhub_script(&root)?;
+    // `git pull` advances HEAD but never widens a sparse cone. Compare every
+    // sparse clone with its new HEAD and materialize added Skills before the
+    // index is rebuilt; HEAD equality alone does not prove the files arrived.
+    let scope_report = reconcile_sparse_source_scopes(&root);
+    record_update_round(&root, &scope_report, continue_run);
     source_governance::refresh_local_revisions(&root, &connection)?;
+    if scope_report.changed_files() {
+        // The script indexed and published before the new folders existed.
+        // Rebuild parents, the active catalog and SQLite from the final tree.
+        return reconcile_agent_skill_delivery(&root, &connection, false, false);
+    }
     // The full SkillHub script has already regenerated every parent and
     // published the active catalog. Do not immediately repeat the same source
     // traversal with `-NoPull`; remove only legacy dispatchers, then perform one
@@ -1843,6 +1858,57 @@ fn run_skillhub_sync_blocking() -> Result<LegacySnapshot, String> {
     // Agent-page action and no longer blocks every Git refresh.
     sync_skill_conflict_dispatchers(&root, &connection)?;
     finalize_agent_skill_delivery(&root, false, false)
+}
+
+/// Time one sync may spend materializing newly added Skills. Anything left is
+/// reported as deferred and repaired by the next sync (the check is state based).
+const SPARSE_SCOPE_BUDGET: Duration = Duration::from_secs(120);
+
+/// Folds this sync round into the persisted "update all" run so the status
+/// view can show finished, unchanged and still-waiting sources per source.
+fn record_update_round(
+    root: &Path,
+    scope_report: &sparse_scope::SparseScopeReport,
+    continue_run: bool,
+) {
+    let state_dir = private_state_dir(root).join("sync-state");
+    let last_sync = read_json(&reports_dir(root).join("last-sync.json"));
+    let snapshot_refresh = read_json(&state_dir.join(SNAPSHOT_REFRESH_REPORT_FILE));
+    let round = update_run::round_entries(
+        last_sync.as_ref(),
+        snapshot_refresh.as_ref(),
+        Some(scope_report),
+        &managed_sources_dir(root),
+    );
+    let now = last_sync
+        .as_ref()
+        .and_then(|payload| payload.get("generatedAt"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(unix_timestamp_string);
+    let run = update_run::merge_round(
+        update_run::read_run(&state_dir),
+        round,
+        continue_run,
+        &now,
+        || format!("run-{}", unix_timestamp_string()),
+    );
+    // Status bookkeeping only; never fail a completed sync because of it.
+    let _ = update_run::write_run(&state_dir, &run);
+}
+
+fn reconcile_sparse_source_scopes(root: &Path) -> sparse_scope::SparseScopeReport {
+    let config = read_json(&skillhub_config_file(root));
+    let report = sparse_scope::reconcile_sources(
+        "git",
+        &managed_sources_dir(root),
+        config.as_ref(),
+        SPARSE_SCOPE_BUDGET,
+    );
+    // The report only feeds the status view; a write failure must not turn a
+    // completed update into a failed sync.
+    let _ = sparse_scope::write_report(&private_state_dir(root).join("sync-state"), &report);
+    report
 }
 
 fn ensure_agent_skill_delivery_blocking() -> Result<LegacySnapshot, String> {
@@ -3064,11 +3130,41 @@ fn command_output_with_timeout_and_cancel(
     timeout_message: &str,
     cancellation: Option<&AtomicBool>,
 ) -> Result<std::process::Output, String> {
+    command_output_with_input_timeout_and_cancel(
+        command,
+        None,
+        timeout,
+        timeout_message,
+        cancellation,
+    )
+}
+
+/// Same bounded runner, optionally feeding `input` on stdin. Long argument
+/// lists (hundreds of sparse patterns) go through stdin so they can never hit
+/// the Windows command-line length limit.
+fn command_output_with_input_timeout_and_cancel(
+    command: &mut Command,
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+    timeout_message: &str,
+    cancellation: Option<&AtomicBool>,
+) -> Result<std::process::Output, String> {
     configure_background_command(command);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    if input.is_some() {
+        command.stdin(Stdio::piped());
+    }
     let mut child = command
         .spawn()
         .map_err(|error| format!("无法启动后台命令：{error}"))?;
+    let stdin_writer = match (input, child.stdin.take()) {
+        (Some(bytes), Some(mut stream)) => Some(thread::spawn(move || {
+            use std::io::Write;
+            let _ = stream.write_all(&bytes);
+            // Dropping the handle closes stdin so the child sees EOF.
+        })),
+        _ => None,
+    };
     let stdout_reader = child.stdout.take().map(|mut stream| {
         thread::spawn(move || {
             let mut buffer = Vec::new();
@@ -3117,6 +3213,11 @@ fn command_output_with_timeout_and_cancel(
 
     let stdout = join_output_reader(stdout_reader);
     let stderr = join_output_reader(stderr_reader);
+    if let Some(writer) = stdin_writer {
+        // The child has exited, so its stdin pipe is closed and the writer
+        // thread cannot block here.
+        let _ = writer.join();
+    }
     Ok(std::process::Output {
         status,
         stdout,
@@ -5078,7 +5179,10 @@ fn read_last_sync_summary(root: &Path) -> SyncSummaryCard {
     let Ok(raw) = fs::read_to_string(path) else {
         return SyncSummaryCard::default();
     };
-    let Ok(payload) = serde_json::from_str::<Value>(&raw) else {
+    // SkillHub.ps1 writes UTF-8 with a BOM (Windows PowerShell 5.1 safety).
+    // Without stripping it every summary parsed as empty and a partial sync
+    // was reported as a complete one.
+    let Ok(payload) = serde_json::from_str::<Value>(raw.trim_start_matches('\u{feff}')) else {
         return SyncSummaryCard::default();
     };
     let usize_field = |key: &str| payload.get(key).and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -5134,6 +5238,7 @@ fn read_last_sync_summary(root: &Path) -> SyncSummaryCard {
         skipped: usize_field("skipped"),
         active_skills: usize_field("activeSkills"),
         repositories,
+        update_run: update_run::read_run(&private_state_dir(root).join("sync-state")),
     }
 }
 
@@ -9905,52 +10010,21 @@ fn complete_sparse_skill_checkout(
     github_target: Option<&str>,
 ) -> Result<std::process::Output, String> {
     control.ensure_active()?;
-    let mut tree_command = Command::new(git_program);
-    tree_command.arg("-C").arg(staged_path).args([
-        "-c",
-        "core.quotepath=false",
-        "ls-tree",
-        "-r",
-        "--name-only",
-        "-z",
-        "HEAD",
-    ]);
-    let tree_output = command_output_with_timeout_and_cancel(
-        &mut tree_command,
-        Duration::from_secs(45),
-        "读取 GitHub 仓库目录超过 45 秒，已自动停止。",
-        Some(control.cancelled.as_ref()),
-    )?;
+    let tree_output = sparse_scope::read_head_tree_output(git_program, staged_path, control)?;
     if !tree_output.status.success() {
         return Ok(tree_output);
     }
 
-    let paths = tree_output
-        .stdout
-        .split(|byte| *byte == 0)
-        .filter_map(|path| std::str::from_utf8(path).ok())
-        .filter(|path| !path.trim().is_empty())
-        .collect::<Vec<_>>();
-    let mut skill_roots = paths
-        .iter()
-        .filter(|path| {
-            Path::new(path)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(|name| name.eq_ignore_ascii_case("SKILL.md"))
-                .unwrap_or(false)
-        })
-        .filter_map(|path| Path::new(path).parent())
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
-        .collect::<Vec<_>>();
-    skill_roots.sort();
-    skill_roots.dedup();
-
-    let root_skill = skill_roots.iter().any(|root| root.is_empty());
+    // Import and every later sync share the scope rules in `sparse_scope`, so
+    // an update can never install a different set than a fresh import would.
+    let tree = sparse_scope::HeadTree::from_ls_tree_z(&tree_output.stdout);
+    let skill_roots = tree.skill_roots();
+    let root_skill = tree.has_root_skill();
+    let skill_scope = skill_roots.iter().cloned().collect::<BTreeSet<_>>();
     if !root_skill {
-        let mut sparse_command = Command::new(git_program);
-        configure_safe_git_materialization(&mut sparse_command, staged_path);
         if skill_roots.is_empty() {
+            let mut sparse_command = Command::new(git_program);
+            configure_safe_git_materialization(&mut sparse_command, staged_path);
             // Prompt repositories are not installed as Skills, but their instructions may
             // depend on project files such as train.py or prepare.py. Disable sparse mode so
             // the isolated, bounded source workspace remains runnable and inspectable.
@@ -9967,20 +10041,21 @@ fn complete_sparse_skill_checkout(
                 validate_prompt_git_tree_before_checkout(git_program, staged_path, control)?;
             }
             sparse_command.args(["sparse-checkout", "disable"]);
-        } else {
-            sparse_command.args(["sparse-checkout", "set", "--cone", "--"]);
-            for root in &skill_roots {
-                sparse_command.arg(root);
+            let output = command_output_with_timeout_and_cancel(
+                &mut sparse_command,
+                Duration::from_secs(180),
+                "Skill 文件下载超过 180 秒，已自动停止。请检查网络后重试。",
+                Some(control.cancelled.as_ref()),
+            )?;
+            if !output.status.success() {
+                return Ok(output);
             }
-        }
-        let output = command_output_with_timeout_and_cancel(
-            &mut sparse_command,
-            Duration::from_secs(180),
-            "Skill 文件下载超过 180 秒，已自动停止。请检查网络后重试。",
-            Some(control.cancelled.as_ref()),
-        )?;
-        if !output.status.success() {
-            return Ok(output);
+        } else {
+            let output =
+                sparse_scope::set_cone_patterns(git_program, staged_path, &skill_scope, control)?;
+            if !output.status.success() {
+                return Ok(output);
+            }
         }
     }
 
@@ -9995,9 +10070,26 @@ fn complete_sparse_skill_checkout(
         "Skill 文件检出超过 180 秒，已自动停止。请检查网络后重试。",
         Some(control.cancelled.as_ref()),
     )?;
-    if checkout_output.status.success() {
-        validate_staged_repository_bounds(staged_path)?;
+    if !checkout_output.status.success() {
+        return Ok(checkout_output);
     }
+    if !root_skill && !skill_roots.is_empty() {
+        // Skills often link to shared folders beside them (`../shared/...`).
+        // Widen the cone to exactly those folders, as every sync also does.
+        let dependencies =
+            sparse_scope::dependency_dirs(staged_path, &tree, &skill_scope, &skill_roots);
+        if !dependencies.is_empty() {
+            control.ensure_active()?;
+            let mut widened = skill_scope.clone();
+            widened.extend(dependencies);
+            let output =
+                sparse_scope::set_cone_patterns(git_program, staged_path, &widened, control)?;
+            if !output.status.success() {
+                return Ok(output);
+            }
+        }
+    }
+    validate_staged_repository_bounds(staged_path)?;
     Ok(checkout_output)
 }
 
@@ -10781,6 +10873,26 @@ fn stage_github_source_import_via_codeload_with_control(
         });
     }
 
+    // Same rule as a Git import: Skills plus the folders their Markdown links
+    // to with `../` (shared references, helper scripts).
+    let listing = files
+        .iter()
+        .map(|file| (file.path.to_string_lossy().replace('\\', "/"), file.size))
+        .collect::<Vec<_>>();
+    let dependency_roots = sparse_scope::archive_dependency_dirs(&listing, |position| {
+        let mut entry = archive.by_index(files[position].index).ok()?;
+        let mut text = String::new();
+        entry
+            .by_ref()
+            .take(sparse_scope::DEPENDENCY_DOCUMENT_MAX_BYTES)
+            .read_to_string(&mut text)
+            .ok()?;
+        Some(text)
+    })
+    .into_iter()
+    .map(PathBuf::from)
+    .collect::<Vec<_>>();
+
     let mut selected = if skill_roots.is_empty() {
         files
     } else {
@@ -10790,6 +10902,9 @@ fn stage_github_source_import_via_codeload_with_control(
                 skill_roots
                     .iter()
                     .any(|root| root.as_os_str().is_empty() || file.path.starts_with(root))
+                    || dependency_roots
+                        .iter()
+                        .any(|root| file.path.starts_with(root))
             })
             .collect::<Vec<_>>()
     };
@@ -20232,6 +20347,30 @@ mod tests {
         let antigravity = agents.first().expect("agent should parse");
         assert!(!antigravity.detected);
         assert!(!antigravity.managed);
+    }
+
+    #[test]
+    fn last_sync_summary_reads_the_bom_written_by_powershell() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-last-sync-bom-{}",
+            unix_timestamp_string()
+        ));
+        let reports = reports_dir(&root);
+        fs::create_dir_all(&reports).expect("reports folder");
+        let payload = serde_json::json!({
+            "generatedAt": "2026-10-01T08:00:00Z",
+            "status": "partial",
+            "total": 3, "succeeded": 1, "failed": 1, "skipped": 1, "activeSkills": 7,
+            "repositories": [ { "Repository": "a", "Action": "pull", "Status": "failed", "Message": "x" } ]
+        });
+        let mut bytes = "\u{feff}".as_bytes().to_vec();
+        bytes.extend(serde_json::to_vec(&payload).unwrap());
+        fs::write(reports.join("last-sync.json"), bytes).expect("write");
+        let summary = read_last_sync_summary(&root);
+        assert_eq!(summary.status, "partial");
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.repositories.len(), 1);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
