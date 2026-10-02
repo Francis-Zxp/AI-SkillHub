@@ -8,9 +8,9 @@ Skills를 모으고 원본 저장소를 업데이트하며 AI 도구에 연결�
 
 [**최신 정식 버전 다운로드**](https://github.com/Francis-Zxp/AI-SkillHub/releases/latest) · [업데이트 내역](CHANGELOG.md) · [문제 제보](https://github.com/Francis-Zxp/AI-SkillHub/issues)
 
-![AI SkillHub — 영어 인터페이스의 하늘 정오 축제 테마 대시보드](docs/images/sky-noon-festival-en.png)
+![AI SkillHub — 영어 인터페이스의 하늘 정오 테마 대시보드](docs/images/sky-noon-festival-en.png)
 
-*영어 예시 라이브러리의 하늘 정오 축제 테마. 각 섬은 하나의 분류를 나타내며, 섬의 크기는 해당 분류의 콘텐츠 양을 반영합니다.*
+*영어 예시 라이브러리의 하늘 정오 테마. 각 섬은 하나의 분류를 나타내며, 섬의 크기는 해당 분류의 콘텐츠 양을 반영합니다.*
 
 ## 주요 기능
 

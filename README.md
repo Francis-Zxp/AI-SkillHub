@@ -8,9 +8,9 @@ A Windows desktop app for collecting Skills, keeping their sources up to date, a
 
 [**Download the latest release**](https://github.com/Francis-Zxp/AI-SkillHub/releases/latest) · [What's new](CHANGELOG.md) · [Report an issue](https://github.com/Francis-Zxp/AI-SkillHub/issues)
 
-![AI SkillHub — English dashboard with the Sky noon festival theme](docs/images/sky-noon-festival-en.png)
+![AI SkillHub — English dashboard with the Sky noon theme](docs/images/sky-noon-festival-en.png)
 
-*Sample library in the Sky noon festival theme. Each island represents a category; its size reflects the content it contains.*
+*Sample library in the Sky noon theme. Each island represents a category; its size reflects the content it contains.*
 
 ## What you can do
 

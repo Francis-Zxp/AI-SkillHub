@@ -8,9 +8,9 @@
 
 [**下载最新正式版**](https://github.com/Francis-Zxp/AI-SkillHub/releases/latest) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/Francis-Zxp/AI-SkillHub/issues)
 
-![AI SkillHub — 英文界面的天空正午节日主题仪表盘](docs/images/sky-noon-festival-en.png)
+![AI SkillHub — 英文界面的天空正午主题仪表盘](docs/images/sky-noon-festival-en.png)
 
-*英文演示技能库，天空正午节日主题。每座岛代表一个分类，岛屿大小反映分类中包含的内容量。*
+*英文演示技能库，天空正午主题。每座岛代表一个分类，岛屿大小反映分类中包含的内容量。*
 
 ## 可以做什么
 

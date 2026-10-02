@@ -1,11 +1,11 @@
 {
-  "version": "3.2.14",
-  "notes": "更新按钮反馈实际检查结果；修复底栏挤压；新增大号图标；提示消息避让底栏。",
-  "pub_date": "2026-10-02T17:43:13Z",
+  "version": "3.2.15",
+  "notes": "Stable dashboard update progress, source-type filters, per-source update results and clearer multilingual project guides.",
+  "pub_date": "2026-10-02T18:52:21Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVMrT2dnTnFoSTRsWGR0N09CVTJUWGx2ZlNHWW1PMlY2SGU2blJjNDJJRFFKQmNKY3lQVDlKbE9YV2hiTGpYUjJPT1ZReUxKWmxyMm45OVFFV0ZmelFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTYyOTkyCWZpbGU6QUkgU2tpbGxIdWJfMy4yLjE0X3g2NC1zZXR1cC5leGUKL3lpRmpxNkt2eFpMYUZMbFlDMkZQQjYvRWx5RUpueFk0TEp4TTkzcG1ZL0N3ZnVUMkxOYkkrQmVaUGJlb25vbjRERnZnY0VIMGdQMjJxWGQwbTRYRFE9PQo=",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.14/AI-SkillHub-3.2.14-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcWRpRnRJeDBueitJa2FZamxjbEFNOEhwT1VvTHo2UHZWTHNudTBHODhhMXRYYmN1bW02MTZ4ZXA0MVF3bnNObmt6ejlLTEJJTytSUzlvaE1peDJJNVF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTY3MDA5CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjE1X3g2NC1zZXR1cC5leGUKb3hkZFRxTXFPL1FoT3ZGMlhSYmZDaDkyOEQzTlZoVEJHRFFSZjNDSzZEV3NUM2daT3Y0ZTcvK2kyZlJlUW9rcnJpQ0pFUjBTUUhIRjA4R2duUU1MQ0E9PQo=",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.15/AI-SkillHub-3.2.15-setup.exe"
     }
   }
 }
