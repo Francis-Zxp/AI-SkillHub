@@ -62,7 +62,7 @@ test("universe starts from a bounded real cache and promotes to the SQLite model
 });
 
 test("star map backdrop: star field, soft core, session-random meteors, dashed sphere outlines", () => {
-  assert.match(universe, /const STAR_FIELD = Array\.from\(\{ length: 170 \}/);
+  assert.match(universe, /const STAR_FIELD = createStarField\(\)/);
   assert.match(universe, /const GREAT_CIRCLES: Array<\[Point3, Point3\]>/);
   // One soft core gives the sphere volume; no wide aura sprite or dust.
   assert.equal((universe.match(/createRadialGradient\(/g) ?? []).length, 1);

@@ -3990,7 +3990,6 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 /* Home is one cinematic set-piece. Product panels resume below the fold. */
 .theme-family-atlas.page-dashboard .workspace-body { max-width: none; gap: 0; padding: 0 0 72px; margin-top: -72px; }
 .theme-family-atlas.page-dashboard .status-banner,
-.theme-family-atlas.page-dashboard .operation-banner,
 .theme-family-atlas.page-dashboard .global-search-results { z-index: 35; margin: 92px 32px -76px; }
 .theme-family-atlas.page-dashboard .preview-panel {
   position: absolute;

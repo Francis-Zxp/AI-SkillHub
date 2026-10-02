@@ -7,6 +7,7 @@
 //   - objects: vertex-colour light-to-shade gradients tinted per instance;
 //   - water, waterfalls, clouds and a sky dome with stars at night.
 import * as THREE from "three";
+import type { PathLine } from "./terrain";
 
 export type SkyPalette = {
   name: string;
@@ -73,9 +74,14 @@ export function toneColor(value: string, tone?: GroundTone) {
   return result;
 }
 
-export function terrainMaterial(palette: SkyPalette, tone?: GroundTone) {
-  const material = new THREE.MeshToonMaterial({ gradientMap: toonGradient() });
+export function terrainMaterial(palette: SkyPalette, tone?: GroundTone, paths: PathLine[] = []) {
+  // Continuous diffuse light keeps a curved cliff from breaking into tiles.
+  const material = new THREE.MeshLambertMaterial();
+  const segments = paths.flatMap(path => path.points.slice(1).map((end, i) => ({ line: new THREE.Vector4(...path.points[i], ...end), width: path.width }))).slice(0, 12);
   const uniforms = {
+    uPaths: { value: Array.from({ length: 12 }, (_, i) => segments[i]?.line ?? new THREE.Vector4()) },
+    uPathWidths: { value: Array.from({ length: 12 }, (_, i) => segments[i]?.width ?? 1) },
+    uPathCount: { value: segments.length },
     uGrassLight: { value: toneColor(palette.grassLight, tone) },
     uGrassDark: { value: toneColor(palette.grassDark, tone) },
     uGrassAlt: { value: toneColor(palette.grassAlt, tone) },
@@ -116,6 +122,9 @@ export function terrainMaterial(palette: SkyPalette, tone?: GroundTone) {
         uniform vec3 uEarthB;
         uniform vec3 uRockDeep;
         uniform float uHighlight;
+        uniform vec4 uPaths[12];
+        uniform float uPathWidths[12];
+        uniform int uPathCount;
         varying float vRock;
         varying float vDepth;
         varying float vWorn;
@@ -126,25 +135,30 @@ export function terrainMaterial(palette: SkyPalette, tone?: GroundTone) {
         // Grass: two broad tones in soft-edged patches, plus a third patch
         // colour; world-space noise, so it never repeats or stretches.
         float broad = skyNoise(vWorld.xz * 0.16) * 0.7 + skyNoise(vWorld.xz * 0.45 + 3.7) * 0.3;
-        vec3 grass = mix(uGrassDark, uGrassLight, smoothstep(0.38, 0.62, broad));
-        grass = mix(grass, uGrassAlt, smoothstep(0.66, 0.72, skyNoise(vWorld.xz * 0.22 + 9.1)) * 0.75);
-        vec3 ground = mix(grass, uPath, smoothstep(0.32, 0.55, vWorn));
+        vec3 grass = mix(uGrassDark, uGrassLight, smoothstep(0.12, 0.88, broad));
+        grass = mix(grass, uGrassAlt, smoothstep(0.55, 0.92, skyNoise(vWorld.xz * 0.22 + 9.1)) * 0.22);
+        // Evaluate the path per pixel: interpolating a sharp vertex mask made
+        // the ground's triangular grid visible along every path edge.
+        float worn = 0.0;
+        if (vRock < 0.5) for (int i = 0; i < 12; i++) {
+          if (i >= uPathCount) break;
+          vec2 start = uPaths[i].xy, segment = uPaths[i].zw - start;
+          float t = clamp(dot(vLocal.xz - start, segment) / max(dot(segment, segment), 0.001), 0.0, 1.0);
+          float distance = length(vLocal.xz - start - segment * t);
+          worn = max(worn, 1.0 - smoothstep(uPathWidths[i] * 0.4, uPathWidths[i] * 0.62, distance));
+        }
+        vec3 ground = mix(grass, uPath, worn);
 
-        // Cliff: crisp earth bands, slightly wavy, then deep rock below.
-        float around = atan(vLocal.z, vLocal.x);
-        float wave = (skyNoise(vec2(around * 2.6, 0.5)) - 0.5) * 0.5;
-        float band = vDepth * 7.0 + wave;
-        float index = floor(band);
-        vec3 earth = index < 1.0 ? uSoil : (mod(index, 2.0) < 1.0 ? uEarthA : uEarthB);
-        earth *= 0.94 + 0.06 * skyNoise(vec2(around * 9.0, band * 3.0));
-        vec3 rock = mix(earth, uRockDeep, smoothstep(0.42, 0.95, vDepth));
-        float rockMask = vRock * step(0.012, vDepth);
+        // Restrained mineral variation, with a single soil-to-stone transition.
+        // Cartesian noise has no angular seam around the back of the island.
+        float mineral = skyNoise(vLocal.xz * 0.24 + vLocal.y * 0.08);
+        vec3 earth = mix(uEarthA, uEarthB, 0.32 + mineral * 0.3);
+        earth = mix(uSoil, earth, smoothstep(0.01, 0.17, vDepth));
+        vec3 rock = mix(earth, uRockDeep, smoothstep(0.28, 0.98, vDepth));
+        float rockMask = vRock * smoothstep(0.001, 0.016, vDepth);
         diffuseColor = vec4(mix(ground, rock, rockMask), opacity);
         diffuseColor.rgb += uHighlight * vec3(0.08, 0.07, 0.03) * (1.0 - rockMask);
-      `)
-      .replace("#include <normal_fragment_begin>", `#include <normal_fragment_begin>
-        // Faceted rock under the island, smooth grass on top.
-        if (vRock > 0.5 && vDepth > 0.3) normal = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition)));`);
+      `);
   };
   material.customProgramCacheKey = () => "sky-toon-terrain";
   return material;
@@ -183,9 +197,13 @@ export function addSway(material: THREE.Material, height: number, amount: number
   return material;
 }
 
-export function waterMaterial(palette: SkyPalette) {
-  const uniforms = { uShallow: { value: color(palette.water) }, uDeep: { value: color(palette.waterDeep) } };
+export function waterMaterial(palette: SkyPalette, channel = false) {
+  const uniforms = { uShallow: { value: color(palette.water) }, uDeep: { value: color(palette.waterDeep) }, uChannel: { value: channel ? 1 : 0 } };
   const material = new THREE.MeshToonMaterial({ gradientMap: toonGradient(), transparent: true, opacity: 0.95 });
+  // The short stream overlap must not fight with the pond's coplanar surface.
+  material.polygonOffset = channel;
+  material.polygonOffsetFactor = -1;
+  material.polygonOffsetUnits = -1;
   material.userData.uniforms = uniforms;
   material.onBeforeCompile = shader => {
     Object.assign(shader.uniforms, uniforms, { uTime: SHARED_UNIFORMS.uTime });
@@ -201,16 +219,19 @@ export function waterMaterial(palette: SkyPalette) {
         uniform vec3 uShallow;
         uniform vec3 uDeep;
         uniform float uTime;
+        uniform float uChannel;
         varying vec2 vDisc;
         varying vec3 vWaterWorld;
         ${NOISE_GLSL}`)
       .replace("#include <map_fragment>", `
-        float edge = length(vDisc);
+        // Streams keep their full width at both ends; a radial pond mask would
+        // pinch the connector into an oval and leave a gap before the falls.
+        float edge = mix(length(vDisc), abs(vDisc.x), uChannel);
         vec3 water = mix(uDeep, uShallow, smoothstep(0.2, 0.9, edge));
         // Cartoon glints: short bright dashes drifting across the surface.
         float glint = step(0.86, skyNoise(vec2(vWaterWorld.x * 2.2 + uTime * 0.35, vWaterWorld.z * 7.0)));
         float foam = smoothstep(0.82, 0.88, edge) * (1.0 - smoothstep(0.97, 1.0, edge));
-        water = mix(water, vec3(1.0), max(foam * 0.85, glint * 0.55 * (1.0 - edge)));
+        water = mix(water, mix(uShallow, vec3(1.0), 0.5), max(foam * 0.6, glint * 0.4 * (1.0 - edge)));
         diffuseColor = vec4(water, opacity * (1.0 - smoothstep(0.97, 1.0, edge)));
       `);
   };
@@ -237,8 +258,8 @@ export function waterfallMaterial(palette: SkyPalette) {
       varying vec2 vUv;
       void main() {
         float stripes = step(0.62, fract(vUv.x * 5.0 + sin(vUv.x * 13.0) * 0.2 + (vUv.y + uTime * 0.9) * 1.6));
-        vec3 colour = mix(uWater, vec3(1.0), stripes * 0.55 + smoothstep(0.88, 1.0, vUv.y) * 0.6);
-        float sides = smoothstep(0.0, 0.12, vUv.x) * smoothstep(1.0, 0.88, vUv.x);
+        vec3 colour = mix(uWater, mix(uWater, vec3(1.0), 0.45), stripes * 0.42 + smoothstep(0.88, 1.0, vUv.y) * 0.4);
+        float sides = smoothstep(0.0, 0.08, vUv.x) * (1.0 - smoothstep(0.92, 1.0, vUv.x));
         float alpha = sides * smoothstep(0.0, 0.35, vUv.y) * 0.92;
         gl_FragColor = vec4(colour, alpha);
         #include <colorspace_fragment>
@@ -247,10 +268,34 @@ export function waterfallMaterial(palette: SkyPalette) {
 }
 
 export function cloudMaterial(palette: SkyPalette) {
-  // Soft and bright: the shaded side stays a light tint, never grey.
-  const material = toonMaterial({ vertexColors: true, color: palette.cloud });
-  material.emissive = color(palette.cloud).lerp(color(palette.cloudShade), 0.4).multiplyScalar(0.55);
-  return material;
+  // Keep cloud shading within the palette. Multiplying white toon clouds by
+  // the bright sun, fill and emissive term clipped all their volume to white.
+  return new THREE.ShaderMaterial({
+    fog: true,
+    uniforms: { ...THREE.UniformsLib.fog, uLight: { value: color(palette.cloud) }, uShade: { value: color(palette.cloudShade) }, uSunDirection: SHARED_UNIFORMS.uSunDirection },
+    vertexShader: `
+      varying vec3 vCloudNormal;
+      #include <fog_pars_vertex>
+      void main() {
+        vCloudNormal = normalize(mat3(modelMatrix) * normal);
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mvPosition;
+        #include <fog_vertex>
+      }`,
+    fragmentShader: `
+      uniform vec3 uLight;
+      uniform vec3 uShade;
+      uniform vec3 uSunDirection;
+      varying vec3 vCloudNormal;
+      #include <fog_pars_fragment>
+      void main() {
+        vec3 normal = normalize(vCloudNormal);
+        float light = smoothstep(-0.7, 1.0, dot(normal, uSunDirection)) * 0.72 + smoothstep(-0.6, 0.8, normal.y) * 0.28;
+        gl_FragColor = vec4(mix(uShade, uLight, light), 1.0);
+        #include <colorspace_fragment>
+        #include <fog_fragment>
+      }`
+  });
 }
 
 export function skyDomeMaterial(palette: SkyPalette) {

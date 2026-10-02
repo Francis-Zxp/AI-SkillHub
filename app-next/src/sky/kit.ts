@@ -143,16 +143,27 @@ function rock(seed: number): KitModel {
   }
   geometry.translate(0, 0.25, 0);
   // Non-indexed: recomputed normals are per face, so the rock is faceted.
-  geometry.computeVertexNormals();
-  return { name: `rock-${seed}`, parts: [{ geometry: shade(merged([geometry]), WHITE, 0.78, 1.05), role: "tint" }], height: 0.62, footprint: 1.15 };
+  geometry.deleteAttribute("normal");
+  geometry.deleteAttribute("uv");
+  const rounded = mergeVertices(geometry, 1e-3);
+  rounded.computeVertexNormals();
+  geometry.dispose();
+  return { name: `rock-${seed}`, parts: [{ geometry: shade(merged([rounded]), WHITE, 0.78, 1.05), role: "tint" }], height: 0.62, footprint: 1.15 };
 }
 
 function grassTuft(seed: number): KitModel {
   const random = seededRandom(seed);
   const blades: THREE.BufferGeometry[] = [];
   for (let index = 0; index < 5; index++) {
-    const blade = new THREE.ConeGeometry(0.045, 0.3 + random() * 0.18, 3, 1);
+    const blade = new THREE.ConeGeometry(0.035, 0.3 + random() * 0.18, 4, 3);
     blade.translate(0, blade.parameters.height / 2, 0);
+    const positions = blade.getAttribute("position");
+    const bend = (random() - 0.5) * 0.18;
+    for (let vertex = 0; vertex < positions.count; vertex++) {
+      const t = positions.getY(vertex) / blade.parameters.height;
+      positions.setX(vertex, positions.getX(vertex) + bend * t * t);
+    }
+    blade.computeVertexNormals();
     blade.rotateZ((random() - 0.5) * 0.7);
     blade.rotateX((random() - 0.5) * 0.7);
     blade.translate((random() - 0.5) * 0.14, 0, (random() - 0.5) * 0.14);

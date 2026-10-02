@@ -1,0 +1,13 @@
+/* Reserve real layout space for progress; the map and its controls move together. */
+.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) { display: flex; flex-direction: column; padding-top: 84px; }
+.theme-family-atlas.page-dashboard .workspace-body > .operation-banner { flex: none; margin: 8px 24px 0; z-index: 36; background: var(--surface); backdrop-filter: none; }
+.theme-family-atlas.page-dashboard .operation-banner > div { min-width: 0; }
+.theme-family-atlas.page-dashboard .operation-banner span { overflow-wrap: anywhere; }
+.theme-family-atlas.page-dashboard .operation-banner em, .theme-family-atlas.page-dashboard .operation-banner button { flex-shrink: 0; }
+.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) .dashboard-view { position: relative; flex: 1; height: auto; }
+.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) :is(.home-visual-switch, .atlas-immersive-toggle, .atlas-intro-toggle, .skill-universe-modes) { top: 16px; }
+.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) :is(.sky-heading, .sky-controls) { top: 70px; }
+.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) .sky-navigation { top: 122px; }
+.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) .skill-universe-inspector { top: 68px; }
+.dashboard-immersive.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) { padding-top: 0; }
+@media (max-width: 1000px) { .theme-family-atlas.page-dashboard .operation-banner { flex-wrap: wrap; gap: 6px 12px; } .theme-family-atlas.page-dashboard .operation-banner > div { flex-basis: 70%; } }

@@ -2,6 +2,15 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.10 - 2026-10-02 - Scene detail and source update reliability
+
+- Restore a denser, evenly distributed star field; simplify overlapping background gradients and dither the remaining atmosphere to reduce visible banding.
+- Reserve layout space for update progress so home controls remain accessible. Source update records now have a compact, collapsible panel with filters and bounded scrolling; library children expand only on request.
+- Repair farm-animal hoof deformation, smooth island surfaces and mineral transitions, connect pond outlets to waterfalls, and balance night clouds and lighting.
+- Safely migrate app-managed legacy Markdown-only sparse checkouts after identity, path, size and local-change checks. Preserve custom checkout scopes.
+- Stop quarantining fully scanned, clean text scripts solely because they are executable helpers; retain dangerous-content findings and review for unscanned executable files.
+- Local candidate release; the public updater manifest is unchanged.
+
 ## 3.2.9 - 2026-10-02 - Sky as a fourth interface family, cartoon islands, star map refinements
 
 - "Sky" is a fourth interface family next to Classic, Modern and Living Atlas: floating dock sidebar, capsule top bar, open page headers, rounded quiet cards, pressed/focus feedback and a short page entrance (off under reduced motion).

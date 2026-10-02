@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
+import "./SourceUpdatePanel.css";
 import { Icon } from "./icons";
 import {
   SOURCE_UPDATE_OUTCOMES,
@@ -22,6 +23,8 @@ type Props = {
 
 export function SourceUpdatePanel({ run, busy, onContinue, compact = false }: Props) {
   const [filter, setFilter] = useState<SourceUpdateOutcome | "all">("all");
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
   const summary = summarizeSourceUpdateRun(run);
   const entries = useMemo(() => sortSourceUpdateEntries(run?.sources ?? []), [run]);
   const attention = entries.filter(entry => ["failed", "local-changes", "deferred", "not-git"].includes(normalizeOutcome(entry.outcome)) || entry.addedSkills.length > 0);
@@ -55,6 +58,7 @@ export function SourceUpdatePanel({ run, busy, onContinue, compact = false }: Pr
             <span className="source-run-progress">{rt("run.progress", { checked: summary.checked, total: summary.total })}</span>
             <span aria-hidden="true">·</span>
             <span>{summary.finished ? rt("run.finished") : rt("run.pending", { n: summary.pending })}</span>
+            {summary.counts.failed > 0 && <span className="source-run-failure">{rt("outcome.failed")} {summary.counts.failed}</span>}
             {run.updatedAt && (
               <>
                 <span aria-hidden="true">·</span>
@@ -69,11 +73,16 @@ export function SourceUpdatePanel({ run, busy, onContinue, compact = false }: Pr
             )}
           </p>
         </div>
+        <div className="source-run-actions">
+        <button className="ghost-action small" type="button" aria-expanded={expanded} aria-controls={detailsId} onClick={() => setExpanded(value => !value)}>
+          {rt(expanded ? "run.collapse" : "run.expand")}
+        </button>
         {summary.pending > 0 && onContinue && (
           <button className="primary-action small" disabled={busy} onClick={onContinue} type="button">
             <Icon name="refresh" /> {rt("run.continue", { n: summary.pending })}
           </button>
         )}
+        </div>
       </header>
 
       <div className="source-run-meter" role="img" aria-label={rt("run.progress", { checked: summary.checked, total: summary.total })}>
@@ -87,6 +96,7 @@ export function SourceUpdatePanel({ run, busy, onContinue, compact = false }: Pr
         ))}
       </div>
 
+      <div id={detailsId} hidden={!expanded}>
       {!compact && (
         <div className="source-run-filters" role="tablist" aria-label={rt("run.title")}>
           <button
@@ -122,6 +132,7 @@ export function SourceUpdatePanel({ run, busy, onContinue, compact = false }: Pr
           <SourceRunRow entry={entry} key={entry.folder} />
         ))}
       </ul>
+      </div>
     </section>
   );
 }

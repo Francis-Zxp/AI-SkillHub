@@ -47,7 +47,7 @@ type BuiltIsland = {
   layout: LayoutIsland;
   plan: IslandPlan;
   terrain: THREE.Mesh;
-  material: THREE.MeshToonMaterial;
+  material: THREE.MeshLambertMaterial;
   pick: THREE.Mesh;
   highlight: number;
   labelAnchor: THREE.Vector3;
@@ -136,6 +136,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   const pickMaterial = track(new THREE.MeshBasicMaterial({ visible: false }));
   const waterGeometryCache: THREE.BufferGeometry[] = [];
   const water = track(waterMaterial(palette));
+  const stream = track(waterMaterial(palette, true));
   const falls = track(waterfallMaterial(palette));
   type Bucket = { parts: Array<{ geometry: THREE.BufferGeometry; material: THREE.Material; matrix: THREE.Matrix4; tinted: boolean }>; matrices: THREE.Matrix4[]; tints: THREE.Color[]; small: boolean };
   const instanceBuckets = new Map<string, Bucket>();
@@ -176,7 +177,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     const plan = planIsland(position.radius, position.seed, theme);
     const origin = new THREE.Vector3(position.x, position.y, position.z);
     const tone = themeTone(theme);
-    const material = track(terrainMaterial(palette, tone));
+    const material = track(terrainMaterial(palette, tone, plan.shape.paths));
     // Tufts a shade deeper than the ground they grow from.
     const tuft = toneColor(palette.grassDark, tone).multiplyScalar(0.92);
     const geometry = track(plan.shape.buildGeometry(quality));
@@ -211,25 +212,34 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     if (plan.waterfall && plan.shape.ponds.length) {
       const fall = plan.waterfall;
       const pond = plan.shape.ponds[0];
-      const top = origin.y + plan.shape.pondLevel(pond) + 0.02;
+      const top = origin.y + plan.shape.pondLevel(pond);
       const drop = plan.shape.cliff + plan.shape.bottomDepth * 0.95;
-      const fallGeometry = new THREE.PlaneGeometry(fall.width, drop, 1, 1);
+      const fallGeometry = new THREE.PlaneGeometry(fall.width, drop, 1, 24);
       fallGeometry.translate(0, -drop / 2, 0);
+      const fallVertices = fallGeometry.getAttribute("position");
+      for (let vertex = 0; vertex < fallVertices.count; vertex++) {
+        const t = -fallVertices.getY(vertex) / drop;
+        fallVertices.setZ(vertex, Math.sin(t * Math.PI * 0.5) * Math.min(0.6, drop * 0.045));
+      }
+      fallGeometry.computeVertexNormals();
       waterGeometryCache.push(fallGeometry);
       const sheet = new THREE.Mesh(fallGeometry, falls);
       const outward = new THREE.Vector3(Math.cos(fall.angle), 0, Math.sin(fall.angle));
-      sheet.position.set(origin.x + fall.x + outward.x * 0.25, top, origin.z + fall.z + outward.z * 0.25);
+      const lipX = fall.x + outward.x * 0.12, lipZ = fall.z + outward.z * 0.12;
+      sheet.position.set(origin.x + lipX, top, origin.z + lipZ);
       sheet.lookAt(sheet.position.clone().add(outward));
       sheet.renderOrder = 2;
       scene.add(sheet);
       // A channel of water from the pond to the lip.
-      const channelLength = Math.hypot(fall.x - pond.x, fall.z - pond.z);
+      const channelStartX = pond.x + outward.x * pond.radius * 0.85;
+      const channelStartZ = pond.z + outward.z * pond.radius * 0.85;
+      const channelLength = Math.hypot(lipX - channelStartX, lipZ - channelStartZ);
       const channelGeometry = new THREE.PlaneGeometry(fall.width, channelLength, 1, 1);
       channelGeometry.rotateX(-Math.PI / 2);
       waterGeometryCache.push(channelGeometry);
-      const channel = new THREE.Mesh(channelGeometry, water);
-      channel.position.set(origin.x + (fall.x + pond.x) / 2, top - 0.005, origin.z + (fall.z + pond.z) / 2);
-      channel.rotation.y = -Math.atan2(fall.z - pond.z, fall.x - pond.x) + Math.PI / 2;
+      const channel = new THREE.Mesh(channelGeometry, stream);
+      channel.position.set(origin.x + (lipX + channelStartX) / 2, top, origin.z + (lipZ + channelStartZ) / 2);
+      channel.rotation.y = Math.atan2(lipX - channelStartX, lipZ - channelStartZ);
       scene.add(channel);
     }
 

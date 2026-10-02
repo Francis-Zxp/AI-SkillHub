@@ -98,11 +98,13 @@ export function formatRunTime(value: string, lang: Lang = getLang()): string {
 type Dictionary = Record<string, string>;
 
 const zh: Dictionary = {
+  "run.expand": "展开记录",
+  "run.collapse": "收起记录",
   "run.title": "来源更新",
   "run.subtitle": "上次“更新全部来源”的逐个结果",
   "run.progress": "已检查 {checked}/{total}",
   "run.pending": "{n} 个待继续",
-  "run.finished": "全部完成",
+  "run.finished": "本轮检查结束",
   "run.checkedAt": "检查于 {time}",
   "run.rounds": "{n} 轮",
   "run.continue": "继续更新剩余 {n} 个",
@@ -135,11 +137,13 @@ const zh: Dictionary = {
 };
 
 const en: Dictionary = {
+  "run.expand": "Show records",
+  "run.collapse": "Hide records",
   "run.title": "Source updates",
   "run.subtitle": "Per-source results of the last “Update all sources”",
   "run.progress": "Checked {checked}/{total}",
   "run.pending": "{n} waiting",
-  "run.finished": "All done",
+  "run.finished": "Check complete",
   "run.checkedAt": "Checked {time}",
   "run.rounds": "{n} rounds",
   "run.continue": "Continue the remaining {n}",
@@ -172,11 +176,13 @@ const en: Dictionary = {
 };
 
 const ko: Dictionary = {
+  "run.expand": "기록 펼치기",
+  "run.collapse": "기록 접기",
   "run.title": "소스 업데이트",
   "run.subtitle": "마지막 “모든 소스 업데이트”의 소스별 결과",
   "run.progress": "{checked}/{total} 확인",
   "run.pending": "{n}개 대기",
-  "run.finished": "모두 완료",
+  "run.finished": "확인 완료",
   "run.checkedAt": "{time} 확인",
   "run.rounds": "{n}회차",
   "run.continue": "남은 {n}개 계속",

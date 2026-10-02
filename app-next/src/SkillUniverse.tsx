@@ -1,3 +1,4 @@
+import "./HomeScene.css";
 import {
   type CSSProperties,
   type PointerEvent,
@@ -10,6 +11,7 @@ import { Icon } from "./icons";
 import { categoryName, getLang, t } from "./i18n";
 import { localizedSkillDescription } from "./localizedDescriptions";
 import { sourcePresentation } from "./sourceIdentity";
+import { createStarField, drawAtmosphereDither } from "./universeAtmosphere";
 import "./SkillUniverse.css";
 import type { LegacySnapshot, SkillCard, SourceCard, SourcePopularityCard } from "./types";
 
@@ -118,19 +120,7 @@ const POSITION_MODES: Record<SkillUniverseMode, SkillUniverseMode> = {
   categories: "categories"
 };
 
-// A quiet, fixed star field (screen-relative) and three great circles of the
-// celestial sphere replace the old aura, dust and meteors: the data carries
-// the colour, the backdrop only gives depth and orientation.
-const STAR_FIELD = Array.from({ length: 170 }, (_, index) => {
-  const seed = stableHash(`universe-star:${index}`);
-  return {
-    x: (seed % 10_007) / 10_007,
-    y: ((seed >>> 7) % 9_973) / 9_973,
-    size: 0.6 + ((seed >>> 3) % 100) / 100,
-    alpha: 0.1 + ((seed >>> 13) % 100) / 300,
-    twinkle: seed % 9 === 0
-  };
-});
+const STAR_FIELD = createStarField();
 // Count, size, angle and timing differ every session; none repeats a path.
 const METEOR_SESSION_SEED = randomSessionSeed();
 const METEORS = Array.from({ length: 4 + (METEOR_SESSION_SEED % 9) }, (_, index) => {
@@ -1047,11 +1037,6 @@ function drawUniverseAtmosphere(
   lightTheme: boolean
 ) {
   context.save();
-  for (const star of STAR_FIELD) {
-    const twinkle = star.twinkle && time > 0 ? 0.55 + 0.45 * Math.sin(time * 0.0011 + star.x * 40) : 1;
-    context.fillStyle = `rgba(${palette.star}, ${(star.alpha * twinkle * (lightTheme ? 0.5 : 1)).toFixed(3)})`;
-    context.fillRect(star.x * width, star.y * height, star.size, star.size);
-  }
   // A soft core inside the sphere gives it volume; the nodes in front of it
   // read brighter, the ones behind recede into it.
   const core = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius * 1.05);
@@ -1062,6 +1047,16 @@ function drawUniverseAtmosphere(
   context.beginPath();
   context.arc(centerX, centerY, radius * 1.05, 0, Math.PI * 2);
   context.fill();
+  drawAtmosphereDither(context, width, height);
+  const starCount = Math.min(STAR_FIELD.length, Math.max(260, Math.round(width * height / 3800)));
+  for (let i = 0; i < starCount; i += 1) {
+    const star = STAR_FIELD[i];
+    const twinkle = star.twinkle && time > 0 ? 0.8 + 0.2 * Math.sin(time * 0.0011 + star.x * 40) : 1;
+    context.fillStyle = `rgba(${palette.star}, ${(star.alpha * twinkle * (lightTheme ? 0.55 : 1)).toFixed(3)})`;
+    context.beginPath();
+    context.arc(star.x * width, star.y * height, star.size * 0.6, 0, Math.PI * 2);
+    context.fill();
+  }
   drawUniverseMeteors(context, palette, width, height, time);
   // Three great circles of the celestial sphere, dashed so they never read
   // as data links (which are solid): finer in front, sparser behind.

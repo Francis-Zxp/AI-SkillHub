@@ -9813,6 +9813,11 @@ fn apply_security_scan_to_execution(
             "{} 安全扫描发现 {} 个待复核内容信号，并识别到 {} 个脚本或可执行文件；来源仍在隔离区，确认后才会写入技能库。",
             execution.summary, review_findings, report.executable_files
         );
+    } else if report.status == "passed" && report.executable_files > 0 {
+        execution.summary = format!(
+            "{} 已检查 {} 个脚本文件，未发现需复核的内容；导入不会执行这些脚本。",
+            execution.summary, report.executable_files
+        );
     }
     Ok(())
 }
@@ -23967,6 +23972,39 @@ mod tests {
             .any(|check| check.contains("已添加过")));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn clean_text_helper_imports_without_an_unnecessary_review_gate() {
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-clean-helper-import-{}",
+            unix_timestamp_string()
+        ));
+        let connection = open_index_database(&root).expect("test sqlite should open");
+        let staged = source_import_staging_root(&root).join("clean-helper");
+        fs::create_dir_all(&staged).unwrap();
+        fs::write(staged.join("SKILL.md"), "# Research helper\n").unwrap();
+        let helper = "raise RuntimeError('imports must never execute helper scripts')\n";
+        fs::write(staged.join("helper.py"), helper).unwrap();
+        let promotion = promote_staged_source_import_in_connection(
+            &root,
+            &connection,
+            "local",
+            &staged.to_string_lossy(),
+            "clean-helper",
+            false,
+        )
+        .unwrap();
+        assert_eq!(promotion.status, "promoted");
+        assert_eq!(promotion.security_status, "passed");
+        assert!(!promotion.security_review_confirmed);
+        assert!(promotion.security_findings.is_empty());
+        assert_eq!(
+            fs::read_to_string(Path::new(&promotion.target_path).join("helper.py")).unwrap(),
+            helper
+        );
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

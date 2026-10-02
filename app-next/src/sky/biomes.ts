@@ -300,6 +300,11 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
     }
   }
   shape.ponds = ponds;
+  if (waterfall && ponds.length) {
+    const pond = ponds[0];
+    // The same spill endpoint drives the carved bed and visible water ribbon.
+    shape.channels.push({ from: [pond.x, pond.z], to: [waterfall.x, waterfall.z], width: waterfall.width, level: shape.pondLevel(pond) });
+  }
 
   // 3. Worn paths from each door toward the open front rim and to the pond.
   const paths: PathLine[] = [];
@@ -401,13 +406,13 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
   }
 
   // 7. Rocks, half sunk near the rim.
-  const rockCount = Math.max(1, Math.round(spec.rocks * radius / 8));
+  const rockCount = Math.max(2, Math.round(spec.rocks * radius / 6));
   for (let attempt = 0, count = 0; attempt < rockCount * 20 && count < rockCount; attempt++) {
     const angle = range(0, Math.PI * 2);
     const distance = shape.rimRadius(angle) * range(0.7, 0.85);
     const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
     if (!free(x, z, 0.8) || !clearOf(x, z, 0.5)) continue;
-    placements.push({ library: "kit", model: pick(["rock-1", "rock-2", "rock-4"]), x, z, yaw: range(0, Math.PI * 2), scale: range(0.9, 1.6) * unit, sink: 0.3, tint: spec.rockColor });
+    placements.push({ library: "kit", model: pick(["rock-1", "rock-2", "rock-4"]), x, z, yaw: range(0, Math.PI * 2), scale: range(0.65, 1.35) * unit, sink: 0.2, tint: spec.rockColor });
     occupied.push({ x, z, r: 0.9 });
     count++;
   }

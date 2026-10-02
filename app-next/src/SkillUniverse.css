@@ -14,10 +14,11 @@
   inset: 0;
   z-index: 2;
   pointer-events: none;
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--bg) 38%, transparent), transparent 34% 76%, color-mix(in srgb, var(--bg) 16%, transparent)),
-    linear-gradient(0deg, color-mix(in srgb, var(--bg) 22%, transparent), transparent 28%);
+  background: none;
 }
+
+.theme-family-atlas.page-dashboard .dashboard-hero.universe-home { background: var(--bg); }
+.theme-family-atlas.page-dashboard .dashboard-hero.universe-home::after { background: none; }
 
 .skill-universe-canvas {
   position: absolute;
@@ -365,4 +366,3 @@
 }
 .theme-family-sky .skill-universe-modes { border-color: var(--border); background: var(--surface-elevated); box-shadow: none; backdrop-filter: none; }
 .theme-family-sky .skill-universe-modes button.active { background: var(--brand); color: var(--on-brand); box-shadow: none; }
-

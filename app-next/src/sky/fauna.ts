@@ -276,8 +276,16 @@ export function createAnimal(
     // Hoppers only move while in the air part of their hop.
     const moving = walk ? 1 : current === hop && hop ? Math.max(0, Math.sin((hop.time / hop.getClip().duration) * Math.PI * 2)) : 0;
     const step = Math.min(distance, speed * delta * (walk ? 1 : moving * 1.6));
-    x += (dx / distance) * step;
-    z += (dz / distance) * step;
+    const nextX = x + (dx / distance) * step, nextZ = z + (dz / distance) * step;
+    // An open destination does not guarantee the straight route avoids a pond.
+    if (!isOpen(nextX, nextZ)) {
+      target = null;
+      rest = 1 + random() * 2;
+      switchTo(idle);
+      return;
+    }
+    x = nextX;
+    z = nextZ;
     const heading = Math.atan2(dx, dz);
     yaw += Math.atan2(Math.sin(heading - yaw), Math.cos(heading - yaw)) * Math.min(1, delta * 5);
     place();

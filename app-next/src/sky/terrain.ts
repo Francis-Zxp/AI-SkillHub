@@ -11,6 +11,7 @@ import { fbm2, fbm3, noise2, seededRandom, smoothstep } from "./noise";
 export type Pad = { x: number; z: number; radius: number; level?: number };
 export type Pond = { x: number; z: number; radius: number; depth: number; level?: number };
 export type PathLine = { points: Array<[number, number]>; width: number };
+export type WaterChannel = { from: [number, number]; to: [number, number]; width: number; level: number };
 
 export class IslandShape {
   readonly radius: number;
@@ -19,6 +20,7 @@ export class IslandShape {
   pads: Pad[] = [];
   ponds: Pond[] = [];
   paths: PathLine[] = [];
+  channels: WaterChannel[] = [];
   private harmonics: Array<{ k: number; amplitude: number; phase: number }>;
   private elongation: number;
   private elongAngle: number;
@@ -108,6 +110,14 @@ export class IslandShape {
         if (distance < 1) height = Math.min(height, basin);
       }
     }
+    for (const channel of this.channels) {
+      const [ax, az] = channel.from, [bx, bz] = channel.to;
+      const dx = bx - ax, dz = bz - az;
+      const t = THREE.MathUtils.clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0, 1);
+      const distance = Math.hypot(x - ax - dx * t, z - az - dz * t);
+      const weight = 1 - smoothstep(channel.width * 0.48, channel.width * 0.95, distance);
+      height += (Math.min(height, channel.level - 0.1) - height) * weight;
+    }
     return height;
   }
 
@@ -133,7 +143,13 @@ export class IslandShape {
   }
 
   isInsidePond(x: number, z: number, margin = 0): boolean {
-    return this.ponds.some(pond => Math.hypot(x - pond.x, z - pond.z) < pond.radius + margin);
+    return this.ponds.some(pond => Math.hypot(x - pond.x, z - pond.z) < pond.radius + margin) ||
+      this.channels.some(channel => {
+        const [ax, az] = channel.from, [bx, bz] = channel.to;
+        const dx = bx - ax, dz = bz - az;
+        const t = THREE.MathUtils.clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0, 1);
+        return Math.hypot(x - ax - dx * t, z - az - dz * t) < channel.width * 0.6 + margin;
+      });
   }
 
   /** Cliff height under the grass lip. */
@@ -155,17 +171,13 @@ export class IslandShape {
     // side bulges hang down on their own and break the silhouette.
     let depth = this.bottomDepth * (envelope * 0.24 + envelope ** 0.3 * 0.76 * mass);
     depth += fbm2(x * 0.32, z * 0.32, this.seed + 11, 3) * this.radius * 0.07 * envelope;
-    const step = Math.max(0.45, this.radius * 0.085);
-    const level = depth / step, floor = Math.floor(level);
-    const terraced = step * (floor + smoothstep(0.3, 0.7, level - floor));
-    return Math.max(0, depth * 0.45 + terraced * 0.55);
+    return Math.max(0, depth);
   }
 
   buildGeometry(quality = 1): THREE.BufferGeometry {
-    // Coarse on purpose: smooth toon grass needs little, and the faceted rock
-    // underneath reads as chunky cartoon planes.
-    const segments = Math.round(THREE.MathUtils.clamp(this.radius * 8, 48, 96) * quality);
-    const rings = Math.round(THREE.MathUtils.clamp(this.radius * 2.2, 10, 26) * quality);
+    // Enough samples for pond banks and a continuous rounded silhouette.
+    const segments = Math.round(THREE.MathUtils.clamp(this.radius * 10, 64, 112) * quality);
+    const rings = Math.round(THREE.MathUtils.clamp(this.radius * 3.2, 16, 38) * quality);
     const positions: number[] = [];
     const rock: number[] = [];
     const depth: number[] = [];
@@ -216,8 +228,8 @@ export class IslandShape {
         const y = rimY - band * cliff;
         if (ring > 0) {
           const strata = Math.sin(y * 2.2 + noise2(theta * 3, y * 0.6, this.seed) * 1.6);
-          radius += Math.sign(strata) * Math.abs(strata) ** 0.4 * this.radius * 0.012;
-          radius += fbm3(cos * radius * 0.45, y * 0.3, sin * radius * 0.45, this.seed + 5, 3) * this.radius * 0.035;
+          radius += strata * this.radius * 0.007;
+          radius += fbm3(cos * radius * 0.45, y * 0.3, sin * radius * 0.45, this.seed + 5, 3) * this.radius * 0.016;
         }
         if (ring === cliffRings) foot.push({ r: radius, y });
         positions.push(cos * radius, y, sin * radius);
@@ -226,7 +238,7 @@ export class IslandShape {
     }
     // Part 2: the underside, rings from the cliff foot in to the axis, each
     // vertex hanging by the depth field below the foot level.
-    const underRings = Math.round(9 * quality) + 4;
+    const underRings = Math.round(18 * quality) + 4;
     const footLevel = foot.reduce((sum, item) => sum + item.y, 0) / foot.length;
     for (let ring = 1; ring <= underRings; ring++) {
       const q = 1 - (ring / underRings) ** 0.9;
@@ -238,7 +250,7 @@ export class IslandShape {
         const x = cos * radius, z = sin * radius;
         const level = base.y + (footLevel - base.y) * (1 - q);
         const y = level - this.undersideDepth(x, z);
-        radius += fbm3(x * 0.4, y * 0.35, z * 0.4, this.seed + 17, 3) * this.radius * 0.05 * q * (1 - q) * 4;
+        radius += fbm3(x * 0.4, y * 0.35, z * 0.4, this.seed + 17, 3) * this.radius * 0.018 * q * (1 - q) * 4;
         positions.push(cos * Math.max(0, radius), y, sin * Math.max(0, radius));
         rock.push(1); depth.push(Math.min(1, 0.25 + ((footLevel - y + cliff) / maxDepth) * 0.75)); worn.push(0);
       }

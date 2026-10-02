@@ -96,7 +96,10 @@ fn outcome_for_log(action: &str, status: &str, message: &str) -> (&'static str, 
             ("deferred", String::new())
         }
         (_, "skipped") if lower.contains("nopull") => ("deferred", String::new()),
-        (_, "not-git") => ("not-git", String::new()),
+        (_, "not-git") => (
+            "not-git",
+            "此来源未配置可用的自动更新方式；可重新导入作者提供的新版本。".to_string(),
+        ),
         (_, "timeout") => ("failed", "连接 GitHub 超时。".to_string()),
         (_, "safety-check-failed") => (
             "failed",
@@ -447,6 +450,12 @@ mod tests {
         assert_eq!(outcome("broken"), "failed");
         assert_eq!(outcome("zip"), "unchanged");
         assert_eq!(outcome("manual"), "not-git");
+        assert!(entries
+            .iter()
+            .find(|entry| entry.folder == "manual")
+            .unwrap()
+            .detail
+            .contains("重新导入"));
         assert_eq!(outcome("__rotation__"), "missing");
         assert!(entries
             .iter()

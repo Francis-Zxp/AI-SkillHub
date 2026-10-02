@@ -10,6 +10,7 @@ import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { AnimalName } from "./biomes";
 import type { SkyPalette } from "./materials";
 import { toonGradient, toonMaterial } from "./materials";
+import { repairFarmHoofWeights } from "./animalRig";
 
 export type TemplatePart = { geometry: THREE.BufferGeometry; material: THREE.Material; matrix: THREE.Matrix4; role?: string };
 export type ModelTemplate = { name: string; parts: TemplatePart[]; box: THREE.Box3; height: number; footprint: number };
@@ -69,6 +70,7 @@ function loadRaw(): Promise<RawLibrary> {
     });
     toonify(villager);
     animals.forEach(gltf => {
+      repairFarmHoofWeights(gltf);
       toonify(gltf);
       mergeSkinnedParts(gltf);
     });
@@ -180,7 +182,7 @@ export async function loadSkyLibrary(palette: SkyPalette): Promise<SkyLibrary> {
     raw.buildings,
     source => {
       if (/RoundTiles/i.test(source.name)) return flat("roof", "#d4643c");
-      if (/Glass/i.test(source.name)) return flat("glass", palette.night ? "#ffcf7a" : "#a9d6ec", "#ffb24d", palette.night * 1.4);
+      if (/Glass/i.test(source.name)) return flat("glass", palette.night ? "#e8bb74" : "#a9d6ec", "#ffb24d", palette.night * 0.65);
       const match = BUILDING_COLORS.find(([pattern]) => pattern.test(source.name));
       return flat(source.name, match ? match[1] : "#e8dccb");
     },

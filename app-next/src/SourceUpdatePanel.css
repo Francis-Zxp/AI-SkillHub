@@ -1,0 +1,23 @@
+.source-run-panel { border: 1px solid var(--border); border-radius: var(--radius-card, 16px); padding: 18px 22px; background: var(--surface); }
+.source-run-head, .source-run-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.source-run-head h3 { margin: 0 0 6px; font-size: 15px; }
+.source-run-head p { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; font-size: 12px; color: var(--text-soft); font-variant-numeric: tabular-nums; }
+.source-run-meter { display: flex; height: 4px; gap: 2px; margin-top: 16px; overflow: hidden; border-radius: 3px; background: var(--surface-strong); }
+.source-run-panel [class*="outcome-"] { --outcome: var(--text-soft); }
+.source-run-panel .outcome-updated { --outcome: var(--success); }
+.source-run-panel .outcome-failed { --outcome: var(--danger); }
+.source-run-panel :is(.outcome-local-changes, .outcome-deferred) { --outcome: var(--warning); }
+.source-run-meter i, .source-run-dot { background: var(--outcome); }
+.source-run-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.source-run-filters { display: flex; gap: 6px; flex-wrap: wrap; margin: 16px 0 8px; }
+.source-run-filters button { display: flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text-soft); font: inherit; font-size: 12px; }
+.source-run-filters button.is-active { color: var(--text); background: var(--surface-strong); border-color: var(--border-strong); }
+.source-run-list { max-height: 380px; overflow: auto; scrollbar-width: thin; list-style: none; padding: 0; margin: 12px 0 0; }
+.source-run-row { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 14px; padding: 12px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.source-run-status { color: var(--outcome); display: flex; align-items: baseline; gap: 6px; font-size: 12px; }
+.source-run-body { min-width: 0; overflow-wrap: anywhere; }
+.source-run-body small { color: var(--text-soft); margin-left: 10px; }
+.source-run-body p, .source-run-note { margin: 5px 0 0; color: var(--text-soft); font-size: 12px; line-height: 1.6; }
+.source-run-added { color: var(--success); }
+.source-run-head .source-run-failure { color: var(--danger); }
+@media (max-width: 700px) { .source-run-panel { padding: 16px; } .source-run-row { grid-template-columns: 1fr; gap: 6px; } }

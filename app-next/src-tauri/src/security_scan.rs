@@ -208,6 +208,7 @@ pub fn scan_source_tree_with_limits(
     let mut skipped_files = 0usize;
     let mut scanned_bytes = 0u64;
     let mut executable_files = 0usize;
+    let mut unscanned_executable_files = 0usize;
     let mut findings = Vec::new();
     let mut blocking_reasons = Vec::new();
 
@@ -273,21 +274,24 @@ pub fn scan_source_tree_with_limits(
                 .and_then(|value| value.to_str())
                 .unwrap_or_default()
                 .to_ascii_lowercase();
-            if EXECUTABLE_EXTENSIONS.contains(&extension.as_str()) {
+            let executable = EXECUTABLE_EXTENSIONS.contains(&extension.as_str());
+            if executable {
                 executable_files += 1;
             }
             if !TEXT_EXTENSIONS.contains(&extension.as_str())
                 || metadata.len() > limits.max_text_file_bytes
             {
                 skipped_files += 1;
+                unscanned_executable_files += usize::from(executable);
                 continue;
             }
 
             let bytes = fs::read(&path).map_err(|error| {
                 format!("Cannot read source file during security scan: {error}")
             })?;
-            if bytes.contains(&0) {
+            if bytes.contains(&0) || std::str::from_utf8(&bytes).is_err() {
                 skipped_files += 1;
+                unscanned_executable_files += usize::from(executable);
                 continue;
             }
             let text = String::from_utf8_lossy(&bytes);
@@ -363,9 +367,12 @@ pub fn scan_source_tree_with_limits(
     } else {
         "low"
     };
+    // The extension records capability, not a dangerous finding. A fully
+    // scanned text helper with no matches should not block normal imports.
+    // Binary, oversized or unreadable executable content still needs review.
     let status = if !blocking_reasons.is_empty() {
         "blocked"
-    } else if findings.is_empty() && executable_files == 0 {
+    } else if findings.is_empty() && unscanned_executable_files == 0 {
         "passed"
     } else {
         "review"
@@ -612,7 +619,7 @@ mod tests {
 
         let report = scan_source_tree(&root).unwrap();
 
-        assert_eq!(report.status, "review");
+        assert_eq!(report.status, "passed");
         assert_eq!(report.risk_level, "medium");
         assert_eq!(report.executable_files, 2);
         assert!(report.findings.is_empty());
@@ -770,7 +777,7 @@ mod tests {
 
         let report = scan_source_tree(&root).unwrap();
 
-        assert_eq!(report.status, "review");
+        assert_eq!(report.status, "passed");
         assert_eq!(report.executable_files, 1);
         assert!(report.safe_to_promote());
         assert!(!report
@@ -790,6 +797,41 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.id.starts_with("hidden-unicode")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unscanned_executables_still_require_review() {
+        for (name, bytes) in [
+            ("tool.exe", b"MZ executable".as_slice()),
+            ("binary.py", b"code\0binary".as_slice()),
+            ("invalid.py", b"code\xff".as_slice()),
+        ] {
+            let root = temp_dir("unscanned-code");
+            fs::write(root.join(name), bytes).unwrap();
+            let report = scan_source_tree(&root).unwrap();
+            assert_eq!(report.status, "review", "{name}");
+            assert_eq!(report.executable_files, 1);
+            assert_eq!(report.skipped_files, 1);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn oversized_script_requires_review_without_claiming_a_complete_scan() {
+        let root = temp_dir("large-script");
+        fs::write(root.join("helper.py"), "print('long helper')").unwrap();
+        let report = scan_source_tree_with_limits(
+            &root,
+            SecurityScanLimits {
+                max_text_file_bytes: 8,
+                ..SecurityScanLimits::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(report.status, "review");
+        assert_eq!(report.executable_files, 1);
+        assert_eq!(report.skipped_files, 1);
         fs::remove_dir_all(root).unwrap();
     }
 

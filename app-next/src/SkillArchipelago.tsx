@@ -1,3 +1,4 @@
+import "./HomeScene.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getLang } from "./i18n";
 import { buildSkyIslands } from "./skyIslandModel";

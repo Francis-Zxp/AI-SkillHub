@@ -24,7 +24,7 @@ const SkillUniverse = lazy(() => import("./SkillUniverse").then(module => ({ def
 import { sourcePresentation } from "./sourceIdentity";
 import { buildSkyIslands, isRouterHubSkill as modelIsRouterHubSkill, skillBelongsToSource as modelSkillBelongsToSource } from "./skyIslandModel";
 import { PromptLauncherAction } from "./PromptLauncherAction";
-import { SourceUpdatePanel } from "./SourceUpdatePanel";
+const SourceUpdatePanel = lazy(() => import("./SourceUpdatePanel").then(module => ({ default: module.SourceUpdatePanel })));
 import { SourceIdentityPanel } from "./SourceIdentityPanel";
 import { SKY_SCENE_EVENT, setSkySceneEnabled, skySceneEnabled } from "./skyScene";
 import { rt, shouldAutoContinue, sourceUpdateToast, summarizeSourceUpdateRun } from "./sourceUpdateRun";
@@ -2512,7 +2512,7 @@ function Dashboard({
 
   return (
     <div className="view dashboard-view">
-      <section className={`dashboard-hero glow-card${atlasMode && (!atlasIntroVisible || homeVisual === "islands") ? " intro-collapsed" : ""}${atlasMode && homeVisual === "islands" ? " islands-home" : ""}`}>
+      <section className={`dashboard-hero glow-card${atlasMode && (!atlasIntroVisible || homeVisual === "islands") ? " intro-collapsed" : ""}${atlasMode && homeVisual === "islands" ? " islands-home" : " universe-home"}`}>
         {atlasMode && homeVisual === "islands" && (
           <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
             <SkillArchipelago centered lightTheme={isLightTheme(theme)} phase={theme.startsWith("sky-") ? (theme.slice(4) as SkyPhase) : isLightTheme(theme) ? "noon" : "night"} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} snapshot={snapshot} />
@@ -3360,25 +3360,6 @@ function Library(props: LibraryProps) {
   }, [skills, sources]);
 
   useEffect(() => {
-    if (!searchQuery.trim() && selectedFolderId === "all") return;
-    const matchingSourceIds = sources
-      .filter(source =>
-        searchQuery.trim()
-          ? sourceMatchesSearch(source, searchQuery) ||
-            (skillsBySourceId.get(source.id) ?? []).some(skill => skillMatchesSearch(skill, searchQuery))
-          : (skillsBySourceId.get(source.id) ?? []).some(skill =>
-              !isRouterHubSkill(skill) && skillMatchesUserFolder(skill, selectedFolderId, source, skillFolders))
-      )
-      .map(source => source.id);
-    if (!matchingSourceIds.length) return;
-    setExpanded(previous => {
-      const next = new Set(previous);
-      matchingSourceIds.forEach(sourceId => next.add(sourceId));
-      return next;
-    });
-  }, [searchQuery, selectedFolderId, skillsBySourceId, sources, skillFolders]);
-
-  useEffect(() => {
     if (snapshot && selectedFolderId !== "all" && selectedFolderId !== "unfiled" &&
         !skillFolders.some(folder => folder.id === selectedFolderId)) setSelectedFolderId("all");
   }, [snapshot, selectedFolderId, skillFolders, setSelectedFolderId]);
@@ -3645,7 +3626,7 @@ function Library(props: LibraryProps) {
 
         <section className="library-tree">
         {visibleSources.map(source => {
-          const isExpanded = expanded.has(source.id) || Boolean(searchQuery.trim());
+          const isExpanded = expanded.has(source.id);
           const sourceSkills = sortSkills(
             (skillsBySourceId.get(source.id) ?? [])
               .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
@@ -6390,11 +6371,13 @@ function Settings({
       )}
 
       {snapshot?.lastSyncSummary?.updateRun ? (
+        <Suspense fallback={<DeferredSurface label={rt("run.title")} />}>
         <SourceUpdatePanel
           busy={disabled}
           onContinue={onContinueSourceUpdate}
           run={snapshot.lastSyncSummary.updateRun}
         />
+        </Suspense>
       ) : sourceUpdateProblems.length > 0 && (
         <section className="panel glow-card source-update-problems" role="status">
           <header className="panel-head">
