@@ -2,6 +2,15 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.12 - 2026-10-03 - Natural motion, Chinese typography and Origin bridge setup
+
+- Fix cloud flicker during pan/zoom by stabilizing shader noise seeds. Join pond and waterfall with one continuous curved spillway.
+- Reconstruct missing animal leg IK, match travel to stride and keep planted feet steady; retain authored coat materials under continuous lighting. Vary flock sizes, routes and single birds.
+- Keep star-map label positions fractional and stable while dragging, cache text measurements and stop redrawing the static backdrop. Restore a visible central star field with empty screen edges; align meteor velocity and tail in pixel space.
+- Correct DPI-sensitive dragging and prevent pointer release after a drag from accidentally selecting a node. Use upper-right lighting consistently for source spheres.
+- Bundle an offline Simplified Chinese UI font derived from Noto Sans SC (OFL), unify type hierarchy, remove nested navigation frames and share the full-window scene background with equal 12px gutters.
+- Detect Origin App registration separately from deployed files; provide a bounded register/start action for the existing Origin session with backups and real read-only connection verification. Support compact-mode servers without requiring an optional status tool.
+
 ## 3.2.11 - 2026-10-02 - Calm skies, stable navigation and MCP compatibility
 
 - Replace opaque cloud clusters with soft density-shaped clouds; remove detached island spikes and grade light topsoil into darker rock.

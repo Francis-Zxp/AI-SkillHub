@@ -1,0 +1,31 @@
+// Exercises the rendered app with preview data; no real user data or IPC writes.
+const { chromium }=require('playwright');
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const out=path.resolve(__dirname,'../reports/visual/v3.2.12-typography');fs.mkdirSync(out,{recursive:true});
+const results=[];const url=process.env.AI_SKILLHUB_PREVIEW_URL||'http://127.0.0.1:1421/';
+async function check(name,fn){try{results.push({name,passed:true,detail:await fn()});console.log('PASS',name);}catch(e){results.push({name,passed:false,error:e.stack});console.error('FAIL',name,e.message);}}
+(async()=>{const browser=await chromium.launch({channel:'chrome',args:['--use-angle=d3d11','--ignore-gpu-blocklist']});try{
+for(const [width,height,dpr,theme]of[[1260,840,1,'sky-noon'],[1920,1080,2,'sky-night'],[3840,2160,1,'sky-noon']]){
+const ctx=await browser.newContext({viewport:{width,height},deviceScaleFactor:dpr});await ctx.route('https://vibecafe.ai/**',r=>r.abort());await ctx.addInitScript(theme=>{localStorage.setItem('ai-skillhub-theme',theme);localStorage.setItem('ai-skillhub-lang','zh');localStorage.setItem('skillhub-sky-enabled','1');localStorage.setItem('ai-skillhub-ui-text-scale','standard');},theme);
+const page=await ctx.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(url);await page.locator('.sky-world-canvas').waitFor();await page.evaluate(()=>document.fonts.ready);await page.waitForTimeout(1300);
+await check('local UI font ready '+width,()=>page.evaluate(()=>{if(!document.fonts.check('400 14px "SkillHub Sans UI"','技能来源分类'))throw Error('Font not loaded');return{family:getComputedStyle(document.querySelector('.shell')).fontFamily,fontFaces:[...document.fonts].map(f=>({family:f.family,status:f.status}))};}));
+await check('scene spans viewport behind rail '+width,()=>page.locator('.sky-world-canvas').evaluate(c=>{const r=c.getBoundingClientRect();if(Math.abs(r.left)>1||Math.abs(r.width-innerWidth)>1)throw Error(JSON.stringify({left:r.left,width:r.width,innerWidth}));return{left:r.left,width:r.width};}));
+await check('rail and chrome share top bottom gutters '+width,()=>page.evaluate(()=>{const rail=document.querySelector('.sidebar').getBoundingClientRect(),top=document.querySelector('.topbar').getBoundingClientRect(),footer=document.querySelector('.atlas-touchbar').getBoundingClientRect();const d={railTop:rail.top,railBottom:innerHeight-rail.bottom,top:top.top,bottom:innerHeight-footer.bottom};if(Object.values(d).some(v=>Math.abs(v-12)>1))throw Error(JSON.stringify(d));return d;}));
+await check('nested rail and footer frames removed '+width,()=>page.evaluate(()=>{const side=document.querySelector('.sidebar'),bar=document.querySelector('.atlas-touchbar'),metric=bar.querySelector('.metric');const d={railBorder:getComputedStyle(side).borderTopWidth,innerFrame:getComputedStyle(side,'::after').display,barBorder:getComputedStyle(bar).borderTopWidth,metricBorder:getComputedStyle(metric).borderTopWidth};if(d.railBorder!=='0px'||d.innerFrame!=='none'||d.barBorder!=='0px'||d.metricBorder!=='0px')throw Error(JSON.stringify(d));return d;}));
+await check('navigation remains clickable '+width,()=>page.locator('.nav-item').first().evaluate(e=>{const r=e.getBoundingClientRect();if(!e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)))throw Error('Navigation covered');return true;}));
+await page.screenshot({path:path.join(out,'islands-'+width+'-'+theme+'.png')});
+await page.getByRole('button',{name:'星图',exact:true}).click();await page.waitForTimeout(600);
+await check('star canvas shares viewport '+width,()=>page.locator('.skill-universe-canvas').evaluate(c=>{const r=c.getBoundingClientRect();if(Math.abs(r.left)>1||Math.abs(r.width-innerWidth)>1)throw Error(JSON.stringify({x:r.x,w:r.width}));return{left:r.left,width:r.width};}));
+await page.screenshot({path:path.join(out,'stars-'+width+'-'+theme+'.png')});
+await page.locator('.atlas-immersive-toggle').click();await page.waitForTimeout(600);
+await check('fullscreen clears navigation safe area '+width,()=>page.evaluate(()=>{const shell=document.querySelector('.shell'),style=getComputedStyle(shell),rail=getComputedStyle(document.querySelector('.sidebar')),canvas=document.querySelector('.skill-universe-canvas').getBoundingClientRect();if(style.getPropertyValue('--home-rail').trim()!=='0px'||Number(rail.opacity)!==0||Math.abs(canvas.x)>1||Math.abs(canvas.width-innerWidth)>1)throw Error('Fullscreen retains rail');return{rail:style.getPropertyValue('--home-rail'),opacity:rail.opacity,width:canvas.width};}));
+await page.locator('.atlas-immersive-toggle').click();await page.waitForTimeout(600);
+
+await page.locator('.nav-item').nth(1).click();await page.locator('.source-group-title').first().waitFor();await page.waitForTimeout(500);
+await check('library primary text and captions readable '+width,()=>page.evaluate(()=>{const selectors=['.source-group-title strong','.source-group-title span','.nav-text strong'];const d=selectors.map(s=>{const e=document.querySelector(s),c=getComputedStyle(e);return{selector:s,size:parseFloat(c.fontSize),family:c.fontFamily}});if(d.some(x=>x.size<12||!x.family.includes('SkillHub Sans UI')))throw Error(JSON.stringify(d));return d;}));
+await check('no page width overflow '+width,()=>page.evaluate(()=>{if(document.documentElement.scrollWidth>innerWidth+1)throw Error('Horizontal overflow');return true;}));
+const cdp=await ctx.newCDPSession(page);await cdp.send('DOM.enable');await cdp.send('CSS.enable');const doc=await cdp.send('DOM.getDocument');const node=await cdp.send('DOM.querySelector',{nodeId:doc.root.nodeId,selector:'.source-group-title strong'});await check('bundled font actually renders '+width,async()=>{const data=await cdp.send('CSS.getPlatformFontsForNode',{nodeId:node.nodeId});if(!data.fonts.some(f=>f.isCustomFont))throw Error(JSON.stringify(data));return data.fonts;});
+await page.screenshot({path:path.join(out,'library-'+width+'-'+theme+'.png')});
+await check('no runtime errors '+width,async()=>assert.deepEqual(errors,[]));await ctx.close();
+}
+}finally{await browser.close();fs.writeFileSync(path.join(out,'results.json'),JSON.stringify(results,null,2));}if(results.some(r=>!r.passed))process.exitCode=1;})().catch(e=>{console.error(e);process.exitCode=1;});

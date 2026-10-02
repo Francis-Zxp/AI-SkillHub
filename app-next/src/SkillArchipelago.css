@@ -3,7 +3,7 @@
 .skill-archipelago.sky-islands.is-light { color: #23384a; background: linear-gradient(180deg, #c3d6e9 0%, #d7e3ef 55%, #edf1f5 100%); }
 .islands-home.dashboard-hero::before, .islands-home.dashboard-hero::after { display: none; }
 .sky-heading { position: absolute; z-index: 2; left: 32px; top: 154px; pointer-events: none; }
-.sky-islands .sky-heading h2, .theme-family-atlas.page-dashboard .dashboard-hero .sky-heading h2 { margin: 0; max-width: none; font-size: clamp(24px, 2.1vw, 35px); font-weight: 550; letter-spacing: -.04em; line-height: 1.3; color: inherit; }
+.sky-islands .sky-heading h2, .theme-family-atlas.page-dashboard .dashboard-hero .sky-heading h2 { margin: 0; max-width: none; font-size: clamp(24px, 2.1vw, 35px); font-weight: 550; letter-spacing: 0; line-height: 1.3; color: inherit; }
 .sky-islands .sky-heading p { margin: 6px 0 0; font-size: 13px; line-height: 1.5; color: inherit; opacity: .82; font-variant-numeric: tabular-nums; }
 .sky-islands .sky-heading h2, .sky-islands .sky-heading p { text-shadow: 0 1px 10px #3a2c3e40; }
 .sky-islands.is-light .sky-heading h2, .sky-islands.is-light .sky-heading p { text-shadow: 0 1px 10px #ffffff80; }
@@ -21,7 +21,7 @@
 .sky-island-label { pointer-events: auto; position: absolute; left: 0; top: 0; width: max-content; max-width: 220px; border: 1px solid #ffffff1f; border-radius: 9px; padding: 6px 12px 7px; color: #f7f1ea; background: #131b2cdb; text-align: center; cursor: pointer; box-shadow: 0 2px 8px #0508122e; transition: background .16s, border-color .16s; will-change: transform; }
 .is-light .sky-island-label { color: #1f3242; background: #fffffff0; border-color: #ffffff; box-shadow: 0 2px 8px #29405a24; }
 .sky-island-label strong { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 600; white-space: nowrap; line-height: 1.55; }
-.sky-island-label > span { display: block; font-size: 10px; opacity: .82; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.sky-island-label > span { display: block; font-size: 12px; opacity: .82; line-height: 1.6; font-variant-numeric: tabular-nums; }
 .sky-island-label b { font-weight: 600; }
 .sky-island-label.is-hovered, .sky-island-label:hover { background: #1f2b44; border-color: #f2b866; }
 .is-light .sky-island-label.is-hovered, .is-light .sky-island-label:hover { background: #fff; border-color: #47698a; }
@@ -38,14 +38,14 @@
 .sky-navigation-row button { border: 0; background: transparent; color: inherit; cursor: pointer; padding: 12px 5px; text-align: left; flex: 1; min-width: 0; }
 .sky-navigation-row button:hover { background: #a2c2bf20; }
 .sky-navigation-row strong { display: block; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sky-navigation-row span { display: block; margin-top: 5px; font-size: 11px; opacity: .72; font-variant-numeric: tabular-nums; }
+.sky-navigation-row span { display: block; margin-top: 5px; font-size: 12px; opacity: .72; font-variant-numeric: tabular-nums; }
 .sky-navigation-row .sky-locate { flex: 0 0 30px; font-size: 21px; text-align: center; }
 .sky-fallback-note { font-size: 12px; line-height: 1.6; display: flex; flex-direction: column; gap: 8px; }
 .sky-fallback-note button { color: inherit; background: transparent; border: 1px solid #a1babc; border-radius: 6px; padding: 7px; cursor: pointer; }
 .sky-islands.is-fallback .sky-navigation { left: 32px; right: 32px; width: auto; top: 230px; }
 .sky-islands.is-fallback .sky-navigation-list { display: grid; grid-template-columns: repeat(auto-fill,minmax(210px,1fr)); gap: 0 20px; }
 .sky-islands.is-fallback .sky-world-canvas { display: none; }
-.sky-caption { position: absolute; bottom: 113px; left: 32px; right: 28px; display: flex; justify-content: space-between; align-items: center; gap: 15px; color: inherit; opacity: .8; font-size: 11px; pointer-events: none; text-shadow: 0 1px 6px #3a2c3e40; }
+.sky-caption { position: absolute; bottom: 113px; left: 32px; right: 28px; display: flex; justify-content: space-between; align-items: center; gap: 15px; color: inherit; opacity: .8; font-size: 12px; pointer-events: none; text-shadow: 0 1px 6px #3a2c3e40; }
 .is-light .sky-caption { text-shadow: none; }
 .sky-caption span { padding: 4px 9px; border-radius: 6px; background: #131b2c99; }
 .is-light .sky-caption span { background: #ffffffb3; }
@@ -55,7 +55,7 @@
 .browser-preview-shell .sky-heading, .browser-preview-shell .sky-controls { top: 211px; }
 .browser-preview-shell .sky-navigation { top: 260px; }
 @media (min-width: 2100px) { .sky-heading { top: 160px; left: 45px; } .sky-island-label { max-width: 300px; padding: 10px 17px; } .sky-island-label strong { font-size: 16px; } .sky-island-label > span { font-size: 12px; } .sky-controls button { font-size: 14px; } }
-@media (max-width: 1000px) { .sky-heading { left: 22px; } .sky-controls { right: 20px; gap: 4px; } .sky-controls button { padding: 8px; } .sky-controls button:nth-child(-n+3) span:last-child { display: none; } .sky-island-label { padding: 5px 8px; max-width: 155px; } .sky-island-label strong { font-size: 11px; } .sky-island-label > span { font-size: 9px; } }
+@media (max-width: 1000px) { .sky-heading { left: 22px; } .sky-controls { right: 20px; gap: 4px; } .sky-controls button { padding: 8px; } .sky-controls button:nth-child(-n+3) span:last-child { display: none; } .sky-island-label { padding: 5px 8px; max-width: 155px; } .sky-island-label strong { font-size: 12px; } .sky-island-label > span { font-size: 11px; } }
 @media (max-height: 750px) { .sky-heading { top: 146px; } .sky-heading p { display: none; } .sky-controls { top: 144px; } .sky-caption { bottom: 98px; } .sky-navigation { top: 187px; bottom: 128px; } }
 @media (prefers-reduced-motion: reduce) { .sky-island-label { transition: none; } }
 .sky-credits-toggle { pointer-events: auto; margin-left: 10px; border: 0; padding: 0; color: inherit; background: none; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }

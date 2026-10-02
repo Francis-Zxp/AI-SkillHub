@@ -5,12 +5,12 @@
 //! has been reviewed: prerequisites, an isolated runtime with a pinned version,
 //! the client entry (written through the existing plan/backup/rollback path),
 //! and a real MCP handshake followed by one read-only call. Steps that cannot be
-//! automated reliably (Origin licensing, registering the Origin Apps, starting
-//! the bridge inside Origin) are reported as the exact next user action.
+//! automated reliably (Origin licensing and native installation confirmations)
+//! are reported as the exact next user action.
 //!
-//! Nothing here runs README code blocks or repository scripts. The only
-//! programs started are a Python interpreter to create the runtime, `pip` for
-//! the pinned package, and the installed package's own CLI and server.
+//! No arbitrary README or webview commands are evaluated. The fixed recipe
+//! provisions a pinned Python package and uses Origin's official COM interface
+//! to register its two reviewed Apps and launch their fixed bridge entry point.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -122,6 +122,7 @@ pub(crate) struct RecipeStatus {
     pub runtime_python: String,
     pub installed_version: String,
     pub app_staged: bool,
+    pub app_registered: bool,
     pub mkopx_commands: Vec<String>,
     pub clients: Vec<ClientBinding>,
     pub verification: Option<Verification>,
@@ -388,8 +389,15 @@ fn installed_sdk_version(python: &Path) -> Option<String> {
 
 /// `origin-mcp status --json` -> state (`running`, `not_running`, `stale`, ...).
 fn bridge_state(python: &Path) -> String {
+    bridge_state_with_env(python, &[])
+}
+
+fn bridge_state_with_env(python: &Path, extra_env: &[(&str, String)]) -> String {
     let mut command = Command::new(python);
     command.args(["-m", "origin_mcp", "status", "--json", "--timeout", "1"]);
+    for (name, value) in extra_env {
+        command.env(name, value);
+    }
     let Ok(output) = run(&mut command, Duration::from_secs(20), "检查 Origin 桥接") else {
         return "unknown".to_string();
     };
@@ -511,6 +519,130 @@ fn read_verification(context: &RecipeContext) -> Option<Verification> {
     serde_json::from_str(&raw).ok()
 }
 
+fn origin_helper_command(context: &RecipeContext, action: &str) -> Result<Command, String> {
+    use base64::Engine;
+    if !matches!(action, "register" | "start") {
+        return Err("不支持的 Origin 桥接操作。".to_string());
+    }
+    let apps = context.apps_dir();
+    if apps.to_string_lossy().contains(['"', '%', ';', '\r', '\n']) {
+        return Err("当前路径包含 LabTalk 特殊字符，请使用手动注册步骤。".to_string());
+    }
+    let script = include_str!("origin_bridge_helper.ps1");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(
+        script
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    let windows = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .ok_or("无法定位 Windows PowerShell。")?;
+    let mut command = Command::new(windows.join("System32/WindowsPowerShell/v1.0/powershell.exe"));
+    command
+        .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
+        .env("SKILLHUB_ORIGIN_APPS", apps)
+        .env("SKILLHUB_ORIGIN_ACTION", action)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    crate::configure_background_command(&mut command);
+    Ok(command)
+}
+
+/// Registers only the two reviewed Apps and starts their fixed entry point in
+/// the one already-running Origin. No arbitrary command/path is accepted.
+pub(crate) fn prepare_bridge(context: &RecipeContext) -> Result<RecipeStatus, String> {
+    let runtime = context.runtime_python();
+    if installed_package_version(&runtime).as_deref() != Some(ORIGIN_MCP_VERSION)
+        || installed_sdk_version(&runtime).as_deref() != Some(ORIGIN_MCP_SDK_VERSION)
+    {
+        return Err("请先安装 Origin MCP 的独立运行环境。".to_string());
+    }
+    if !origin_running() {
+        return Err("请先打开 Origin，然后点击“注册并启动”。".to_string());
+    }
+    if bridge_state(&runtime) == "running" {
+        return Ok(verify(context));
+    }
+    let apps = context.apps_dir();
+    let registered = registered_apps(&runtime, &apps)?;
+    for name in [START_APP, STOP_APP] {
+        for file in ["package.ini", "launch.ogs"] {
+            if !apps.join(name).join(file).is_file() {
+                return Err("Origin App 文件不完整，请先重新安装运行环境。".to_string());
+            }
+        }
+    }
+    if [START_APP, STOP_APP]
+        .iter()
+        .any(|name| !registered.iter().any(|found| found == name))
+    {
+        let backup = context
+            .runtime_dir
+            .join("app-backups")
+            .join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&backup).map_err(|error| format!("无法备份 Origin App：{error}"))?;
+        for file in ["OPXList.xml", "AppsTabs.xml"] {
+            if apps.join(file).is_file() {
+                fs::copy(apps.join(file), backup.join(file))
+                    .map_err(|error| format!("无法备份 Origin 注册信息：{error}"))?;
+            }
+        }
+        for name in [START_APP, STOP_APP] {
+            crate::copy_directory_tree(&apps.join(name), &backup.join(name))?;
+        }
+        append_log(context, &format!("Origin App backup: {}", backup.display()));
+        run_origin_helper(context, "register")?;
+        let registered = registered_apps(&runtime, &apps)?;
+        if [START_APP, STOP_APP]
+            .iter()
+            .any(|name| !registered.iter().any(|found| found == name))
+        {
+            return Err(
+                "Origin 尚未完成 App 注册。请完成 Origin 安装窗口中的确认后重试。".to_string(),
+            );
+        }
+    }
+    run_origin_helper(context, "start")?;
+    Ok(verify(context))
+}
+
+fn run_origin_helper(context: &RecipeContext, action: &str) -> Result<(), String> {
+    let mut child = origin_helper_command(context, action)?
+        .spawn()
+        .map_err(|error| format!("无法连接到 Origin：{error}"))?;
+    let started = Instant::now();
+    loop {
+        if let Some(exit) = child.try_wait().map_err(|error| error.to_string())? {
+            return if exit.success() {
+                Ok(())
+            } else {
+                Err("Origin 未完成操作。请保留一个 Origin 窗口，关闭其安装/错误对话框后重试；也可展开手动步骤。".to_string())
+            };
+        }
+        if action == "start" && bridge_state(&context.runtime_python()) == "running" {
+            // Keep the COM caller alive until the author's foreground bridge
+            // returns. This thread owns/reaps only our helper, never Origin.
+            thread::spawn(move || {
+                let _ = child.wait();
+            });
+            return Ok(());
+        }
+        if started.elapsed() > Duration::from_secs(if action == "register" { 90 } else { 60 }) {
+            // Do not use taskkill /T: a COM server is the user's running app.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(if action == "register" {
+                "等待 Origin 注册确认超时。请在 Origin 中完成安装提示，再重试；已部署的同版本文件可选“全部跳过”。"
+            } else {
+                "桥接尚未响应。请检查 Origin 的 Python/Bridge 提示后重试；当前工程未关闭或重启。"
+            }.to_string());
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+}
+
 fn write_verification(context: &RecipeContext, verification: &Verification) {
     if let Ok(text) = serde_json::to_string_pretty(verification) {
         let _ = fs::create_dir_all(&context.runtime_dir);
@@ -518,16 +650,50 @@ fn write_verification(context: &RecipeContext, verification: &Verification) {
     }
 }
 
-fn bridge_next_step(app_staged: bool, origin_running: bool) -> &'static str {
+fn bridge_next_step(app_staged: bool, app_registered: bool, origin_running: bool) -> &'static str {
     if !app_staged {
         "install"
-    } else if origin_running {
-        "start-bridge"
-    } else {
+    } else if !origin_running {
         // A closed Origin process says nothing about whether its Apps were
         // already registered. Do not ask users to register them again.
         "open-origin"
+    } else if !app_registered {
+        "register-app"
+    } else {
+        "start-bridge"
     }
+}
+
+/// Origin records installed Apps in OPXList.xml. Directory existence only
+/// proves staging. Parse the registry with Python's standard XML parser; no
+/// external entities or user configuration are evaluated.
+fn registered_apps(python: &Path, apps: &Path) -> Result<Vec<String>, String> {
+    let registry = apps.join("OPXList.xml");
+    if !registry.exists() {
+        return Ok(Vec::new());
+    }
+    let script = r#"import json, pathlib, sys, xml.etree.ElementTree as ET
+path = pathlib.Path(sys.argv[1])
+if path.stat().st_size > 8*1024*1024: raise ValueError('App registry too large')
+raw = path.read_bytes()
+if len(raw) > 8*1024*1024 or b'<!DOCTYPE' in raw.upper(): raise ValueError('Unsupported App registry')
+root = ET.fromstring(raw)
+if root.tag != 'OriginStorage': raise ValueError('Invalid App registry')
+print(json.dumps([p.get('Label') for p in root.findall('Package') if p.get('Label') == p.findtext('Package/Name')]))
+"#;
+    let output = run(
+        Command::new(python)
+            .args(["-I", "-c", script])
+            .arg(registry),
+        Duration::from_secs(10),
+        "读取 Origin App 注册信息",
+    )?;
+    if !output.status.success() {
+        return Err(
+            "无法读取 Origin App 注册表；请在 Origin 的 Apps 中检查，未改动注册信息。".to_string(),
+        );
+    }
+    serde_json::from_slice(&output.stdout).map_err(|_| "Origin App 注册信息格式无效。".to_string())
 }
 
 /// Read-only status. Starts no server; runs the runtime's own `status` CLI
@@ -614,11 +780,21 @@ pub(crate) fn detect(context: &RecipeContext) -> RecipeStatus {
 
     status.app_staged =
         context.apps_dir().join(START_APP).is_dir() && context.apps_dir().join(STOP_APP).is_dir();
-    status.steps.push(if status.app_staged {
+    let apps = registered_apps(&runtime, &context.apps_dir());
+    status.app_registered = apps.as_ref().is_ok_and(|names| {
+        [START_APP, STOP_APP]
+            .iter()
+            .all(|name| names.iter().any(|found| found == name))
+    });
+    status.steps.push(if status.app_registered {
+        step("app", "ok", "Start/Stop App 已注册。")
+    } else if let Err(failure) = apps {
+        step("app", "failed", failure)
+    } else if status.app_staged {
         step(
             "app",
             "user",
-            "Start/Stop App 文件已就位；在 Origin 中打包并注册后才会出现在 Apps 中。",
+            "App 文件已就位但尚未注册。点击“注册并启动”；若 Origin 提示文件已存在，可选“全部跳过”。",
         )
     } else {
         step(
@@ -717,6 +893,7 @@ pub(crate) fn detect(context: &RecipeContext) -> RecipeStatus {
             "needs-origin",
             bridge_next_step(
                 status.app_staged,
+                status.app_registered,
                 origin
                     .as_ref()
                     .is_some_and(|installation| installation.running),
@@ -1019,20 +1196,26 @@ fn handshake(
         return Err("MCP 服务器没有返回任何工具。".to_string());
     }
     if !names.iter().any(|name| name == "origin_bridge_status") {
-        verification.bridge_state = bridge_state(python);
-        return Ok(());
-    }
-    let status = session.request(
-        3,
-        "tools/call",
-        json!({ "name": "origin_bridge_status", "arguments": {} }),
-    )?;
-    let (bridge_ok, bridge_message) = tool_envelope(&status);
-    verification.bridge_state = if bridge_ok { "running" } else { "not_running" }.to_string();
-    if !bridge_ok {
-        // Not a failure of the install: Origin or its bridge is simply not up.
-        verification.bridge_state = format!("not_running {bridge_message}").trim().to_string();
-        return Ok(());
+        verification.bridge_state = bridge_state_with_env(python, extra_env);
+        if verification.bridge_state != "running" {
+            return Ok(());
+        }
+        // The author's default compact profile includes origin_ping but omits
+        // origin_bridge_status. A successful CLI status must still be followed
+        // by the actual MCP ping; it cannot terminate verification early.
+    } else {
+        let status = session.request(
+            3,
+            "tools/call",
+            json!({ "name": "origin_bridge_status", "arguments": {} }),
+        )?;
+        let (bridge_ok, bridge_message) = tool_envelope(&status);
+        verification.bridge_state = if bridge_ok { "running" } else { "not_running" }.to_string();
+        if !bridge_ok {
+            // Not a failure of the install: Origin or its bridge is simply not up.
+            verification.bridge_state = format!("not_running {bridge_message}").trim().to_string();
+            return Ok(());
+        }
     }
     if names.iter().any(|name| name == "origin_ping") {
         // Connects to the running Origin session and reports it; it does not
@@ -1047,6 +1230,8 @@ fn handshake(
         if !ping_ok {
             return Err(format!("Origin 只读调用失败：{ping_message}"));
         }
+    } else {
+        return Err("当前工具集未提供 origin_ping，无法确认 Origin 实际可调用。".to_string());
     }
     Ok(())
 }
@@ -1087,9 +1272,57 @@ mod tests {
 
     #[test]
     fn closed_origin_does_not_imply_missing_app_registration() {
-        assert_eq!(bridge_next_step(true, false), "open-origin");
-        assert_eq!(bridge_next_step(true, true), "start-bridge");
-        assert_eq!(bridge_next_step(false, false), "install");
+        assert_eq!(bridge_next_step(true, true, false), "open-origin");
+        assert_eq!(bridge_next_step(true, false, false), "open-origin");
+        assert_eq!(bridge_next_step(true, true, true), "start-bridge");
+        assert_eq!(bridge_next_step(true, false, true), "register-app");
+        assert_eq!(bridge_next_step(false, false, false), "install");
+    }
+
+    #[test]
+    fn app_files_do_not_count_as_registration_and_invalid_registry_is_rejected() {
+        let home = std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let local = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let Some((python, _)) = find_base_pythons(&home, &local).into_iter().next() else {
+            return;
+        };
+        let root =
+            std::env::temp_dir().join(format!("skillhub-app-registry-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join(START_APP)).unwrap();
+        assert!(registered_apps(&python, &root).unwrap().is_empty());
+        fs::write(root.join("OPXList.xml"), format!(r#"<OriginStorage><Package Label="{START_APP}"><Package><Name>{START_APP}</Name></Package></Package><Package Label="{STOP_APP}"><Package><Name>Unrelated App</Name></Package></Package></OriginStorage>"#)).unwrap();
+        assert_eq!(
+            registered_apps(&python, &root).unwrap(),
+            vec![START_APP.to_string()]
+        );
+        fs::write(
+            root.join("OPXList.xml"),
+            "<!DOCTYPE x [<!ENTITY file SYSTEM 'file:///private'>]><OriginStorage/>",
+        )
+        .unwrap();
+        assert!(registered_apps(&python, &root).is_err());
+        fs::write(root.join("OPXList.xml"), "<OriginStorage><broken>").unwrap();
+        assert!(registered_apps(&python, &root).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bridge_helper_rejects_unreviewed_actions_and_labtalk_path_injection() {
+        let mut context = RecipeContext {
+            runtime_dir: PathBuf::from("runtime"),
+            home_dir: PathBuf::from("home"),
+            local_app_data: PathBuf::from("safe"),
+            app_version: "test".to_string(),
+        };
+        assert!(origin_helper_command(&context, "run arbitrary script").is_err());
+        for path in ["A\";exit", "A%", "A;exit", "A\nexit"] {
+            context.local_app_data = PathBuf::from(path);
+            assert!(origin_helper_command(&context, "start").is_err());
+        }
     }
 
     #[test]
@@ -1204,6 +1437,10 @@ mod tests {
 
     const FAKE_SERVER: &str = r#"import json, os, sys
 mode = os.environ.get("FAKE_BRIDGE", "down")
+is_up = mode in ("up", "compact-up")
+if 'status' in sys.argv:
+    print(json.dumps({'state': 'running' if is_up else 'not_running'}))
+    sys.exit(0)
 for line in sys.stdin:
     message = json.loads(line)
     ident = message.get("id")
@@ -1213,12 +1450,14 @@ for line in sys.stdin:
     if method == "initialize":
         result = {"protocolVersion": "2025-06-18", "serverInfo": {"name": "origin-mcp", "version": "0.1.4"}, "capabilities": {"tools": {}}}
     elif method == "tools/list":
-        result = {"tools": [{"name": "origin_bridge_status"}, {"name": "origin_ping"}, {"name": "origin_plot"}]}
+        result = {"tools": [{"name": "origin_ping"}, {"name": "origin_plot"}]}
+        if not mode.startswith('compact'):
+            result['tools'].append({"name": "origin_bridge_status"})
     else:
         name = message["params"]["name"]
         if name == "origin_bridge_status":
-            envelope = {"ok": mode == "up", "message": "Origin bridge responded." if mode == "up" else "not reachable"}
-            if mode != "up":
+            envelope = {"ok": is_up, "message": "Origin bridge responded." if is_up else "not reachable"}
+            if not is_up:
                 envelope["error_code"] = "origin_bridge_unavailable"
         else:
             # Only a read-only, hidden ping is acceptable.
@@ -1269,13 +1508,34 @@ for line in sys.stdin:
         let mut up = Verification::default();
         handshake(
             &python,
-            &[("PYTHONPATH", path), ("FAKE_BRIDGE", "up".to_string())],
+            &[
+                ("PYTHONPATH", path.clone()),
+                ("FAKE_BRIDGE", "up".to_string()),
+            ],
             "3.2.8",
             &mut up,
         )
         .expect("handshake with bridge up");
         assert_eq!(up.bridge_state, "running");
         assert!(up.origin_ping_ok, "ping must be sent with show=false");
+        for mode in ["compact-up", "compact-down"] {
+            let mut compact = Verification::default();
+            handshake(
+                &python,
+                &[
+                    ("PYTHONPATH", path.clone()),
+                    ("FAKE_BRIDGE", mode.to_string()),
+                ],
+                "3.2.12",
+                &mut compact,
+            )
+            .expect("Compact profile verification");
+            assert_eq!(
+                compact.tool_count, 2,
+                "No origin_bridge_status tool in compact mode"
+            );
+            assert_eq!(compact.origin_ping_ok, mode == "compact-up");
+        }
         let _ = fs::remove_dir_all(root);
     }
 
@@ -1310,6 +1570,24 @@ for line in sys.stdin:
         assert!(started.elapsed() < Duration::from_secs(10));
         drop(session);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[ignore = "Explicit live Origin session; only origin_ping(show=false), no project edits"]
+    fn live_origin_read_only_handshake() {
+        let runtime = std::env::var_os("AI_SKILLHUB_ORIGIN_RUNTIME")
+            .map(PathBuf::from)
+            .expect("Explicit runtime path required");
+        let mut verification = Verification::default();
+        handshake(&runtime, &[], "3.2.12", &mut verification).expect("Live Origin MCP handshake");
+        assert_eq!(verification.bridge_state, "running");
+        assert!(
+            verification.origin_ping_ok,
+            "A tool list alone is insufficient"
+        );
+        println!("Origin live verification: protocol={}, tools={}, bridge={}, origin_ping(show=false)={}",
+            verification.protocol_version, verification.tool_count, verification.bridge_state,
+            verification.origin_ping_ok);
     }
 
     #[test]

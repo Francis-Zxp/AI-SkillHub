@@ -4465,6 +4465,17 @@ async fn verify_mcp_recipe() -> Result<mcp_recipes::RecipeStatus, String> {
     run_blocking_task(|| Ok(mcp_recipes::verify(&mcp_recipe_context()?))).await
 }
 
+/// Registers/starts the reviewed Origin bridge in the already-running app.
+/// The webview cannot supply scripts, paths, or process identifiers.
+#[tauri::command]
+async fn prepare_origin_bridge() -> Result<mcp_recipes::RecipeStatus, String> {
+    run_blocking_task(|| {
+        let _guard = acquire_mcp_mutation_guard()?;
+        mcp_recipes::prepare_bridge(&mcp_recipe_context()?)
+    })
+    .await
+}
+
 /// Fetches a bounded public repository configuration and returns only a
 /// secret-free draft. It never starts an MCP server or writes a configuration.
 #[tauri::command]
@@ -19000,6 +19011,7 @@ pub fn run() {
             detect_mcp_recipe,
             install_mcp_recipe,
             verify_mcp_recipe,
+            prepare_origin_bridge,
             apply_source_identity_migration,
             set_preset_workspace_enabled,
             set_real_write_authorization,

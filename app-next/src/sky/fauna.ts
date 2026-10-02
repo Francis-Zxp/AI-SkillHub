@@ -2,7 +2,7 @@
 // flat white, with the wings animated in the vertex shader in bursts of
 // flapping and long glides; flocks bank into their turns. Villagers walk a
 // worn path and pause at its ends. Animals wander their patch of grass:
-// walking where the rig has a walk cycle, hopping otherwise, grazing between.
+// using authored walk targets or a four-beat gait, grazing between.
 // Feet follow the same height function as the terrain mesh.
 import * as THREE from "three";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
@@ -11,6 +11,7 @@ import type { ModelTemplate } from "./assets";
 import { SHARED_UNIFORMS, toonGradient } from "./materials";
 import { seededRandom } from "./noise";
 import type { IslandShape } from "./terrain";
+import { createFarmLegSolver } from "./animalRig";
 
 // Measured in the sky lab: head toward +X, wingspan along Z, wings raised.
 const GULL_SHOULDER = 6;
@@ -62,8 +63,14 @@ export function createFlocks(template: ModelTemplate, bounds: THREE.Box3, count:
   mesh.castShadow = false;
   const size = bounds.getSize(new THREE.Vector3());
   const center = bounds.getCenter(new THREE.Vector3());
-  // Two or three flocks circling at different heights and directions.
-  const flockCount = count > 6 ? 3 : 2;
+  // A solitary bird and uneven groups, stable for a given scene seed.
+  const groupSizes = [1];
+  let remaining = count - 1;
+  while (remaining > 0) {
+    const group = Math.min(remaining, 2 + Math.floor(random() * 4));
+    groupSizes.push(group);remaining -= group;
+  }
+  const flockCount = groupSizes.length;
   const routes = Array.from({ length: flockCount }, (_, flock) => {
     const points: THREE.Vector3[] = [];
     const radiusX = size.x * (0.32 + random() * 0.22), radiusZ = size.z * (0.28 + random() * 0.22);
@@ -81,11 +88,12 @@ export function createFlocks(template: ModelTemplate, bounds: THREE.Box3, count:
     }
     return { curve: new THREE.CatmullRomCurve3(points, true, "centripetal"), speed: 0.012 + random() * 0.006, start: random() };
   });
-  const birds = Array.from({ length: count }, (_, index) => ({
-    flock: index % flockCount,
-    lag: Math.floor(index / flockCount) * 0.012 + random() * 0.004,
+  const birds = groupSizes.flatMap((size, flock) => Array.from({ length: size }, (_, index) => ({
+    flock,
+    lag: index * (0.009 + random() * 0.005),
     offset: new THREE.Vector3((random() - 0.5) * 2.2, (random() - 0.5) * 0.8, (random() - 0.5) * 2.2)
-  }));
+  })));
+  mesh.userData.flockSizes = groupSizes;
   const scale = wingspan / (GULL_SPAN * 2);
   const position = new THREE.Vector3(), ahead = new THREE.Vector3(), further = new THREE.Vector3();
   const forward = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), side = new THREE.Vector3();
@@ -197,7 +205,7 @@ export function createWalker(gltf: GLTF, shape: IslandShape, origin: THREE.Vecto
 
 /**
  * An animal grazing around `home` (island-local XZ). It picks open spots
- * within `range`, walks there (or hops, if its rig has no walk cycle), then
+ * within `range`, walks there, then
  * stands and grazes for a while.
  */
 export function createAnimal(
@@ -228,7 +236,7 @@ export function createAnimal(
   const action = (name: string) => (clip(name) ? mixer.clipAction(clip(name)!) : null);
   const idle = action("Idle");
   const walk = action("WalkSlow") ?? action("Walk");
-  const hop = walk ? null : action("Jump");
+  const solver = createFarmLegSolver(object);
   const random = seededRandom(seed);
   let current: THREE.AnimationAction | null = null;
   const switchTo = (next: THREE.AnimationAction | null) => {
@@ -240,7 +248,22 @@ export function createAnimal(
   let x = home[0], z = home[1], yaw = random() * Math.PI * 2;
   let target: [number, number] | null = null;
   let rest = 1 + random() * 4;
-  const speed = length * (walk ? 0.55 : 0.9);
+  const foot = object.getObjectByName("FrontFootL")!;
+  const rigScale = foot.parent!.getWorldScale(new THREE.Vector3()).z;
+  const track = walk?.getClip().tracks.find(item => item.name === "FrontFootL.position");
+  const zValues = track ? Array.from(track.values).filter((_, index) => index % 3 === 2) : [];
+  const stride = zValues.length ? Math.max(...zValues) - Math.min(...zValues) : length * 0.32 / rigScale;
+  const cycle = walk?.getClip().duration ?? 1.5;
+  const rate = 0.94 + random() * 0.12;
+  const speed = stride * rigScale / (cycle * 0.62) * rate;
+  const contacts = walk ? ["FrontFootL", "FrontFootR", "BackFootL", "BackFootR"].map(name => {
+    const bone = object.getObjectByName(name)!;
+    const values = walk.getClip().tracks.find(item => item.name === `${name}.position`)?.values;
+    const ys = values ? Array.from(values).filter((_, index) => index % 3 === 1) : [bone.position.y];
+    return { bone, floor: Math.min(...ys), y: bone.position.y, z: bone.position.z };
+  }) : [];
+  let authoredStep = 0;
+  let phase = 0, gaitWeight = 0;
   const place = () => {
     object.position.set(origin.x + x, origin.y + shape.heightAt(x, z), origin.z + z);
     object.rotation.y = yaw;
@@ -255,15 +278,32 @@ export function createAnimal(
   };
   switchTo(idle);
   place();
-  const update = (delta: number) => {
+  const solve = () => solver.update(point => shape.heightAt(point.x - origin.x, point.z - origin.z) - shape.heightAt(x, z), true);
+  const animate = (delta: number, moving: number) => {
+    if (walk) walk.setEffectiveTimeScale(rate * moving);
+    for (const contact of contacts) { contact.y = contact.bone.position.y;contact.z = contact.bone.position.z; }
     mixer.update(delta);
+    // The clip's planted feet move backwards at a non-uniform speed. Move
+    // the body by the same amount instead of guessing from clip duration.
+    const planted = contacts.filter(item => Math.max(item.y, item.bone.position.y) < item.floor + stride * 0.06)
+      .map(item => Math.max(0, item.z - item.bone.position.z) * rigScale).sort((a, b) => a - b);
+    authoredStep = planted.length ? planted[Math.floor(planted.length / 2)] : speed * delta * moving * 0.5;
+    if (!walk) {
+      phase = (phase + delta * rate * moving / cycle) % 1;
+      gaitWeight += (moving - gaitWeight) * Math.min(1, delta * 8);
+      solver.gait(phase, stride, gaitWeight);
+    }
+  };
+  const update = (delta: number) => {
     if (!target) {
       rest -= delta;
       if (rest <= 0) {
         target = chooseTarget();
         rest = 3 + random() * 6;
-        if (target) switchTo(walk ?? hop ?? idle);
+        if (target) switchTo(walk ?? idle);
       }
+      animate(delta, 0);
+      solve();
       return;
     }
     const dx = target[0] - x, dz = target[1] - z;
@@ -271,24 +311,30 @@ export function createAnimal(
     if (distance < 0.05) {
       target = null;
       switchTo(idle);
+      animate(delta, 0);
+      solve();
       return;
     }
-    // Hoppers only move while in the air part of their hop.
-    const moving = walk ? 1 : current === hop && hop ? Math.max(0, Math.sin((hop.time / hop.getClip().duration) * Math.PI * 2)) : 0;
-    const step = Math.min(distance, speed * delta * (walk ? 1 : moving * 1.6));
+    const heading = Math.atan2(dx, dz);
+    const turn = Math.atan2(Math.sin(heading - yaw), Math.cos(heading - yaw));
+    yaw += turn * Math.min(1, delta * 5);
+    const moving = Math.max(0, Math.cos(turn));
+    animate(delta, moving);
+    const weight = walk ? walk.getEffectiveWeight() : gaitWeight;
+    const step = Math.min(distance, walk ? authoredStep : speed * delta * moving * weight);
     const nextX = x + (dx / distance) * step, nextZ = z + (dz / distance) * step;
     // An open destination does not guarantee the straight route avoids a pond.
     if (!isOpen(nextX, nextZ)) {
       target = null;
       rest = 1 + random() * 2;
       switchTo(idle);
+      solve();
       return;
     }
     x = nextX;
     z = nextZ;
-    const heading = Math.atan2(dx, dz);
-    yaw += Math.atan2(Math.sin(heading - yaw), Math.cos(heading - yaw)) * Math.min(1, delta * 5);
     place();
+    solve();
   };
   return {
     object,

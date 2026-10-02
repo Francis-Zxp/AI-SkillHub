@@ -1,14 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { starFieldOpacity } from '../src/universeAtmosphere.ts';
+import { meteorSegment, starFieldOpacity } from '../src/universeAtmosphere.ts';
 import { advanceLabel } from '../src/universeLabels.ts';
 
 test('stars leave the frame edges clear and fade toward the outer field', () => {
   const fade = (x, y) => starFieldOpacity(x, y, 500, 400, 1000, 800);
-  for (const point of [[0, 400], [50, 400], [500, 0], [500, 760], [1000, 400]]) assert.equal(fade(...point), 0);
+  for (const point of [[0, 400], [30, 400], [500, 0], [500, 780], [1000, 400]]) assert.equal(fade(...point), 0);
   assert.ok(fade(500, 400) > fade(250, 400));
   assert.ok(fade(250, 400) > fade(120, 400));
-  assert.ok(fade(500, 400) <= 0.32);
+  assert.ok(fade(500, 400) >= 0.5 && fade(500, 400) <= 0.65);
+});
+
+test('meteor travel follows its tail on square, ultrawide and portrait screens', () => {
+  for (const [width, height] of [[1000,1000],[3840,1080],[900,1600]]) for (const direction of [-1,1]) {
+    const meteor = {x:.3,y:.2,direction,slope:.6,length:80};
+    const a=meteorSegment(meteor,.2,width,height), b=meteorSegment(meteor,.6,width,height);
+    const vx=b.headX-a.headX, vy=b.headY-a.headY, tx=b.headX-b.tailX, ty=b.headY-b.tailY;
+    assert.ok(Math.abs(vx*ty-vy*tx)<1e-8);
+    assert.ok(vx*tx+vy*ty>0);
+    assert.ok(Math.abs(Math.hypot(tx,ty)-80)<1e-8);
+  }
 });
 
 test('a one-frame collision cannot move or blink a visible label', () => {

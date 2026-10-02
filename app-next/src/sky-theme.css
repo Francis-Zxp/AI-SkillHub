@@ -11,8 +11,6 @@
 .theme-sky-noon,
 .theme-sky-golden,
 .theme-sky-night {
-  --ui-font: "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", "Noto Sans KR", sans-serif;
-  --ui-display: "Segoe UI Variable Display", "Microsoft YaHei UI", "Segoe UI", sans-serif;
   --shadow-glow: none;
   --radius-card: 18px;
   --sky-ease: cubic-bezier(.2, .8, .2, 1);
@@ -169,19 +167,20 @@
 
 /* ---------- Floating dock instead of a rail ---------- */
 .theme-family-sky.shell { grid-template-columns: 92px minmax(0, 1fr); }
-.theme-family-sky .sidebar {
+.theme-family-sky.theme-family-atlas .sidebar {
   top: 12px;
-  height: calc(100vh - 24px);
+  height: calc(100dvh - 24px);
   margin: 12px 0 12px 12px;
   width: 76px;
   padding: 12px 10px;
-  border: 1px solid var(--border);
-  border-radius: 22px;
+  border: 0;
+  border-radius: 20px;
   background: var(--surface-elevated);
   box-shadow: none;
   backdrop-filter: none;
 }
-.theme-family-sky .brand { width: 54px; height: 54px; margin: 0 auto 12px; border: 0; background: transparent; padding: 0; }
+.theme-family-sky .sidebar::after { display: none; }
+.theme-family-sky .brand { box-shadow: none; width: 54px; height: 54px; margin: 0 auto 12px; border: 0; background: transparent; padding: 0; }
 .theme-family-sky .brand-logo { width: 44px; height: 44px; border-radius: 13px; }
 .theme-family-sky .nav-item,
 .theme-family-sky .sidebar-footer .nav-item {
@@ -204,7 +203,7 @@
 /* ---------- Capsule top bar ---------- */
 .theme-family-sky .topbar {
   margin: 12px 12px 0 8px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 18px;
   background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
   box-shadow: var(--shadow-chrome);
@@ -224,9 +223,9 @@
 .theme-family-sky .eyebrow { text-transform: none; letter-spacing: 0; }
 .theme-family-sky.theme-family-atlas .page-header h2 {
   font-family: var(--ui-display);
-  font-size: clamp(28px, 2.3vw, 38px);
-  font-weight: 650;
-  letter-spacing: -.025em;
+  font-size: clamp(24px, 2vw, 32px);
+  font-weight: 600;
+  letter-spacing: 0;
   line-height: 1.15;
 }
 .theme-family-sky.theme-family-atlas .page-header p { margin-top: 6px; color: var(--text-soft); }
@@ -283,7 +282,7 @@
 /* ---------- Home ---------- */
 .theme-family-sky.page-dashboard .dashboard-hero { --hero-grad: none; }
 .theme-family-sky .metric-grid.atlas-touchbar {
-  border: 1px solid var(--border);
+  border: 0;
   background: color-mix(in srgb, var(--surface-elevated) 94%, transparent);
   box-shadow: var(--shadow-chrome);
   backdrop-filter: blur(12px);

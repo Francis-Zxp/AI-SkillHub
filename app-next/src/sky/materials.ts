@@ -301,18 +301,21 @@ export function cloudMaterial(palette: SkyPalette) {
       ${NOISE_GLSL}
       #include <fog_pars_fragment>
       void main() {
+        // Perspective interpolation can perturb a constant varying by a few
+        // ulps. Hashing that value amplifies it into a different cloud shape.
+        float seed = floor(vCloudSeed + 0.5);
         vec2 p = (vCloudUv - 0.5) * vec2(8.0, 3.8);
         float density = 0.0;
         for (int i = 0; i < 7; i++) {
           float k = float(i);
-          float r = skyHash(vec2(k + 0.3, vCloudSeed * 11.0));
+          float r = skyHash(vec2(k + 0.3, seed * 11.0));
           float arch = sin((k + 0.5) / 7.0 * 3.14159);
           vec2 center = vec2((k - 3.0) * 0.78, -0.18 + arch * arch * (0.45 + r * 0.55));
           vec2 q = (p - center) / vec2(0.62 + r * 0.48, 0.38 + r * 0.55);
           density += exp(-dot(q, q) * 1.7) * 0.7;
         }
         vec2 drift = vec2(uTime * 0.008, 0.0);
-        float detail = skyNoise(p * 2.4 + drift + vCloudSeed * 7.0) * 0.6
+        float detail = skyNoise(p * 2.4 + drift + seed * 7.0) * 0.6
           + skyNoise(p * 6.5 - drift * 0.5) * 0.28 + skyNoise(p * 15.0) * 0.12;
         vec2 wisp = (p - vec2(0.2, -0.12)) / vec2(3.2, 0.35);
         density += exp(-dot(wisp, wisp)) * 0.22;

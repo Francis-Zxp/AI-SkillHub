@@ -11,6 +11,7 @@ import type { IslandPlan, Placement } from "./biomes";
 import { createAnimal, createFlocks, createWalker } from "./fauna";
 import type { Flock, Walker } from "./fauna";
 import { buildKit, cloudGeometry, disposeKit } from "./kit";
+import { spillwayGeometry } from "./water";
 import type { KitModel } from "./kit";
 import { layoutIslands } from "./layout";
 import type { LayoutIsland } from "./layout";
@@ -138,7 +139,6 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   const pickMaterial = track(new THREE.MeshBasicMaterial({ visible: false }));
   const waterGeometryCache: THREE.BufferGeometry[] = [];
   const water = track(waterMaterial(palette));
-  const stream = track(waterMaterial(palette, true));
   const falls = track(waterfallMaterial(palette));
   type Bucket = { parts: Array<{ geometry: THREE.BufferGeometry; material: THREE.Material; matrix: THREE.Matrix4; tinted: boolean }>; matrices: THREE.Matrix4[]; tints: THREE.Color[]; small: boolean };
   const instanceBuckets = new Map<string, Bucket>();
@@ -216,33 +216,16 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       const pond = plan.shape.ponds[0];
       const top = origin.y + plan.shape.pondLevel(pond);
       const drop = plan.shape.cliff + plan.shape.bottomDepth * 0.95;
-      const fallGeometry = new THREE.PlaneGeometry(fall.width, drop, 1, 24);
-      fallGeometry.translate(0, -drop / 2, 0);
-      const fallVertices = fallGeometry.getAttribute("position");
-      for (let vertex = 0; vertex < fallVertices.count; vertex++) {
-        const t = -fallVertices.getY(vertex) / drop;
-        fallVertices.setZ(vertex, Math.sin(t * Math.PI * 0.5) * Math.min(0.6, drop * 0.045));
-      }
-      fallGeometry.computeVertexNormals();
-      waterGeometryCache.push(fallGeometry);
-      const sheet = new THREE.Mesh(fallGeometry, falls);
       const outward = new THREE.Vector3(Math.cos(fall.angle), 0, Math.sin(fall.angle));
       const lipX = fall.x + outward.x * 0.12, lipZ = fall.z + outward.z * 0.12;
-      sheet.position.set(origin.x + lipX, top, origin.z + lipZ);
-      sheet.lookAt(sheet.position.clone().add(outward));
-      sheet.renderOrder = 2;
-      scene.add(sheet);
-      // A channel of water from the pond to the lip.
       const channelStartX = pond.x + outward.x * pond.radius * 0.85;
       const channelStartZ = pond.z + outward.z * pond.radius * 0.85;
-      const channelLength = Math.hypot(lipX - channelStartX, lipZ - channelStartZ);
-      const channelGeometry = new THREE.PlaneGeometry(fall.width, channelLength, 1, 1);
-      channelGeometry.rotateX(-Math.PI / 2);
-      waterGeometryCache.push(channelGeometry);
-      const channel = new THREE.Mesh(channelGeometry, stream);
-      channel.position.set(origin.x + (lipX + channelStartX) / 2, top, origin.z + (lipZ + channelStartZ) / 2);
-      channel.rotation.y = Math.atan2(lipX - channelStartX, lipZ - channelStartZ);
-      scene.add(channel);
+      const geometry = spillwayGeometry(new THREE.Vector3(channelStartX, 0, channelStartZ), new THREE.Vector3(lipX, 0, lipZ), fall.width, drop);
+      waterGeometryCache.push(geometry);
+      const sheet = new THREE.Mesh(geometry, falls);
+      sheet.position.set(origin.x, top + 0.006, origin.z);
+      sheet.renderOrder = 2;
+      scene.add(sheet);
     }
 
     for (const building of plan.buildings) {
@@ -439,6 +422,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   const view = { target: home.target.clone(), distance: 60 };
   const goal = { target: home.target.clone(), distance: 60 };
   let width = 1, height = 1, minDistance = 12, maxDistance = 200;
+  let safeLeft = 0, safeTop = 0;
   const viewDirection = new THREE.Vector3(0, Math.sin(pitch), Math.cos(pitch));
   const applyCamera = () => {
     camera.position.copy(view.target).addScaledVector(viewDirection, view.distance);
@@ -470,7 +454,9 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   const fitHome = () => {
     const points = silhouette;
     // Leave room for the heading above and the status bar below.
-    const top = height < 760 ? 0.58 : 0.62, bottom = height < 760 ? 0.62 : 0.68, side = 0.92;
+    const top = Math.min(height < 760 ? 0.58 : 0.62, 1 - 2 * (safeTop + 18) / height);
+    const bottom = height < 760 ? 0.62 : 0.68;
+    const left = -1 + 2 * (safeLeft + 24) / width, right = 1 - 48 / width;
     let low = 8, high = 1500;
     for (let iteration = 0; iteration < 40; iteration++) {
       const middle = (low + high) / 2;
@@ -479,7 +465,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       applyCamera();
       const fits = points.every(point => {
         const projected = point.clone().project(camera);
-        return projected.x > -side && projected.x < side && projected.y < top && projected.y > -bottom;
+        return projected.x > left && projected.x < right && projected.y < top && projected.y > -bottom;
       });
       if (fits) high = middle; else low = middle;
     }
@@ -493,9 +479,16 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     if (!visible || !options.host.clientWidth || !options.host.clientHeight) return;
     width = options.host.clientWidth;
     height = options.host.clientHeight;
+    safeLeft = Number.parseFloat(getComputedStyle(options.host).getPropertyValue("--home-rail")) || 0;
+    const hostTop = options.host.getBoundingClientRect().top;
+    const chrome = options.host.closest(".sky-islands")?.querySelectorAll(".sky-heading, .sky-controls");
+    safeTop = Math.max(0, ...Array.from(chrome ?? []).map(element => element.getBoundingClientRect().bottom - hostTop + 12));
     renderer.setPixelRatio(pixelRatio());
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
+    // Keep the sky full bleed; shift only the content projection away from
+    // the floating navigation rail, which is not usable scene space.
+    camera.setViewOffset(width, height, -safeLeft / 2, 0, width, height);
     camera.updateProjectionMatrix();
     // Stay on the overview if the user has not moved away from it.
     const atHome = !initialized || (goal.target.distanceTo(home.target) < 0.01 && Math.abs(goal.distance - home.distance) < 0.01);
@@ -606,8 +599,9 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
           return { ...above, y: above.y - size.height - 6 };
         })()
       ];
-      const anchor = candidates.find(candidate => !blocksIsland(shapes, island.layout.id, candidate.x - size!.width / 2, candidate.y, size!.width, size!.height)) ?? candidates[0];
-      let visible = anchor.z < 1 && anchor.x > -width * 0.05 && anchor.x < width * 1.05 && anchor.y > -height * 0.05 && anchor.y < height * 1.05;
+      const fitsChrome = (candidate: typeof candidates[number]) => candidate.x - size!.width / 2 > safeLeft + 8 && candidate.x + size!.width / 2 < width - 8 && candidate.y > safeTop && candidate.y + size!.height < height - 8;
+      const anchor = candidates.find(candidate => fitsChrome(candidate) && !blocksIsland(shapes, island.layout.id, candidate.x - size!.width / 2, candidate.y, size!.width, size!.height)) ?? candidates[0];
+      let visible = anchor.z < 1 && fitsChrome(anchor);
       const x = anchor.x;
       let y = anchor.y;
       const rect = () => ({ left: x - size!.width / 2 - 4, right: x + size!.width / 2 + 4, top: y - 3, bottom: y + size!.height + 3 });
@@ -785,6 +779,11 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   reduced.addEventListener("change", requestDraw);
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(options.host);
+  // Fullscreen changes the floating rail without resizing the full-bleed
+  // canvas; re-read safe areas when the application shell class changes.
+  const shellObserver = new MutationObserver(resize);
+  const shell = options.host.closest(".shell");
+  if (shell) shellObserver.observe(shell, { attributes: true, attributeFilter: ["class"] });
   const intersection = new IntersectionObserver(entries => {
     intersecting = entries.some(entry => entry.isIntersecting);
     if (intersecting && visible) requestDraw();
@@ -871,6 +870,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       disposed = true;
       cancelAnimationFrame(raf);
       resizeObserver.disconnect();
+      shellObserver.disconnect();
       intersection.disconnect();
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);

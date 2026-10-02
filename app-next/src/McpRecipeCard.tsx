@@ -19,6 +19,7 @@ export type RecipeStatus = {
   runtimePython: string;
   installedVersion: string;
   appStaged: boolean;
+  appRegistered: boolean;
   mkopxCommands: string[];
   clients: Array<{ hostId: string; configured: boolean; matchesRuntime: boolean }>;
   verification?: {
@@ -37,7 +38,7 @@ type TargetOption = { hostId: "host-codex" | "host-claude-code"; scope: string; 
 type FieldDiff = { targetId: string; hostId: string; serverName: string; field: string; change: string; before: string; after: string };
 type MutationPlan = { planId: string; targets: Array<{ id: string; hostId: string; pathDisplay: string; existed: boolean }>; diffs: FieldDiff[] };
 
-type Phase = "" | "detecting" | "installing" | "planning" | "applying" | "verifying";
+type Phase = "" | "detecting" | "installing" | "planning" | "applying" | "verifying" | "starting";
 
 type Props = {
   runtimeAvailable: boolean;
@@ -161,6 +162,19 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
     }
   }
 
+  async function prepareBridge() {
+    setPhase("starting");
+    setError("");
+    try {
+      setStatus(await invoke<RecipeStatus>("prepare_origin_bridge"));
+    } catch (reason) {
+      setError(String(reason));
+      await detect(false);
+    } finally {
+      setPhase("");
+    }
+  }
+
   async function copy(text: string, index: number) {
     try {
       await navigator.clipboard.writeText(text);
@@ -180,7 +194,9 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
     if (!status) return { label: rt("recheck"), run: detect };
     if (next === "install") return { label: rt("installAndConnect"), run: installAndConnect };
     if (next === "connect") return { label: rt("connect"), run: () => planConnection(status) };
-    if (["verify", "register-app", "start-bridge", "open-origin"].includes(next)) return { label: rt("verify"), run: verify };
+    if (next === "register-app") return { label: rt("registerAndStart"), run: prepareBridge };
+    if (next === "start-bridge") return { label: rt("startBridge"), run: prepareBridge };
+    if (["verify", "open-origin"].includes(next)) return { label: rt("verify"), run: verify };
     if (state === "ready") return { label: rt("verifyAgain"), run: verify };
     return { label: rt("recheck"), run: detect };
   })();
@@ -209,6 +225,8 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
           )}
         </p>
       )}
+
+      {phase === "starting" && <p className="recipe-next" role="status">{rt("startingHint")}</p>}
 
       {status && ["register-app", "open-origin", "start-bridge"].includes(next) && status.mkopxCommands.length > 0 && (
         <details className="recipe-guide-disclosure">
@@ -338,11 +356,15 @@ const zh: Dictionary = {
   "next.install-python": "安装 Python 3.10–3.14（不会改动现有环境），然后点“重新检测”。",
   "next.install": "安装独立运行环境，并写入所选 AI 工具。",
   "next.connect": "把 Origin 服务器写入所选 AI 工具。",
-  "next.open-origin": "打开 Origin，在 Apps 中点击 Origin MCP Bridge Start，然后验证连接。首次使用请展开注册步骤。",
-  "next.register-app": "在 Origin 里注册 Start/Stop 两个 App（只需一次）。",
-  "next.start-bridge": "在 Origin 的 Apps 中点击 Origin MCP Bridge Start，然后点“验证连接”。",
+  "next.open-origin": "打开 Origin 后点“重新检测”，即可在这里注册并启动桥接。",
+  "next.register-app": "Origin 已打开。点击“注册并启动”，首次安装时确认 Origin 弹窗即可。",
+  "next.start-bridge": "App 已注册。点击“启动并验证”，连接当前 Origin 会话。",
   "next.verify": "进行连接验证（握手、工具列表、桥接和一次只读调用）。",
   "next.none": "已就绪。重启或重新连接 AI 工具后即可使用。",
+  registerAndStart: "注册并启动",
+  startBridge: "启动并验证",
+  startingHint: "请留意 Origin 的安装提示。若提示同版本文件已存在，可选“全部跳过”；完成后将自动验证连接。",
+  "phase.starting": "正在连接 Origin…",
   installAndConnect: "安装并连接",
   connect: "连接到 AI 工具",
   verify: "验证连接",
@@ -402,11 +424,15 @@ const en: Dictionary = {
   "next.install-python": "Install Python 3.10–3.14 (existing environments stay untouched), then click “Check again”.",
   "next.install": "Install the isolated runtime and add it to the selected AI tools.",
   "next.connect": "Add the Origin server to the selected AI tools.",
-  "next.open-origin": "Open Origin, click Origin MCP Bridge Start in Apps, then verify. For first use, open the registration steps.",
-  "next.register-app": "Register the Start/Stop Apps in Origin (one time).",
-  "next.start-bridge": "In Origin's Apps, click Origin MCP Bridge Start, then click “Verify”.",
+  "next.open-origin": "Open Origin and check again to register and start the bridge here.",
+  "next.register-app": "Origin is open. Register and start the bridge; confirm the native installation prompt if shown.",
+  "next.start-bridge": "The Apps are registered. Start and verify the bridge in the current Origin session.",
   "next.verify": "Verify the connection (handshake, tool list, bridge and one read-only call).",
   "next.none": "Ready. Restart or reconnect your AI tool to use it.",
+  registerAndStart: "Register and start",
+  startBridge: "Start and verify",
+  startingHint: "Check Origin for an installation prompt. Choose Skip All for the existing same-version files. Connection verification follows automatically.",
+  "phase.starting": "Connecting to Origin…",
   installAndConnect: "Install and connect",
   connect: "Connect to AI tools",
   verify: "Verify",
@@ -466,11 +492,15 @@ const ko: Dictionary = {
   "next.install-python": "Python 3.10–3.14를 설치하세요(기존 환경은 그대로). 그런 다음 “다시 확인”을 누르세요.",
   "next.install": "독립 실행 환경을 설치하고 선택한 AI 도구에 추가합니다.",
   "next.connect": "선택한 AI 도구에 Origin 서버를 추가합니다.",
-  "next.open-origin": "Origin을 열고 Apps에서 Origin MCP Bridge Start를 누른 뒤 연결을 확인하세요. 처음이라면 등록 단계를 펼치세요.",
-  "next.register-app": "Origin에서 Start/Stop 앱을 등록하세요(한 번만).",
-  "next.start-bridge": "Origin의 Apps에서 Origin MCP Bridge Start를 누른 뒤 “연결 확인”을 누르세요.",
+  "next.open-origin": "Origin을 열고 다시 확인하면 여기에서 브리지를 등록하고 시작할 수 있습니다.",
+  "next.register-app": "Origin이 열려 있습니다. 등록하고 시작을 누르고 설치 창이 나타나면 확인하세요.",
+  "next.start-bridge": "앱이 등록되어 있습니다. 현재 Origin 세션에서 브리지를 시작하고 확인하세요.",
   "next.verify": "연결을 확인합니다(핸드셰이크, 도구 목록, 브리지, 읽기 전용 호출 1회).",
   "next.none": "준비되었습니다. AI 도구를 다시 시작하거나 다시 연결하세요.",
+  registerAndStart: "등록하고 시작",
+  startBridge: "시작하고 확인",
+  startingHint: "Origin의 설치 창을 확인하세요. 동일 버전 파일이 이미 있으면 모두 건너뛰기를 선택하세요. 이후 연결을 자동으로 확인합니다.",
+  "phase.starting": "Origin 연결 중…",
   installAndConnect: "설치하고 연결",
   connect: "AI 도구에 연결",
   verify: "연결 확인",

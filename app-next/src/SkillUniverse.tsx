@@ -11,7 +11,7 @@ import { Icon } from "./icons";
 import { categoryName, getLang, t } from "./i18n";
 import { localizedSkillDescription } from "./localizedDescriptions";
 import { sourcePresentation } from "./sourceIdentity";
-import { createStarField, drawAtmosphereDither, starFieldOpacity } from "./universeAtmosphere";
+import { createStarField, drawAtmosphereDither, meteorSegment, starFieldOpacity } from "./universeAtmosphere";
 import "./SkillUniverse.css";
 import { advanceLabel, type LabelState } from "./universeLabels";
 import type { LegacySnapshot, SkillCard, SourceCard, SourcePopularityCard } from "./types";
@@ -80,6 +80,10 @@ type UniverseRuntime = {
   obstacles: Array<{ left: number; top: number; right: number; bottom: number }>;
   refreshObstacles: () => void;
   labelStates: Map<string, LabelState>;
+  labelMetrics: Map<string, { text: string; ownerText: string; titleWidth: number; ownerWidth: number }>;
+  font: string;
+  railWidth: number;
+  paintAtmosphere: (palette: StarPalette, x: number, y: number, radius: number) => void;
   pointerX: number;
   pointerY: number;
   pointerInside: boolean;
@@ -169,6 +173,7 @@ export function SkillUniverse({
   const visibleRef = useRef(visible); visibleRef.current = visible;
   useEffect(() => { runtimeRef.current?.requestDraw(); }, [visible]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const atmosphereRef = useRef<HTMLCanvasElement | null>(null);
   const runtimeRef = useRef<UniverseRuntime | null>(null);
   const hoverRef = useRef("");
   const cachedModelRef = useRef<UniverseModel | null>(readUniverseModelCache());
@@ -229,6 +234,10 @@ export function SkillUniverse({
       obstacles: [],
       refreshObstacles: () => undefined,
       labelStates: new Map(),
+      labelMetrics: new Map(),
+      font: getComputedStyle(host).getPropertyValue("--ui-font").trim() || "sans-serif",
+      railWidth: 0,
+      paintAtmosphere: () => undefined,
       frameIndex: 0,
       frameMs: 16.7,
       frameSamples: [],
@@ -256,7 +265,6 @@ export function SkillUniverse({
     setSelected(null);
 
     let frame = 0;
-    let frameTimer = 0;
     let lastDrawAt = 0;
     let pageVisible = !document.hidden;
     let focused = document.hasFocus();
@@ -265,6 +273,18 @@ export function SkillUniverse({
     let width = 1;
     let height = 1;
     let dpr = 1;
+    let atmosphereKey = "";
+    const backdrop = atmosphereRef.current;
+    const backdropContext = backdrop?.getContext("2d");
+    runtime.paintAtmosphere = (palette, x, y, radius) => {
+      if (!backdropContext) return;
+      // Position changes below 0.25px are invisible; stop repainting at rest.
+      const key = [width, height, x.toFixed(2), y.toFixed(2), radius.toFixed(2)].join(":");
+      if (key === atmosphereKey) return;
+      atmosphereKey = key;
+      backdropContext.clearRect(0, 0, width, height);
+      drawUniverseBackdrop(backdropContext, palette, x, y, radius, width, height, lightTheme);
+    };
 
     canvas.dataset.renderer = "canvas2d";
     canvas.dataset.contextState = "ready";
@@ -273,9 +293,7 @@ export function SkillUniverse({
 
     const cancelScheduledDraw = () => {
       window.cancelAnimationFrame(frame);
-      window.clearTimeout(frameTimer);
       frame = 0;
-      frameTimer = 0;
     };
 
     const canRender = () => visibleRef.current && pageVisible && intersecting && contextReady;
@@ -291,35 +309,19 @@ export function SkillUniverse({
     const scheduleDraw = (urgent = false) => {
       if (!canRender() || !focused || frame) return;
       if (reducedMotion && !urgent) return;
-      const interactiveMotion = hasInteractiveMotion();
-      if (frameTimer) {
-        if (!urgent) return;
-        window.clearTimeout(frameTimer);
-        frameTimer = 0;
-      }
-      // Keep the homepage smooth on a healthy renderer, then reduce only the
-      // background cadence when this device's actual draw cost needs it.
-      // Interaction remains immediate at 60 fps; non-home pages unmount this
-      // component, and visibility/focus guards above cancel all idle work.
-      const ambientInterval = runtime.drawMs > 18 ? 1000 / 20 : runtime.drawMs > 12 ? 1000 / 28 : 1000 / 36;
-      const interval = interactiveMotion ? 1000 / 60 : ambientInterval;
-      const wait = urgent ? 0 : Math.max(0, interval - (performance.now() - lastDrawAt));
-      if (wait <= 1) {
-        frame = window.requestAnimationFrame(draw);
-        return;
-      }
-      frameTimer = window.setTimeout(() => {
-        frameTimer = 0;
-        if (canRender() && focused) frame = window.requestAnimationFrame(draw);
-      }, wait);
+      // RAF owns cadence. A timer followed by RAF missed every other refresh
+      // on 60Hz displays, even during a drag. Only ambient motion is throttled.
+      if (urgent) lastDrawAt = 0;
+      frame = window.requestAnimationFrame(draw);
     };
 
     const refreshObstacles = () => {
+      runtime.railWidth = parseFloat(getComputedStyle(host).getPropertyValue("--home-rail")) || 0;
       const origin = canvas.getBoundingClientRect();
       const scope = host.closest(".dashboard-hero") ?? host;
       const overlays = [
         ...scope.querySelectorAll(".skill-universe-modes, .atlas-intro-toggle, .atlas-immersive-toggle, .home-visual-switch, .atlas-hero-copy, .skill-universe-counter, .skill-universe-legend, .skill-universe-help"),
-        ...document.querySelectorAll(".atlas-touchbar")
+        ...document.querySelectorAll(".atlas-touchbar, .sidebar, .topbar, .operation-banner")
       ];
       runtime.obstacles = overlays
         .map(element => element.getBoundingClientRect())
@@ -342,6 +344,11 @@ export function SkillUniverse({
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (backdrop && backdropContext) {
+        backdrop.width = canvas.width; backdrop.height = canvas.height;
+        backdropContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+        atmosphereKey = "";
+      }
       canvas.dataset.renderScale = String(dpr);
       refreshObstacles();
       scheduleDraw(true);
@@ -350,6 +357,11 @@ export function SkillUniverse({
     const draw = (time: number) => {
       frame = 0;
       if (!canRender()) return;
+      const ambientInterval = runtime.drawMs > 18 ? 1000 / 20 : 1000 / 30;
+      if (!reducedMotion && lastDrawAt && !hasInteractiveMotion() && time - lastDrawAt < ambientInterval - 1) {
+        scheduleDraw();
+        return;
+      }
       const animationTime = reducedMotion || !focused ? 0 : time;
       const drawStarted = performance.now();
       context.clearRect(0, 0, width, height);
@@ -418,8 +430,20 @@ export function SkillUniverse({
       scheduleDraw(true);
     };
 
+    const onFontsLoaded = () => {
+      runtime.font = getComputedStyle(host).getPropertyValue("--ui-font").trim() || "sans-serif";
+      runtime.labelMetrics.clear();
+      scheduleDraw(true);
+    };
+    document.fonts.addEventListener("loadingdone", onFontsLoaded);
     const observer = new ResizeObserver(resize);
     observer.observe(host);
+    const shell = host.closest(".shell");
+    const layoutObserver = new MutationObserver(() => {
+      refreshObstacles();
+      scheduleDraw(true);
+    });
+    if (shell) layoutObserver.observe(shell, { attributes: true, attributeFilter: ["class"] });
     // Moving a window between monitors can change DPR without changing its CSS
     // size. Re-arm the query after each change to keep the backing store sharp.
     let resolutionQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
@@ -448,6 +472,8 @@ export function SkillUniverse({
 
     return () => {
       observer.disconnect();
+      layoutObserver.disconnect();
+      document.fonts.removeEventListener("loadingdone", onFontsLoaded);
       resolutionQuery.removeEventListener("change", onResolutionChange);
       intersectionObserver.disconnect();
       document.removeEventListener("visibilitychange", onVisibility);
@@ -504,13 +530,15 @@ export function SkillUniverse({
     const runtime = runtimeRef.current;
     if (!canvas || !runtime) return;
     const rect = canvas.getBoundingClientRect();
+    const previousX = runtime.pointerX, previousY = runtime.pointerY;
     runtime.pointerX = event.clientX - rect.left;
     runtime.pointerY = event.clientY - rect.top;
     runtime.pointerInside = true;
 
     if (runtime.dragging) {
-      const dx = event.movementX;
-      const dy = event.movementY;
+      // Absolute CSS coordinates stay fractional and consistent across Windows DPI.
+      const dx = runtime.pointerX - previousX;
+      const dy = runtime.pointerY - previousY;
       const now = performance.now();
       const elapsed = Math.max(8, now - runtime.lastPointerTime);
       runtime.rotationY = wrapAngle(runtime.rotationY + dx * 0.0048);
@@ -559,7 +587,7 @@ export function SkillUniverse({
     const runtime = runtimeRef.current;
     if (!canvas || !runtime) return;
     runtime.dragging = false;
-    runtime.dragged = false;
+    // Keep this through the click emitted after pointerup; reset on the next down.
     event.currentTarget.releasePointerCapture?.(event.pointerId);
     const hit = findHit(runtime, runtime.pointerX, runtime.pointerY);
     canvas.style.cursor = hit ? "pointer" : "grab";
@@ -608,6 +636,7 @@ export function SkillUniverse({
       data-universe-state={snapshot ? "live" : showingCachedModel ? "cached" : "empty"}
       style={{ "--universe-hue": shown?.hue ?? 178 } as CSSProperties}
     >
+      <canvas className="skill-universe-atmosphere" aria-hidden="true" ref={atmosphereRef} />
       <canvas
         aria-label={t("universe.aria", { skills: model.skillCount, sources: model.sourceCount })}
         className="skill-universe-canvas"
@@ -919,7 +948,8 @@ function drawUniverse(
     runtime.zoom = runtime.targetZoom;
   }
 
-  const targetCenterX = width * (centered ? 0.505 : width < 850 ? 0.56 : 0.67);
+  const availableWidth = width - runtime.railWidth;
+  const targetCenterX = runtime.railWidth + availableWidth * (centered ? 0.505 : width < 850 ? 0.56 : 0.67);
   const targetCenterY = height * (centered ? 0.47 : 0.49);
   if (!runtime.centerX || time === 0) {
     runtime.centerX = targetCenterX;
@@ -932,7 +962,7 @@ function drawUniverse(
   const centerX = runtime.centerX;
   const centerY = runtime.centerY;
   const radiusFactor = centered ? (width < 850 ? 0.53 : 0.43) : (width < 850 ? 0.5 : 0.39);
-  const radius = Math.min(width * radiusFactor, height * (centered ? 0.57 : 0.52), 680) * runtime.zoom;
+  const radius = Math.min(availableWidth * radiusFactor, height * (centered ? 0.57 : 0.52), 680) * runtime.zoom;
   const interactive = runtime.dragging || (time > 0 && time < runtime.interactionUntil);
   const lod = resolveUniverseLod(model.nodes.length, runtime.quality, interactive);
   runtime.lod = lod;
@@ -941,6 +971,7 @@ function drawUniverse(
   const palette = starPalette(tone, lightTheme);
   const focusId = runtime.hoverId || runtime.selectedId;
 
+  runtime.paintAtmosphere(palette, centerX, centerY, radius);
   drawUniverseAtmosphere(context, palette, centerX, centerY, radius, width, height, time, rotationX, rotationY, lightTheme);
 
   const cosX = Math.cos(rotationX);
@@ -1028,21 +1059,12 @@ function drawUniverse(
     runtime.renderedNodes += 1;
     drawUniverseNode(context, node, focus, palette, lod);
   }
-  drawUniverseLabels(context, runtime, palette, width, height, focusId, focusNeighbors, lod, interactive);
+  drawUniverseLabels(context, runtime, palette, width, height, focusId, focusNeighbors, time === 0);
 }
 
-function drawUniverseAtmosphere(
-  context: CanvasRenderingContext2D,
-  palette: StarPalette,
-  centerX: number,
-  centerY: number,
-  radius: number,
-  width: number,
-  height: number,
-  time: number,
-  rotationX: number,
-  rotationY: number,
-  lightTheme: boolean
+function drawUniverseBackdrop(
+  context: CanvasRenderingContext2D, palette: StarPalette,
+  centerX: number, centerY: number, radius: number, width: number, height: number, lightTheme: boolean
 ) {
   context.save();
   // Off-axis light adds volume without washing out the central data.
@@ -1059,14 +1081,30 @@ function drawUniverseAtmosphere(
   const starCount = Math.min(STAR_FIELD.length, Math.max(260, Math.round(width * height / 3800)));
   for (let i = 0; i < starCount; i += 1) {
     const star = STAR_FIELD[i];
-    const twinkle = star.twinkle && time > 0 ? 0.8 + 0.2 * Math.sin(time * 0.0011 + star.x * 40) : 1;
     const fade = starFieldOpacity(star.x * width, star.y * height, centerX, centerY, width, height);
     if (fade < 0.002) continue;
-    context.fillStyle = `rgba(${palette.star}, ${(star.alpha * twinkle * fade * (lightTheme ? 0.65 : 1)).toFixed(3)})`;
+    context.fillStyle = `rgba(${palette.star}, ${(star.alpha * fade * (lightTheme ? 0.95 : 1)).toFixed(3)})`;
     context.beginPath();
-    context.arc(star.x * width, star.y * height, star.size * 0.6, 0, Math.PI * 2);
+    context.arc(star.x * width, star.y * height, star.size * 0.78, 0, Math.PI * 2);
     context.fill();
   }
+  context.restore();
+}
+
+function drawUniverseAtmosphere(
+  context: CanvasRenderingContext2D,
+  palette: StarPalette,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  width: number,
+  height: number,
+  time: number,
+  rotationX: number,
+  rotationY: number,
+  lightTheme: boolean
+) {
+  context.save();
   drawUniverseMeteors(context, palette, width, height, time);
   // Three great circles of the celestial sphere, dashed so they never read
   // as data links (which are solid): finer in front, sparser behind.
@@ -1122,10 +1160,7 @@ function drawUniverseMeteors(
     if (phase > meteor.duration) continue;
     const progress = phase / meteor.duration;
     const fade = Math.sin(progress * Math.PI);
-    const headX = (meteor.x + progress * 0.18 * meteor.direction) * width;
-    const headY = (meteor.y + progress * 0.18 * meteor.slope) * height;
-    const tailX = headX - meteor.length * meteor.direction;
-    const tailY = headY - meteor.length * meteor.slope;
+    const { headX, headY, tailX, tailY } = meteorSegment(meteor, progress, width, height);
     const trail = context.createLinearGradient(tailX, tailY, headX, headY);
     trail.addColorStop(0, `${palette.meteor}0)`);
     trail.addColorStop(1, `${palette.meteor}${(fade * meteor.opacity).toFixed(3)})`);
@@ -1150,8 +1185,7 @@ function drawUniverseNode(
   palette: StarPalette,
   lod: UniverseLod
 ) {
-  // Flat shapes, one restrained colour per category: sources are discs with
-  // a thin orbit, parent Skills are rings, Skills are dots. Depth sets the
+  // One colour per category: lit sources, parent rings, child dots. Depth sets the
   // emphasis; focus states override it.
   const active = focus === "active" || focus === "selected";
   const alpha = focus === "muted"
@@ -1176,13 +1210,20 @@ function drawUniverseNode(
   } else if (node.kind === "source") {
     context.beginPath();
     context.arc(x, y, radius, 0, Math.PI * 2);
-    context.fillStyle = tint("source", alpha);
+    const surface = context.createRadialGradient(x + radius * 0.3, y - radius * 0.32, radius * 0.05, x, y, radius);
+    surface.addColorStop(0, palette.node(node.hue, "source", alpha, Math.min(1, depth + 0.3)));
+    surface.addColorStop(0.6, tint("source", alpha));
+    surface.addColorStop(1, palette.node(node.hue, "source", alpha, Math.max(0, depth - 0.35)));
+    context.fillStyle = surface;
     context.fill();
     if (depth > 0.55 && radius > 4) {
-      // A small lit cap on the near side, from the same light as the core.
+      // Soft reflected light, from the same upper-right light as the sphere.
+      const reflection = context.createRadialGradient(x + radius * 0.28, y - radius * 0.32, 0, x + radius * 0.18, y - radius * 0.2, radius * 0.75);
+      reflection.addColorStop(0, `${palette.highlight}${alpha * 0.4})`);
+      reflection.addColorStop(1, `${palette.highlight}0)`);
       context.beginPath();
-      context.arc(x + radius * 0.3, y - radius * 0.32, radius * 0.32, 0, Math.PI * 2);
-      context.fillStyle = `${palette.highlight}${(alpha * (depth - 0.55) * 0.9).toFixed(3)})`;
+      context.arc(x, y, radius, 0, Math.PI * 2);
+      context.fillStyle = reflection;
       context.fill();
     }
     if (lod < 2 || active) {
@@ -1284,7 +1325,6 @@ function starPalette(tone: UniverseTone, lightTheme: boolean): StarPalette {
   };
 }
 
-const LABEL_FONT = "'Segoe UI Variable Text', 'Microsoft YaHei UI', 'Segoe UI', sans-serif";
 
 /** Names stay readable: the focused node and its neighbours first, then
  * sources by size and nearness; each label tries four sides of its node and
@@ -1297,16 +1337,14 @@ function drawUniverseLabels(
   height: number,
   focusId: string,
   neighbors: Set<string> | undefined,
-  lod: UniverseLod,
-  interactive: boolean
+  reducedMotion: boolean
 ) {
   const now = performance.now();
-  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const limit = interactive ? 10 : lod === 0 ? 40 : lod === 1 ? 26 : 14;
+  const limit = 32;
   const candidates = runtime.projected
     .filter(node => node.rendered && (focusId
       ? node.id === focusId || node.id === runtime.selectedId || neighbors?.has(node.id)
-      : node.kind === "source" || (node.kind === "router" && lod === 0 && node.depth > 0.55)))
+      : node.kind === "source"))
     .map(node => ({
       node,
       score: (node.id === focusId ? 1e7 : 0) + (node.id === runtime.selectedId ? 1e6 : 0) +
@@ -1321,15 +1359,20 @@ function drawUniverseLabels(
 
     const focused = node.id === focusId || node.id === runtime.selectedId;
     const size = focused ? 12.5 : node.kind === "source" ? 12 : 11;
-    context.font = `${focused || node.kind === "source" ? 600 : 500} ${size}px ${LABEL_FONT}`;
-    const text = truncateText(context, node.kind === "source" ? node.label : `/${node.label}`, focused ? 280 : 200);
+    context.font = `${focused || node.kind === "source" ? 600 : 500} ${size}px ${runtime.font}`;
     const titleFont = context.font;
-    const ownerFont = `400 ${size - 1}px ${LABEL_FONT}`;
-    const owner = node.kind === "source" && node.owner ? ` ${node.owner}` : "";
-    const titleWidth = context.measureText(text).width;
-    context.font = ownerFont;
-    const ownerText = owner ? truncateText(context, owner, 120) : "";
-    const ownerWidth = ownerText ? context.measureText(ownerText).width : 0;
+    const ownerFont = `400 ${size - 1}px ${runtime.font}`;
+    const metricKey = `${node.id}:${focused}`;
+    let metrics = runtime.labelMetrics.get(metricKey);
+    if (!metrics) {
+      const text = truncateText(context, node.kind === "source" ? node.label : `/${node.label}`, focused ? 280 : 200);
+      const titleWidth = context.measureText(text).width;
+      context.font = ownerFont;
+      const ownerText = node.kind === "source" && node.owner ? truncateText(context, ` ${node.owner}`, 120) : "";
+      metrics = { text, titleWidth, ownerText, ownerWidth: ownerText ? context.measureText(ownerText).width : 0 };
+      runtime.labelMetrics.set(metricKey, metrics);
+    }
+    const { text, titleWidth, ownerText, ownerWidth } = metrics;
     context.font = titleFont;
     const textWidth = titleWidth + ownerWidth;
     const padX = focused ? 9 : 3, boxHeight = size + (focused ? 12 : 6);
@@ -1352,7 +1395,7 @@ function drawUniverseLabels(
     advanceLabel(state, available, now, reducedMotion);
     runtime.labelStates.set(node.id, state);
     if (state.opacity <= 0.01) continue;
-    const spot = { left: Math.round(options[state.side].left), top: Math.round(options[state.side].top) };
+    const spot = options[state.side];
     context.globalAlpha = state.opacity;
     placed.push({ left: spot.left, top: spot.top, right: spot.left + boxWidth, bottom: spot.top + boxHeight });
     count += 1;

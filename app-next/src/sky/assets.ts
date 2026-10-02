@@ -55,11 +55,15 @@ function loadRaw(): Promise<RawLibrary> {
     loader.loadAsync(`${base}gull.glb`),
     Promise.all(ANIMALS.map(name => loader.loadAsync(`${base}animals/${name}.glb`)))
   ]).then(([buildings, props, villager, gull, animals]) => {
-    const toonify = (gltf: GLTF) => gltf.scene.traverse(object => {
+    const toonify = (gltf: GLTF, animal = false) => gltf.scene.traverse(object => {
       const mesh = object as THREE.Mesh;
       if (!mesh.isMesh) return;
       const materials = (Array.isArray(mesh.material) ? mesh.material : [mesh.material]) as THREE.MeshStandardMaterial[];
-      const converted = materials.map(source => new THREE.MeshToonMaterial({
+      const converted = materials.map(source => animal ? new THREE.MeshStandardMaterial({
+        color: source.color?.clone() ?? new THREE.Color(1, 1, 1),
+        map: source.map ?? null, vertexColors: source.vertexColors,
+        roughness: 0.82, metalness: 0, name: source.name
+      }) : new THREE.MeshToonMaterial({
         gradientMap: toonGradient(),
         color: source.color?.clone() ?? new THREE.Color(1, 1, 1),
         map: source.map ?? null,
@@ -71,7 +75,7 @@ function loadRaw(): Promise<RawLibrary> {
     toonify(villager);
     animals.forEach(gltf => {
       repairFarmHoofWeights(gltf);
-      toonify(gltf);
+      toonify(gltf, true);
       mergeSkinnedParts(gltf);
     });
     return { buildings, props, villager, gull, animals: new Map(ANIMALS.map((name, index) => [name, animals[index]])) };
@@ -93,7 +97,7 @@ function mergeSkinnedParts(gltf: GLTF) {
     const mesh = object as THREE.SkinnedMesh;
     if (!mesh.isSkinnedMesh || Array.isArray(mesh.material)) return;
     const material = mesh.material as THREE.MeshToonMaterial;
-    const key = `${mesh.skeleton.bones[0]?.uuid}:${mesh.parent?.uuid}:${material.color.getHexString()}`;
+    const key = `${mesh.skeleton.bones[0]?.uuid}:${mesh.parent?.uuid}:${material.color.getHexString()}:${material.map?.uuid ?? ""}`;
     groups.set(key, [...(groups.get(key) ?? []), mesh]);
   });
   for (const meshes of groups.values()) {
@@ -103,7 +107,7 @@ function mergeSkinnedParts(gltf: GLTF) {
     const uniform = meshes.map(mesh => {
       const source = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
       const plain = new THREE.BufferGeometry();
-      for (const name of ["position", "normal", "skinWeight"]) {
+      for (const name of ["position", "normal", "skinWeight", "uv", "color"]) {
         const attribute = source.getAttribute(name);
         if (attribute) plain.setAttribute(name, new THREE.Float32BufferAttribute(Array.from(attribute.array as ArrayLike<number>), attribute.itemSize));
       }
