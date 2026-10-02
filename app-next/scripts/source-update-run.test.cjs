@@ -90,3 +90,43 @@ test("toast states pending and failures honestly in every language", () => {
     assert.equal(sourceUpdateToast(run([])), null);
   }
 });
+
+test("latest means every source was checked, with no pinned or preserved local content", () => {
+  const { sourceUpdateFeedback } = load();
+  const clean = run([entry("a", "unchanged")]);
+  assert.equal(sourceUpdateFeedback(clean).label, "已是最新");
+  assert.match(sourceUpdateFeedback(clean).message, /检查于/);
+  assert.equal(sourceUpdateFeedback(run([entry("a", "updated")])).label, "已更新 1");
+  for (const outcome of ["pinned", "not-git", "local-changes", "failed", "deferred", "unknown"]) {
+    const feedback = sourceUpdateFeedback(run([entry("a", "unchanged"), entry("b", outcome)]));
+    assert.notEqual(feedback.label, "已是最新", outcome);
+    assert.notEqual(feedback.tone, "ok", outcome);
+  }
+  assert.equal(sourceUpdateFeedback(run([entry("a", "unchanged", { keptLocalPaths: ["a.md"] })])).label, "部分未更新");
+  assert.equal(sourceUpdateFeedback(null), null);
+  assert.equal(sourceUpdateFeedback(run([])), null);
+  assert.equal(sourceUpdateFeedback({ ...clean, updatedAt: "" }), null);
+});
+
+test("source-set changes invalidate a previous whole-library result, generated routers do not", () => {
+  const { sourceUpdateFeedback } = load();
+  const clean = run([entry("a", "unchanged")]);
+  const a = { name: "Custom title", localPath: "C:\\data\\sources\\A\\" };
+  assert.equal(sourceUpdateFeedback(clean, [a]).label, "已是最新");
+  assert.equal(sourceUpdateFeedback(clean, [a, { name: "router", localPath: "/sources/AI-SkillHub-local-routers" }]).label, "已是最新");
+  assert.equal(sourceUpdateFeedback(clean, [a, { name: "b", localPath: "/sources/b" }]), null);
+  assert.equal(sourceUpdateFeedback(clean, []), null);
+  assert.equal(sourceUpdateFeedback(clean, [{ name: "new", localPath: "/sources/renamed" }]), null);
+});
+
+test("all languages distinguish clean, changed, partial, pending and failed checks", () => {
+  for (const lang of ["zh", "en", "ko"]) {
+    const { sourceUpdateFeedback } = load(lang);
+    const labels = [
+      [entry("a", "unchanged")], [entry("a", "updated")], [entry("a", "failed")],
+      [entry("a", "unchanged"), entry("b", "failed")], [entry("a", "deferred")], [entry("a", "pinned")]
+    ].map(entries => sourceUpdateFeedback(run(entries)).label);
+    assert.equal(new Set(labels).size, 6);
+    assert.ok(labels.every(label => !label.includes("run.") && !label.includes("{")));
+  }
+});

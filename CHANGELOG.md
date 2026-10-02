@@ -2,6 +2,13 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.14 - 2026-10-03 - Clear update results and uncluttered controls
+
+- Shorten update actions and size dashboard buttons from their contents, preventing footer text overlap at large text sizes and high DPI.
+- Retain the latest per-source check result on update buttons, with check time and counts in their tooltip. Skipped, failed, pending and locally preserved files never qualify as fully up to date; changing the source set invalidates the previous library result.
+- Shift the existing icon presets down one label and add a larger fourth size, with migration for existing preferences and no change to text sizing.
+- Position notifications above the actual footer with 20 px clearance across pages and themes.
+
 ## 3.2.13 - 2026-10-03 - Consistent navigation panel and stable moving labels
 
 - Restore one rounded navigation panel across themes and pages; its surrounding rail is transparent and shares the page background.

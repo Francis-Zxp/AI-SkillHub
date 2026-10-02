@@ -9,6 +9,7 @@ import {
   skillPathLeaf,
   sortSourceUpdateEntries,
   sourceFolderLabel,
+  sourceUpdateFeedback,
   summarizeSourceUpdateRun
 } from "./sourceUpdateRun";
 import type { SourceUpdateOutcome, SourceUpdateRun, SourceUpdateRunEntry } from "./types";
@@ -57,7 +58,7 @@ export function SourceUpdatePanel({ run, busy, onContinue, compact = false }: Pr
           <p>
             <span className="source-run-progress">{rt("run.progress", { checked: summary.checked, total: summary.total })}</span>
             <span aria-hidden="true">·</span>
-            <span>{summary.finished ? rt("run.finished") : rt("run.pending", { n: summary.pending })}</span>
+            <span>{sourceUpdateFeedback(run)?.label ?? rt("run.finished")}</span>
             {summary.counts.failed > 0 && <span className="source-run-failure">{rt("outcome.failed")} {summary.counts.failed}</span>}
             {run.updatedAt && (
               <>

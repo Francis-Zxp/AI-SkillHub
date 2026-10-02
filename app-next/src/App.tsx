@@ -27,7 +27,8 @@ import { PromptLauncherAction } from "./PromptLauncherAction";
 const SourceUpdatePanel = lazy(() => import("./SourceUpdatePanel").then(module => ({ default: module.SourceUpdatePanel })));
 const SourceIdentityPanel = lazy(() => import("./SourceIdentityPanel").then(module => ({ default: module.SourceIdentityPanel })));
 import { SKY_SCENE_EVENT, setSkySceneEnabled, skySceneEnabled } from "./skyScene";
-import { rt, shouldAutoContinue, sourceUpdateToast, summarizeSourceUpdateRun } from "./sourceUpdateRun";
+import { rt, shouldAutoContinue, sourceUpdateFeedback, sourceUpdateToast, summarizeSourceUpdateRun } from "./sourceUpdateRun";
+import { UI_ICON_SCALES, UI_ICON_SCALE_STORAGE_KEY, restoredIconScale } from "./iconScale";
 import { externalSkillsText } from "./externalSkills";
 const ExternalSkillsPanel = lazy(() => import("./ExternalSkillsPanel").then(module => ({ default: module.ExternalSkillsPanel })));
 import type {
@@ -338,18 +339,11 @@ const PROJECT_RELEASES_URL = "https://github.com/Francis-Zxp/AI-SkillHub/release
 const UPDATE_DIAGNOSTIC_STORAGE_KEY = "ai-skillhub-update-diagnostic-v1";
 const UPDATE_CHECK_HEADERS = { "Cache-Control": "no-cache", Pragma: "no-cache" } as const;
 const UI_TEXT_SCALE_STORAGE_KEY = "ai-skillhub-ui-text-scale";
-const UI_ICON_SCALE_STORAGE_KEY = "ai-skillhub-ui-icon-scale";
 const UI_TEXT_SCALES: Record<UiScalePreset, number> = {
   compact: 0.92,
   standard: 1,
   comfortable: 1.08,
   large: 1.16
-};
-const UI_ICON_SCALES: Record<UiScalePreset, number> = {
-  compact: 0.92,
-  standard: 1,
-  comfortable: 1.2,
-  large: 1.36
 };
 const INTERNAL_SKILL_DRAG_TYPES = [
   "application/x-ai-skillhub-source-id",
@@ -458,7 +452,10 @@ export function App() {
   // resolved phase, while settings keep showing the user's choice.
   const resolvedTheme: ThemeName = theme === "sky-auto" ? `sky-${skyPhase}` : theme;
   const [textScale, setTextScale] = useState<UiScalePreset>(() => initialUiScale(UI_TEXT_SCALE_STORAGE_KEY, "standard"));
-  const [iconScale, setIconScale] = useState<UiScalePreset>(() => initialUiScale(UI_ICON_SCALE_STORAGE_KEY, "comfortable"));
+  const [iconScale, setIconScale] = useState<UiScalePreset>(() => restoredIconScale(
+    window.localStorage.getItem(UI_ICON_SCALE_STORAGE_KEY), window.localStorage.getItem("ai-skillhub-ui-icon-scale")
+  ));
+  const [sourceCheckFailed, setSourceCheckFailed] = useState(false);
   const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
   const [loadError, setLoadError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1362,11 +1359,13 @@ export function App() {
   }
 
   async function runCoreSync(continueRun = false): Promise<LegacySnapshot | null> {
+    setSourceCheckFailed(false);
     updateRunStopRef.current = false;
     setOperation({ title: t("op.syncTitle"), detail: t("op.step1"), step: 1, total: 1, percent: 28 });
     try {
       let refreshed = await loadSnapshot("refresh", { background: true, quiet: true, continueRun });
       if (!refreshed) {
+        setSourceCheckFailed(true);
         toastMessage(t("toast.syncFailed"), "error");
         return null;
       }
@@ -1386,7 +1385,7 @@ export function App() {
           stoppable: true
         });
         const next = await loadSnapshot("refresh", { background: true, quiet: true, continueRun: true });
-        if (!next) break;
+        if (!next) { setSourceCheckFailed(true); break; }
         refreshed = next;
       }
       setOperation({ title: t("op.syncTitle"), detail: t("op.step3"), step: 1, total: 1, percent: 100 });
@@ -1820,6 +1819,22 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    if (!toast) return;
+    const notification = document.querySelector<HTMLElement>(".toast");
+    const footers = [...document.querySelectorAll<HTMLElement>(".atlas-touchbar, .atlas-event-tape")];
+    const placeToast = () => {
+      const occupied = footers.filter(element => element.getClientRects().length > 0)
+        .map(element => Math.max(0, window.innerHeight - element.getBoundingClientRect().top));
+      notification?.style.setProperty("--toast-bottom", `${Math.max(88, ...occupied.map(height => height + 20))}px`);
+    };
+    const observer = new ResizeObserver(placeToast);
+    footers.forEach(element => observer.observe(element));
+    window.addEventListener("resize", placeToast);
+    placeToast();
+    return () => { observer.disconnect(); window.removeEventListener("resize", placeToast); };
+  }, [toast, active, theme, textScale, dashboardImmersive]);
+
   /* ---- global search results ---- */
 
   const skillCommandSearch = queryLooksLikeSkillCommand(globalSearch);
@@ -1838,6 +1853,10 @@ export function App() {
   }, [globalSearch, skillCommandSearch, snapshot]);
 
   const operationProgress = operation ? Math.max(1, Math.min(100, Math.round(operation.percent))) : 0;
+  const updateFeedback = useMemo(() => sourceCheckFailed
+    ? { label: rt("run.checkFailed"), message: t("toast.syncFailed"), tone: "error" as const }
+    : runtimeAvailable ? sourceUpdateFeedback(snapshot?.lastSyncSummary?.updateRun, snapshot?.sources) : null,
+  [sourceCheckFailed, snapshot?.lastSyncSummary?.updateRun, snapshot?.sources, lang]);
   const advancedActive = active === "release" || active === "snapshots";
   const atlasMode = isAtlasTheme(resolvedTheme);
   const atlasVisual = atlasThemeVisual(resolvedTheme);
@@ -1949,6 +1968,8 @@ export function App() {
               className="primary-pill"
               disabled={mutationBusy}
               onClick={() => void syncAndRefreshAll()}
+              title={updateFeedback ? `${t("topbar.sync")} · ${updateFeedback.message}` : t("topbar.sync")}
+              aria-label={updateFeedback ? `${updateFeedback.label} · ${t("topbar.sync")}` : t("topbar.sync")}
               type="button"
             >
               <Icon className={loading || initialDeliveryBusy || indexRefreshing || Boolean(operation) ? "icon-spin" : ""} name="refresh" />
@@ -1965,7 +1986,7 @@ export function App() {
                         : initialDeliveryBusy || !startupVerified
                           ? t("topbar.verifyingIndex")
                           : realWritesEnabled
-                            ? t("topbar.sync")
+                            ? updateFeedback?.label ?? t("topbar.sync")
                             : t("topbar.refreshIndex")
                   : loading
                     ? t("topbar.loading")
@@ -2083,6 +2104,7 @@ export function App() {
               snapshot={snapshot}
               summary={summary}
               syncing={Boolean(operation)}
+              updateFeedback={updateFeedback}
               theme={resolvedTheme}
             />
           )}
@@ -2442,6 +2464,7 @@ function Dashboard({
   snapshot,
   summary,
   syncing,
+  updateFeedback,
   theme
 }: {
   visible: boolean;
@@ -2460,6 +2483,7 @@ function Dashboard({
   snapshot: LegacySnapshot | null;
   summary: LegacySummary;
   syncing: boolean;
+  updateFeedback: ReturnType<typeof sourceUpdateFeedback>;
   theme: ThemeName;
 }) {
   const backupBlocked = countByStatus(snapshot?.backupDryRun ?? [], "blocked");
@@ -2641,9 +2665,9 @@ function Dashboard({
         />
         {atlasMode && (
           <div className="atlas-touchbar-actions">
-            <button disabled={loading || syncing} onClick={onSync} title={t("dash.sync")} type="button">
+            <button disabled={loading || syncing} onClick={onSync} aria-label={updateFeedback ? `${updateFeedback.label} · ${t("dash.sync")}` : t("dash.sync")} title={updateFeedback ? `${t("dash.sync")} · ${updateFeedback.message}` : t("dash.sync")} type="button">
               <Icon className={loading || syncing ? "icon-spin" : ""} name="refresh" />
-              <span>{syncing ? t("dash.syncing") : loading ? snapshot ? t("dash.processing") : t("dash.loadingIndex") : t("dash.sync")}</span>
+              <span>{syncing ? t("dash.syncing") : loading ? snapshot ? t("dash.processing") : t("dash.loadingIndex") : updateFeedback?.label ?? t("dash.sync")}</span>
             </button>
             <button onClick={onOpenLibrary} title={t("dash.addSource")} type="button">
               <Icon name="add" />

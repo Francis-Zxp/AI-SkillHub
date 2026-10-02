@@ -1,6 +1,6 @@
 import { getLang } from "./i18n";
 import type { Lang } from "./i18n";
-import type { SourceUpdateOutcome, SourceUpdateRun, SourceUpdateRunEntry } from "./types";
+import type { SourceCard, SourceUpdateOutcome, SourceUpdateRun, SourceUpdateRunEntry } from "./types";
 
 /** Display order: what needs attention first, quiet results last. */
 export const SOURCE_UPDATE_OUTCOMES: SourceUpdateOutcome[] = [
@@ -98,10 +98,18 @@ export function formatRunTime(value: string, lang: Lang = getLang()): string {
 type Dictionary = Record<string, string>;
 
 const zh: Dictionary = {
+  "run.latest": "已是最新",
+  "run.updatedShort": "已更新 {n}",
+  "run.partialFailed": "部分失败",
+  "run.checkFailed": "检查失败",
+  "run.waitingShort": "待继续",
+  "run.skippedShort": "部分未更新",
+  "run.latestToast": "已是最新，本次已检查 {n} 个来源。",
+  "run.toastSkipped": "，{n} 个未更新（固定版本、本地修改或无上游）",
   "run.expand": "展开记录",
   "run.collapse": "收起记录",
   "run.title": "来源更新",
-  "run.subtitle": "上次“更新全部来源”的逐个结果",
+  "run.subtitle": "上次“更新全部”的逐个结果",
   "run.progress": "已检查 {checked}/{total}",
   "run.pending": "{n} 个待继续",
   "run.finished": "本轮检查结束",
@@ -112,7 +120,7 @@ const zh: Dictionary = {
   "run.stop": "本轮结束后停止",
   "run.stopped": "已停止。剩余 {n} 个来源保留在“待继续”，随时可以继续。",
   "run.filterAll": "全部 {n}",
-  "run.empty": "还没有完整的更新记录。点击右上角“更新全部来源”开始。",
+  "run.empty": "还没有完整的更新记录。点击右上角“更新全部”开始。",
   "run.addedSkills": "新增 Skill：{names}",
   "run.discovered": "发现 {n} 个新 Skill（未启用，因为此来源只安装你选定的部分）",
   "run.keptLocal": "{n} 个文件保留了你本地的版本",
@@ -137,10 +145,18 @@ const zh: Dictionary = {
 };
 
 const en: Dictionary = {
+  "run.latest": "Up to date",
+  "run.updatedShort": "Updated {n}",
+  "run.partialFailed": "Some failed",
+  "run.checkFailed": "Check failed",
+  "run.waitingShort": "Continue",
+  "run.skippedShort": "Some skipped",
+  "run.latestToast": "Up to date. Checked {n} sources in this run.",
+  "run.toastSkipped": ", {n} skipped (pinned, local edits or no upstream)",
   "run.expand": "Show records",
   "run.collapse": "Hide records",
   "run.title": "Source updates",
-  "run.subtitle": "Per-source results of the last “Update all sources”",
+  "run.subtitle": "Per-source results of the last “Update all”",
   "run.progress": "Checked {checked}/{total}",
   "run.pending": "{n} waiting",
   "run.finished": "Check complete",
@@ -151,7 +167,7 @@ const en: Dictionary = {
   "run.stop": "Stop after this round",
   "run.stopped": "Stopped. {n} sources stay waiting; continue any time.",
   "run.filterAll": "All {n}",
-  "run.empty": "No complete update record yet. Use “Update all sources” at the top right.",
+  "run.empty": "No complete update record yet. Use “Update all” at the top right.",
   "run.addedSkills": "New Skills: {names}",
   "run.discovered": "Found {n} new Skills (not enabled: this source installs only your selection)",
   "run.keptLocal": "{n} files kept your local version",
@@ -176,10 +192,18 @@ const en: Dictionary = {
 };
 
 const ko: Dictionary = {
+  "run.latest": "최신 상태",
+  "run.updatedShort": "{n}개 업데이트",
+  "run.partialFailed": "일부 실패",
+  "run.checkFailed": "확인 실패",
+  "run.waitingShort": "계속 필요",
+  "run.skippedShort": "일부 건너뜀",
+  "run.latestToast": "최신 상태입니다. 이번에 소스 {n}개를 확인했습니다.",
+  "run.toastSkipped": ", {n}개 건너뜀(버전 고정, 로컬 수정 또는 원본 없음)",
   "run.expand": "기록 펼치기",
   "run.collapse": "기록 접기",
   "run.title": "소스 업데이트",
-  "run.subtitle": "마지막 “모든 소스 업데이트”의 소스별 결과",
+  "run.subtitle": "마지막 “모두 업데이트”의 소스별 결과",
   "run.progress": "{checked}/{total} 확인",
   "run.pending": "{n}개 대기",
   "run.finished": "확인 완료",
@@ -190,7 +214,7 @@ const ko: Dictionary = {
   "run.stop": "이번 회차 후 중지",
   "run.stopped": "중지했습니다. 남은 소스 {n}개는 대기 상태로 남아 언제든 계속할 수 있습니다.",
   "run.filterAll": "전체 {n}",
-  "run.empty": "아직 완료된 업데이트 기록이 없습니다. 오른쪽 위 “모든 소스 업데이트”를 누르세요.",
+  "run.empty": "아직 완료된 업데이트 기록이 없습니다. 오른쪽 위 “모두 업데이트”를 누르세요.",
   "run.addedSkills": "새 Skill: {names}",
   "run.discovered": "새 Skill {n}개 발견(선택한 항목만 설치하는 소스라 활성화하지 않음)",
   "run.keptLocal": "파일 {n}개는 로컬 버전을 유지했습니다",
@@ -227,10 +251,16 @@ export function rt(key: string, vars?: Record<string, string | number>): string 
 export function sourceUpdateToast(run: SourceUpdateRun | null | undefined): { message: string; tone: "ok" | "warn" | "error" } | null {
   const summary = summarizeSourceUpdateRun(run);
   if (summary.total === 0) return null;
+  if (summary.counts.unchanged === summary.total && summary.keptLocal === 0) {
+    return { message: rt("run.latestToast", { n: summary.total }), tone: "ok" };
+  }
   let rest = "";
   if (summary.addedSkills > 0) rest += rt("run.toastAdded", { n: summary.addedSkills });
   if (summary.counts.failed > 0) rest += rt("run.toastFailed", { n: summary.counts.failed });
   if (summary.pending > 0) rest += rt("run.toastPending", { n: summary.pending });
+  const skipped = summary.counts.pinned + summary.counts["not-git"] + summary.counts["local-changes"];
+  if (skipped > 0) rest += rt("run.toastSkipped", { n: skipped });
+  if (summary.keptLocal > 0) rest += ` · ${rt("run.keptLocal", { n: summary.keptLocal })}`;
   const message = rt("run.toast", {
     checked: summary.checked,
     total: summary.total,
@@ -240,8 +270,29 @@ export function sourceUpdateToast(run: SourceUpdateRun | null | undefined): { me
   });
   const tone = summary.counts.failed > 0 && summary.counts.failed === summary.checked
     ? "error"
-    : summary.counts.failed > 0 || summary.pending > 0 || summary.counts["local-changes"] > 0
+    : summary.counts.failed > 0 || summary.pending > 0 || skipped > 0 || summary.keptLocal > 0
       ? "warn"
       : "ok";
   return { message, tone };
+}
+
+/** This is a dated result of a real check, never a live promise about upstream. */
+export function sourceUpdateFeedback(run: SourceUpdateRun | null | undefined, sources?: Pick<SourceCard, "localPath" | "name">[]) {
+  if (!run?.updatedAt) return null;
+  if (sources) {
+    const folders = sources.map(source => skillPathLeaf(source.localPath || source.name).toLowerCase())
+      .filter(folder => folder !== "ai-skillhub-local-routers");
+    const checked = new Set(run.sources.map(source => source.folder.toLowerCase()));
+    // Adding/removing/renaming a source invalidates the whole-library claim.
+    if (!folders.length || folders.length !== checked.size || folders.some(folder => !checked.has(folder))) return null;
+  }
+  const toast = sourceUpdateToast(run);
+  if (!toast) return null;
+  const { counts, pending, total, keptLocal } = summarizeSourceUpdateRun(run);
+  const label = counts.failed > 0 ? rt(counts.failed === total ? "run.checkFailed" : "run.partialFailed")
+    : pending > 0 ? rt("run.waitingShort")
+    : counts.pinned + counts["not-git"] + counts["local-changes"] + keptLocal > 0 ? rt("run.skippedShort")
+    : counts.updated > 0 ? rt("run.updatedShort", { n: counts.updated })
+    : rt("run.latest");
+  return { ...toast, label, message: `${rt("run.checkedAt", { time: formatRunTime(run.updatedAt) })} · ${toast.message}` };
 }

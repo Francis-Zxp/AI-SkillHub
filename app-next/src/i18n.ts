@@ -177,7 +177,7 @@ const en: Dict = {
 
   // Topbar
   "topbar.searchPlaceholder": "Search sources and skills, e.g. /nature or research-writing",
-  "topbar.sync": "Update all sources",
+  "topbar.sync": "Update all",
   "topbar.refreshIndex": "Refresh local index",
   "topbar.syncing": "Syncing…",
   "topbar.loadingIndex": "Loading local index…",
@@ -295,7 +295,7 @@ const en: Dict = {
   // Dashboard
   "dash.title": "Skill Overview",
   "dash.subtitle": "System overview and AI skill deployment status.",
-  "dash.sync": "Update all sources",
+  "dash.sync": "Update all",
   "dash.syncing": "Syncing…",
   "dash.loadingIndex": "Loading local index…",
   "dash.processing": "Processing…",
@@ -1381,7 +1381,7 @@ const zh: Dict = {
   "qa.measuring": "正在测量",
 
   "topbar.searchPlaceholder": "搜索来源和 Skills；例如 /nature 或 research-writing",
-  "topbar.sync": "更新全部来源",
+  "topbar.sync": "更新全部",
   "topbar.refreshIndex": "刷新本地索引",
   "topbar.syncing": "正在同步…",
   "topbar.loadingIndex": "正在载入本地索引…",
@@ -1496,7 +1496,7 @@ const zh: Dict = {
 
   "dash.title": "技能总览",
   "dash.subtitle": "系统总览与 AI Skill 部署状态。",
-  "dash.sync": "更新全部来源",
+  "dash.sync": "更新全部",
   "dash.syncing": "正在同步…",
   "dash.loadingIndex": "正在载入本地索引…",
   "dash.processing": "正在处理…",
@@ -2564,7 +2564,7 @@ const ko: Dict = {
   "qa.measuring": "측정 중",
 
   "topbar.searchPlaceholder": "소스와 스킬 검색 — 예: /nature 또는 research-writing",
-  "topbar.sync": "모든 소스 업데이트",
+  "topbar.sync": "모두 업데이트",
   "topbar.refreshIndex": "로컬 인덱스 새로고침",
   "topbar.syncing": "동기화 중…",
   "topbar.loadingIndex": "로컬 인덱스 불러오는 중…",
@@ -2679,7 +2679,7 @@ const ko: Dict = {
 
   "dash.title": "스킬 현황",
   "dash.subtitle": "시스템 전체 현황과 AI 스킬 배포 상태입니다.",
-  "dash.sync": "모든 소스 업데이트",
+  "dash.sync": "모두 업데이트",
   "dash.syncing": "동기화 중…",
   "dash.loadingIndex": "로컬 인덱스 불러오는 중…",
   "dash.processing": "처리 중…",
