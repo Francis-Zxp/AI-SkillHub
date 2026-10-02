@@ -14,6 +14,7 @@ import { sourcePresentation } from "./sourceIdentity";
 import { createStarField, drawAtmosphereDither, meteorSegment, starFieldOpacity } from "./universeAtmosphere";
 import "./SkillUniverse.css";
 import { advanceLabel, type LabelState } from "./universeLabels";
+import { UniverseLabelLayer } from "./universeLabelLayer";
 import type { LegacySnapshot, SkillCard, SourceCard, SourcePopularityCard } from "./types";
 
 export type SkillUniverseMode = "relations" | "sources" | "categories";
@@ -80,6 +81,7 @@ type UniverseRuntime = {
   obstacles: Array<{ left: number; top: number; right: number; bottom: number }>;
   refreshObstacles: () => void;
   labelStates: Map<string, LabelState>;
+  labelLayer: UniverseLabelLayer;
   labelMetrics: Map<string, { text: string; ownerText: string; titleWidth: number; ownerWidth: number }>;
   font: string;
   railWidth: number;
@@ -174,6 +176,7 @@ export function SkillUniverse({
   useEffect(() => { runtimeRef.current?.requestDraw(); }, [visible]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const atmosphereRef = useRef<HTMLCanvasElement | null>(null);
+  const labelsRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<UniverseRuntime | null>(null);
   const hoverRef = useRef("");
   const cachedModelRef = useRef<UniverseModel | null>(readUniverseModelCache());
@@ -202,7 +205,7 @@ export function SkillUniverse({
   useEffect(() => {
     const canvas = canvasRef.current;
     const host = canvas?.parentElement;
-    if (!canvas || !host) return;
+    if (!canvas || !host || !labelsRef.current) return;
     const context = canvas.getContext("2d", { alpha: true });
     if (!context) {
       canvas.dataset.renderer = "canvas2d-unavailable";
@@ -234,6 +237,7 @@ export function SkillUniverse({
       obstacles: [],
       refreshObstacles: () => undefined,
       labelStates: new Map(),
+      labelLayer: new UniverseLabelLayer(labelsRef.current),
       labelMetrics: new Map(),
       font: getComputedStyle(host).getPropertyValue("--ui-font").trim() || "sans-serif",
       railWidth: 0,
@@ -310,7 +314,7 @@ export function SkillUniverse({
       if (!canRender() || !focused || frame) return;
       if (reducedMotion && !urgent) return;
       // RAF owns cadence. A timer followed by RAF missed every other refresh
-      // on 60Hz displays, even during a drag. Only ambient motion is throttled.
+      // on 60Hz displays. Slow rotation needs the same cadence as dragging.
       if (urgent) lastDrawAt = 0;
       frame = window.requestAnimationFrame(draw);
     };
@@ -357,7 +361,7 @@ export function SkillUniverse({
     const draw = (time: number) => {
       frame = 0;
       if (!canRender()) return;
-      const ambientInterval = runtime.drawMs > 18 ? 1000 / 20 : 1000 / 30;
+      const ambientInterval = runtime.drawMs > 18 ? 1000 / 30 : 0;
       if (!reducedMotion && lastDrawAt && !hasInteractiveMotion() && time - lastDrawAt < ambientInterval - 1) {
         scheduleDraw();
         return;
@@ -483,6 +487,7 @@ export function SkillUniverse({
       canvas.removeEventListener("contextlost", onContextLost);
       canvas.removeEventListener("contextrestored", onContextRestored);
       cancelScheduledDraw();
+      runtime.labelLayer.clear();
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
   }, [lightTheme, model, tone]);
@@ -650,6 +655,7 @@ export function SkillUniverse({
         ref={canvasRef}
         role="img"
       />
+      <div className="skill-universe-labels" aria-hidden="true" ref={labelsRef} />
 
       <div className="skill-universe-modes" aria-label={t("universe.modeLabel")}>
         {MODES.map(item => (
@@ -1341,6 +1347,7 @@ function drawUniverseLabels(
 ) {
   const now = performance.now();
   const limit = 32;
+  runtime.labelLayer.begin();
   const candidates = runtime.projected
     .filter(node => node.rendered && (focusId
       ? node.id === focusId || node.id === runtime.selectedId || neighbors?.has(node.id)
@@ -1399,40 +1406,12 @@ function drawUniverseLabels(
     context.globalAlpha = state.opacity;
     placed.push({ left: spot.left, top: spot.top, right: spot.left + boxWidth, bottom: spot.top + boxHeight });
     count += 1;
-    const textY = spot.top + boxHeight / 2 + 0.5;
-    if (focused) {
-      roundRect(context, spot.left, spot.top, boxWidth, boxHeight, 7);
-      context.fillStyle = palette.chip;
-      context.fill();
-      context.strokeStyle = palette.chipBorder;
-      context.lineWidth = 1;
-      context.stroke();
-      context.fillStyle = palette.text;
-      context.fillText(text, spot.left + padX, textY);
-      if (ownerText) {
-        context.font = ownerFont;
-        context.globalAlpha = state.opacity * 0.6;
-        context.fillText(ownerText, spot.left + padX + titleWidth, textY);
-        context.globalAlpha = 1;
-      }
-    } else {
-      context.globalAlpha = state.opacity * (neighbors?.has(node.id) ? 0.95 : 0.5 + node.depth * 0.45);
-      context.lineJoin = "round";
-      context.lineWidth = 3;
-      context.strokeStyle = palette.halo;
-      context.strokeText(text, spot.left + padX, textY);
-      context.fillStyle = palette.text;
-      context.fillText(text, spot.left + padX, textY);
-      if (ownerText) {
-        context.font = ownerFont;
-        const alpha = context.globalAlpha;
-        context.strokeText(ownerText, spot.left + padX + titleWidth, textY);
-        context.globalAlpha = alpha * 0.55;
-        context.fillText(ownerText, spot.left + padX + titleWidth, textY);
-      }
-      context.globalAlpha = 1;
-    }
+    const opacity = state.opacity * (focused ? 1 : neighbors?.has(node.id) ? 0.95 : 0.5 + node.depth * 0.45);
+    runtime.labelLayer.place(node.id, text, ownerText, spot.left, spot.top, boxWidth, boxHeight,
+      size, focused || node.kind === "source" ? 600 : 500, opacity, focused,
+      palette.text, palette.halo, palette.chip, palette.chipBorder);
   }
+  runtime.labelLayer.end();
   context.restore();
 }
 
@@ -1591,11 +1570,6 @@ function scalePoint(point: Point3, amount: number): Point3 {
 function normalizePoint(point: Point3, radius = 1): Point3 {
   const length = Math.hypot(point.x, point.y, point.z) || 1;
   return { x: (point.x / length) * radius, y: (point.y / length) * radius, z: (point.z / length) * radius };
-}
-
-function roundRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
-  context.beginPath();
-  context.roundRect(x, y, width, height, radius);
 }
 
 function truncateText(context: CanvasRenderingContext2D, value: string, maxWidth: number) {

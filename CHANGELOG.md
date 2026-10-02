@@ -2,6 +2,13 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.13 - 2026-10-03 - Consistent navigation panel and stable moving labels
+
+- Restore one rounded navigation panel across themes and pages; its surrounding rail is transparent and shares the page background.
+- Remove conflicting home-only and Sky-only panel rules; reserve space for the star map introduction beside the restored panel.
+- Move star map labels to persistent compositor surfaces, avoiding per-frame glyph rasterization. Automatic rotation follows display refresh cadence when rendering capacity permits, with adaptive fallback for slower devices.
+- Keep drag, zoom, label collision handling, reduced motion and off-page animation suspension.
+
 ## 3.2.12 - 2026-10-03 - Natural motion, Chinese typography and Origin bridge setup
 
 - Fix cloud flicker during pan/zoom by stabilizing shader noise seeds. Join pond and waterfall with one continuous curved spillway.

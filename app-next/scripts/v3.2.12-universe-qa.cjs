@@ -26,6 +26,11 @@ if(fs.existsSync(baseline)) {
     proto.clearRect=function(...a){
      if(this.canvas.classList.contains('skill-universe-canvas')){
       if(window.drawFrame)window.framesSeen.push(window.drawFrame);window.drawFrame={time:performance.now(),labels:{}};
+      const labelFrame=window.drawFrame;
+      queueMicrotask(()=>{for(const e of document.querySelectorAll('.skill-universe-label')){
+       const matrix=new DOMMatrix(e.style.transform);
+       labelFrame.labels[e.dataset.nodeId]={x:matrix.m41,y:matrix.m42,alpha:Number(e.style.opacity)};
+      }});
      }
      if(this.canvas.classList.contains('skill-universe-atmosphere'))window.backgroundPaints++;
      return clear.apply(this,a);

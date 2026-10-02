@@ -451,16 +451,30 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .sidebar {
   position: sticky;
   top: 0;
+  z-index: 50;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
   height: 100vh;
   padding: var(--space-6) var(--space-4);
-  background: var(--surface);
-  border-right: 1px solid var(--border);
-  backdrop-filter: blur(24px);
+  background: transparent;
+  border: 0;
+  backdrop-filter: none;
   overflow: hidden;
+}
+
+/* The rail is transparent; only this inset panel owns a surface in every theme. */
+.sidebar::after {
+  content: "";
+  position: absolute;
+  inset: 12px 8px;
+  z-index: -1;
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  background: var(--surface-elevated);
+  box-shadow: none;
+  pointer-events: none;
 }
 
 .brand {
@@ -3841,18 +3855,8 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   padding: 16px 10px;
   overflow: visible;
   border: 0;
-  background: color-mix(in srgb, var(--bg) 46%, transparent);
-  backdrop-filter: blur(24px) saturate(125%);
-}
-.theme-family-atlas .sidebar::after {
-  content: "";
-  position: absolute;
-  inset: 12px 8px;
-  z-index: -1;
-  border: 1px solid var(--border);
-  border-radius: 28px;
-  background: color-mix(in srgb, var(--surface) 50%, transparent);
-  box-shadow: none;
+  background: transparent;
+  backdrop-filter: none;
 }
 .theme-family-atlas .brand {
   display: grid;
@@ -3863,8 +3867,8 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   margin: 2px 0 12px;
   border: 0;
   border-radius: 17px;
-  background: color-mix(in srgb, var(--surface-strong) 68%, transparent);
-  box-shadow: inset 0 0 0 1px var(--border);
+  background: transparent;
+  box-shadow: none;
 }
 .theme-family-atlas .brand-logo { width: 38px; height: 38px; border-radius: 11px; }
 .theme-family-atlas .brand > div,
@@ -4332,7 +4336,6 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 
 .theme-family-atlas.shell { grid-template-columns: 92px minmax(0, 1fr); }
 .theme-family-atlas .sidebar { width: 92px; padding-inline: 12px; }
-.theme-family-atlas .sidebar { background: color-mix(in srgb, var(--bg) 90%, transparent); backdrop-filter: none; }
 .theme-family-atlas .brand {
   width: 60px;
   height: 60px;
@@ -4729,11 +4732,6 @@ code { font-family: var(--ui-mono); font-size: .92em; }
     radial-gradient(76% 56% at 78% -8%, rgba(71, 111, 198, .17), transparent 58%),
     radial-gradient(48% 48% at 16% 88%, rgba(169, 112, 189, .065), transparent 66%),
     linear-gradient(142deg, #05060a 0%, #080b12 48%, #06070c 100%);
-}
-.theme-nocturne .sidebar {
-  background: rgba(7, 8, 13, .9);
-  border-right-color: rgba(220, 229, 248, .075);
-  box-shadow: none;
 }
 .theme-nocturne .topbar {
   border-color: rgba(220, 229, 248, .09);

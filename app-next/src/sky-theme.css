@@ -165,21 +165,7 @@
 .theme-family-sky > .particle-field-cosmos,
 .theme-family-sky > .particle-field-backdrop { display: none; }
 
-/* ---------- Floating dock instead of a rail ---------- */
-.theme-family-sky.shell { grid-template-columns: 92px minmax(0, 1fr); }
-.theme-family-sky.theme-family-atlas .sidebar {
-  top: 12px;
-  height: calc(100dvh - 24px);
-  margin: 12px 0 12px 12px;
-  width: 76px;
-  padding: 12px 10px;
-  border: 0;
-  border-radius: 20px;
-  background: var(--surface-elevated);
-  box-shadow: none;
-  backdrop-filter: none;
-}
-.theme-family-sky .sidebar::after { display: none; }
+/* ---------- The shared inset rail uses this theme's navigation colours ---------- */
 .theme-family-sky .brand { box-shadow: none; width: 54px; height: 54px; margin: 0 auto 12px; border: 0; background: transparent; padding: 0; }
 .theme-family-sky .brand-logo { width: 44px; height: 44px; border-radius: 13px; }
 .theme-family-sky .nav-item,

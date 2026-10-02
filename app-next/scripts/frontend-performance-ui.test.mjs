@@ -71,7 +71,7 @@ test("decorative canvases stop when hidden, unfocused, or outside the viewport",
 
 test("the Skill universe rotates slowly only while the homepage is active", () => {
   assert.match(universe, /hasInteractiveMotion/);
-  assert.match(universe, /const ambientInterval = runtime\.drawMs > 18 \? 1000 \/ 20 : 1000 \/ 30/);
+  assert.match(universe, /const ambientInterval = runtime\.drawMs > 18 \? 1000 \/ 30 : 0/);
   assert.match(universe, /!hasInteractiveMotion\(\) && time - lastDrawAt < ambientInterval - 1/);
   assert.match(universe, /frame = window\.requestAnimationFrame\(draw\)/);
   assert.match(universe, /if \(reducedMotion && !urgent\) return/);

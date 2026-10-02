@@ -39,6 +39,14 @@
   pointer-events: none;
 }
 
+.skill-universe-labels { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; }
+.skill-universe-label {
+  position: absolute; top: 0; left: 0; box-sizing: border-box; display: flex;
+  align-items: center; white-space: pre; border-radius: 7px; line-height: 1;
+  font-family: var(--ui-font); letter-spacing: normal; will-change: transform, opacity; opacity: 0;
+}
+.skill-universe-label-owner { font-size: calc(1em - 1px); font-weight: 400; opacity: .55; }
+
 .skill-universe.is-promoting-cache .skill-universe-canvas {
   animation: universe-cache-promote 760ms cubic-bezier(.16, 1, .3, 1);
 }

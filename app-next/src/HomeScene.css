@@ -16,9 +16,6 @@
 
 /* The scene spans the window; navigation and readouts share one safe gutter. */
 .theme-family-atlas.page-dashboard { --home-rail: 92px; --home-gap: 12px; }
-.theme-family-atlas.page-dashboard .sidebar { background: transparent; border: 0; box-shadow: none; backdrop-filter: none; }
-.theme-family-atlas.page-dashboard .sidebar::after { display: none; }
-.theme-family-atlas.page-dashboard .sidebar-footer { border-color: transparent; }
 .theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar { left: calc(50% + var(--home-rail) / 2); width: calc(100% - var(--home-rail) - 2 * var(--home-gap)); bottom: max(var(--home-gap), env(safe-area-inset-bottom)); border: 0; box-shadow: none; }
 .theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar .metric { border: 0; background: transparent; box-shadow: none; }
 .theme-family-atlas.page-dashboard .home-visual-switch { left: calc(var(--home-rail) + 24px); }
@@ -31,10 +28,9 @@
 @media (min-width: 821px) {
   .theme-family-atlas.page-dashboard .workspace { grid-column: 1 / -1; grid-row: 1; }
   .theme-family-atlas.page-dashboard .sidebar { grid-column: 1; grid-row: 1; }
+  .theme-family-atlas.page-dashboard .dashboard-hero-inner { padding-left: calc(var(--home-rail) + clamp(34px, 5.4vw, 88px)); }
   .theme-family-atlas.page-dashboard .topbar { margin: var(--home-gap) var(--home-gap) 0 calc(var(--home-rail) + var(--home-gap)); top: var(--home-gap); }
-  .theme-family-sky.theme-family-atlas.page-dashboard .sidebar { height: calc(100dvh - 24px); }
 }
 @media (max-width: 820px) {
   .theme-family-atlas.page-dashboard { --home-rail: 0px; }
-  .theme-family-sky.theme-family-atlas .sidebar { height: 66px; width: calc(100% - 24px); margin: 12px; }
 }
