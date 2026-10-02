@@ -4,6 +4,8 @@ import { test } from "node:test";
 
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+// The star map stylesheet ships with its lazily loaded chunk.
+const universeStyles = readFileSync(new URL("../src/SkillUniverse.css", import.meta.url), "utf8");
 const universe = readFileSync(new URL("../src/SkillUniverse.tsx", import.meta.url), "utf8");
 const translations = readFileSync(new URL("../src/i18n.ts", import.meta.url), "utf8");
 const tauriConfig = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
@@ -56,7 +58,7 @@ test("universe starts from a bounded real cache and promotes to the SQLite model
   assert.match(universe, /raw\.length > 2_000_000/);
   assert.match(universe, /data-universe-state=/);
   assert.match(universe, /writeUniverseModelCache\(liveModel\)/);
-  assert.match(styles, /@keyframes universe-cache-promote/);
+  assert.match(universeStyles, /@keyframes universe-cache-promote/);
 });
 
 test("star map backdrop is a quiet star field with great circles, no aura or meteors", () => {

@@ -19,8 +19,8 @@ import { Icon, type IconName } from "./icons";
 import { CountUp, ParticleField, useCardGlow } from "./effects";
 import { LANG_OPTIONS, type Lang, categoryName, getLang, initialLang, setLang, t } from "./i18n";
 import { localizedSkillDescription } from "./localizedDescriptions";
-import { SkillUniverse } from "./SkillUniverse";
 const SkillArchipelago = lazy(() => import("./SkillArchipelago").then(module => ({ default: module.SkillArchipelago })));
+const SkillUniverse = lazy(() => import("./SkillUniverse").then(module => ({ default: module.SkillUniverse })));
 import { sourcePresentation } from "./sourceIdentity";
 import { buildSkyIslands, isRouterHubSkill as modelIsRouterHubSkill, skillBelongsToSource as modelSkillBelongsToSource } from "./skyIslandModel";
 import { PromptLauncherAction } from "./PromptLauncherAction";
@@ -2508,6 +2508,7 @@ function Dashboard({
           </Suspense>
         )}
         {atlasMode && homeVisual === "universe" && (
+          <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
           <SkillUniverse
             centered={!atlasIntroVisible}
             lightTheme={isLightTheme(theme)}
@@ -2526,6 +2527,7 @@ function Dashboard({
                     : "biolume"
             }
           />
+          </Suspense>
         )}
         {!atlasMode && (
           <ParticleField

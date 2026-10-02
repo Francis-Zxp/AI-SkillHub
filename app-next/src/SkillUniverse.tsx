@@ -10,6 +10,7 @@ import { Icon } from "./icons";
 import { categoryName, getLang, t } from "./i18n";
 import { localizedSkillDescription } from "./localizedDescriptions";
 import { sourcePresentation } from "./sourceIdentity";
+import "./SkillUniverse.css";
 import type { LegacySnapshot, SkillCard, SourceCard, SourcePopularityCard } from "./types";
 
 export type SkillUniverseMode = "relations" | "sources" | "categories";

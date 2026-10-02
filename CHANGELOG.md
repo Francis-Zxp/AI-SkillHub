@@ -2,6 +2,16 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.8 - 2026-10-02 - Complete source updates, Sky theme and rebuilt sky islands
+
+- Sparse-checkout sources re-reconcile their scope after every pull, so Skills added upstream (and the small directories they reference) are materialised; local edits are kept and nothing is hard-reset. Import and update share the same rules.
+- "Update all sources" is a resumable run with per-source outcomes (updated, unchanged, pinned, local changes, failed, pending), check times and counts, automatic continuation within a bounded number of rounds and a stop control; tracking branches and upstream default-branch changes are shown. A UTF-8 BOM in the sync summary no longer turns partial syncs into "complete".
+- GitHub sources use project-first `repo--owner` names; a previewed, resumable and reversible migration keeps categories, notes, ratings, enabled state and usage, without inventing aliases for old invocation names.
+- Origin MCP install-and-connect: isolated venv, pinned origin-mcp 0.1.4, previewed and backed-up host configuration, staged verification (environment, process, MCP handshake, Origin bridge, one read-only call) bound to the app version.
+- Sky islands rebuilt from bundled, licensed assets (Quaternius CC0 kits, Poly by Google gull CC-BY 3.0) with original terrain, hanging-rock geology, cloud sea, themed biomes and life animation; screen-space layout and labels; pause, low-power, reduced-motion and WebGL-loss fallbacks.
+- Star map redesigned: quiet star field, restrained category colours, explicit hover/selected/neighbour/muted states, collision-free project-first labels, click to select.
+- New default "Sky · Dusk / Day" theme family; hero slogan and decorative English labels removed. Public updater manifest unchanged (3.2.4).
+
 ## 3.2.7 - 2026-10-01 - Category sky islands and documented MCP imports (in progress)
 
 - Replaces the flat island home with a locally bundled Three.js r160 scene and original procedural island models. Each island represents a user category; its area reflects Skills and Prompt-source counts, with stable layouts and an unfiled category.
