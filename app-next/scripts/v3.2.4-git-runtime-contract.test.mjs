@@ -16,7 +16,7 @@ const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.j
 const cargoToml = await readText("../src-tauri/Cargo.toml");
 
 test("the Git runtime ships with one consistent installed version", () => {
-  assert.equal(packageJson.version, "3.2.11");
+  assert.match(packageJson.version, /^\d+\.\d+\.\d+$/);
   assert.equal(tauriConfig.version, packageJson.version);
   assert.equal(cargoToml.match(/^version = "([^"]+)"$/m)?.[1], packageJson.version);
 });

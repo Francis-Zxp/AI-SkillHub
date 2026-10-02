@@ -16,6 +16,9 @@
 
 /* The scene spans the window; navigation and readouts share one safe gutter. */
 .theme-family-atlas.page-dashboard { --home-rail: 92px; --home-gap: 12px; }
+.theme-family-atlas.page-dashboard .sidebar { background: transparent; border: 0; box-shadow: none; backdrop-filter: none; }
+.theme-family-atlas.page-dashboard .sidebar::after { display: none; }
+.theme-family-atlas.page-dashboard .sidebar-footer { border-color: transparent; }
 .theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar { left: calc(50% + var(--home-rail) / 2); width: calc(100% - var(--home-rail) - 2 * var(--home-gap)); bottom: max(var(--home-gap), env(safe-area-inset-bottom)); border: 0; box-shadow: none; }
 .theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar .metric { border: 0; background: transparent; box-shadow: none; }
 .theme-family-atlas.page-dashboard .home-visual-switch { left: calc(var(--home-rail) + 24px); }
