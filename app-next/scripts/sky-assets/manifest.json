@@ -40,6 +40,22 @@
       "file": "gull-flying-b.glb",
       "attribution": "Flying gull by Poly by Google, CC-BY 3.0 (https://creativecommons.org/licenses/by/3.0/), via Poly Pizza. Re-exported with optimised geometry; wings animated in a shader.",
       "sha256": ""
+    },
+    "animals": {
+      "pack": "Farm Animals Pack",
+      "author": "Quaternius",
+      "license": "CC0 1.0",
+      "url": "https://quaternius.com/packs/farmanimals.html",
+      "file": "Farm Animals by @Quaternius.zip",
+      "models": [
+        "Sheep",
+        "Pig",
+        "Cow",
+        "Llama",
+        "Pug",
+        "Horse"
+      ],
+      "sha256": ""
     }
   },
   "textures": [
@@ -168,49 +184,6 @@
     }
   ],
   "libraries": {
-    "nature": {
-      "dir": "nature",
-      "models": [
-        "CommonTree_1",
-        "CommonTree_2",
-        "CommonTree_3",
-        "CommonTree_4",
-        "CommonTree_5",
-        "Pine_1",
-        "Pine_2",
-        "Pine_3",
-        "Pine_4",
-        "Pine_5",
-        "TwistedTree_1",
-        "DeadTree_1",
-        "Bush_Common",
-        "Bush_Common_Flowers",
-        "Fern_1",
-        "Plant_1",
-        "Plant_1_Big",
-        "Plant_7",
-        "Plant_7_Big",
-        "Clover_1",
-        "Flower_3_Group",
-        "Flower_4_Group",
-        "Flower_3_Single",
-        "Flower_4_Single",
-        "Grass_Common_Short",
-        "Grass_Common_Tall",
-        "Grass_Wispy_Short",
-        "Rock_Medium_1",
-        "Rock_Medium_2",
-        "Rock_Medium_3",
-        "RockPath_Round_Small_1",
-        "RockPath_Round_Small_2",
-        "RockPath_Round_Small_3",
-        "Mushroom_Common",
-        "Mushroom_Laetiporus"
-      ],
-      "dropMaps": [
-        "normalTexture"
-      ]
-    },
     "props": {
       "dir": "props",
       "models": [

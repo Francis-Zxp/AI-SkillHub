@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head><meta charset="UTF-8" /><title>FBX to GLB</title></head>
+  <body>
+    <script type="module">
+      // Dev tool: converts the CC0 Quaternius farm animals (FBX) to GLB in the
+      // browser with three's own loader and exporter. window.convert(name)
+      // resolves to { base64, animations, meshes }.
+      import * as THREE from "three";
+      import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+      import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
+      window.convert = async name => {
+        const object = await new FBXLoader().loadAsync(`/lab/.out/fbx/${name}.fbx`);
+        object.name = name;
+        const meshes = [];
+        object.traverse(node => {
+          if (node.isMesh) {
+            meshes.push({ name: node.name, skinned: Boolean(node.isSkinnedMesh), materials: (Array.isArray(node.material) ? node.material : [node.material]).map(m => [m.name, m.color?.getHexString()]) });
+          }
+        });
+        const glb = await new GLTFExporter().parseAsync(object, { binary: true, animations: object.animations, onlyVisible: true });
+        const bytes = new Uint8Array(glb);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+        return { base64: btoa(binary), animations: object.animations.map(clip => [clip.name, Number(clip.duration.toFixed(2))]), meshes };
+      };
+      document.body.dataset.ready = "1";
+    </script>
+  </body>
+</html>

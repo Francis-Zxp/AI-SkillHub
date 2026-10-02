@@ -1,33 +1,38 @@
-// Each category island gets a designed theme chosen from its name (falling
-// back to a stable choice from its id), and a deterministic decoration plan.
-// Composition rules: the hero building sits toward the back so the side
-// facing the camera stays open; no tree stands between the camera and the
-// building; a worn path leads from the door; vegetation avoids paths, ponds
-// and building pads; rim rocks are embedded, never set on top of the grass.
+// Each category island gets a designed cartoon theme chosen from its name
+// (falling back to a stable choice from its id) and a deterministic plan.
+// Composition rules: the house sits toward the back so the side facing the
+// camera stays open; no tree stands in front of it; a worn path leads from
+// the door; ponds can spill over the edge as a waterfall; animals graze in
+// the open grass; nothing stands on paths, ponds or building pads.
 import { IslandShape } from "./terrain";
 import type { Pad, PathLine, Pond } from "./terrain";
 import { hashString, seededRandom, smoothstep } from "./noise";
 
 export type ThemeId = "scholar" | "observatory" | "workshop" | "orchard" | "garden" | "meadow";
+export type AnimalName = "Sheep" | "Pig" | "Cow" | "Llama" | "Pug" | "Horse";
 
 type Theme = {
   id: ThemeId;
   match: RegExp | null;
   buildings: string[];
+  roof: string;
   trees: string[];
   treeDensity: number;
+  leaves: string[];
   bushes: string[];
   props: string[];
   pond: boolean;
+  waterfall: boolean;
   flowers: number;
+  flowerColors: string[];
   rocks: number;
-  walker: boolean;
+  rockColor: string;
   mushrooms: boolean;
-  /** Ground colour: HSL offsets on the palette's grass, and how much dry grass. */
+  animals: AnimalName[];
+  villager: boolean;
+  /** Ground: HSL offsets on the palette's grass, and a path colour. */
   grass: [number, number, number];
-  dry: number;
-  /** Leaf colours of the crowns, in morning light (sRGB). */
-  leaves: string[];
+  path?: string;
 };
 
 const THEMES: Theme[] = [
@@ -35,116 +40,136 @@ const THEMES: Theme[] = [
     id: "scholar",
     match: /写作|写|论文|paper|writ|润色|文稿|essay|text|book|阅读|书|翻译|报告|report|slide|ppt|演示/gi,
     buildings: ["TownHouse", "Cottage"],
-    trees: ["CommonTree_1", "CommonTree_2", "CommonTree_3"],
+    roof: "#d4643c",
+    trees: ["round-11", "round-23", "round-37", "poplar"],
     treeDensity: 1,
-    bushes: ["Bush_Common_Flowers", "Bush_Common"],
-    props: ["Bench", "Stall_Empty", "Book_Stack_1", "Barrel", "Bucket_Wooden_1", "BookStand"],
+    leaves: ["#f0a03c", "#e8783a", "#d65a34", "#f2c14a", "#9ccc58"],
+    bushes: ["bush-3", "bush-8"],
+    props: ["Bench", "BookStand", "Book_Stack_1", "Stall_Empty", "Barrel", "Bucket_Wooden_1"],
     pond: true,
+    waterfall: true,
     flowers: 1,
-    rocks: 3,
-    walker: true,
+    flowerColors: ["#ffffff", "#ffd45a", "#f28a6a"],
+    rocks: 2,
+    rockColor: "#b9b2a8",
     mushrooms: false,
-    grass: [-0.03, 0.02, 0.02],
-    dry: 0.75,
-    leaves: ["#e0913f", "#d9a53b", "#c8643a", "#e6b552", "#d77f45", "#a9c55c"]
+    animals: ["Pug"],
+    villager: true,
+    grass: [-0.02, 0.02, 0.02]
   },
   {
     id: "observatory",
     match: /调研|研究|文献|research|idea|survey|science|科研|实验|探索|综述|literature/gi,
     buildings: ["Tower"],
-    trees: ["Pine_1", "Pine_2", "Pine_3", "Pine_4"],
+    roof: "#4f78a8",
+    trees: ["pine-5", "pine-9", "pine-5", "poplar"],
     treeDensity: 1.15,
-    bushes: ["Bush_Common", "Fern_1"],
-    props: ["Chest_Wood", "BookStand", "Banner_1", "Crate_Wooden", "Scroll_1"],
+    leaves: ["#3f9a7a", "#2f8a6c", "#56a884", "#4c9466"],
+    bushes: ["bush-3"],
+    props: ["Chest_Wood", "BookStand", "Banner_1", "Scroll_1", "Crate_Wooden"],
     pond: false,
-    flowers: 0.45,
+    waterfall: false,
+    flowers: 0.5,
+    flowerColors: ["#ffffff", "#a9c4ff"],
     rocks: 6,
-    walker: true,
+    rockColor: "#a9b0ba",
     mushrooms: true,
-    grass: [0.05, -0.16, 0.03],
-    dry: 0.1,
-    leaves: ["#7fae74", "#6f9f78", "#8bb67a", "#76a98a"]
+    animals: ["Llama"],
+    villager: true,
+    grass: [0.05, -0.12, 0.02]
   },
   {
     id: "workshop",
     match: /软件|代码|code|dev|工程|engineer|software|tool|工具|自动|agent|程序|开发|跑/gi,
     buildings: ["Workshop"],
-    trees: ["Pine_2", "Pine_5", "CommonTree_5"],
+    roof: "#c2553f",
+    trees: ["poplar", "pine-9", "round-37"],
     treeDensity: 0.8,
-    bushes: ["Bush_Common", "Plant_1_Big"],
-    props: ["Anvil_Log", "Workbench", "Crate_Wooden", "Crate_Wooden", "Barrel", "Barrel", "Stall_Cart_Empty", "Bucket_Wooden_1"],
+    leaves: ["#8fbf4a", "#a4c45a", "#6fae4a"],
+    bushes: ["bush-8"],
+    props: ["Anvil_Log", "Workbench", "Crate_Wooden", "Barrel", "Stall_Cart_Empty", "Crate_Wooden", "Barrel"],
     pond: true,
+    waterfall: false,
     flowers: 0.4,
+    flowerColors: ["#ffd45a"],
     rocks: 4,
-    walker: true,
+    rockColor: "#b8aa98",
     mushrooms: false,
-    grass: [-0.045, -0.12, 0.04],
-    dry: 1.1,
-    leaves: ["#a7b65a", "#b5b866", "#95ad55"]
+    animals: ["Horse"],
+    villager: true,
+    grass: [-0.04, -0.08, 0.03],
+    path: "#d9b98a"
   },
   {
     id: "orchard",
     match: /数据|data|分析|analys|stat|统计|表格|可视化/gi,
     buildings: ["Cottage"],
-    trees: ["CommonTree_4", "CommonTree_1"],
+    roof: "#5e9a5a",
+    trees: ["round-11", "round-23", "round-37"],
     treeDensity: 1.25,
-    bushes: ["Bush_Common_Flowers"],
+    leaves: ["#7cc650", "#6ab848", "#92d05a"],
+    bushes: ["bush-3", "bush-8"],
     props: ["Barrel_Apples", "FarmCrate_Apple", "FarmCrate_Carrot", "Stall_Cart_Empty", "Bench"],
     pond: false,
+    waterfall: false,
     flowers: 0.7,
+    flowerColors: ["#ffffff", "#ff8a8a"],
     rocks: 2,
-    walker: true,
+    rockColor: "#b9b2a8",
     mushrooms: false,
-    grass: [0.0, 0.1, 0.0],
-    dry: 0,
-    leaves: ["#9fd056", "#8cc84f", "#b2d65e"]
+    animals: ["Pig", "Cow"],
+    villager: true,
+    grass: [0, 0.08, 0]
   },
   {
     id: "garden",
     match: /绘|图|figure|plot|chart|design|视觉|美术|art|ui|界面|画|配色|前端/gi,
     buildings: ["Cottage"],
-    trees: ["TwistedTree_1", "CommonTree_4", "CommonTree_2"],
-    treeDensity: 0.75,
-    bushes: ["Bush_Common_Flowers", "Bush_Common_Flowers", "Plant_7_Big"],
-    props: ["Bench", "Pot_1", "Vase_2", "Bucket_Wooden_1", "FarmCrate_Empty"],
+    roof: "#d65f7a",
+    trees: ["round-11", "round-37", "round-23"],
+    treeDensity: 0.85,
+    leaves: ["#f4a6c0", "#f7c3d4", "#ee8fb0", "#ffffff", "#a6d36a"],
+    bushes: ["bush-3", "bush-8"],
+    props: ["Bench", "Pot_1", "Vase_2", "Bucket_Wooden_1"],
     pond: true,
-    flowers: 2.4,
+    waterfall: true,
+    flowers: 2.6,
+    flowerColors: ["#f47ca0", "#ffd45a", "#ffffff", "#b58cf0", "#ff9a5a"],
     rocks: 2,
-    walker: true,
+    rockColor: "#c2b8b0",
     mushrooms: false,
-    grass: [0.02, 0.0, 0.04],
-    dry: 0,
-    leaves: ["#f2a7c0", "#f5bfd0", "#eeb6d6", "#f7d7e2", "#e99ab5", "#a3c75b"]
+    animals: ["Sheep"],
+    villager: true,
+    grass: [0.02, 0, 0.03]
   },
   {
     id: "meadow",
     match: /未归档|unfiled|其他|其它|other|misc|未分类|收件|inbox/gi,
     buildings: [],
-    trees: ["CommonTree_2", "Pine_5", "DeadTree_1"],
+    roof: "#c2553f",
+    trees: ["round-23", "pine-9", "bush-3"],
     treeDensity: 0.7,
-    bushes: ["Bush_Common", "Fern_1", "Plant_1"],
-    props: ["Stall_Cart_Empty", "Bench"],
+    leaves: ["#8cc85a", "#a8d060", "#6ab45a"],
+    bushes: ["bush-3", "bush-8"],
+    props: ["Bench"],
     pond: true,
-    flowers: 1.2,
-    rocks: 5,
-    walker: false,
+    waterfall: true,
+    flowers: 1.4,
+    flowerColors: ["#ffffff", "#ffd45a", "#f47ca0"],
+    rocks: 4,
+    rockColor: "#b9b2a8",
     mushrooms: true,
-    grass: [0.0, -0.05, 0.03],
-    dry: 0.35,
-    leaves: ["#a3c75b", "#b4c96a", "#98bd5c"]
+    animals: ["Sheep", "Cow"],
+    villager: false,
+    grass: [0, -0.03, 0.03]
   }
 ];
 
-export type ThemeTone = { grass: [number, number, number]; dry: number };
+export type ThemeTone = { grass: [number, number, number]; path?: string };
 
 export function themeTone(theme: ThemeId): ThemeTone {
   const spec = THEMES.find(item => item.id === theme) ?? THEMES[0];
-  return { grass: spec.grass, dry: spec.dry };
-}
-
-function hexToRgb(hex: string): [number, number, number] {
-  const value = Number.parseInt(hex.slice(1), 16);
-  return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
+  return { grass: spec.grass, path: spec.path };
 }
 
 /** Themes ranked by how many of their keywords the category name contains. */
@@ -184,7 +209,7 @@ export function assignThemes(islands: Array<{ id: string; name: string }>): Map<
 }
 
 export type Placement = {
-  library: "nature" | "props";
+  library: "kit" | "props";
   model: string;
   x: number;
   z: number;
@@ -194,11 +219,13 @@ export type Placement = {
   height?: number;
   /** How far to push the model into the ground (fraction of its height). */
   sink: number;
-  /** Leaf colour of this crown in morning light (sRGB 0..1). */
-  tint?: [number, number, number];
+  /** Instance colour for tinted kit parts (sRGB hex). */
+  tint?: string;
 };
 
-export type BuildingPlacement = { model: string; x: number; z: number; yaw: number; scale: number };
+export type BuildingPlacement = { model: string; x: number; z: number; yaw: number; scale: number; roof: string };
+export type Waterfall = { x: number; z: number; angle: number; width: number };
+export type AnimalPlacement = { name: AnimalName; x: number; z: number; seed: number };
 
 export type IslandPlan = {
   theme: ThemeId;
@@ -207,6 +234,8 @@ export type IslandPlan = {
   buildings: BuildingPlacement[];
   placements: Placement[];
   walkers: Array<Array<[number, number]>>;
+  animals: AnimalPlacement[];
+  waterfall: Waterfall | null;
 };
 
 /** Footprints (width x depth) of the composed buildings, unscaled. */
@@ -226,6 +255,7 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
   const range = (min: number, max: number) => min + random() * (max - min);
   const pick = <T,>(items: T[]) => items[Math.floor(random() * items.length)];
   const buildingScale = Math.min(0.56, Math.max(0.36, 0.3 + radius * 0.025));
+  const unit = buildingScale / 0.45;
   const occupied: Occupant[] = [];
   const free = (x: number, z: number, r: number) =>
     occupied.every(item => Math.hypot(x - item.x, z - item.z) > item.r + r) && shape.normalizedDistance(x, z) < 0.86;
@@ -242,7 +272,7 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
       const z = index === 0 ? range(-0.34, -0.12) * radius : range(-0.2, 0.15) * radius;
       if (!free(x, z, half + 0.4) || shape.normalizedDistance(x, z) > 0.7 - half / radius * 0.5) continue;
       const yaw = range(-0.32, 0.32) + (index === 1 ? (x > 0 ? -0.35 : 0.35) : 0);
-      buildings.push({ model, x, z, yaw, scale: buildingScale });
+      buildings.push({ model, x, z, yaw, scale: buildingScale, roof: spec.roof });
       pads.push({ x, z, radius: half * 0.92 });
       occupied.push({ x, z, r: half + 0.2 });
       break;
@@ -250,22 +280,28 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
   }
   shape.pads = pads;
 
-  // 2. A pond on larger islands of water-loving themes.
+  // 2. A pond; on waterfall themes it sits by the rim on the side facing the
+  // camera and spills over the edge.
   const ponds: Pond[] = [];
-  if (spec.pond && radius >= 5.5) {
-    const pondRadius = Math.min(2.6, Math.max(1, radius * 0.17));
-    for (let attempt = 0; attempt < 40; attempt++) {
-      const angle = range(0, Math.PI * 2), distance = range(0.25, 0.5) * radius;
+  let waterfall: Waterfall | null = null;
+  if (spec.pond && radius >= 5) {
+    const pondRadius = Math.min(2.4, Math.max(1, radius * 0.17));
+    for (let attempt = 0; attempt < 60; attempt++) {
+      const spill = spec.waterfall && attempt < 40;
+      const angle = spill ? range(0.35, 1.2) * (random() < 0.5 ? 1 : -1) + Math.PI / 2 : range(0, Math.PI * 2);
+      const rim = shape.rimRadius(angle);
+      const distance = spill ? rim - pondRadius * 1.05 : range(0.25, 0.5) * radius;
       const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
-      if (!free(x, z, pondRadius + 0.6)) continue;
-      ponds.push({ x, z, radius: pondRadius, depth: 0.45 });
+      if (!occupied.every(item => Math.hypot(x - item.x, z - item.z) > item.r + pondRadius + 0.6)) continue;
+      ponds.push({ x, z, radius: pondRadius, depth: 0.4 });
       occupied.push({ x, z, r: pondRadius + 0.3 });
+      if (spill) waterfall = { x: Math.cos(angle) * rim, z: Math.sin(angle) * rim, angle, width: pondRadius * 0.9 };
       break;
     }
   }
   shape.ponds = ponds;
 
-  // 3. Worn paths from each door: toward the open front rim, and to the pond.
+  // 3. Worn paths from each door toward the open front rim and to the pond.
   const paths: PathLine[] = [];
   const walkers: Array<Array<[number, number]>> = [];
   const pathWidth = 0.75 + radius * 0.035;
@@ -286,7 +322,7 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
       paths.push({ points: [door, [(door[0] + shore[0]) / 2, (door[1] + shore[1]) / 2], shore], width: pathWidth * 0.8 });
       route.push(middle, door, shore);
     }
-    if (spec.walker) walkers.push(route);
+    if (spec.villager) walkers.push(route);
   }
   shape.paths = paths;
 
@@ -298,13 +334,8 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
     const [width] = BUILDING_FOOTPRINT[building.model];
     return z > building.z && Math.abs(x - building.x) < width * building.scale * 0.6 + margin && z - building.z < radius * 0.75;
   });
-  const leafTint = (): [number, number, number] => {
-    const [r, g, b] = hexToRgb(pick(spec.leaves));
-    const light = range(0.9, 1.08), warm = range(-0.04, 0.04);
-    return [Math.min(1, r * light * (1 + warm)), Math.min(1, g * light), Math.min(1, b * light * (1 - warm))];
-  };
 
-  // 4. Props near the door and along the path, at building scale.
+  // 4. Props by the door, at building scale.
   if (buildings.length) {
     const building = buildings[0];
     const [width, depth] = BUILDING_FOOTPRINT[building.model];
@@ -336,13 +367,12 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
   }
 
   // 5. Trees: framing the building from the back and sides, never in front.
-  const treeTarget = Math.round(spec.treeDensity * radius * radius * 0.11) + (radius < 3 ? 1 : 2);
-  const orchard = spec.id === "orchard";
+  const treeTarget = Math.round(spec.treeDensity * radius * radius * 0.085) + (radius < 3 ? 1 : 2);
   let trees = 0;
   for (let attempt = 0; attempt < treeTarget * 30 && trees < treeTarget; attempt++) {
     let x: number, z: number;
-    if (orchard && attempt < treeTarget * 12) {
-      const spacing = 2.3 * buildingScale / 0.45;
+    if (spec.id === "orchard" && attempt < treeTarget * 12) {
+      const spacing = 2.4 * unit;
       x = (Math.round(range(-radius, radius) / spacing) + 0.5) * spacing;
       z = (Math.round(range(-radius, radius) / spacing) + 0.5) * spacing;
     } else {
@@ -350,93 +380,84 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
       x = Math.cos(angle) * distance;
       z = Math.sin(angle) * distance;
     }
-    const spread = 1.05 * buildingScale / 0.45;
+    const spread = 1.1 * unit;
     if (shape.normalizedDistance(x, z) > 0.8 || !free(x, z, spread) || !clearOf(x, z, 0.8) || blocksView(x, z, 0.6)) continue;
-    // Prefer the back half so the view toward the camera stays open.
-    if (z > radius * 0.3 && random() < 0.65) continue;
+    if (z > radius * 0.3 && random() < 0.6) continue;
     const model = pick(spec.trees);
-    const heightWanted = range(2.3, 3.6) * buildingScale / 0.45 * (/Twisted/.test(model) ? 1.35 : 1);
-    placements.push({ library: "nature", model, x, z, yaw: range(0, Math.PI * 2), scale: 1, height: heightWanted, sink: 0.012, tint: leafTint() });
+    placements.push({ library: "kit", model, x, z, yaw: range(0, Math.PI * 2), scale: 1, height: range(2.1, 3.1) * unit, sink: 0.02, tint: pick(spec.leaves) });
     occupied.push({ x, z, r: spread });
     trees++;
   }
 
-  // 6. Bushes and small plants around trees and along the building sides.
-  const bushTarget = Math.round(radius * 1.3);
+  // 6. Bushes around trees and along the building sides.
+  const bushTarget = Math.round(radius * 0.9);
   for (let attempt = 0, count = 0; attempt < bushTarget * 25 && count < bushTarget; attempt++) {
     const angle = range(0, Math.PI * 2), distance = Math.sqrt(random()) * radius * 0.85;
     const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
-    if (shape.normalizedDistance(x, z) > 0.86 || !free(x, z, 0.35) || !clearOf(x, z, 0.35)) continue;
-    const model = pick(spec.bushes);
-    placements.push({ library: "nature", model, x, z, yaw: range(0, Math.PI * 2), scale: range(0.45, 0.75) * buildingScale / 0.45, sink: 0.05, tint: leafTint() });
-    occupied.push({ x, z, r: 0.45 });
+    if (shape.normalizedDistance(x, z) > 0.86 || !free(x, z, 0.4) || !clearOf(x, z, 0.35)) continue;
+    placements.push({ library: "kit", model: pick(spec.bushes), x, z, yaw: range(0, Math.PI * 2), scale: range(0.8, 1.2) * unit, sink: 0.08, tint: pick(spec.leaves) });
+    occupied.push({ x, z, r: 0.5 });
     count++;
   }
 
-  // 7. Rim rocks: embedded about a third into the ground at the edge.
+  // 7. Rocks, half sunk near the rim.
   const rockCount = Math.max(1, Math.round(spec.rocks * radius / 8));
   for (let attempt = 0, count = 0; attempt < rockCount * 20 && count < rockCount; attempt++) {
     const angle = range(0, Math.PI * 2);
-    const distance = shape.rimRadius(angle) * range(0.72, 0.86);
+    const distance = shape.rimRadius(angle) * range(0.7, 0.85);
     const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
     if (!free(x, z, 0.8) || !clearOf(x, z, 0.5)) continue;
-    placements.push({ library: "nature", model: pick(["Rock_Medium_1", "Rock_Medium_2", "Rock_Medium_3"]), x, z, yaw: range(0, Math.PI * 2), scale: range(0.55, 1.05) * buildingScale / 0.45, sink: 0.34 });
+    placements.push({ library: "kit", model: pick(["rock-1", "rock-2", "rock-4"]), x, z, yaw: range(0, Math.PI * 2), scale: range(0.9, 1.6) * unit, sink: 0.3, tint: spec.rockColor });
     occupied.push({ x, z, r: 0.9 });
     count++;
   }
-  // Stepping stones and pebbles along paths.
-  for (const path of paths) {
-    for (let index = 1; index < path.points.length; index++) {
-      const [ax, az] = path.points[index - 1], [bx, bz] = path.points[index];
-      const length = Math.hypot(bx - ax, bz - az);
-      for (let step = 0.6; step < length; step += range(1.1, 1.8)) {
-        const t = step / length;
-        const side = (random() - 0.5) * path.width * 0.3;
-        const x = ax + (bx - ax) * t + (az - bz) / length * side, z = az + (bz - az) * t + (bx - ax) / length * side;
-        if (shape.isInsidePond(x, z, 0.2) || shape.normalizedDistance(x, z) > 0.88) continue;
-        placements.push({ library: "nature", model: pick(["RockPath_Round_Small_1", "RockPath_Round_Small_2", "RockPath_Round_Small_3"]), x, z, yaw: range(0, Math.PI * 2), scale: range(0.4, 0.6) * buildingScale / 0.45, sink: 0.45 });
-      }
-    }
-  }
 
-  // 8. Flower patches.
-  const patches = Math.round(spec.flowers * (1 + radius * 0.35));
+  // 8. Flower beds.
+  const patches = Math.round(spec.flowers * (1 + radius * 0.3));
   for (let patch = 0; patch < patches; patch++) {
     const angle = range(0, Math.PI * 2), distance = Math.sqrt(random()) * radius * 0.72;
     const cx = Math.cos(angle) * distance, cz = Math.sin(angle) * distance;
-    const model = pick(["Flower_3_Group", "Flower_4_Group", "Flower_3_Single", "Flower_4_Single", "Clover_1"]);
-    const count = 3 + Math.floor(random() * 6);
+    const tint = pick(spec.flowerColors);
+    const count = 4 + Math.floor(random() * 6);
     for (let index = 0; index < count; index++) {
-      const x = cx + range(-0.9, 0.9), z = cz + range(-0.9, 0.9);
+      const x = cx + range(-0.8, 0.8), z = cz + range(-0.8, 0.8);
       if (shape.normalizedDistance(x, z) > 0.9 || !clearOf(x, z, 0.25) || !free(x, z, 0.05)) continue;
-      placements.push({ library: "nature", model, x, z, yaw: range(0, Math.PI * 2), scale: range(0.22, 0.34) * buildingScale / 0.45, sink: 0.03 });
+      placements.push({ library: "kit", model: "flower", x, z, yaw: range(0, Math.PI * 2), scale: range(0.9, 1.3) * unit, sink: 0.02, tint });
     }
   }
 
   // 9. Mushrooms in the shade of trees.
   if (spec.mushrooms) {
-    for (const tree of placements.filter(item => /Tree|Pine/.test(item.model)).slice(0, 6)) {
+    for (const tree of placements.filter(item => item.model.startsWith("pine") || item.model.startsWith("round")).slice(0, 6)) {
       const x = tree.x + range(-0.7, 0.7), z = tree.z + range(-0.7, 0.7);
       if (!clearOf(x, z, 0.2)) continue;
-      placements.push({ library: "nature", model: pick(["Mushroom_Common", "Mushroom_Laetiporus"]), x, z, yaw: range(0, Math.PI * 2), scale: range(0.3, 0.5) * buildingScale / 0.45, sink: 0.05 });
+      placements.push({ library: "kit", model: "mushroom", x, z, yaw: range(0, Math.PI * 2), scale: range(0.9, 1.4) * unit, sink: 0.04, tint: pick(["#e0503f", "#f08a3c"]) });
     }
   }
 
-  // 10. Grass: dense clumps everywhere that is not path, pond or floor, and
-  // a fuller band along the rim so the edge reads as an overhang.
-  const grassTarget = Math.min(700, Math.round(radius * radius * 5));
+  // 10. A few grass tufts to break the surface, denser along the rim.
+  const grassTarget = Math.min(140, Math.round(radius * radius * 1.1));
   for (let index = 0; index < grassTarget; index++) {
-    const rimBand = index % 4 === 0;
+    const rimBand = index % 3 === 0;
     const angle = range(0, Math.PI * 2);
-    const distance = rimBand ? shape.rimRadius(angle) * range(0.86, 0.985) : Math.sqrt(random()) * radius * 0.9;
+    const distance = rimBand ? shape.rimRadius(angle) * range(0.84, 0.95) : Math.sqrt(random()) * radius * 0.88;
     const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
     const worn = shape.pathWeight(x, z);
-    if (worn > 0.35 || shape.isInsidePond(x, z, 0.1)) continue;
+    if (worn > 0.3 || shape.isInsidePond(x, z, 0.1)) continue;
     if (pads.some(pad => Math.hypot(x - pad.x, z - pad.z) < pad.radius * 0.95)) continue;
-    const model = pick(["Grass_Common_Short", "Grass_Common_Short", "Grass_Common_Short", "Grass_Wispy_Short", "Grass_Common_Tall"]);
-    const fade = 1 - smoothstep(0.05, 0.35, worn);
-    placements.push({ library: "nature", model, x, z, yaw: range(0, Math.PI * 2), scale: range(0.2, 0.36) * fade * buildingScale / 0.45, sink: 0.08 });
+    placements.push({ library: "kit", model: pick(["grass-1", "grass-2"]), x, z, yaw: range(0, Math.PI * 2), scale: range(0.8, 1.3) * unit * (1 - smoothstep(0.05, 0.3, worn)), sink: 0.05, tint: "grass" });
   }
 
-  return { theme, shape, buildingScale, buildings, placements, walkers };
+  // 11. Animals graze in the open grass.
+  const animals: AnimalPlacement[] = [];
+  const animalCount = radius < 4.2 ? 1 : radius < 8 ? 2 : 3;
+  for (let attempt = 0; attempt < 80 && animals.length < animalCount && spec.animals.length; attempt++) {
+    const angle = range(0, Math.PI * 2), distance = Math.sqrt(random()) * radius * 0.6;
+    const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
+    if (!free(x, z, 0.8) || !clearOf(x, z, 0.6)) continue;
+    animals.push({ name: spec.animals[animals.length % spec.animals.length], x, z, seed: seed + attempt });
+    occupied.push({ x, z, r: 0.9 });
+  }
+
+  return { theme, shape, buildingScale, buildings, placements, walkers, animals, waterfall };
 }

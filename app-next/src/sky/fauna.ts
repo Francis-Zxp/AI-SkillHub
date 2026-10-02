@@ -1,13 +1,14 @@
-// Birds and villagers. Birds are the CC-BY gull mesh, instanced, with the
-// wings animated in the vertex shader (shoulder rotation, outer wing bending
-// more) in bursts of flapping and long glides; flocks bank into their turns.
-// Villagers are the rigged CC0 character walking a worn path, pausing at its
-// ends; their feet follow the same height function as the terrain mesh.
+// Birds, villagers and animals. Birds are the CC-BY gull mesh, instanced and
+// flat white, with the wings animated in the vertex shader in bursts of
+// flapping and long glides; flocks bank into their turns. Villagers walk a
+// worn path and pause at its ends. Animals wander their patch of grass:
+// walking where the rig has a walk cycle, hopping otherwise, grazing between.
+// Feet follow the same height function as the terrain mesh.
 import * as THREE from "three";
 import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { ModelTemplate } from "./assets";
-import { SHARED_UNIFORMS } from "./materials";
+import { SHARED_UNIFORMS, toonGradient } from "./materials";
 import { seededRandom } from "./noise";
 import type { IslandShape } from "./terrain";
 
@@ -15,9 +16,8 @@ import type { IslandShape } from "./terrain";
 const GULL_SHOULDER = 6;
 const GULL_SPAN = 45;
 
-function gullMaterial(source: THREE.MeshStandardMaterial) {
-  const material = source.clone();
-  material.side = THREE.DoubleSide;
+function gullMaterial() {
+  const material = new THREE.MeshToonMaterial({ gradientMap: toonGradient(), color: "#f7f8fa", side: THREE.DoubleSide });
   material.onBeforeCompile = shader => {
     shader.uniforms.uTime = SHARED_UNIFORMS.uTime;
     shader.vertexShader = shader.vertexShader
@@ -51,7 +51,7 @@ export type Flock = { mesh: THREE.InstancedMesh; update: (time: number) => void;
 
 export function createFlocks(template: ModelTemplate, bounds: THREE.Box3, count: number, seed: number, wingspan: number): Flock {
   const part = template.parts[0];
-  const material = gullMaterial(part.material as THREE.MeshStandardMaterial);
+  const material = gullMaterial();
   const geometry = part.geometry.clone();
   const seeds = new Float32Array(count);
   const random = seededRandom(seed);
@@ -185,6 +185,103 @@ export function createWalker(gltf: GLTF, shape: IslandShape, origin: THREE.Vecto
   place(route[0][0], route[0][1]);
   yaw = Math.atan2(route[1][0] - route[0][0], route[1][1] - route[0][1]);
   object.rotation.y = yaw;
+  return {
+    object,
+    update,
+    dispose() {
+      mixer.stopAllAction();
+      mixer.uncacheRoot(object);
+    }
+  };
+}
+
+/**
+ * An animal grazing around `home` (island-local XZ). It picks open spots
+ * within `range`, walks there (or hops, if its rig has no walk cycle), then
+ * stands and grazes for a while.
+ */
+export function createAnimal(
+  gltf: GLTF,
+  shape: IslandShape,
+  origin: THREE.Vector3,
+  home: [number, number],
+  range: number,
+  length: number,
+  seed: number,
+  isOpen: (x: number, z: number) => boolean
+): Walker {
+  const object = cloneSkinned(gltf.scene);
+  object.updateMatrixWorld(true);
+  // Precise: skinned vertices in their bind pose, not the raw geometry box.
+  const box = new THREE.Box3().setFromObject(object, true);
+  const size = box.getSize(new THREE.Vector3());
+  object.scale.setScalar(length / Math.max(0.01, Math.max(size.x, size.z)));
+  object.traverse(child => {
+    const mesh = child as THREE.Mesh;
+    if (mesh.isMesh) {
+      mesh.castShadow = true;
+      mesh.frustumCulled = false;
+    }
+  });
+  const mixer = new THREE.AnimationMixer(object);
+  const clip = (name: string) => gltf.animations.find(item => item.name.endsWith(`|${name}`));
+  const action = (name: string) => (clip(name) ? mixer.clipAction(clip(name)!) : null);
+  const idle = action("Idle");
+  const walk = action("WalkSlow") ?? action("Walk");
+  const hop = walk ? null : action("Jump");
+  const random = seededRandom(seed);
+  let current: THREE.AnimationAction | null = null;
+  const switchTo = (next: THREE.AnimationAction | null) => {
+    if (!next || next === current) return;
+    next.reset().play();
+    if (current) current.crossFadeTo(next, 0.3, false);
+    current = next;
+  };
+  let x = home[0], z = home[1], yaw = random() * Math.PI * 2;
+  let target: [number, number] | null = null;
+  let rest = 1 + random() * 4;
+  const speed = length * (walk ? 0.55 : 0.9);
+  const place = () => {
+    object.position.set(origin.x + x, origin.y + shape.heightAt(x, z), origin.z + z);
+    object.rotation.y = yaw;
+  };
+  const chooseTarget = () => {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const angle = random() * Math.PI * 2, distance = (0.3 + random() * 0.7) * range;
+      const tx = home[0] + Math.cos(angle) * distance, tz = home[1] + Math.sin(angle) * distance;
+      if (isOpen(tx, tz)) return [tx, tz] as [number, number];
+    }
+    return null;
+  };
+  switchTo(idle);
+  place();
+  const update = (delta: number) => {
+    mixer.update(delta);
+    if (!target) {
+      rest -= delta;
+      if (rest <= 0) {
+        target = chooseTarget();
+        rest = 3 + random() * 6;
+        if (target) switchTo(walk ?? hop ?? idle);
+      }
+      return;
+    }
+    const dx = target[0] - x, dz = target[1] - z;
+    const distance = Math.hypot(dx, dz);
+    if (distance < 0.05) {
+      target = null;
+      switchTo(idle);
+      return;
+    }
+    // Hoppers only move while in the air part of their hop.
+    const moving = walk ? 1 : current === hop && hop ? Math.max(0, Math.sin((hop.time / hop.getClip().duration) * Math.PI * 2)) : 0;
+    const step = Math.min(distance, speed * delta * (walk ? 1 : moving * 1.6));
+    x += (dx / distance) * step;
+    z += (dz / distance) * step;
+    const heading = Math.atan2(dx, dz);
+    yaw += Math.atan2(Math.sin(heading - yaw), Math.cos(heading - yaw)) * Math.min(1, delta * 5);
+    place();
+  };
   return {
     object,
     update,

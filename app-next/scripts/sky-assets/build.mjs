@@ -113,7 +113,7 @@ async function finish(document, label, file) {
   console.log(`${label}: ${(size / 1024).toFixed(0)} KiB, ${root.listScenes()[0].listChildren().length} models, ${root.listMeshes().length} meshes, ${root.listTextures().length} textures`);
 }
 
-const wanted = only.length ? only : [...Object.keys(manifest.libraries), "buildings", "villager", "gull", "textures"];
+const wanted = only.length ? only : ["props", "buildings", "villager", "gull", "animals"];
 
 if (wanted.includes("textures")) {
   // Tiling textures sampled in world space by the terrain shader.
@@ -169,4 +169,18 @@ if (wanted.includes("gull")) {
   await document.transform(dedup(), prune(), weld());
   await io.write(path.join(outDir, "gull.glb"), document);
   console.log(`gull: ${(fs.statSync(path.join(outDir, "gull.glb")).size / 1024).toFixed(0)} KiB`);
+}
+
+if (wanted.includes("animals")) {
+  // CC0 Quaternius farm animals, converted from FBX by convert-animals.cjs
+  // (expected in <assets-src>/animals). Skinned, so no quantization; the
+  // runtime merges each animal's material ranges into one mesh per colour.
+  const target = path.join(outDir, "animals");
+  fs.mkdirSync(target, { recursive: true });
+  for (const name of manifest.sources.animals.models) {
+    const document = await io.read(path.join(srcDir, "animals", `${name}.glb`));
+    await document.transform(dedup(), prune({ keepLeaves: true }));
+    await io.write(path.join(target, `${name}.glb`), document);
+    console.log(`animals/${name}: ${(fs.statSync(path.join(target, `${name}.glb`)).size / 1024).toFixed(0)} KiB, ${document.getRoot().listAnimations().length} animations`);
+  }
 }

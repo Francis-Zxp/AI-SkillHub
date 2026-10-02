@@ -131,6 +131,23 @@ const STAR_FIELD = Array.from({ length: 170 }, (_, index) => {
     twinkle: seed % 9 === 0
   };
 });
+// Count, size, angle and timing differ every session; none repeats a path.
+const METEOR_SESSION_SEED = randomSessionSeed();
+const METEORS = Array.from({ length: 4 + (METEOR_SESSION_SEED % 9) }, (_, index) => {
+  const seed = stableHash(`universe-meteor:${METEOR_SESSION_SEED}:${index}`);
+  return {
+    delay: (seed % 10_000) / 10_000,
+    duration: 0.05 + ((seed >>> 4) % 60) / 1000,
+    direction: ((seed >>> 6) & 1) === 0 ? 1 : -1,
+    slope: 0.25 + ((seed >>> 16) % 50) / 100,
+    head: 0.6 + ((seed >>> 8) % 14) / 10,
+    length: 30 + ((seed >>> 10) % 90),
+    width: 0.5 + ((seed >>> 20) % 10) / 10,
+    opacity: 0.35 + ((seed >>> 13) % 40) / 100,
+    x: 0.1 + ((seed >>> 14) % 80) / 100,
+    y: 0.05 + ((seed >>> 18) % 50) / 100
+  };
+});
 const GREAT_CIRCLES: Array<[Point3, Point3]> = [
   [{ x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }],
   [{ x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 }],
@@ -1035,13 +1052,25 @@ function drawUniverseAtmosphere(
     context.fillStyle = `rgba(${palette.star}, ${(star.alpha * twinkle * (lightTheme ? 0.5 : 1)).toFixed(3)})`;
     context.fillRect(star.x * width, star.y * height, star.size, star.size);
   }
-  // Three great circles of the celestial sphere: brighter in front, faint
-  // behind, so the rotation reads without any glow.
+  // A soft core inside the sphere gives it volume; the nodes in front of it
+  // read brighter, the ones behind recede into it.
+  const core = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius * 1.05);
+  core.addColorStop(0, `${palette.core}${lightTheme ? 0.1 : 0.2})`);
+  core.addColorStop(0.45, `${palette.core}${lightTheme ? 0.04 : 0.08})`);
+  core.addColorStop(1, `${palette.core}0)`);
+  context.fillStyle = core;
+  context.beginPath();
+  context.arc(centerX, centerY, radius * 1.05, 0, Math.PI * 2);
+  context.fill();
+  drawUniverseMeteors(context, palette, width, height, time);
+  // Three great circles of the celestial sphere, dashed so they never read
+  // as data links (which are solid): finer in front, sparser behind.
   const cosX = Math.cos(rotationX), sinX = Math.sin(rotationX);
   const cosY = Math.cos(rotationY), sinY = Math.sin(rotationY);
   context.lineWidth = 0.75;
   for (const [axisA, axisB] of GREAT_CIRCLES) {
     for (const front of [false, true]) {
+      context.setLineDash(front ? [3, 5] : [1.5, 7]);
       context.beginPath();
       let drawing = false;
       for (let step = 0; step <= 96; step += 1) {
@@ -1064,9 +1093,47 @@ function drawUniverseAtmosphere(
           drawing = false;
         }
       }
-      context.strokeStyle = `${palette.grid}${front ? (lightTheme ? 0.16 : 0.13) : (lightTheme ? 0.06 : 0.045)})`;
+      context.strokeStyle = `${palette.grid}${front ? (lightTheme ? 0.2 : 0.17) : (lightTheme ? 0.07 : 0.055)})`;
       context.stroke();
     }
+  }
+  context.setLineDash([]);
+  context.restore();
+}
+
+/** A few meteors per session, each with its own size, angle and timing. */
+function drawUniverseMeteors(
+  context: CanvasRenderingContext2D,
+  palette: StarPalette,
+  width: number,
+  height: number,
+  time: number
+) {
+  if (time === 0) return;
+  context.save();
+  context.lineCap = "round";
+  for (const meteor of METEORS) {
+    const phase = (time * 0.000028 + meteor.delay) % 1;
+    if (phase > meteor.duration) continue;
+    const progress = phase / meteor.duration;
+    const fade = Math.sin(progress * Math.PI);
+    const headX = (meteor.x + progress * 0.18 * meteor.direction) * width;
+    const headY = (meteor.y + progress * 0.18 * meteor.slope) * height;
+    const tailX = headX - meteor.length * meteor.direction;
+    const tailY = headY - meteor.length * meteor.slope;
+    const trail = context.createLinearGradient(tailX, tailY, headX, headY);
+    trail.addColorStop(0, `${palette.meteor}0)`);
+    trail.addColorStop(1, `${palette.meteor}${(fade * meteor.opacity).toFixed(3)})`);
+    context.strokeStyle = trail;
+    context.lineWidth = meteor.width;
+    context.beginPath();
+    context.moveTo(tailX, tailY);
+    context.lineTo(headX, headY);
+    context.stroke();
+    context.fillStyle = `${palette.meteor}${(fade * meteor.opacity).toFixed(3)})`;
+    context.beginPath();
+    context.arc(headX, headY, meteor.head, 0, Math.PI * 2);
+    context.fill();
   }
   context.restore();
 }
@@ -1089,6 +1156,9 @@ function drawUniverseNode(
       : (0.34 + node.depth * 0.66) * (node.enabled ? 1 : 0.75);
   const radius = node.radius * (active ? 1.12 : 1);
   const { screenX: x, screenY: y } = node;
+  // Near nodes carry full colour and light, far nodes fade into the core.
+  const depth = active || focus === "neighbor" ? 1 : node.depth;
+  const tint = (kind: UniverseNodeKind, value: number) => palette.node(node.hue, kind, value, depth);
   context.save();
   if (!node.enabled) {
     context.beginPath();
@@ -1101,29 +1171,36 @@ function drawUniverseNode(
   } else if (node.kind === "source") {
     context.beginPath();
     context.arc(x, y, radius, 0, Math.PI * 2);
-    context.fillStyle = palette.node(node.hue, "source", alpha);
+    context.fillStyle = tint("source", alpha);
     context.fill();
+    if (depth > 0.55 && radius > 4) {
+      // A small lit cap on the near side, from the same light as the core.
+      context.beginPath();
+      context.arc(x - radius * 0.3, y - radius * 0.32, radius * 0.32, 0, Math.PI * 2);
+      context.fillStyle = `${palette.highlight}${(alpha * (depth - 0.55) * 0.9).toFixed(3)})`;
+      context.fill();
+    }
     if (lod < 2 || active) {
       context.beginPath();
       context.arc(x, y, radius + 3.5, 0, Math.PI * 2);
-      context.strokeStyle = palette.node(node.hue, "source", alpha * 0.32);
+      context.strokeStyle = tint("source", alpha * 0.32);
       context.lineWidth = 1;
       context.stroke();
     }
   } else if (node.kind === "router") {
     context.beginPath();
     context.arc(x, y, radius, 0, Math.PI * 2);
-    context.strokeStyle = palette.node(node.hue, "router", alpha);
+    context.strokeStyle = tint("router", alpha);
     context.lineWidth = 1.6;
     context.stroke();
     context.beginPath();
     context.arc(x, y, Math.max(1.2, radius * 0.36), 0, Math.PI * 2);
-    context.fillStyle = palette.node(node.hue, "router", alpha);
+    context.fillStyle = tint("router", alpha);
     context.fill();
   } else {
     context.beginPath();
     context.arc(x, y, Math.max(1.1, radius), 0, Math.PI * 2);
-    context.fillStyle = palette.node(node.hue, "skill", alpha);
+    context.fillStyle = tint("skill", alpha);
     context.fill();
   }
   if (active) {
@@ -1142,7 +1219,11 @@ type StarPalette = {
   edge: (hue: number, alpha: number) => string;
   edgeHot: string;
   conflict: string;
-  node: (hue: number, kind: UniverseNodeKind, alpha: number) => string;
+  /** Colour by category hue; `depth` 0 (far) .. 1 (near) sets saturation and light. */
+  node: (hue: number, kind: UniverseNodeKind, alpha: number, depth: number) => string;
+  core: string;
+  highlight: string;
+  meteor: string;
   muted: string;
   ring: string;
   text: string;
@@ -1154,7 +1235,8 @@ type StarPalette = {
 /** Restrained colours: category hue at moderate saturation; the warm Sky and
  * Parchment tones highlight in amber/terracotta, the cool ones in blue. */
 function starPalette(tone: UniverseTone, lightTheme: boolean): StarPalette {
-  const warm = tone === "sky" || tone === "parchment";
+  // Warm accents belong to daylight; a night sky stays cool and clean.
+  const warm = tone === "parchment" || (tone === "sky" && lightTheme);
   if (lightTheme) {
     return {
       star: "40, 62, 92",
@@ -1162,7 +1244,12 @@ function starPalette(tone: UniverseTone, lightTheme: boolean): StarPalette {
       edge: (hue, alpha) => `hsla(${hue}, 26%, 48%, ${alpha})`,
       edgeHot: warm ? "rgba(196, 100, 60, " : "rgba(44, 100, 166, ",
       conflict: "rgba(168, 112, 31, ",
-      node: (hue, kind, alpha) => kind === "skill" ? `hsla(${hue}, 28%, 52%, ${alpha})` : `hsla(${hue}, 44%, ${kind === "router" ? 38 : 44}%, ${alpha})`,
+      node: (hue, kind, alpha, depth) => kind === "skill"
+        ? `hsla(${hue}, ${Math.round(18 + depth * 40)}%, ${Math.round(66 - depth * 18)}%, ${alpha})`
+        : `hsla(${hue}, ${Math.round(28 + depth * 46)}%, ${Math.round((kind === "router" ? 56 : 62) - depth * 22)}%, ${alpha})`,
+      core: warm ? "rgba(214, 150, 92, " : "rgba(70, 116, 196, ",
+      highlight: "rgba(255, 255, 255, ",
+      meteor: warm ? "rgba(196, 100, 60, " : "rgba(44, 100, 166, ",
       muted: "rgba(115, 130, 149, ",
       ring: warm ? "#b9552e" : "#1d4c84",
       text: "#1b2a3a",
@@ -1177,7 +1264,12 @@ function starPalette(tone: UniverseTone, lightTheme: boolean): StarPalette {
     edge: (hue, alpha) => `hsla(${hue}, 26%, 72%, ${alpha})`,
     edgeHot: warm ? "rgba(240, 180, 110, " : "rgba(140, 180, 255, ",
     conflict: "rgba(232, 180, 95, ",
-    node: (hue, kind, alpha) => kind === "skill" ? `hsla(${hue}, 28%, 66%, ${alpha})` : `hsla(${hue}, 48%, ${kind === "router" ? 74 : 68}%, ${alpha})`,
+    node: (hue, kind, alpha, depth) => kind === "skill"
+      ? `hsla(${hue}, ${Math.round(16 + depth * 46)}%, ${Math.round(42 + depth * 30)}%, ${alpha})`
+      : `hsla(${hue}, ${Math.round(26 + depth * 54)}%, ${Math.round((kind === "router" ? 50 : 44) + depth * 28)}%, ${alpha})`,
+    core: warm ? "rgba(255, 196, 140, " : "rgba(150, 186, 255, ",
+    highlight: "rgba(255, 255, 255, ",
+    meteor: warm ? "rgba(255, 226, 190, " : "rgba(214, 230, 255, ",
     muted: "rgba(150, 140, 165, ",
     ring: warm ? "#ffd9aa" : "#e2ebff",
     text: warm ? "#f5efe9" : "#eef2fb",

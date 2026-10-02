@@ -1,0 +1,290 @@
+/* =============================================================
+   Sky — the fourth UI family (v3.2.9)
+   One layout language, four lights: morning, midday, afternoon, night.
+   "Follows the time of day" switches between them by the system clock.
+   Colours are taken from real skies and materials — clay, paper, slate,
+   lamplight — not from a generated gradient. Surfaces are solid, borders
+   are hairlines, shadows are short; the scenes carry the atmosphere.
+   ============================================================= */
+
+.theme-sky-dawn,
+.theme-sky-noon,
+.theme-sky-golden,
+.theme-sky-night {
+  --ui-font: "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", "Noto Sans KR", sans-serif;
+  --ui-display: "Segoe UI Variable Display", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  --shadow-glow: none;
+  --radius-card: 18px;
+  --sky-ease: cubic-bezier(.2, .8, .2, 1);
+  color: var(--text);
+}
+
+/* Morning: rose paper, clay and a pale blue. */
+.theme-sky-dawn {
+  --bg: #f3eee8;
+  --bg-soft: #f8f4ef;
+  --surface: #fffdfa;
+  --surface-soft: #f6f0e9;
+  --surface-strong: #ece3d8;
+  --surface-elevated: #ffffff;
+  --border: rgba(62, 44, 30, .1);
+  --border-strong: rgba(201, 111, 74, .5);
+  --text: #2b211b;
+  --text-soft: #5c4e44;
+  --text-muted: #8f8177;
+  --brand: #c96f4a;
+  --brand-strong: #a8532f;
+  --brand-glow: rgba(201, 111, 74, .14);
+  --accent: #6f8fae;
+  --success: #3f8a62;
+  --warning: #b4781e;
+  --danger: #c24b4b;
+  --info: #4f7fae;
+  --success-soft: rgba(63, 138, 98, .1);
+  --warning-soft: rgba(180, 120, 30, .1);
+  --danger-soft: rgba(194, 75, 75, .09);
+  --info-soft: rgba(79, 127, 174, .1);
+  --on-brand: #ffffff;
+  --sky-top: #f2d6c4;
+  --sky-mid: #f1e6dc;
+  --shadow-card: 0 1px 2px rgba(62, 44, 30, .05), 0 6px 20px rgba(62, 44, 30, .06);
+  --shadow-card-hover: 0 2px 4px rgba(62, 44, 30, .06), 0 12px 30px rgba(62, 44, 30, .1);
+  --shadow-chrome: 0 1px 2px rgba(62, 44, 30, .05), 0 8px 24px rgba(62, 44, 30, .07);
+  --hero-grad: linear-gradient(180deg, #f2d6c4 0%, #f3eee8 70%);
+  color-scheme: light;
+}
+
+/* Midday: clear sky over white paper. */
+.theme-sky-noon {
+  --bg: #eef2f5;
+  --bg-soft: #f6f8fa;
+  --surface: #ffffff;
+  --surface-soft: #f2f5f8;
+  --surface-strong: #e3e9ef;
+  --surface-elevated: #ffffff;
+  --border: rgba(20, 40, 60, .1);
+  --border-strong: rgba(29, 111, 184, .5);
+  --text: #14202b;
+  --text-soft: #44525f;
+  --text-muted: #77848f;
+  --brand: #1d6fb8;
+  --brand-strong: #155892;
+  --brand-glow: rgba(29, 111, 184, .14);
+  --accent: #e0a32f;
+  --success: #2c8a5f;
+  --warning: #a86f12;
+  --danger: #c03d48;
+  --info: #2f73b8;
+  --success-soft: rgba(44, 138, 95, .1);
+  --warning-soft: rgba(168, 111, 18, .1);
+  --danger-soft: rgba(192, 61, 72, .09);
+  --info-soft: rgba(47, 115, 184, .1);
+  --on-brand: #ffffff;
+  --sky-top: #d3e6f5;
+  --sky-mid: #e6eef5;
+  --shadow-card: 0 1px 2px rgba(20, 40, 60, .05), 0 6px 20px rgba(20, 40, 60, .06);
+  --shadow-card-hover: 0 2px 4px rgba(20, 40, 60, .06), 0 12px 30px rgba(20, 40, 60, .1);
+  --shadow-chrome: 0 1px 2px rgba(20, 40, 60, .05), 0 8px 24px rgba(20, 40, 60, .07);
+  --hero-grad: linear-gradient(180deg, #d3e6f5 0%, #eef2f5 70%);
+  color-scheme: light;
+}
+
+/* Afternoon: low sun, warm paper, a cool green counterweight. */
+.theme-sky-golden {
+  --bg: #f4ede2;
+  --bg-soft: #f9f4ec;
+  --surface: #fffbf5;
+  --surface-soft: #f5ece0;
+  --surface-strong: #eadcc7;
+  --surface-elevated: #fffdf9;
+  --border: rgba(70, 48, 20, .11);
+  --border-strong: rgba(200, 102, 44, .5);
+  --text: #2a2016;
+  --text-soft: #5f4f3c;
+  --text-muted: #92826c;
+  --brand: #c8662c;
+  --brand-strong: #a24f1e;
+  --brand-glow: rgba(200, 102, 44, .14);
+  --accent: #3f7a6b;
+  --success: #3c8058;
+  --warning: #a7731a;
+  --danger: #b84536;
+  --info: #4a7396;
+  --success-soft: rgba(60, 128, 88, .1);
+  --warning-soft: rgba(167, 115, 26, .1);
+  --danger-soft: rgba(184, 69, 54, .09);
+  --info-soft: rgba(74, 115, 150, .1);
+  --on-brand: #ffffff;
+  --sky-top: #f3d6ad;
+  --sky-mid: #f2e4d0;
+  --shadow-card: 0 1px 2px rgba(70, 48, 20, .05), 0 6px 20px rgba(70, 48, 20, .07);
+  --shadow-card-hover: 0 2px 4px rgba(70, 48, 20, .06), 0 12px 30px rgba(70, 48, 20, .11);
+  --shadow-chrome: 0 1px 2px rgba(70, 48, 20, .05), 0 8px 24px rgba(70, 48, 20, .08);
+  --hero-grad: linear-gradient(180deg, #f3d6ad 0%, #f4ede2 70%);
+  color-scheme: light;
+}
+
+/* Night: a clean deep blue — no haze, no plum — with lamplight amber. */
+.theme-sky-night {
+  --bg: #0b111d;
+  --bg-soft: #0f1626;
+  --surface: #131b2c;
+  --surface-soft: #182237;
+  --surface-strong: #1f2b44;
+  --surface-elevated: #151e31;
+  --border: rgba(170, 190, 225, .11);
+  --border-strong: rgba(242, 184, 102, .55);
+  --text: #e9eef7;
+  --text-soft: #aeb9cb;
+  --text-muted: #75839a;
+  --brand: #f2b866;
+  --brand-strong: #ffd496;
+  --brand-glow: rgba(242, 184, 102, .2);
+  --accent: #86b4ff;
+  --success: #6fcf9f;
+  --warning: #f0bd62;
+  --danger: #f2838c;
+  --info: #8fb6f5;
+  --success-soft: rgba(111, 207, 159, .12);
+  --warning-soft: rgba(240, 189, 98, .12);
+  --danger-soft: rgba(242, 131, 140, .12);
+  --info-soft: rgba(143, 182, 245, .12);
+  --on-brand: #1d1407;
+  --sky-top: #12203a;
+  --sky-mid: #0d1527;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, .3), 0 8px 24px rgba(0, 0, 0, .25);
+  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, .35), 0 14px 34px rgba(0, 0, 0, .35);
+  --shadow-chrome: 0 1px 2px rgba(0, 0, 0, .3), 0 10px 28px rgba(0, 0, 0, .3);
+  --hero-grad: linear-gradient(180deg, #12203a 0%, #0b111d 70%);
+  color-scheme: dark;
+}
+
+/* ---------- Canvas: a sky band at the top fading into paper ---------- */
+.theme-family-sky.shell {
+  background: linear-gradient(180deg, var(--sky-top) 0, var(--sky-mid) 220px, var(--bg) 520px, var(--bg) 100%);
+  transition: background-color 600ms var(--sky-ease);
+}
+.theme-family-sky > .particle-field-cosmos,
+.theme-family-sky > .particle-field-backdrop { display: none; }
+
+/* ---------- Floating dock instead of a rail ---------- */
+.theme-family-sky.shell { grid-template-columns: 92px minmax(0, 1fr); }
+.theme-family-sky .sidebar {
+  top: 12px;
+  height: calc(100vh - 24px);
+  margin: 12px 0 12px 12px;
+  width: 76px;
+  padding: 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-chrome);
+  backdrop-filter: none;
+}
+.theme-family-sky .brand { width: 54px; height: 54px; margin: 0 auto 12px; border: 0; background: transparent; padding: 0; }
+.theme-family-sky .brand-logo { width: 44px; height: 44px; border-radius: 13px; }
+.theme-family-sky .nav-item,
+.theme-family-sky .sidebar-footer .nav-item {
+  width: 54px;
+  height: 50px;
+  margin: 0 auto;
+  border-radius: 14px;
+  background: transparent;
+  box-shadow: none;
+}
+.theme-family-sky .nav-item .nav-icon { background: transparent; color: var(--text-soft); transition: background 180ms var(--sky-ease), color 180ms var(--sky-ease), transform 180ms var(--sky-ease); }
+.theme-family-sky .nav-item:hover { background: var(--surface-soft); }
+.theme-family-sky .nav-item:hover .nav-icon { color: var(--text); }
+.theme-family-sky .nav-item.active { background: transparent; box-shadow: none; }
+.theme-family-sky .nav-item.active .nav-icon { background: var(--brand); color: var(--on-brand); box-shadow: 0 4px 14px var(--brand-glow); }
+.theme-family-sky .nav-item:active .nav-icon { transform: scale(.94); }
+.theme-family-sky .nav-text { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-elevated); box-shadow: var(--shadow-chrome); }
+.theme-family-sky .sidebar-footer { border-top-color: var(--border); }
+
+/* ---------- Capsule top bar ---------- */
+.theme-family-sky .topbar {
+  margin: 12px 12px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  box-shadow: var(--shadow-chrome);
+  backdrop-filter: blur(12px);
+}
+.theme-family-sky .command-search { border-radius: 12px; background: var(--surface-soft); border: 1px solid transparent; transition: border-color 160ms var(--sky-ease), background 160ms var(--sky-ease); }
+.theme-family-sky .command-search:focus-within { border-color: var(--border-strong); background: var(--surface-elevated); }
+
+/* ---------- Pages: open headers, quiet cards ---------- */
+.theme-family-sky.theme-family-atlas:not(.page-dashboard) .page-header {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding-inline: 4px;
+}
+.theme-family-sky .page-header > div > .eyebrow:first-child { display: none; }
+.theme-family-sky .eyebrow { text-transform: none; letter-spacing: 0; }
+.theme-family-sky.theme-family-atlas .page-header h2 {
+  font-family: var(--ui-display);
+  font-size: clamp(28px, 2.3vw, 38px);
+  font-weight: 650;
+  letter-spacing: -.025em;
+  line-height: 1.15;
+}
+.theme-family-sky.theme-family-atlas .page-header p { margin-top: 6px; color: var(--text-soft); }
+.theme-family-sky.theme-family-atlas:not(.page-dashboard) .panel,
+.theme-family-sky.theme-family-atlas:not(.page-dashboard) .library-toolbar,
+.theme-family-sky.theme-family-atlas:not(.page-dashboard) .source-group,
+.theme-family-sky .glow-card:not(.dashboard-hero) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: none;
+}
+.theme-family-sky.theme-family-atlas:not(.page-dashboard) .source-group {
+  transition: box-shadow 200ms var(--sky-ease), transform 200ms var(--sky-ease), border-color 200ms var(--sky-ease);
+}
+.theme-family-sky.theme-family-atlas:not(.page-dashboard) .source-group:hover { box-shadow: var(--shadow-card-hover); border-color: color-mix(in srgb, var(--brand) 22%, var(--border)); }
+.theme-family-sky .page-header-stats > * { border-radius: 12px; background: var(--surface); border: 1px solid var(--border); box-shadow: none; }
+
+/* ---------- Controls: one solid primary, press feedback ---------- */
+.theme-family-sky .primary-action,
+.theme-family-sky .primary-pill,
+.theme-family-sky.theme-family-atlas.page-dashboard .hero-actions .primary-action,
+.theme-family-sky .atlas-touchbar-actions button:last-child {
+  background: var(--brand);
+  color: var(--on-brand);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .08), 0 4px 14px var(--brand-glow);
+}
+.theme-family-sky .primary-action:hover:not(:disabled),
+.theme-family-sky .primary-pill:hover {
+  background: color-mix(in srgb, var(--brand) 88%, #000);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .1), 0 8px 20px var(--brand-glow);
+  transform: translateY(-1px);
+}
+.theme-sky-night .primary-action:hover:not(:disabled),
+.theme-sky-night .primary-pill:hover { background: var(--brand-strong); }
+.theme-family-sky .secondary-action,
+.theme-family-sky .ghost-action { transition: background 160ms var(--sky-ease), border-color 160ms var(--sky-ease), transform 120ms var(--sky-ease); }
+.theme-family-sky :is(.primary-action, .secondary-action, .ghost-action, .primary-pill, .icon-button):active:not(:disabled) { transform: translateY(0) scale(.97); }
+.theme-family-sky :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.theme-family-sky .status-pill { border-radius: 999px; }
+
+/* ---------- Motion: pages settle in, never bounce ---------- */
+.theme-family-sky .view { animation: sky-view-in 280ms var(--sky-ease) both; }
+@keyframes sky-view-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-family-sky .view { animation: none; }
+  .theme-family-sky :is(.primary-action, .secondary-action, .ghost-action, .primary-pill, .nav-icon) { transition: none; }
+}
+
+/* ---------- Home ---------- */
+.theme-family-sky.page-dashboard .dashboard-hero { --hero-grad: none; }
+.theme-family-sky .metric-grid.atlas-touchbar {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-elevated) 94%, transparent);
+  box-shadow: var(--shadow-chrome);
+  backdrop-filter: blur(12px);
+}

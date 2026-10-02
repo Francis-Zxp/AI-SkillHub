@@ -17,7 +17,7 @@ const record = (name, ok, detail) => {
   console.log(`${ok ? "PASS" : "FAIL"} ${name} ${JSON.stringify(detail)}`);
 };
 
-async function openSky(browser, { width = 1920, height = 1080, dpr = 1, theme = "sky-dusk", reducedMotion = "no-preference" } = {}) {
+async function openSky(browser, { width = 1920, height = 1080, dpr = 1, theme = "sky-night", reducedMotion = "no-preference" } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: dpr, reducedMotion });
   await context.addInitScript(([themeName]) => {
     try {
@@ -111,7 +111,7 @@ const hostData = page => page.evaluate(() => ({ ...document.querySelector(".sky-
 
     // 7. WebGL context loss falls back to the category list.
     {
-      const { context, page } = await openSky(browser, { theme: "sky-day" });
+      const { context, page } = await openSky(browser, { theme: "sky-noon" });
       await page.evaluate(() => {
         const canvas = document.querySelector("canvas.sky-world-canvas");
         const gl = canvas.getContext("webgl2") || canvas.getContext("webgl");
@@ -130,7 +130,7 @@ const hostData = page => page.evaluate(() => ({ ...document.querySelector(".sky-
 
     // 8. 4K and HiDPI stay within the pixel budget and render sharp text.
     for (const viewport of [{ width: 3840, height: 2160, dpr: 1 }, { width: 1920, height: 1080, dpr: 2 }, { width: 1536, height: 864, dpr: 1.25 }]) {
-      const { context, page } = await openSky(browser, { ...viewport, theme: "sky-day" });
+      const { context, page } = await openSky(browser, { ...viewport, theme: "sky-noon" });
       const data = await hostData(page);
       const backing = await page.evaluate(() => {
         const canvas = document.querySelector("canvas.sky-world-canvas");

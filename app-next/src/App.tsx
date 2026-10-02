@@ -26,6 +26,7 @@ import { buildSkyIslands, isRouterHubSkill as modelIsRouterHubSkill, skillBelong
 import { PromptLauncherAction } from "./PromptLauncherAction";
 import { SourceUpdatePanel } from "./SourceUpdatePanel";
 import { SourceIdentityPanel } from "./SourceIdentityPanel";
+import { SKY_SCENE_EVENT, setSkySceneEnabled, skySceneEnabled } from "./skyScene";
 import { rt, shouldAutoContinue, sourceUpdateToast, summarizeSourceUpdateRun } from "./sourceUpdateRun";
 import { externalSkillsText } from "./externalSkills";
 const ExternalSkillsPanel = lazy(() => import("./ExternalSkillsPanel").then(module => ({ default: module.ExternalSkillsPanel })));
@@ -62,8 +63,11 @@ import type {
 declare const __APP_VERSION__: string;
 
 type ThemeName =
-  | "sky-dusk"
-  | "sky-day"
+  | "sky-auto"
+  | "sky-dawn"
+  | "sky-noon"
+  | "sky-golden"
+  | "sky-night"
   | "nocturne"
   | "parchment"
   | "atlas-dark"
@@ -359,8 +363,11 @@ function hasInternalSkillDrag(dataTransfer: DataTransfer) {
 
 const UI_SCALE_OPTIONS: UiScalePreset[] = ["compact", "standard", "comfortable", "large"];
 const THEME_OPTIONS: Array<{ icon: IconName; labelKey: string; value: ThemeName }> = [
-  { value: "sky-dusk", labelKey: "theme.skyDusk", icon: "moon" },
-  { value: "sky-day", labelKey: "theme.skyDay", icon: "sun" },
+  { value: "sky-auto", labelKey: "theme.skyAuto", icon: "sparkle" },
+  { value: "sky-dawn", labelKey: "theme.skyDawn", icon: "sun" },
+  { value: "sky-noon", labelKey: "theme.skyNoon", icon: "sun" },
+  { value: "sky-golden", labelKey: "theme.skyGolden", icon: "sun" },
+  { value: "sky-night", labelKey: "theme.skyNight", icon: "moon" },
   { value: "nocturne", labelKey: "theme.nocturne", icon: "moon" },
   { value: "parchment", labelKey: "theme.parchment", icon: "sun" },
   { value: "atlas-dark", labelKey: "theme.atlasDark", icon: "moon" },
@@ -444,6 +451,10 @@ export function App() {
   const [active, setActive] = useState<NavKey>(() => initialNavKey());
   const [externalImportPath, setExternalImportPath] = useState("");
   const [theme, setTheme] = useState<ThemeName>(() => initialTheme());
+  const skyPhase = useSkyPhase();
+  // "sky-auto" follows the clock; everything that styles the app uses the
+  // resolved phase, while settings keep showing the user's choice.
+  const resolvedTheme: ThemeName = theme === "sky-auto" ? `sky-${skyPhase}` : theme;
   const [textScale, setTextScale] = useState<UiScalePreset>(() => initialUiScale(UI_TEXT_SCALE_STORAGE_KEY, "standard"));
   const [iconScale, setIconScale] = useState<UiScalePreset>(() => initialUiScale(UI_ICON_SCALE_STORAGE_KEY, "comfortable"));
   const [snapshot, setSnapshot] = useState<LegacySnapshot | null>(null);
@@ -1760,9 +1771,9 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    document.body.dataset.theme = theme;
+    document.body.dataset.theme = resolvedTheme;
     window.localStorage.setItem("ai-skillhub-theme", theme);
-  }, [theme]);
+  }, [theme, resolvedTheme]);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--ui-text-scale", String(UI_TEXT_SCALES[textScale]));
@@ -1826,12 +1837,12 @@ export function App() {
 
   const operationProgress = operation ? Math.max(1, Math.min(100, Math.round(operation.percent))) : 0;
   const advancedActive = active === "release" || active === "snapshots";
-  const atlasMode = isAtlasTheme(theme);
-  const atlasVisual = atlasThemeVisual(theme);
+  const atlasMode = isAtlasTheme(resolvedTheme);
+  const atlasVisual = atlasThemeVisual(resolvedTheme);
 
   return (
     <main
-      className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${theme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"} page-${active} lang-${lang}${dashboardImmersive && active === "dashboard" ? " dashboard-immersive" : ""}`}
+      className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${resolvedTheme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"}${resolvedTheme.startsWith("sky-") ? " theme-family-sky" : ""} page-${active} lang-${lang}${dashboardImmersive && active === "dashboard" ? " dashboard-immersive" : ""}`}
       data-runtime-hydrated={runtimeHydrated ? "true" : "false"}
       style={{
         "--ui-icon-scale": UI_ICON_SCALES[iconScale],
@@ -2069,7 +2080,7 @@ export function App() {
               snapshot={snapshot}
               summary={summary}
               syncing={Boolean(operation)}
-              theme={theme}
+              theme={resolvedTheme}
             />
           )}
           {active === "library" && (
@@ -2504,7 +2515,7 @@ function Dashboard({
       <section className={`dashboard-hero glow-card${atlasMode && (!atlasIntroVisible || homeVisual === "islands") ? " intro-collapsed" : ""}${atlasMode && homeVisual === "islands" ? " islands-home" : ""}`}>
         {atlasMode && homeVisual === "islands" && (
           <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
-            <SkillArchipelago centered lightTheme={isLightTheme(theme)} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} snapshot={snapshot} />
+            <SkillArchipelago centered lightTheme={isLightTheme(theme)} phase={theme.startsWith("sky-") ? (theme.slice(4) as SkyPhase) : isLightTheme(theme) ? "noon" : "night"} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} snapshot={snapshot} />
           </Suspense>
         )}
         {atlasMode && homeVisual === "universe" && (
@@ -2516,7 +2527,7 @@ function Dashboard({
             onOpenSource={onOpenSource}
             snapshot={snapshot}
             tone={
-              theme === "sky-dusk" || theme === "sky-day"
+              theme.startsWith("sky-")
                 ? "sky"
                 : theme === "nocturne"
                 ? "prism"
@@ -6490,6 +6501,7 @@ function Settings({
               onChange={value => onChangeTheme(value as ThemeName)}
             />
           </div>
+          <SkySceneSettingRow />
           <div className="settings-row">
             <strong>{t("set.language")}</strong>
             <SegmentedToggle
@@ -6680,8 +6692,27 @@ function initialNavKey(): NavKey {
   return isNavKey(view) ? view : "dashboard";
 }
 
-const DEFAULT_THEME: ThemeName = "sky-dusk";
-const SKY_THEME_MIGRATION_KEY = "ai-skillhub-theme-sky-default-v1";
+const DEFAULT_THEME: ThemeName = "sky-auto";
+const SKY_THEME_MIGRATION_KEY = "ai-skillhub-theme-sky-default-v2";
+export type SkyPhase = "dawn" | "noon" | "golden" | "night";
+
+/** Morning 5–10, midday 10–15, afternoon 15–19, night otherwise (local time). */
+function skyPhaseAt(date: Date): SkyPhase {
+  const hour = date.getHours();
+  if (hour >= 5 && hour < 10) return "dawn";
+  if (hour >= 10 && hour < 15) return "noon";
+  if (hour >= 15 && hour < 19) return "golden";
+  return "night";
+}
+
+function useSkyPhase(): SkyPhase {
+  const [phase, setPhase] = useState<SkyPhase>(() => skyPhaseAt(new Date()));
+  useEffect(() => {
+    const timer = window.setInterval(() => setPhase(skyPhaseAt(new Date())), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return phase;
+}
 
 function initialTheme(): ThemeName {
   if (typeof window === "undefined") return DEFAULT_THEME;
@@ -6689,14 +6720,15 @@ function initialTheme(): ThemeName {
   if (isThemeName(searchTheme)) return searchTheme;
   try {
     const savedTheme = window.localStorage.getItem("ai-skillhub-theme");
-    // One time only, on the first start of 3.2.8: move to the new Sky family,
-    // keeping the light/dark preference. Every older theme stays selectable
-    // in the theme menu, and a later choice is never overridden.
+    // One time only: the earlier Sky day/dusk pair, the previous default and
+    // fresh installs move to the time-of-day Sky theme. Any other saved
+    // choice is kept, and every older theme stays selectable.
     if (!window.localStorage.getItem(SKY_THEME_MIGRATION_KEY)) {
       window.localStorage.setItem(SKY_THEME_MIGRATION_KEY, "1");
-      const next: ThemeName = isThemeName(savedTheme) && isLightTheme(savedTheme) ? "sky-day" : DEFAULT_THEME;
-      window.localStorage.setItem("ai-skillhub-theme", next);
-      return next;
+      if (!isThemeName(savedTheme) || savedTheme === "nocturne" || savedTheme === "atlas-legacy-light" || savedTheme === "atlas-light") {
+        window.localStorage.setItem("ai-skillhub-theme", DEFAULT_THEME);
+        return DEFAULT_THEME;
+      }
     }
     return isThemeName(savedTheme) ? savedTheme : DEFAULT_THEME;
   } catch {
@@ -6716,8 +6748,11 @@ function isUiScalePreset(value: string | null): value is UiScalePreset {
 
 function isThemeName(value: string | null): value is ThemeName {
   return (
-    value === "sky-dusk" ||
-    value === "sky-day" ||
+    value === "sky-auto" ||
+    value === "sky-dawn" ||
+    value === "sky-noon" ||
+    value === "sky-golden" ||
+    value === "sky-night" ||
     value === "nocturne" ||
     value === "parchment" ||
     value === "atlas-dark" ||
@@ -6733,8 +6768,7 @@ function isThemeName(value: string | null): value is ThemeName {
 
 function isAtlasTheme(theme: ThemeName): boolean {
   return (
-    theme === "sky-dusk" ||
-    theme === "sky-day" ||
+    theme.startsWith("sky-") ||
     theme === "nocturne" ||
     theme === "parchment" ||
     theme === "atlas-dark" ||
@@ -6746,7 +6780,9 @@ function isAtlasTheme(theme: ThemeName): boolean {
 
 function isLightTheme(theme: ThemeName): boolean {
   return (
-    theme === "sky-day" ||
+    theme === "sky-dawn" ||
+    theme === "sky-noon" ||
+    theme === "sky-golden" ||
     theme === "parchment" ||
     theme === "atlas-light" ||
     theme === "atlas-legacy-light" ||
@@ -6756,11 +6792,10 @@ function isLightTheme(theme: ThemeName): boolean {
 }
 
 function atlasThemeVisual(theme: ThemeName) {
-  if (theme === "sky-dusk") {
-    return { accent: "#f0b46e", palette: ["#f0b46e", "#a99ad8", "#7cc6a0", "#93b3e8"] };
-  }
-  if (theme === "sky-day") {
-    return { accent: "#2c64a6", palette: ["#2c64a6", "#c4643c", "#2e8463", "#738295"] };
+  if (theme.startsWith("sky-")) {
+    return theme === "sky-night"
+      ? { accent: "#f2b866", palette: ["#f2b866", "#86b4ff", "#6fcf9f", "#aeb9cb"] }
+      : { accent: "#1d6fb8", palette: ["#1d6fb8", "#c8662c", "#2c8a5f", "#7a8794"] };
   }
   if (theme === "parchment") {
     return {
@@ -6784,6 +6819,26 @@ function atlasThemeVisual(theme: ThemeName) {
     accent: "#7ce9df",
     palette: ["#7ce9df", "#dcefed", "#79aee8", "#d6b76c"]
   };
+}
+
+/** Home: 3D sky islands or the simple category cards (no GPU). */
+function SkySceneSettingRow() {
+  const [enabled, setEnabled] = useState(skySceneEnabled);
+  useEffect(() => {
+    const onChange = (event: Event) => setEnabled(Boolean((event as CustomEvent<boolean>).detail));
+    window.addEventListener(SKY_SCENE_EVENT, onChange);
+    return () => window.removeEventListener(SKY_SCENE_EVENT, onChange);
+  }, []);
+  return (
+    <div className="settings-row">
+      <strong>{t("set.skyScene")}</strong>
+      <SegmentedToggle
+        value={enabled ? "on" : "off"}
+        options={[{ value: "on", label: t("set.skySceneOn") }, { value: "off", label: t("set.skySceneOff") }]}
+        onChange={value => setSkySceneEnabled(value === "on")}
+      />
+    </div>
+  );
 }
 
 function themeLabel(theme: ThemeName): string {

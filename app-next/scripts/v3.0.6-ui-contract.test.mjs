@@ -61,8 +61,15 @@ test("universe starts from a bounded real cache and promotes to the SQLite model
   assert.match(universeStyles, /@keyframes universe-cache-promote/);
 });
 
-test("star map backdrop is a quiet star field with great circles, no aura or meteors", () => {
+test("star map backdrop: star field, soft core, session-random meteors, dashed sphere outlines", () => {
   assert.match(universe, /const STAR_FIELD = Array\.from\(\{ length: 170 \}/);
   assert.match(universe, /const GREAT_CIRCLES: Array<\[Point3, Point3\]>/);
-  assert.doesNotMatch(universe, /METEOR|AURA_SPRITES|DUST_PARTICLES|createRadialGradient/);
+  // One soft core gives the sphere volume; no wide aura sprite or dust.
+  assert.equal((universe.match(/createRadialGradient\(/g) ?? []).length, 1);
+  assert.doesNotMatch(universe, /AURA_SPRITES|DUST_PARTICLES/);
+  // Meteor count and size differ every session.
+  assert.match(universe, /const METEOR_SESSION_SEED = randomSessionSeed\(\);/);
+  assert.match(universe, /length: 4 \+ \(METEOR_SESSION_SEED % 9\)/);
+  // Sphere outlines are dashed so they never read as data links.
+  assert.match(universe, /context\.setLineDash\(front \? \[3, 5\] : \[1\.5, 7\]\)/);
 });

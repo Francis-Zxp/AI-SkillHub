@@ -2,14 +2,12 @@ AI SkillHub - sky island assets
 
 These files are built from third-party asset packs by
 scripts/sky-assets/build.mjs (see scripts/sky-assets/manifest.json).
-Models were merged into libraries, unused maps removed, textures re-encoded
-as WebP, vertex data quantized; nothing else about the shapes was changed
-unless noted.
+Models were merged into libraries, unused maps removed and vertex data
+optimised; at runtime they are toon shaded and buildings are recoloured.
 
-nature.glb, buildings.glb, props.glb, textures/*.webp
-  Stylized Nature MegaKit, Medieval Village MegaKit, Fantasy Props MegaKit
+buildings.glb, props.glb
+  Medieval Village MegaKit, Fantasy Props MegaKit
   by Quaternius - CC0 1.0 (public domain dedication)
-  https://opengameart.org/content/stylized-nature-megakit
   https://opengameart.org/content/medieval-village-megakit
   https://opengameart.org/content/fantasy-props-megakit
   Buildings are composed from the village kit's wall, roof, door and window
@@ -19,14 +17,19 @@ villager.glb
   Animated woman from the Ultimate Modular Women pack
   by Quaternius - CC0 1.0
   https://poly.pizza/m/nIItLV9nxS
-  Only five animations kept.
+
+animals/*.glb (Sheep, Pig, Cow, Llama, Pug, Horse)
+  Farm Animals Pack by Quaternius - CC0 1.0
+  https://quaternius.com/packs/farmanimals.html
+  Converted from FBX to glTF with three.js (scripts/sky-assets/convert-animals.cjs).
 
 gull.glb
   "Flying gull" by Poly by Google - CC-BY 3.0
   https://creativecommons.org/licenses/by/3.0/
   via Poly Pizza: https://poly.pizza/m/eMNhHDZakYp
-  Re-exported with optimised geometry; the wing beat is animated in a
-  shader by AI SkillHub.
+  Re-exported with optimised geometry; drawn flat white and the wing beat
+  animated in a shader by AI SkillHub.
 
-Original to AI SkillHub: island terrain and rock geology, ground, water,
-cloud and sky shaders, island layout, themes and all animation code.
+Original to AI SkillHub: island terrain and rock, all trees, bushes, rocks,
+grass, flowers, mushrooms and clouds (built in code), ground, water,
+waterfall, cloud and sky shaders, island layout, themes and animation code.

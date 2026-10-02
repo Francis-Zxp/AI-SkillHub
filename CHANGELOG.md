@@ -2,6 +2,15 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.9 - 2026-10-02 - Sky as a fourth interface family, cartoon islands, star map refinements
+
+- "Sky" is a fourth interface family next to Classic, Modern and Living Atlas: floating dock sidebar, capsule top bar, open page headers, rounded quiet cards, pressed/focus feedback and a short page entrance (off under reduced motion).
+- Default "Sky - follows the time of day" switches between dawn, noon, golden hour and night by local time; any phase can be pinned. The hazy plum dusk is replaced by a clean deep-blue night. Old Sky Dusk/Day choices migrate once.
+- Sky islands are now cartoon: procedural rounded trees, bushes, rocks, grass, flowers and mushrooms, toon lighting, procedural ground and strata with no texture seams; ponds, waterfalls, cartoon clouds; six farm animals (Quaternius, CC0). The realistic nature kit and ground textures are no longer shipped.
+- Home can switch the 3D islands off (category cards instead), from the islands page or Settings; software renderers start with it off. Skinned animal parts are merged at runtime to keep draw calls low.
+- Star map: soft core glow restored, dashed outer great circles, depth-driven node saturation and lightness with lit caps on front sources, cool night palette, random meteors (4-12 per session).
+- Not done: the requested non-blocking security scan for one-click load and collapsed child Skills in the library were stopped by the automated safety review and await the user's decision. Public updater manifest unchanged (3.2.4).
+
 ## 3.2.8 - 2026-10-02 - Complete source updates, Sky theme and rebuilt sky islands
 
 - Sparse-checkout sources re-reconcile their scope after every pull, so Skills added upstream (and the small directories they reference) are materialised; local edits are kept and nothing is hard-reset. Import and update share the same rules.

@@ -162,8 +162,10 @@ export class IslandShape {
   }
 
   buildGeometry(quality = 1): THREE.BufferGeometry {
-    const segments = Math.round(THREE.MathUtils.clamp(this.radius * 14, 72, 160) * quality);
-    const rings = Math.round(THREE.MathUtils.clamp(this.radius * 2.6, 12, 34) * quality);
+    // Coarse on purpose: smooth toon grass needs little, and the faceted rock
+    // underneath reads as chunky cartoon planes.
+    const segments = Math.round(THREE.MathUtils.clamp(this.radius * 8, 48, 96) * quality);
+    const rings = Math.round(THREE.MathUtils.clamp(this.radius * 2.2, 10, 26) * quality);
     const positions: number[] = [];
     const rock: number[] = [];
     const depth: number[] = [];
@@ -224,7 +226,7 @@ export class IslandShape {
     }
     // Part 2: the underside, rings from the cliff foot in to the axis, each
     // vertex hanging by the depth field below the foot level.
-    const underRings = Math.round(16 * quality) + 6;
+    const underRings = Math.round(9 * quality) + 4;
     const footLevel = foot.reduce((sum, item) => sum + item.y, 0) / foot.length;
     for (let ring = 1; ring <= underRings; ring++) {
       const q = 1 - (ring / underRings) ** 0.9;

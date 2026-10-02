@@ -8,26 +8,26 @@
 .sky-islands .sky-heading h2, .sky-islands .sky-heading p { text-shadow: 0 1px 10px #3a2c3e40; }
 .sky-islands.is-light .sky-heading h2, .sky-islands.is-light .sky-heading p { text-shadow: 0 1px 10px #ffffff80; }
 .sky-controls { position: absolute; top: 153px; right: 28px; display: flex; gap: 7px; z-index: 4; }
-.sky-controls button, .sky-empty button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid #ffffff26; border-radius: 8px; padding: 8px 12px; color: inherit; background: #2c2338a6; font-size: 12px; line-height: 1.4; cursor: pointer; backdrop-filter: blur(6px); }
+.sky-controls button, .sky-empty button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid #ffffff26; border-radius: 8px; padding: 8px 12px; color: inherit; background: #131b2cb3; font-size: 12px; line-height: 1.4; cursor: pointer; backdrop-filter: blur(6px); }
 .is-light .sky-controls button, .is-light .sky-empty button { background: #ffffffc4; border-color: #9fb3c74d; }
-.sky-controls button:hover, .sky-empty button:hover { background: #3c3049e6; }
+.sky-controls button:hover, .sky-empty button:hover { background: #1f2b44e6; }
 .is-light .sky-controls button:hover, .is-light .sky-empty button:hover { background: #fff; color: #1b3042; }
-.sky-controls button[aria-pressed="true"] { border-color: #f1c58c; }
+.sky-controls button[aria-pressed="true"] { border-color: #f2b866; }
 .is-light .sky-controls button[aria-pressed="true"] { border-color: #47698a; }
 .sky-controls button span[aria-hidden] { font-size: 17px; line-height: 16px; }
 .sky-scene-host { position: absolute; inset: 0; }
 .sky-world-canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
 .sky-map-labels { position: absolute; inset: 0; pointer-events: none; }
-.sky-island-label { pointer-events: auto; position: absolute; left: 0; top: 0; width: max-content; max-width: 220px; border: 1px solid #ffffff1f; border-radius: 9px; padding: 6px 12px 7px; color: #f7f1ea; background: #2a2134d6; text-align: center; cursor: pointer; box-shadow: 0 2px 8px #1f15262e; transition: background .16s, border-color .16s; will-change: transform; }
+.sky-island-label { pointer-events: auto; position: absolute; left: 0; top: 0; width: max-content; max-width: 220px; border: 1px solid #ffffff1f; border-radius: 9px; padding: 6px 12px 7px; color: #f7f1ea; background: #131b2cdb; text-align: center; cursor: pointer; box-shadow: 0 2px 8px #0508122e; transition: background .16s, border-color .16s; will-change: transform; }
 .is-light .sky-island-label { color: #1f3242; background: #fffffff0; border-color: #ffffff; box-shadow: 0 2px 8px #29405a24; }
 .sky-island-label strong { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 600; white-space: nowrap; line-height: 1.55; }
 .sky-island-label > span { display: block; font-size: 10px; opacity: .82; line-height: 1.6; font-variant-numeric: tabular-nums; }
 .sky-island-label b { font-weight: 600; }
-.sky-island-label.is-hovered, .sky-island-label:hover { background: #3a2d47; border-color: #f1c58c; }
+.sky-island-label.is-hovered, .sky-island-label:hover { background: #1f2b44; border-color: #f2b866; }
 .is-light .sky-island-label.is-hovered, .is-light .sky-island-label:hover { background: #fff; border-color: #47698a; }
-.sky-islands button:focus-visible, .sky-islands input:focus-visible { outline: 2px solid #f1c58c; outline-offset: 3px; }
+.sky-islands button:focus-visible, .sky-islands input:focus-visible { outline: 2px solid #f2b866; outline-offset: 3px; }
 .is-light.sky-islands button:focus-visible, .is-light.sky-islands input:focus-visible { outline-color: #2f5577; }
-.sky-navigation { position: absolute; right: 28px; top: 206px; bottom: 150px; width: 286px; z-index: 5; display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid #ffffff21; border-radius: 12px; background: #2a2134f2; box-shadow: 0 7px 20px #1f152633; }
+.sky-navigation { position: absolute; right: 28px; top: 206px; bottom: 150px; width: 286px; z-index: 5; display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid #ffffff21; border-radius: 12px; background: #131b2cf2; box-shadow: 0 7px 20px #05081233; }
 .is-light .sky-navigation { background: #fbfcfdf7; border-color: #cfdae4; }
 .sky-search { display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #9cb2b54a; padding: 4px 2px 11px; }
 .sky-search > span { font-size: 22px; }
@@ -47,7 +47,7 @@
 .sky-islands.is-fallback .sky-world-canvas { display: none; }
 .sky-caption { position: absolute; bottom: 113px; left: 32px; right: 28px; display: flex; justify-content: space-between; align-items: center; gap: 15px; color: inherit; opacity: .8; font-size: 11px; pointer-events: none; text-shadow: 0 1px 6px #3a2c3e40; }
 .is-light .sky-caption { text-shadow: none; }
-.sky-caption span { padding: 4px 9px; border-radius: 6px; background: #2a213485; }
+.sky-caption span { padding: 4px 9px; border-radius: 6px; background: #131b2c99; }
 .is-light .sky-caption span { background: #ffffffb3; }
 .sky-empty { position: absolute; top: 44%; left: 15%; right: 15%; text-align: center; }
 .sky-islands .sky-empty p { font-size: 14px; line-height: 1.7; color: inherit; margin: 12px 0 20px; }
@@ -59,7 +59,7 @@
 @media (max-height: 750px) { .sky-heading { top: 146px; } .sky-heading p { display: none; } .sky-controls { top: 144px; } .sky-caption { bottom: 98px; } .sky-navigation { top: 187px; bottom: 128px; } }
 @media (prefers-reduced-motion: reduce) { .sky-island-label { transition: none; } }
 .sky-credits-toggle { pointer-events: auto; margin-left: 10px; border: 0; padding: 0; color: inherit; background: none; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
-.sky-credits { position: absolute; right: 28px; bottom: 150px; z-index: 6; width: min(380px, calc(100% - 56px)); padding: 14px 16px; border: 1px solid #ffffff21; border-radius: 12px; color: #f5efe9; background: #2a2134f5; box-shadow: 0 7px 20px #1f152633; font-size: 12px; line-height: 1.5; }
+.sky-credits { position: absolute; right: 28px; bottom: 150px; z-index: 6; width: min(380px, calc(100% - 56px)); padding: 14px 16px; border: 1px solid #ffffff21; border-radius: 12px; color: #f5efe9; background: #131b2cf5; box-shadow: 0 7px 20px #05081233; font-size: 12px; line-height: 1.5; }
 .is-light .sky-credits { color: #1f3242; background: #fbfcfdf7; border-color: #cfdae4; }
 .sky-credits header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .sky-credits header button { border: 0; background: none; color: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
@@ -67,3 +67,47 @@
 .sky-credits li span { display: block; }
 .sky-credits li small, .sky-credits p { opacity: .75; }
 .sky-credits p { margin: 10px 0 0; }
+
+/* Time of day: the page behind the scene matches its sky, so nothing flashes. */
+.skill-archipelago.sky-islands.sky-phase-dawn { background: linear-gradient(180deg, #9fb8dd 0%, #f7d4c1 55%, #f6e3d8 100%); }
+.skill-archipelago.sky-islands.sky-phase-noon { background: linear-gradient(180deg, #7fb6e6 0%, #d9ecf8 55%, #eaf3fa 100%); }
+.skill-archipelago.sky-islands.sky-phase-golden { background: linear-gradient(180deg, #8fb4d8 0%, #f6d6a2 55%, #f4e2c4 100%); }
+.skill-archipelago.sky-islands.sky-phase-night { color: #e9eef7; background: linear-gradient(180deg, #0c1630 0%, #24365e 55%, #16223e 100%); }
+
+/* Simple view: category cards, no GPU. */
+.sky-islands.is-flat .sky-scene-host { display: none; }
+.sky-board {
+  position: absolute;
+  inset: 230px 32px 150px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  align-content: start;
+  gap: 14px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.sky-board-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 16px 18px;
+  border: 1px solid #ffffff;
+  border-radius: 16px;
+  color: #1f3242;
+  background: #ffffffe6;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 2px 10px #29405a1f;
+  transition: transform 180ms cubic-bezier(.2, .8, .2, 1), box-shadow 180ms cubic-bezier(.2, .8, .2, 1);
+}
+.sky-board-card:hover { transform: translateY(-2px); box-shadow: 0 8px 22px #29405a2e; }
+.sky-board-card:active { transform: scale(.98); }
+.sky-board-card strong { font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sky-board-card span { font-size: 12px; opacity: .72; font-variant-numeric: tabular-nums; }
+.sky-board-card i { display: block; height: 4px; margin-top: 6px; border-radius: 4px; background: #2c64a6; opacity: .8; }
+.sky-phase-golden .sky-board-card i { background: #c8662c; }
+.sky-phase-dawn .sky-board-card i { background: #c96f4a; }
+.sky-phase-night .sky-board-card { color: #e9eef7; background: #131b2ce6; border-color: #ffffff1a; box-shadow: 0 2px 10px #0000004d; }
+.sky-phase-night .sky-board-card i { background: #f2b866; }
+@media (prefers-reduced-motion: reduce) { .sky-board-card { transition: none; } }

@@ -69,15 +69,16 @@ test("the sync report names the snapshot result instead of calling the source un
 
 test("light themes never paint the star map backdrop as a grey shadow", () => {
   // A translucent DARK tint spread over a light page reads as a dirty smudge.
-  // The backdrop now only draws tiny stars and hairline circles; light themes
-  // halve the star alpha and keep the circles faint.
+  // The backdrop draws tiny stars, hairline circles and one soft core whose
+  // light-theme strength stays far fainter than on dark themes.
   const atmosphere = universe.slice(
     universe.indexOf("function drawUniverseAtmosphere("),
-    universe.indexOf("function drawUniverseNode(")
+    universe.indexOf("function drawUniverseMeteors(")
   );
   assert.ok(atmosphere.length > 0);
-  assert.doesNotMatch(atmosphere, /createRadialGradient|fillRect\(0, 0/);
+  assert.doesNotMatch(atmosphere, /fillRect\(0, 0/);
   assert.match(atmosphere, /lightTheme \? 0\.5 : 1/);
-  assert.match(atmosphere, /lightTheme \? 0\.16 : 0\.13/);
+  assert.match(atmosphere, /lightTheme \? 0\.1 : 0\.2/);
+  assert.match(atmosphere, /lightTheme \? 0\.2 : 0\.17/);
   assert.match(styles, /--hero-grad: radial-gradient\(circle at 66% 48%, rgba\(22, 121, 111, \.05\), transparent 52%\);/);
 });

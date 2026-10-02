@@ -3,7 +3,7 @@
 import { createSkyWorld } from "../src/sky/world";
 
 const params = new URLSearchParams(location.search);
-const direction = params.get("dir") ?? "morning";
+const direction = params.get("dir") ?? "noon";
 const set = params.get("set") ?? "real";
 const sets: Record<string, Array<{ id: string; name: string; weight: number }>> = {
   real: [
@@ -26,7 +26,7 @@ const sets: Record<string, Array<{ id: string; name: string; weight: number }>> 
 };
 const islands = sets[set] ?? sets.real;
 const host = document.getElementById("host")!;
-if (direction === "dusk") document.body.classList.add("dark");
+if (direction === "night") document.body.classList.add("dark");
 const labels = new Map<string, HTMLElement>();
 for (const island of islands) {
   const label = document.createElement("button");
