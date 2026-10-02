@@ -1,11 +1,11 @@
 {
-  "version": "3.2.4",
-  "notes": "AI SkillHub v3.2.4: 设置页一键安装 Git；并入 v3.2.3 的浅色主题阴影修复与无 Git 电脑的来源更新。",
-  "pub_date": "2026-09-19T21:10:57Z",
+  "version": "3.2.11",
+  "notes": "AI SkillHub 3.2.11: natural clouds, stable dashboard and labels, clearer panels, Codex TOML compatibility and source workflow repairs.",
+  "pub_date": "2026-10-02T13:06:39Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcWM0QXpHeE5CMUhZZ3NOb3ByNEVuTXdkYVBLbWNBVW9HSWVNR3prMlFtN1VZZmg3T1pkZlIzeFduWjVBSXhqZEQxZkZxMXpRVlA4YVY3V2oyUGFQWndzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5ODUyMjU2CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjRfeDY0LXNldHVwLmV4ZQpuSGo0bHY4WmVpK1d3ZEhMKzN5MDc3L1BHNXUwSWd6dUd2TG9FNmI3d2VjNmZsQ1MzZnR2T00yUC9iaFFIM2ZDRXVHUTEydWV5NzRXK2svOUw3cjNCdz09Cg==",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.4/AI-SkillHub-3.2.4-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcWVRWk5wNTNPOUEzRGpiTVB2am1DOGhnY25vMUZCcGdBVm1OQWpvbFQyZU8xMUh2aGk1bU1ubjg0dURSM2lNNVZBR2Y3Y2tjQWdNTUxZL1pqMWJrM1FjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTQ2Mzk4CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjExX3g2NC1zZXR1cC5leGUKWHFtWWcvVjlFdW1yVThETWZNN0drU055THZPSWdqNlZlZWpHaDRhUG82OWQ1R1laL09MYVNIK05XZC9GSXJhREx5VVpmVTV0V0k2NGFNK2RnbTFyRHc9PQo=",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.11/AI-SkillHub-3.2.11-setup.exe"
     }
   }
 }
