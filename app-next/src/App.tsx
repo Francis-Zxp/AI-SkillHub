@@ -6689,14 +6689,15 @@ function initialTheme(): ThemeName {
   if (isThemeName(searchTheme)) return searchTheme;
   try {
     const savedTheme = window.localStorage.getItem("ai-skillhub-theme");
-    // One time only: "nocturne" was the previous default, so a saved
-    // "nocturne" usually means "never chose". Move it to the new default;
-    // any other saved choice is kept, and nocturne stays selectable.
-    if (savedTheme === "nocturne" && !window.localStorage.getItem(SKY_THEME_MIGRATION_KEY)) {
+    // One time only, on the first start of 3.2.8: move to the new Sky family,
+    // keeping the light/dark preference. Every older theme stays selectable
+    // in the theme menu, and a later choice is never overridden.
+    if (!window.localStorage.getItem(SKY_THEME_MIGRATION_KEY)) {
       window.localStorage.setItem(SKY_THEME_MIGRATION_KEY, "1");
-      return DEFAULT_THEME;
+      const next: ThemeName = isThemeName(savedTheme) && isLightTheme(savedTheme) ? "sky-day" : DEFAULT_THEME;
+      window.localStorage.setItem("ai-skillhub-theme", next);
+      return next;
     }
-    window.localStorage.setItem(SKY_THEME_MIGRATION_KEY, "1");
     return isThemeName(savedTheme) ? savedTheme : DEFAULT_THEME;
   } catch {
     return DEFAULT_THEME;

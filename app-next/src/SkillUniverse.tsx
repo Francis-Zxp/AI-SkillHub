@@ -1321,7 +1321,8 @@ function edgeAlpha(kind: UniverseEdgeKind, mode: SkillUniverseMode, highlighted:
 
 function nodeRadius(node: UniverseNode, perspectiveScale: number) {
   if (node.kind === "source") {
-    return clamp(6.2 + Math.log10(node.stars + 1) * 2.4 + Math.sqrt(node.childCount) * 0.18, 7, 19) * perspectiveScale;
+    // Popularity and size still read, but no disc dominates a dense cluster.
+    return clamp(4.6 + Math.log10(node.stars + 1) * 1.6 + Math.sqrt(node.childCount) * 0.14, 5, 13) * perspectiveScale;
   }
   if (node.kind === "router") return (5.2 + node.rating * 0.48) * perspectiveScale;
   return (1.5 + node.rating * 0.38 + (node.health === "warn" ? 0.35 : 0)) * perspectiveScale;

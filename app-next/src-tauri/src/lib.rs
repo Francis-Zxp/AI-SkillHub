@@ -3892,7 +3892,7 @@ async fn apply_source_identity_migration(
             &connection,
             "source_identity_migrated",
             &format!(
-                "Unified {} source folder(s) to owner--repo",
+                "Unified {} source folder(s) to repo--owner",
                 journal.entries.len()
             ),
             serde_json::json!({
