@@ -443,6 +443,7 @@ export function App() {
     return initial;
   });
   const [active, setActive] = useState<NavKey>(() => initialNavKey());
+  const [showUpdateResults, setShowUpdateResults] = useState(false);
   const [dashboardVisited, setDashboardVisited] = useState(active === "dashboard");
   useEffect(() => { if (active === "dashboard") setDashboardVisited(true); }, [active]);
   const [externalImportPath, setExternalImportPath] = useState("");
@@ -2001,6 +2002,9 @@ export function App() {
                   : t("topbar.statusUnauthorized")
                 : t("topbar.statusPreview")}
             </span>
+            {snapshot?.lastSyncSummary?.updateRun && (
+              <button className="icon-button" type="button" title={rt("run.title")} aria-label={rt("run.title")} aria-expanded={showUpdateResults} onClick={() => setShowUpdateResults(value => !value)}><Icon name="info" /></button>
+            )}
           </div>
         </header>
 
@@ -2036,6 +2040,15 @@ export function App() {
               )}
               <i style={{ "--operation-progress": `${operationProgress}%` } as CSSProperties} />
             </section>
+          )}
+
+          {showUpdateResults && snapshot?.lastSyncSummary?.updateRun && (
+            <div className="update-results-popover">
+              <button className="ghost-action small" type="button" onClick={() => setShowUpdateResults(false)}>{t("common.close")}</button>
+              <Suspense fallback={<DeferredSurface label={rt("run.title")} />}>
+                <SourceUpdatePanel run={snapshot.lastSyncSummary.updateRun} busy={mutationBusy} initiallyExpanded />
+              </Suspense>
+            </div>
           )}
 
           {loadError && (
@@ -3373,6 +3386,7 @@ function Library(props: LibraryProps) {
   const [editingSkillId, setEditingSkillId] = useState("");
   const [showImport, setShowImport] = useState(() => Boolean(props.suggestedLocalPath) || importWizardDraftHasContent(loadImportWizardDraft()));
   const [showMaintenance, setShowMaintenance] = useState(false);
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<"all" | "skill" | "prompt" | "other">("all");
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
   const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
   const [childLimits, setChildLimits] = useState<Record<string, number>>({});
@@ -3424,13 +3438,16 @@ function Library(props: LibraryProps) {
             (skillsBySourceId.get(source.id) ?? []).some(skill => skillMatchesSearch(skill, searchQuery))
         )
       : folderFiltered;
-    return sortSources(filtered, sortKey, popularityById, skills);
-  }, [popularityById, selectedFolderId, skills, skillsBySourceId, sources, sourceDrafts, sortKey, searchQuery, skillFolders]);
+    const typed = filtered.filter(source => sourceTypeFilter === "all" ||
+      (sourceTypeFilter === "other" ? source.sourceType !== "skill" && source.sourceType !== "prompt" : source.sourceType === sourceTypeFilter));
+    return sortSources(typed, sortKey, popularityById, skills);
+  }, [popularityById, selectedFolderId, skills, skillsBySourceId, sources, sourceDrafts, sortKey, searchQuery, skillFolders, sourceTypeFilter]);
 
   const localSkills = useMemo(() => {
     const filtered = skills
       .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
       .filter(skill => {
+        if (sourceTypeFilter === "prompt" || sourceTypeFilter === "other") return false;
         if (resolveSkillSource(skill, sources)) {
           return false;
         }
@@ -3438,7 +3455,7 @@ function Library(props: LibraryProps) {
         return searchQuery.trim() ? skillMatchesSearch(skill, searchQuery) : true;
       });
     return sortSkills(filtered, sortKey);
-  }, [skillDrafts, skills, sources, selectedFolderId, searchQuery, sortKey, skillFolders]);
+  }, [skillDrafts, skills, sources, selectedFolderId, searchQuery, sortKey, skillFolders, sourceTypeFilter]);
 
   const totalMatches =
     visibleSources.length +
@@ -3638,7 +3655,7 @@ function Library(props: LibraryProps) {
         {atlasMode && (
           <aside className="atlas-library-filter-deck" aria-label={t("atlas.filterDeck")}>
             <header>
-              <span>{t("nav.library")}</span>
+              <button type="button" className="source-type-filter" aria-pressed={sourceTypeFilter === "all"} onClick={() => setSourceTypeFilter("all")}>{t("nav.library")}</button>
               <b>{visibleSources.length.toLocaleString()}</b>
             </header>
             <div className="atlas-filter-meter">
@@ -3647,9 +3664,9 @@ function Library(props: LibraryProps) {
               <i style={{ "--meter": `${skills.length ? Math.round((enabledSkillCount / skills.length) * 100) : 0}%` } as CSSProperties} />
             </div>
             <dl>
-              <div><dt>{t("atlas.skillSources")}</dt><dd>{sources.filter(source => source.sourceType === "skill").length}</dd></div>
-              <div><dt>{t("atlas.promptSources")}</dt><dd>{sources.filter(source => source.sourceType === "prompt").length}</dd></div>
-              <div><dt>{t("atlas.otherSources")}</dt><dd>{sources.filter(source => source.sourceType !== "skill" && source.sourceType !== "prompt").length}</dd></div>
+              {(["skill", "prompt", "other"] as const).map(type => (
+                <div key={type}><dt><button type="button" className="source-type-filter" aria-pressed={sourceTypeFilter === type} onClick={() => setSourceTypeFilter(current => current === type ? "all" : type)}>{t(type === "skill" ? "atlas.skillSources" : type === "prompt" ? "atlas.promptSources" : "atlas.otherSources")}</button></dt><dd>{sources.filter(source => type === "other" ? source.sourceType !== "skill" && source.sourceType !== "prompt" : source.sourceType === type).length}</dd></div>
+              ))}
             </dl>
           </aside>
         )}

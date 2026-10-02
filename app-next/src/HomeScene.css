@@ -1,18 +1,21 @@
-/* Reserve real layout space for progress; the map and its controls move together. */
-.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) { display: flex; flex-direction: column; padding-top: 84px; }
-.theme-family-atlas.page-dashboard .workspace-body > .operation-banner { flex: none; margin: 8px 24px 0; z-index: 36; background: var(--surface); backdrop-filter: none; }
+/* Progress belongs to the header; it must not resize the scene. */
+.theme-family-atlas.page-dashboard .workspace-body > .operation-banner { position: absolute; top: 80px; left: 12px; right: 12px; height: 4px; min-height: 0; padding: 0; margin: 0; border: 0; z-index: 36; background: var(--surface); backdrop-filter: none; }
+.theme-family-atlas.page-dashboard .operation-banner > div,
+.theme-family-atlas.page-dashboard .operation-banner em { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.theme-family-atlas.page-dashboard .operation-banner > button { position: absolute; right: 50%; top: 8px; transform: translateX(50%); }
 .theme-family-atlas.page-dashboard .operation-banner > div { min-width: 0; }
 .theme-family-atlas.page-dashboard .operation-banner span { overflow-wrap: anywhere; }
 .theme-family-atlas.page-dashboard .operation-banner em, .theme-family-atlas.page-dashboard .operation-banner button { flex-shrink: 0; }
-.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) .dashboard-view { position: relative; flex: 1; height: auto; }
-.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) :is(.home-visual-switch, .atlas-immersive-toggle, .atlas-intro-toggle, .skill-universe-modes) { top: 16px; }
-.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) :is(.sky-heading, .sky-controls) { top: 70px; }
-.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) .sky-navigation { top: 122px; }
-.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) .skill-universe-inspector { top: 68px; }
-.dashboard-immersive.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) { padding-top: 0; }
+.dashboard-immersive.theme-family-atlas.page-dashboard .workspace-body > .operation-banner { top: 8px; }
 @media (max-width: 1000px) { .theme-family-atlas.page-dashboard .operation-banner { flex-wrap: wrap; gap: 6px 12px; } .theme-family-atlas.page-dashboard .operation-banner > div { flex-basis: 70%; } }
 
 .dashboard-view[hidden] { display: none !important; }
+
+.source-type-filter { width: 100%; padding: 6px 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.source-type-filter[aria-pressed="true"] { color: var(--accent); font-weight: 700; }
+.source-type-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.update-results-popover { position: fixed; top: 92px; right: 24px; z-index: 80; width: min(720px, calc(100vw - 128px)); max-height: calc(100dvh - 220px); overflow: auto; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
+.update-results-popover > button { display: block; margin-left: auto; margin-bottom: 8px; }
 
 /* The scene spans the window; navigation and readouts share one safe gutter. */
 .theme-family-atlas.page-dashboard { --home-rail: 92px; --home-gap: 12px; }

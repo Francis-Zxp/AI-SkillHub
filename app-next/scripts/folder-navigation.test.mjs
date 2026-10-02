@@ -25,7 +25,7 @@ function declaration(name) {
 }
 function initializer(name, bindings) {
   const node = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === name);
-  return run(`return ${node.initializer.getText(ast)};`, bindings);
+  return run(`return ${node.initializer.getText(ast)};`, { sourceTypeFilter: "all", ...bindings });
 }
 const modelText = await readFile(new URL("../src/skyIslandModel.ts", import.meta.url), "utf8");
 const model = await import(`data:text/javascript,${encodeURIComponent(ts.transpileModule(modelText, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText)}`);
@@ -48,6 +48,14 @@ const bindings = {
   applySkillDraft: value => value, sortSources: values => values, sortSkills: values => values,
   sourceDrafts: {}, skillDrafts: {}, searchQuery: "", sortKey: "recent", popularityById: new Map()
 };
+
+test("source type selection distinguishes Skills, Prompts and other sources", () => {
+  const sources = [{...source, id: "skill", sourceType: "skill"}, {...source, id: "prompt", sourceType: "prompt"}, {...source, id: "other", sourceType: "mixed"}];
+  for (const type of ["skill", "prompt", "other"]) {
+    assert.deepEqual(initializer("visibleSources", {...bindings, sources, selectedFolderId: "all", sourceTypeFilter: type}).map(item => item.id), [type]);
+  }
+  assert.equal(initializer("visibleSources", {...bindings, sources, selectedFolderId: "all"}).length, 3);
+});
 
 test("folder filtering honors a child override before source inheritance", () => {
   assert.equal(functions.skillMatchesUserFolder(skills[0], "research", source), true);

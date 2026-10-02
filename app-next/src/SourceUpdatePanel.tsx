@@ -20,11 +20,12 @@ type Props = {
   onContinue?: () => void;
   /** Compact mode lists only entries that need attention. */
   compact?: boolean;
+  initiallyExpanded?: boolean;
 };
 
-export function SourceUpdatePanel({ run, busy, onContinue, compact = false }: Props) {
+export function SourceUpdatePanel({ run, busy, onContinue, compact = false, initiallyExpanded = false }: Props) {
   const [filter, setFilter] = useState<SourceUpdateOutcome | "all">("all");
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(initiallyExpanded);
   const detailsId = useId();
   const summary = summarizeSourceUpdateRun(run);
   const entries = useMemo(() => sortSourceUpdateEntries(run?.sources ?? []), [run]);

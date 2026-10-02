@@ -2,6 +2,13 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.15 - 2026-10-03 - Stable update progress and clearer source browsing
+
+- Keep the dashboard scene in place while source updates run, so the background and controls no longer move with the progress panel.
+- Filter the library by Skill, Prompt or other sources directly from its source totals.
+- Open the latest update results to see each source and its specific outcome, including skipped sources and their reasons.
+- Refresh the project homepage with matching English, Chinese and Korean guides and a sharp English 4K Sky noon screenshot.
+
 ## 3.2.14 - 2026-10-03 - Clear update results and uncluttered controls
 
 - Shorten update actions and size dashboard buttons from their contents, preventing footer text overlap at large text sizes and high DPI.

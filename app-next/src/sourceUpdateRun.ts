@@ -137,10 +137,10 @@ const zh: Dictionary = {
   "outcome.local-changes": "本地修改",
   "outcome.failed": "失败",
   "outcome.deferred": "待继续",
-  "outcome.not-git": "需重新添加",
+  "outcome.not-git": "无上游",
   "hint.local-changes": "检测到你改过的文件，已跳过更新以免覆盖。",
   "hint.deferred": "本轮时间用完，下一轮会优先处理。",
-  "hint.not-git": "这个文件夹没有来源记录，无法自动更新；删除后用 GitHub 地址重新添加即可。",
+  "hint.not-git": "没有可用的上游更新记录。请查找作者的新版本后重新导入；无需先删除现有资料。",
   "hint.pinned": "已固定在指定版本，同步不会改动它。"
 };
 
@@ -184,10 +184,10 @@ const en: Dictionary = {
   "outcome.local-changes": "Local edits",
   "outcome.failed": "Failed",
   "outcome.deferred": "Waiting",
-  "outcome.not-git": "Re-add needed",
+  "outcome.not-git": "No upstream",
   "hint.local-changes": "Files you changed were found, so the update was skipped to keep them.",
   "hint.deferred": "This round ran out of time; the next round handles it first.",
-  "hint.not-git": "This folder has no source record and cannot update itself. Remove it and add the GitHub URL again.",
+  "hint.not-git": "No usable upstream update record. Import a newer version from the author; you do not need to delete the existing source first.",
   "hint.pinned": "Pinned to a fixed version; sync leaves it unchanged."
 };
 
@@ -231,10 +231,10 @@ const ko: Dictionary = {
   "outcome.local-changes": "로컬 수정",
   "outcome.failed": "실패",
   "outcome.deferred": "대기",
-  "outcome.not-git": "다시 추가 필요",
+  "outcome.not-git": "업데이트 원본 없음",
   "hint.local-changes": "직접 수정한 파일이 있어 덮어쓰지 않도록 업데이트를 건너뛰었습니다.",
   "hint.deferred": "이번 회차 시간이 끝났습니다. 다음 회차에서 먼저 처리합니다.",
-  "hint.not-git": "소스 기록이 없는 폴더라 자동 업데이트할 수 없습니다. 삭제 후 GitHub 주소로 다시 추가하세요.",
+  "hint.not-git": "사용 가능한 업데이트 원본 기록이 없습니다. 작성자의 새 버전을 가져오세요. 기존 자료를 먼저 삭제할 필요는 없습니다.",
   "hint.pinned": "지정한 버전에 고정되어 동기화가 변경하지 않습니다."
 };
 
@@ -259,7 +259,11 @@ export function sourceUpdateToast(run: SourceUpdateRun | null | undefined): { me
   if (summary.counts.failed > 0) rest += rt("run.toastFailed", { n: summary.counts.failed });
   if (summary.pending > 0) rest += rt("run.toastPending", { n: summary.pending });
   const skipped = summary.counts.pinned + summary.counts["not-git"] + summary.counts["local-changes"];
-  if (skipped > 0) rest += rt("run.toastSkipped", { n: skipped });
+  if (skipped > 0) {
+    const entries = (run?.sources ?? []).filter(entry => ["pinned", "not-git", "local-changes"].includes(entry.outcome));
+    rest += ` · ${entries.slice(0, 3).map(entry => `${sourceFolderLabel(entry.folder).title}: ${rt(`outcome.${entry.outcome}`)}`).join("; ")}`;
+    if (entries.length > 3) rest += ` (+${entries.length - 3})`;
+  }
   if (summary.keptLocal > 0) rest += ` · ${rt("run.keptLocal", { n: summary.keptLocal })}`;
   const message = rt("run.toast", {
     checked: summary.checked,

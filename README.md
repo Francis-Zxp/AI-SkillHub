@@ -1,117 +1,62 @@
 # AI SkillHub
 
-**简体中文** | [English](README_EN.md)
+**English** · [Chinese](README_ZH.md) · [Korean](README_KO.md)
 
-把分散在 GitHub、本地目录和不同 AI 工具里的 Skills，整理成一张可识别、可搜索、可评分、可路由、可同步的能力图谱。
+### Your AI Skills, organized in one place.
 
-AI SkillHub 是一款面向 Windows 的本地优先 Skill 管理器：导入真实 `SKILL.md`，区分 Prompt 资料与可调用 Skill，自动概括用途与使用方法，组织父子关系与同名路由，并把经过筛选的能力安全同步给 Claude Code、Codex、Antigravity 等工具。
+A Windows desktop app for collecting Skills, keeping their sources up to date, and connecting them to your AI tools. Manage GitHub repositories, local Skills, Prompt collections, and MCP configurations from a searchable local library.
 
-<img width="2560" height="1526" alt="AI SkillHub 3.x" src="https://github.com/user-attachments/assets/408eab67-1912-47ca-af5d-3dad1c383e01" />
+[**Download the latest release**](https://github.com/Francis-Zxp/AI-SkillHub/releases/latest) · [What's new](CHANGELOG.md) · [Report an issue](https://github.com/Francis-Zxp/AI-SkillHub/issues)
 
-## 现在能做什么
+![AI SkillHub — English dashboard with the Sky noon festival theme](docs/images/sky-noon-festival-en.png)
 
-- 从 GitHub、本地文件夹、zip / `.skill` 包导入来源。
-- 只把包含 `SKILL.md` 的目录识别为可调用 Skill；Prompt 仓库保留为资料，不伪装成 Skill。
-- 根据 `README`、`SKILL.md` 与来源信息离线生成简介、用途、用法、分类和自定义标签；用户修改永远优先。
-- 导入进入正式资料库前执行逐文件安全扫描；高风险始终阻止写入，中风险展示脱敏证据并留在隔离区，只有用户明确确认后才会加入资料库。
-- 每个非空来源只发布一个规范化父 Skill，并且只路由到同一来源内的明确子 Skill；
-  同名子能力不会生成全局短名入口，技能库可一键复制精确子 Skill 名称供父路由选择。
-- 给来源与子 Skill 进行本地 1–5 星评分，并按评分优先排序。
-- 锁定 Git 来源版本、预览上游更新差异，并在存在已验证备份时一键回滚。
-- 用个人/子评分、健康、真实本地使用和安全扫描生成可解释质量分；缺失证据不计零分，GitHub stars 仍只表示热度。
-- 用真实来源、分类、父子关系、个人评分和 GitHub 热度生成可交互能力星图。
-- 检测 Claude Code、Codex、Antigravity 等本机工具；适配器医生会解释桌面应用、Code 能力、PATH 与 Skills 目录分别处于什么状态。
-- 只读盘点 Codex 与 Claude Code 已存在的 MCP 配置，并可在脱敏预览和明确确认后添加、修改、移除或回滚受支持的绑定；不启动未知服务器、不读取凭据值，也不伪造 Tools / Resources / Prompts 探测结果。
-- 用零写入的 Codex 插件医生检查版本、清单、配置和缓存结构证据；不执行插件脚本、PowerShell、`setup.ps1`，也不触碰独立的桌面修复工具。
-- 保存诊断、审计、快照和回滚信息，不向新用户展示开发发布工具。
-- v4 恢复完成且数据库健康后，用白名单清理助手把旧便携数据移动到可恢复备份；开发者 `release` 目录不自动处理。
+*Sample library in the Sky noon festival theme. Each island represents a category; its size reflects the content it contains.*
 
-## 安装与自动更新
+## What you can do
 
-前往 [GitHub Releases](https://github.com/Francis-Zxp/AI-SkillHub/releases/latest) 下载：
+| Task | How AI SkillHub helps |
+| --- | --- |
+| Build your library | Import GitHub repositories, local folders, ZIP files, or `.skill` packages. Discover Skills already present in supported local AI-tool directories. |
+| Find the right capability | Search, categorize, tag, rate, and annotate sources and individual Skills. Explore categories as islands or relationships as a star map. |
+| Keep sources current | Check upstream Git repositories and bring in newly added Skills. See which sources changed, stayed current, failed, or were skipped. |
+| Use multiple AI tools | Detect supported tools such as Claude Code, Codex, and Antigravity, then deliver enabled Skills to the selected tools. |
+| Keep similar Skills together | Source-specific parent entries preserve each collection and its child Skills. Similar capabilities from different authors can coexist. |
+| Manage MCP connections | Inspect supported host configurations, preview changes, apply bindings, and restore snapshots. Origin MCP also has a dedicated setup and connection check. |
 
-- 推荐：`AI-SkillHub-<版本>-setup.exe`
-- 备用：`AI-SkillHub-<版本>.zip`
+## Start in three steps
 
-v3.0.3 是自动更新起点。安装 v3.0.3 或更高版本后，软件会自动检查官方正式版；只有通过 AI SkillHub 更新公钥验证的签名安装包才会被接受。后续更新替换受管理的程序文件并重启，来源、评分、设置与 SQLite 索引继续保存在：
+1. **Install** the `AI-SkillHub-<version>-setup.exe` from the latest release. A ZIP package is also available.
+2. **Add a source** in the Skill Library, or discover existing Skills under AI Tools.
+3. **Choose your AI tools** and synchronize the enabled Skills. Open a source to see its usage instructions.
+
+The interface is available in English, Chinese, and Korean. Theme, text size, icon size, animation, and power-saving controls let you adjust the workspace.
+
+## Skills, Prompts, and MCP
+
+- **Skills** contain `SKILL.md` and describe capabilities an agent can load. Parent entries organize the child Skills belonging to the same source.
+- **Prompts** are reusable instructions or reference materials. A Prompt repository is not installed as a Skill merely because it contains Markdown files.
+- **MCP** connects an AI client to an external server or application. Importing a configuration does not install every server dependency or prove that it is running; use the connection checks provided for supported integrations.
+
+## Updates and your data
+
+**Source updates** pull changes from the original repositories. A pinned version, local edits, or a source without an upstream address may require attention; the update results explain the outcome for each source. Your own notes and ratings remain separate from upstream content.
+
+**App updates** use signed official release packages. Settings provides update checks and installation; the latest release page remains available for manual downloads. Release history lives in the [changelog](CHANGELOG.md).
+
+Your library, settings, ratings, and local index are stored outside the program directory:
 
 ```text
 %LOCALAPPDATA%\AI SkillHub\UserData\
 ```
 
-v3.0.2 及更早版本没有更新器，因此需要手动安装一次当前正式版。v3.0.4
-起的可恢复迁移会逐来源复制和校验旧资料，并在合并本地备注、标签、评分
-等 SQLite 元数据前创建备份；它不会覆盖更新的来源。v3.0.5 又把来源
-下载、安全扫描和写入移到后台线程并显示五阶段进度。恢复完成后，用户
-可用安全清理助手逐项确认并移动白名单中的旧数据，`release` 始终保留
-手动处理。
+Imported source scripts are not executed during scanning. Source review, diagnostics, and recoverable snapshots help you inspect changes before applying them. Public release packages do not include the developer's personal library.
 
-v3.0.6 会对刚发布版本尚未同步到全部 GitHub 更新端点的情况自动重试，
-无需退出软件。主页会先恢复上一份真实星图缓存，再过渡到当前 SQLite
-索引；缓存不保存来源绝对路径、备注或完整 Skill 内容，手动“同步并刷新”
-仍代表真实的 Git/工具同步，不会用快速动画伪装完成。
+## Development
 
-v3.0.7 把启动时的快速本地读取明确标成“加载本地索引”，不再称作同步；
-只有手动同步才会访问 Git/工具链。编辑侧栏现已逐主题校验可读性，星图
-体积光与几何球心严格重合，空间背景提供受性能约束的 5–20 条会话级随机
-流星。首页右上角可进入沉浸模式，也可直接打开官方 GitHub 项目；`Esc`
-可随时退出沉浸模式。
+Built with **Tauri 2 · React · TypeScript · Rust · SQLite**.
 
-v3.1.4 将正式版发现从单一 GitHub Release 入口升级为三条签名元数据线路，
-区分网络、超时、TLS、代理、元数据、签名与安装错误；网络恢复或电脑唤醒后
-会自动复查，慢速安装包下载允许最长 10 分钟，检查和安装也不会重复并发。
-失败不会改动当前程序与资料库，并可直接打开官方发布页手动安装。
+The maintained desktop workspace is [`app-next`](app-next/README.md). See its documentation for development requirements and commands, and the [Skill Router Standard](docs/skill-router-standard.md) for parent and child routing.
 
-v3.1.3 修复超大型 GitHub 仓库导入：先读取目录并只下载包含 `SKILL.md` 的
-Skill 子树，不再为单个 Skill 克隆完整仓库；系统 Git 或整仓 ZIP 不可用时，
-会尝试作者最新 Release 中经过大小、来源和格式校验的 Skill 专用 ZIP，并继续
-执行路径、符号链接、单文件、总量和逐文件安全扫描。`ppt-master` 的 Git 稀疏
-导入与官方 Skill-only Release 两条真实路径均已通过隔离测试。
+---
 
-v3.1.2 修复了大型来源被重复安全告警误阻断的问题：脚本文件改为汇总计数，
-文档、示例、测试与不会执行的 GitHub Workflow 进入隔离审查，真正运行脚本
-或 `SKILL.md` 中的危险命令仍会阻止写入。添加来源表单现在会跨页面与重启
-保留草稿，成功导入后自动清除，也可手动清空。
-
-v3.1.1 修复了正式桌面包的导入事件权限：只开放进度所需的监听/取消监听，
-并在监听不可用时自动降级为无实时进度导入，不再让 ACL 配置阻断正式写入。
-v3.1.0 修复了 GitHub 导入的可靠性与取消链路：真实后台阶段驱动进度，
-内置 ZIP 下载会跳过而不跟随符号链接，匿名逐文件 API 回退不会再耗尽
-公网 IP 配额，取消会终止所属 Windows 进程树并清理隔离区。新增「连接
-中心」用于只读盘点 MCP，并提供零写入的 Codex 插件医生；两者都不会
-启动服务器、读取密钥或执行修复脚本。
-
-v3.2.0 让刷新任务单飞并在后台执行，来源备注与标签一次事务保存；Git 更新按持久化
-游标轮转，预算延后的来源会在下次优先检查。父 Skill 交付会修复断链和合法多行 YAML，
-每个子 Skill 可复制精确名称。MCP 连接中心新增计划、脱敏差异、原子写入、静态回读与
-跨重启快照回滚；回滚内容仅保存在受当前 Windows 用户保护的私有状态目录，若宿主配置被外部修改会拒绝覆盖。它仍不会启动 Server，运行可用性必须在对应宿主的 `/mcp` 中确认。
-
-## 最短使用流程
-
-1. 打开 AI SkillHub，进入「技能库」。
-2. 粘贴 GitHub 仓库地址，或选择本地 Skill 文件夹。
-3. 点击「一键添加并刷新」。
-4. 检查自动识别的简介、用途、用法与标签；需要时直接编辑或对现有资料库一键重新识别。
-5. 在「AI 工具」中只启用实际检测到的工具，再执行同步。
-
-## 重要边界
-
-- 不创建不存在的 Codex、Claude 或其他 AI 工具目录。
-- 不把 Prompt 仓库安装成 Skill。
-- 不执行导入来源中的脚本；自动元数据识别只读取有边界的文本证据。
-- 不覆盖用户目录；涉及真实写入前必须有快照、确认与诊断记录。
-- 公开发布包不包含个人 Skills、私有来源、评分、配置、报告或构建缓存。
-
-## 开发
-
-本地开发入口：
-
-```text
-AI SkillHub.exe
-```
-
-正式发布会同时生成签名 NSIS 安装器、更新清单、SHA-256、便携包，并把仓库根目录的开发者 EXE 刷新为同一个版本。详细架构、路由规则与开发命令见 [English documentation](README_EN.md)、[使用说明](使用说明.md) 和 [Skill Router Standard](docs/skill-router-standard.md)。
-
-## 作者
-
-FrancisZhu
+Created by **FrancisZhu**.

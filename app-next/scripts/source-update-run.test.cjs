@@ -130,3 +130,10 @@ test("all languages distinguish clean, changed, partial, pending and failed chec
     assert.ok(labels.every(label => !label.includes("run.") && !label.includes("{")));
   }
 });
+
+test("skipped results identify the actual source and reason instead of a generic list", () => {
+  const { sourceUpdateToast } = load();
+  const result = sourceUpdateToast(run([entry("repo", "unchanged"), entry("mineru-document-extractor", "not-git")]));
+  assert.match(result.message, /mineru-document-extractor: 无上游/);
+  assert.doesNotMatch(result.message, /固定版本、本地修改或无上游|\[object Object\]/);
+});
