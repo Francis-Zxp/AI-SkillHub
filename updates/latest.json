@@ -1,11 +1,11 @@
 {
-  "version": "3.2.12",
-  "notes": "修复天空岛运动、星图标签与流星；统一中文字体，整条侧栏共用首页背景；补齐 Origin 桥接注册及真实连接验证。",
-  "pub_date": "2026-10-02T15:31:11Z",
+  "version": "3.2.13",
+  "notes": "统一全部主题的圆角菜单面板与外侧背景；星图文字使用稳定合成层，改善自动旋转、拖动与惯性运动。",
+  "pub_date": "2026-10-02T16:35:56Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVNTakdpbDZJN0YxdUd6clR0UFFUYVBldWJHK2ZleXg1bWEvdWp1Vnhhc0JWK05ubkdpMEJobDRLenZGZ0Z6dVZ2NFpEYXlkeTF3TnhUK051RnNmOUFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTU1MDcwCWZpbGU6QUkgU2tpbGxIdWJfMy4yLjEyX3g2NC1zZXR1cC5leGUKSlI0WEd4Q2J6ZGgrbmNwTzhUUE1ZVkh1cURMaUJ1UWx5Q2JpK2JZcEF6Y25qWWkxNEZ1dFFYM202V1UwNnhBdFAxM1JCMkJRbVM2N0d0TWQ0aVJBQ3c9PQo=",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.12/AI-SkillHub-3.2.12-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVhuZHQrem1kMStPdldwWStGZERhVW5KUS9HSzYrOVhROWtsR0NGYWEybGNwRG5BUkJyZnBKeUozWDE4UGYySzl0YWloYjhFS1ovcUpkVGtMWWdQREFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTU4OTU1CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjEzX3g2NC1zZXR1cC5leGUKelZzN2dyMUF2NGQ1VkFjMHF3RGc0ZEF3YTVxK1lBRTJPV1VPYnkrN3l2UzVKOTlYb3FaKzhHRVE0c0ZtT2hYMmlZQStLWlk3eFppUUd3R3BoSjJOREE9PQo=",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.13/AI-SkillHub-3.2.13-setup.exe"
     }
   }
 }
