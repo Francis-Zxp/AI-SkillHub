@@ -28,6 +28,11 @@ pub(crate) const ORIGIN_RECIPE_ID: &str = "origin-mcp";
 /// docs/origin-ui-buttons.md and docs/agentic/origin-mcp-bootstrap.md.
 /// PyPI wheel sha256 2a9a3a31a41b23dd0a328c1a383f819c3966d9f6de518ef08a546f3cfdf4f845.
 pub(crate) const ORIGIN_MCP_VERSION: &str = "0.1.4";
+/// origin-mcp 0.1.4 asks for `mcp>=1.8.0` with no upper bound, and mcp 2.x
+/// renamed FastMCP, so the server fails at import with the newest SDK. This
+/// pair was verified on 2026-10-02: initialize answers and tools/list returns
+/// the 25 Origin tools.
+pub(crate) const ORIGIN_MCP_SDK_VERSION: &str = "1.30.0";
 pub(crate) const ORIGIN_SERVER_NAME: &str = "origin";
 const START_APP: &str = "Origin MCP Bridge Start";
 const STOP_APP: &str = "Origin MCP Bridge Stop";
@@ -359,6 +364,20 @@ fn installed_package_version(python: &Path) -> Option<String> {
     output.status.success().then(|| text(&output.stdout))
 }
 
+/// Version of the `mcp` SDK in the runtime (origin-mcp imports it at start).
+fn installed_sdk_version(python: &Path) -> Option<String> {
+    if !python.is_file() {
+        return None;
+    }
+    let mut command = Command::new(python);
+    command.args([
+        "-c",
+        "import importlib.metadata as m;print(m.version('mcp'))",
+    ]);
+    let output = run(&mut command, Duration::from_secs(30), "读取 MCP SDK 版本").ok()?;
+    output.status.success().then(|| text(&output.stdout))
+}
+
 /// `origin-mcp status --json` -> state (`running`, `not_running`, `stale`, ...).
 fn bridge_state(python: &Path) -> String {
     let mut command = Command::new(python);
@@ -521,6 +540,14 @@ pub(crate) fn detect(context: &RecipeContext) -> RecipeStatus {
     status.origin = origin.clone();
 
     let installed = installed_package_version(&runtime).unwrap_or_default();
+    let sdk = if installed.is_empty() {
+        String::new()
+    } else {
+        installed_sdk_version(&runtime).unwrap_or_default()
+    };
+    // A runtime counts only with the verified package and SDK pair; anything
+    // else is repaired by installing again.
+    let runtime_ready = installed == ORIGIN_MCP_VERSION && sdk == ORIGIN_MCP_SDK_VERSION;
     status.installed_version = installed.clone();
     if installed.is_empty() {
         let bases = find_base_pythons(&context.home_dir, &context.local_app_data);
@@ -547,6 +574,15 @@ pub(crate) fn detect(context: &RecipeContext) -> RecipeStatus {
             "runtime",
             "failed",
             format!("运行环境中的 origin-mcp 是 {installed}，已核验版本是 {ORIGIN_MCP_VERSION}。"),
+        ));
+    } else if !runtime_ready {
+        status.steps.push(step(
+            "runtime",
+            "failed",
+            format!(
+                "运行环境中的 MCP SDK 是 {}，origin-mcp {ORIGIN_MCP_VERSION} 只能在 1.x 上启动（已核验 {ORIGIN_MCP_SDK_VERSION}）。点“安装并连接”修复。",
+                if sdk.is_empty() { "未知版本" } else { sdk.as_str() }
+            ),
         ));
     } else {
         status.steps.push(step(
@@ -606,7 +642,7 @@ pub(crate) fn detect(context: &RecipeContext) -> RecipeStatus {
             || !same_path(&verification.runtime_python, &runtime)
     });
     status.verification_stale = stale;
-    let bridge = if installed == ORIGIN_MCP_VERSION {
+    let bridge = if runtime_ready {
         bridge_state(&runtime)
     } else {
         String::new()
@@ -652,7 +688,7 @@ pub(crate) fn detect(context: &RecipeContext) -> RecipeStatus {
         ("not-installed", "install-origin")
     } else if installed.is_empty() && status.base_python.is_empty() {
         ("not-installed", "install-python")
-    } else if installed != ORIGIN_MCP_VERSION {
+    } else if !runtime_ready {
         ("not-installed", "install")
     } else if connected == 0 {
         ("needs-connection", "connect")
@@ -748,6 +784,7 @@ pub(crate) fn install(context: &RecipeContext, base_python: &Path) -> Result<Rec
             "--no-input",
             "--no-warn-script-location",
             &format!("origin-mcp=={ORIGIN_MCP_VERSION}"),
+            &format!("mcp=={ORIGIN_MCP_SDK_VERSION}"),
         ]),
         Duration::from_secs(900),
         "下载并安装 origin-mcp",
@@ -760,8 +797,11 @@ pub(crate) fn install(context: &RecipeContext, base_python: &Path) -> Result<Rec
         )));
     }
     let installed = installed_package_version(&python).unwrap_or_default();
-    if installed != ORIGIN_MCP_VERSION {
-        return Err(cleanup(format!("安装后版本校验失败（得到 {installed}）。")));
+    let sdk = installed_sdk_version(&python).unwrap_or_default();
+    if installed != ORIGIN_MCP_VERSION || sdk != ORIGIN_MCP_SDK_VERSION {
+        return Err(cleanup(format!(
+            "安装后版本校验失败（得到 origin-mcp {installed}、MCP SDK {sdk}）。"
+        )));
     }
     append_log(context, &format!("origin-mcp {installed} installed"));
     // Stages the two Origin App folders under %LOCALAPPDATA%\OriginLab\Apps.
