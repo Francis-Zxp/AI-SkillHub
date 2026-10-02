@@ -87,7 +87,7 @@ async function main() {
     assert.ok(metrics.scrollWidth <= metrics.width + 1);
     const screenshot = reportPath.replace(/\.json$/, "-4k.png");
     await page.screenshot({ path: screenshot });
-    assert.ok(scriptUrls.some(url => /skyIslandScene.*\.js/.test(url)), "scene chunk must load from packaged assets");
+    assert.ok(scriptUrls.some(url => /world.*\.js/.test(url)), "sky world chunk must load from packaged assets");
     const externalScripts = scriptUrls.filter(url => !/^https?:\/\/(?:tauri|ipc)\.localhost\//.test(url) && !/^(?:tauri|ipc):/.test(url));
     assert.deepEqual(externalScripts, [], "no external script may load during the isolated run");
     assert.ok(blockedTelemetryRequests.length > 0, "existing telemetry script request must be explicitly blocked");

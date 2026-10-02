@@ -30,7 +30,6 @@ test("formal release version surfaces agree before signing", () => {
     new RegExp(`^#\\s+AI SkillHub v${escapedVersion}\\s*$`, "m"),
   );
   assert.match(read(appRoot, "src", "preview.ts"), new RegExp(`appVersion:\\s*"${escapedVersion} preview"`));
-  assert.match(read(appRoot, "src", "i18n.ts"), new RegExp(`"atlas\\.releaseTag":\\s*"${escapedVersion}\\s+·`));
   assert.match(
     read(appRoot, "scripts", "test-nsis-install-upgrade.ps1"),
     new RegExp(`\\[string\\]\\$ExpectedVersion\\s*=\\s*'${escapedVersion}'`),

@@ -8,3 +8,6 @@ src-tauri/gen/
 .skillhub-next/
 reports/
 *.log
+
+# Sky lab build output (local inspection only)
+lab/.out/

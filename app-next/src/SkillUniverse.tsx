@@ -9,6 +9,7 @@ import {
 import { Icon } from "./icons";
 import { categoryName, getLang, t } from "./i18n";
 import { localizedSkillDescription } from "./localizedDescriptions";
+import { sourcePresentation } from "./sourceIdentity";
 import type { LegacySnapshot, SkillCard, SourceCard, SourcePopularityCard } from "./types";
 
 export type SkillUniverseMode = "relations" | "sources" | "categories";
@@ -34,13 +35,15 @@ type UniverseNode = {
   source?: SourceCard;
   sourceId: string;
   sourceName: string;
+  /** Repository owner, shown after the project name and de-emphasised. */
+  owner?: string;
   stars: number;
 };
 
 type UniverseEdge = { from: string; kind: UniverseEdgeKind; to: string };
-type UniverseTone = "biolume" | "mist" | "parchment" | "prism";
+type UniverseTone = "biolume" | "mist" | "parchment" | "prism" | "sky";
 type UniverseLod = 0 | 1 | 2;
-type UniverseNodeFocus = "active" | "neighbor" | "muted" | "normal";
+type UniverseNodeFocus = "active" | "selected" | "neighbor" | "muted" | "normal";
 type UniverseModel = {
   categories: Array<{ category: string; count: number; hue: number }>;
   edges: UniverseEdge[];
@@ -68,6 +71,10 @@ type UniverseRuntime = {
   drawnEdges: number;
   drawMs: number;
   hoverId: string;
+  selectedId: string;
+  /** Screen areas covered by HTML controls; labels are not drawn there. */
+  obstacles: Array<{ left: number; top: number; right: number; bottom: number }>;
+  refreshObstacles: () => void;
   pointerX: number;
   pointerY: number;
   pointerInside: boolean;
@@ -110,36 +117,25 @@ const POSITION_MODES: Record<SkillUniverseMode, SkillUniverseMode> = {
   categories: "categories"
 };
 
-const SPHERE_SHELL = Array.from({ length: 420 }, (_, index) => fibonacciPoint(index, 420, 1));
-const DUST_PARTICLES = Array.from({ length: 144 }, (_, index) => {
-  const seed = stableHash(`universe-dust:${index}`);
+// A quiet, fixed star field (screen-relative) and three great circles of the
+// celestial sphere replace the old aura, dust and meteors: the data carries
+// the colour, the backdrop only gives depth and orientation.
+const STAR_FIELD = Array.from({ length: 170 }, (_, index) => {
+  const seed = stableHash(`universe-star:${index}`);
   return {
-    angle: (seed % 6283) / 1000,
-    distance: 0.38 + ((seed >>> 5) % 1000) / 740,
-    size: 0.35 + (seed % 7) * 0.085,
-    speed: 0.000004 + (seed % 5) * 0.0000015,
-    stretch: 0.78 + ((seed >>> 8) % 28) / 100,
-    twinkle: 0.08 + ((seed >>> 12) % 16) / 100
+    x: (seed % 10_007) / 10_007,
+    y: ((seed >>> 7) % 9_973) / 9_973,
+    size: 0.6 + ((seed >>> 3) % 100) / 100,
+    alpha: 0.1 + ((seed >>> 13) % 100) / 300,
+    twinkle: seed % 9 === 0
   };
 });
-const METEOR_SESSION_SEED = randomSessionSeed();
-const METEORS = Array.from({ length: 5 + (METEOR_SESSION_SEED % 16) }, (_, index) => {
-  const seed = stableHash(`universe-meteor:${METEOR_SESSION_SEED}:${index}`);
-  return {
-    delay: (seed % 10_000) / 10_000,
-    duration: 0.12 + ((seed >>> 4) % 90) / 700,
-    direction: ((seed >>> 6) & 1) === 0 ? 1 : -1,
-    head: 0.55 + ((seed >>> 8) % 16) / 10,
-    length: 28 + ((seed >>> 10) % 86),
-    opacity: 0.32 + ((seed >>> 13) % 28) / 100,
-    slope: -0.48 + ((seed >>> 16) % 96) / 100,
-    width: 0.42 + ((seed >>> 20) % 11) / 10,
-    x: -0.18 + ((seed >>> 14) % 136) / 100,
-    y: 0.04 + ((seed >>> 18) % 84) / 100
-  };
-});
-const AURA_SPRITES = new Map<string, HTMLCanvasElement>();
-const UNIVERSE_CACHE_KEY = "ai-skillhub-universe-cache-v1";
+const GREAT_CIRCLES: Array<[Point3, Point3]> = [
+  [{ x: 1, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }],
+  [{ x: 0, y: 1, z: 0 }, { x: 0, y: 0, z: 1 }],
+  [{ x: 0.5, y: 0, z: -0.866 }, { x: 0, y: 1, z: 0 }]
+];
+const UNIVERSE_CACHE_KEY = "ai-skillhub-universe-cache-v2";
 
 export function SkillUniverse({
   centered,
@@ -153,6 +149,8 @@ export function SkillUniverse({
 }: SkillUniverseProps) {
   const [internalMode, setInternalMode] = useState<SkillUniverseMode>("relations");
   const [hovered, setHovered] = useState<UniverseNode | null>(null);
+  const [selected, setSelected] = useState<UniverseNode | null>(null);
+  const shown = hovered ?? selected;
   const mode = controlledMode ?? internalMode;
   const modeRef = useRef(mode);
   const centeredRef = useRef(centered);
@@ -213,6 +211,9 @@ export function SkillUniverse({
       drawnEdges: 0,
       drawMs: 0,
       hoverId: "",
+      selectedId: "",
+      obstacles: [],
+      refreshObstacles: () => undefined,
       frameIndex: 0,
       frameMs: 16.7,
       frameSamples: [],
@@ -237,6 +238,7 @@ export function SkillUniverse({
       zoom: 1
     };
     runtimeRef.current = runtime;
+    setSelected(null);
 
     let frame = 0;
     let frameTimer = 0;
@@ -297,6 +299,20 @@ export function SkillUniverse({
       }, wait);
     };
 
+    const refreshObstacles = () => {
+      const origin = canvas.getBoundingClientRect();
+      const scope = host.closest(".dashboard-hero") ?? host;
+      const overlays = [
+        ...scope.querySelectorAll(".skill-universe-modes, .atlas-intro-toggle, .atlas-immersive-toggle, .home-visual-switch, .atlas-hero-copy, .skill-universe-counter, .skill-universe-legend, .skill-universe-help"),
+        ...document.querySelectorAll(".atlas-touchbar")
+      ];
+      runtime.obstacles = overlays
+        .map(element => element.getBoundingClientRect())
+        .filter(rect => rect.width > 0 && rect.height > 0)
+        .map(rect => ({ left: rect.left - origin.left, top: rect.top - origin.top, right: rect.right - origin.left, bottom: rect.bottom - origin.top }));
+    };
+    runtime.refreshObstacles = refreshObstacles;
+
     const resize = () => {
       const rect = host.getBoundingClientRect();
       width = Math.max(1, Math.floor(rect.width));
@@ -311,6 +327,7 @@ export function SkillUniverse({
       canvas.style.height = `${height}px`;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
       canvas.dataset.renderScale = String(dpr);
+      refreshObstacles();
       scheduleDraw(true);
     };
 
@@ -431,6 +448,12 @@ export function SkillUniverse({
   useEffect(() => {
     if (runtimeRef.current) runtimeRef.current.interactionUntil = performance.now() + 420;
     runtimeRef.current?.requestDraw();
+    // Controls move when the intro collapses; re-measure after layout settles.
+    const timer = window.setTimeout(() => {
+      runtimeRef.current?.refreshObstacles();
+      runtimeRef.current?.requestDraw();
+    }, 450);
+    return () => window.clearTimeout(timer);
   }, [centered, mode]);
 
   useEffect(() => {
@@ -539,6 +562,20 @@ export function SkillUniverse({
     }
   };
 
+  // One click selects (the node, its links and names stay highlighted); a
+  // click on empty space clears; a double click opens.
+  const selectNode = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    const runtime = runtimeRef.current;
+    if (!canvas || !runtime || runtime.dragged) return;
+    const rect = canvas.getBoundingClientRect();
+    const hit = findHit(runtime, event.clientX - rect.left, event.clientY - rect.top);
+    const next = hit ?? null;
+    runtime.selectedId = next?.id ?? "";
+    setSelected(next);
+    runtime.requestDraw();
+  };
+
   const openNode = (event: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     const runtime = runtimeRef.current;
@@ -553,11 +590,12 @@ export function SkillUniverse({
     <div
       className={`skill-universe${centered ? " is-centered" : ""}${promotingCache ? " is-promoting-cache" : ""}`}
       data-universe-state={snapshot ? "live" : showingCachedModel ? "cached" : "empty"}
-      style={{ "--universe-hue": hovered?.hue ?? 178 } as CSSProperties}
+      style={{ "--universe-hue": shown?.hue ?? 178 } as CSSProperties}
     >
       <canvas
         aria-label={t("universe.aria", { skills: model.skillCount, sources: model.sourceCount })}
         className="skill-universe-canvas"
+        onClick={selectNode}
         onDoubleClick={openNode}
         onPointerCancel={endDrag}
         onPointerDown={startDrag}
@@ -596,26 +634,26 @@ export function SkillUniverse({
         ))}
       </div>
 
-      {hovered && (
+      {shown && (
         <aside className="skill-universe-inspector" aria-live="polite">
           <header>
             <i />
-            <span>{nodeKindLabel(hovered.kind)}</span>
-            <b>{displayCategory(hovered.category)}</b>
+            <span>{nodeKindLabel(shown.kind)}</span>
+            <b>{displayCategory(shown.category)}</b>
           </header>
-          <strong>{hovered.kind === "skill" || hovered.kind === "router" ? `/${hovered.label}` : hovered.label}</strong>
-          <p>{hovered.description || t("universe.noDescription")}</p>
+          <strong>{shown.kind === "skill" || shown.kind === "router" ? `/${shown.label}` : shown.label}</strong>
+          <p>{shown.description || t("universe.noDescription")}</p>
           <dl>
-            <div><dt>{t("universe.source")}</dt><dd>{hovered.sourceName}</dd></div>
-            {hovered.kind === "source" ? (
+            <div><dt>{t("universe.source")}</dt><dd>{shown.sourceName}</dd></div>
+            {shown.kind === "source" ? (
               <>
-                <div><dt>GitHub</dt><dd>★ {hovered.stars.toLocaleString()}</dd></div>
-                <div><dt>{t("universe.children")}</dt><dd>{hovered.childCount}</dd></div>
+                <div><dt>GitHub</dt><dd>★ {shown.stars.toLocaleString()}</dd></div>
+                <div><dt>{t("universe.children")}</dt><dd>{shown.childCount}</dd></div>
               </>
             ) : (
               <>
-                <div><dt>{t("universe.myRating")}</dt><dd>{hovered.rating ? `${hovered.rating} / 5` : t("universe.unrated")}</dd></div>
-                <div><dt>{t("universe.health")}</dt><dd>{hovered.health}</dd></div>
+                <div><dt>{t("universe.myRating")}</dt><dd>{shown.rating ? `${shown.rating} / 5` : t("universe.unrated")}</dd></div>
+                <div><dt>{t("universe.health")}</dt><dd>{shown.health}</dd></div>
               </>
             )}
           </dl>
@@ -706,7 +744,8 @@ function buildUniverseModel(snapshot: LegacySnapshot | null): UniverseModel {
       hue: clusterHue(dominantCategory, source.id),
       id: `source:${source.id}`,
       kind: "source",
-      label: source.name,
+      label: sourcePresentation(source).title,
+      owner: sourcePresentation(source).owner,
       positions: {
         sources: sourceCenter,
         categories: scalePoint(sourceCategoryCenter, 0.88),
@@ -716,7 +755,7 @@ function buildUniverseModel(snapshot: LegacySnapshot | null): UniverseModel {
       seed: stableHash(source.id),
       source,
       sourceId: source.id,
-      sourceName: source.name,
+      sourceName: sourcePresentation(source).title,
       stars: sourcePopularity?.stars ?? 0
     };
     nodes.push(sourceNode);
@@ -813,7 +852,7 @@ function createSkillNode(
     skill,
     source,
     sourceId: source.id,
-    sourceName: source.name,
+    sourceName: sourcePresentation(source).title,
     stars: 0
   };
 }
@@ -883,21 +922,10 @@ function drawUniverse(
   runtime.lod = lod;
   const rotationY = runtime.rotationY;
   const rotationX = runtime.rotationX + (time === 0 ? 0 : Math.sin(time * 0.00009) * 0.025);
+  const palette = starPalette(tone, lightTheme);
+  const focusId = runtime.hoverId || runtime.selectedId;
 
-  drawUniverseAtmosphere(
-    context,
-    centerX,
-    centerY,
-    radius,
-    lightTheme,
-    tone,
-    time,
-    rotationX,
-    rotationY,
-    runtime.quality,
-    interactive,
-    lod
-  );
+  drawUniverseAtmosphere(context, palette, centerX, centerY, radius, width, height, time, rotationX, rotationY, lightTheme);
 
   const cosX = Math.cos(rotationX);
   const sinX = Math.sin(rotationX);
@@ -928,9 +956,9 @@ function drawUniverse(
   runtime.drawnEdges = 0;
   for (let edgeIndex = 0; edgeIndex < model.edges.length; edgeIndex += 1) {
     const edge = model.edges[edgeIndex];
-    const highlighted = Boolean(runtime.hoverId && (edge.from === runtime.hoverId || edge.to === runtime.hoverId));
-    if (runtime.hoverId ? !highlighted : !edgeVisible(edge.kind, mode)) continue;
-    if (!runtime.hoverId) {
+    const highlighted = Boolean(focusId && (edge.from === focusId || edge.to === focusId));
+    if (focusId ? !highlighted : !edgeVisible(edge.kind, mode)) continue;
+    if (!focusId) {
       if (lod === 2 && edge.kind === "category") continue;
       if (lod === 1 && edge.kind === "category" && edgeIndex % 2 === 1) continue;
       if (lod === 2 && edge.kind === "conflict" && edgeIndex % 2 === 1) continue;
@@ -948,168 +976,96 @@ function drawUniverse(
     context.moveTo(from.screenX, from.screenY);
     context.quadraticCurveTo(controlX, controlY, to.screenX, to.screenY);
     context.strokeStyle = edge.kind === "conflict"
-      ? `rgba(255, 177, 105, ${alpha})`
-      : `hsla(${to.hue}, 78%, ${lightTheme ? 38 : 70}%, ${alpha})`;
-    context.lineWidth = highlighted ? 1.45 : edge.kind === "parent" ? 0.68 : 0.48;
+      ? `${palette.conflict}${alpha})`
+      : highlighted
+        ? `${palette.edgeHot}${alpha})`
+        : palette.edge(to.hue, alpha);
+    context.lineWidth = highlighted ? 1.3 : edge.kind === "parent" ? 0.7 : 0.5;
     if (edge.kind === "conflict") context.setLineDash([4, 5]);
     context.stroke();
     context.setLineDash([]);
     runtime.drawnEdges += 1;
-    if (highlighted) {
-      drawRelationshipPulse(context, from, to, controlX, controlY, edgeIndex, time, lightTheme);
-    }
   }
   context.restore();
 
   if (lod < 2 || !interactive || runtime.frameIndex % 2 === 0) {
     runtime.projected.sort((a, b) => a.depth - b.depth);
   }
-  const hoveredNeighbors = runtime.hoverId ? model.neighbors.get(runtime.hoverId) : undefined;
+  const focusNeighbors = focusId ? model.neighbors.get(focusId) : undefined;
   const skillStride = lod === 2 ? Math.max(2, Math.ceil(model.nodes.length / 760)) : 1;
   runtime.renderedNodes = 0;
   for (const node of runtime.projected) {
     node.rendered = false;
     const focus: UniverseNodeFocus = node.id === runtime.hoverId
       ? "active"
-      : hoveredNeighbors?.has(node.id)
-        ? "neighbor"
-        : runtime.hoverId
-          ? "muted"
-          : "normal";
-    if (node.kind === "skill" && focus !== "active" && focus !== "neighbor" && node.seed % skillStride !== 0) {
+      : node.id === runtime.selectedId
+        ? "selected"
+        : focusNeighbors?.has(node.id)
+          ? "neighbor"
+          : focusId
+            ? "muted"
+            : "normal";
+    if (node.kind === "skill" && focus !== "active" && focus !== "selected" && focus !== "neighbor" && node.seed % skillStride !== 0) {
       continue;
     }
     node.rendered = true;
     runtime.renderedNodes += 1;
-    drawUniverseNode(context, node, focus, lightTheme, time, lod, interactive);
+    drawUniverseNode(context, node, focus, palette, lod);
   }
-  if (runtime.hoverId) {
-    const hovered = runtime.projectedById.get(runtime.hoverId);
-    if (hovered) drawHoverLabel(context, hovered, width, height, lightTheme);
-  }
+  drawUniverseLabels(context, runtime, palette, width, height, focusId, focusNeighbors, lod, interactive);
 }
 
 function drawUniverseAtmosphere(
   context: CanvasRenderingContext2D,
+  palette: StarPalette,
   centerX: number,
   centerY: number,
   radius: number,
-  lightTheme: boolean,
-  tone: UniverseTone,
+  width: number,
+  height: number,
   time: number,
   rotationX: number,
   rotationY: number,
-  quality: number,
-  interactive: boolean,
-  lod: UniverseLod
+  lightTheme: boolean
 ) {
-  const atmosphere = atmospherePalette(tone, lightTheme);
-  const aura = getAuraSprite(`${tone}:${lightTheme ? "light" : "dark"}`, atmosphere);
-  if (aura) {
-    context.drawImage(aura, centerX - radius * 1.18, centerY - radius * 1.18, radius * 2.36, radius * 2.36);
-  }
-  drawUniverseMeteors(context, centerX, centerY, radius, lightTheme, tone, time, interactive, lod);
-
   context.save();
-  context.translate(centerX, centerY);
-  context.rotate(time * 0.000006);
-  context.strokeStyle = atmosphere.line;
-  context.lineWidth = 0.7;
-  const ringCount = interactive || lod === 2 ? 1 : lod === 1 ? 2 : 3;
-  for (let ring = 0; ring < ringCount; ring += 1) {
-    context.save();
-    const ringOffset = ring - (ringCount - 1) / 2;
-    context.rotate(ringOffset * 0.42 + time * 0.000002 * (ring + 1));
-    context.scale(1, 0.52 + ring * 0.12);
-    context.beginPath();
-    context.arc(0, 0, radius * (0.78 + ring * 0.14), 0, Math.PI * 2);
-    context.stroke();
-    context.restore();
+  for (const star of STAR_FIELD) {
+    const twinkle = star.twinkle && time > 0 ? 0.55 + 0.45 * Math.sin(time * 0.0011 + star.x * 40) : 1;
+    context.fillStyle = `rgba(${palette.star}, ${(star.alpha * twinkle * (lightTheme ? 0.5 : 1)).toFixed(3)})`;
+    context.fillRect(star.x * width, star.y * height, star.size, star.size);
   }
-  context.restore();
-
-  const cosX = Math.cos(rotationX);
-  const sinX = Math.sin(rotationX);
-  const cosY = Math.cos(rotationY);
-  const sinY = Math.sin(rotationY);
-  const shellStep = lod === 2 ? 3 : lod === 1 || interactive || quality < 0.72 ? 2 : 1;
-  context.save();
-  context.fillStyle = atmosphere.shell;
-  for (let index = 0; index < SPHERE_SHELL.length; index += shellStep) {
-    const point = SPHERE_SHELL[index];
-    const y0 = point.y * cosX - point.z * sinX;
-    const z0 = point.y * sinX + point.z * cosX;
-    const x = point.x * cosY + z0 * sinY;
-    const z = -point.x * sinY + z0 * cosY;
-    const scale = 3.05 / (3.05 - z);
-    const size = (z > 0 ? 1.05 : 0.48) * scale;
-    context.globalAlpha = z > 0 ? 0.68 : 0.18;
-    context.beginPath();
-    context.arc(
-      centerX + x * radius * scale,
-      centerY + y0 * radius * scale,
-      Math.max(0.36, size),
-      0,
-      Math.PI * 2
-    );
-    context.fill();
-  }
-  context.restore();
-
-  context.save();
-  context.fillStyle = atmosphere.dust;
-  const dustScale = lod === 2 ? 0.32 : lod === 1 ? 0.58 : quality;
-  const dustCount = interactive ? Math.min(28, DUST_PARTICLES.length) : Math.round(DUST_PARTICLES.length * dustScale);
-  for (let index = 0; index < dustCount; index += 1) {
-    const dust = DUST_PARTICLES[index];
-    const angle = dust.angle + time * dust.speed;
-    const distance = radius * dust.distance;
-    const x = centerX + Math.cos(angle) * distance * dust.stretch;
-    const y = centerY + Math.sin(angle) * distance * 0.66;
-    context.globalAlpha = 0.46 + Math.sin(time * 0.00045 + dust.angle * 2.7) * dust.twinkle;
-    context.fillRect(x, y, dust.size, dust.size);
-  }
-  context.restore();
-}
-
-function drawUniverseMeteors(
-  context: CanvasRenderingContext2D,
-  centerX: number,
-  centerY: number,
-  radius: number,
-  lightTheme: boolean,
-  tone: UniverseTone,
-  time: number,
-  interactive: boolean,
-  lod: UniverseLod
-) {
-  if (time === 0 || interactive || lod === 2) return;
-  const meteorHue = tone === "prism" ? 216 : tone === "parchment" ? 18 : tone === "mist" ? 166 : 178;
-  context.save();
-  context.lineCap = "round";
-  for (const meteor of METEORS) {
-    const phase = (time * 0.000028 + meteor.delay) % 1;
-    if (phase > meteor.duration) continue;
-    const progress = phase / meteor.duration;
-    const fade = Math.sin(progress * Math.PI);
-    const startX = centerX + (meteor.x - 0.5) * radius * 2.8 + progress * radius * 0.72 * meteor.direction;
-    const startY = centerY + (meteor.y - 0.5) * radius * 2.1 + progress * radius * 0.72 * meteor.slope;
-    const tailX = startX - meteor.length * meteor.direction;
-    const tailY = startY - meteor.length * meteor.slope;
-    const gradient = context.createLinearGradient(tailX, tailY, startX, startY);
-    gradient.addColorStop(0, `hsla(${meteorHue}, 92%, ${lightTheme ? 36 : 76}%, 0)`);
-    gradient.addColorStop(0.72, `hsla(${meteorHue}, 92%, ${lightTheme ? 36 : 76}%, ${fade * meteor.opacity * 0.16})`);
-    gradient.addColorStop(1, `hsla(${meteorHue}, 100%, ${lightTheme ? 32 : 88}%, ${fade * meteor.opacity})`);
-    context.beginPath();
-    context.moveTo(tailX, tailY);
-    context.lineTo(startX, startY);
-    context.strokeStyle = gradient;
-    context.lineWidth = meteor.width;
-    context.stroke();
-    context.beginPath();
-    context.arc(startX, startY, meteor.head, 0, Math.PI * 2);
-    context.fillStyle = `hsla(${meteorHue}, 100%, ${lightTheme ? 30 : 90}%, ${fade * meteor.opacity * 0.86})`;
-    context.fill();
+  // Three great circles of the celestial sphere: brighter in front, faint
+  // behind, so the rotation reads without any glow.
+  const cosX = Math.cos(rotationX), sinX = Math.sin(rotationX);
+  const cosY = Math.cos(rotationY), sinY = Math.sin(rotationY);
+  context.lineWidth = 0.75;
+  for (const [axisA, axisB] of GREAT_CIRCLES) {
+    for (const front of [false, true]) {
+      context.beginPath();
+      let drawing = false;
+      for (let step = 0; step <= 96; step += 1) {
+        const angle = (step / 96) * Math.PI * 2;
+        const x = axisA.x * Math.cos(angle) + axisB.x * Math.sin(angle);
+        const y = axisA.y * Math.cos(angle) + axisB.y * Math.sin(angle);
+        const z = axisA.z * Math.cos(angle) + axisB.z * Math.sin(angle);
+        const rotatedY = y * cosX - z * sinX;
+        const rotatedZ0 = y * sinX + z * cosX;
+        const rotatedX = x * cosY + rotatedZ0 * sinY;
+        const rotatedZ = -x * sinY + rotatedZ0 * cosY;
+        const scale = 3.05 / (3.05 - rotatedZ);
+        const screenX = centerX + rotatedX * radius * scale;
+        const screenY = centerY + rotatedY * radius * scale;
+        if ((rotatedZ >= 0) === front) {
+          if (drawing) context.lineTo(screenX, screenY);
+          else context.moveTo(screenX, screenY);
+          drawing = true;
+        } else {
+          drawing = false;
+        }
+      }
+      context.strokeStyle = `${palette.grid}${front ? (lightTheme ? 0.16 : 0.13) : (lightTheme ? 0.06 : 0.045)})`;
+      context.stroke();
+    }
   }
   context.restore();
 }
@@ -1118,285 +1074,217 @@ function drawUniverseNode(
   context: CanvasRenderingContext2D,
   node: ProjectedNode,
   focus: UniverseNodeFocus,
-  lightTheme: boolean,
-  time: number,
-  lod: UniverseLod,
-  interactive: boolean
+  palette: StarPalette,
+  lod: UniverseLod
 ) {
-  const hue = node.hue;
-  const highlighted = focus === "active";
-  const neighbor = focus === "neighbor";
-  const focusAlpha = focus === "muted" ? 0.14 : neighbor ? 0.9 : 1;
-  const baseAlpha = node.enabled ? 0.54 + node.depth * 0.42 : 0.38;
-  const animatedNode = highlighted || node.kind !== "skill";
-  const pulse = time === 0 || !animatedNode ? 1 : 0.975 + Math.sin(time * 0.00082 + node.seed) * 0.025;
-  const radius = node.radius * (highlighted ? 1.3 : neighbor ? 1.08 : pulse);
-  const lightness = lightTheme ? 43 : 67;
-
+  // Flat shapes, one restrained colour per category: sources are discs with
+  // a thin orbit, parent Skills are rings, Skills are dots. Depth sets the
+  // emphasis; focus states override it.
+  const active = focus === "active" || focus === "selected";
+  const alpha = focus === "muted"
+    ? 0.1
+    : active || focus === "neighbor"
+      ? 1
+      : (0.34 + node.depth * 0.66) * (node.enabled ? 1 : 0.75);
+  const radius = node.radius * (active ? 1.12 : 1);
+  const { screenX: x, screenY: y } = node;
   context.save();
-  context.globalAlpha = focusAlpha;
-  if (highlighted) {
+  if (!node.enabled) {
     context.beginPath();
-    context.arc(node.screenX, node.screenY, radius * (2.35 + Math.sin(time * 0.002) * 0.08), 0, Math.PI * 2);
-    context.fillStyle = `hsla(${hue}, 92%, ${lightness + 4}%, .1)`;
+    context.arc(x, y, Math.max(1.6, radius), 0, Math.PI * 2);
+    context.setLineDash([2, 2]);
+    context.strokeStyle = `${palette.muted}${alpha})`;
+    context.lineWidth = 1;
+    context.stroke();
+    context.setLineDash([]);
+  } else if (node.kind === "source") {
+    context.beginPath();
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.fillStyle = palette.node(node.hue, "source", alpha);
     context.fill();
-  }
-
-  if (node.kind === "source") {
-    if (node.enabled && (lod < 2 || highlighted)) {
-      const popularityHalo = 2.2 + Math.min(0.7, Math.log10(node.stars + 1) * 0.1);
-      for (const [scale, alpha] of [[popularityHalo, 0.028], [1.78, 0.052], [1.38, 0.08]] as const) {
-        context.beginPath();
-        context.arc(node.screenX, node.screenY, radius * scale, 0, Math.PI * 2);
-        context.fillStyle = `hsla(${hue}, 88%, ${lightness + 5}%, ${highlighted ? alpha * 1.9 : alpha})`;
-        context.fill();
-      }
-    }
-
-    if (node.enabled) {
-      const sphere = context.createRadialGradient(
-        node.screenX - radius * 0.34,
-        node.screenY - radius * 0.38,
-        Math.max(0.6, radius * 0.06),
-        node.screenX,
-        node.screenY,
-        radius * 1.08
-      );
-      sphere.addColorStop(0, `hsla(${hue - 8}, 96%, ${lightTheme ? 82 : 92}%, ${Math.min(1, baseAlpha + 0.2)})`);
-      sphere.addColorStop(0.22, `hsla(${hue}, 92%, ${lightTheme ? 56 : 70}%, ${Math.min(1, baseAlpha + 0.12)})`);
-      sphere.addColorStop(0.7, `hsla(${hue + 7}, 84%, ${lightTheme ? 38 : 49}%, ${baseAlpha})`);
-      sphere.addColorStop(1, `hsla(${hue + 14}, 76%, ${lightTheme ? 24 : 25}%, ${baseAlpha * 0.92})`);
+    if (lod < 2 || active) {
       context.beginPath();
-      context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
-      context.fillStyle = sphere;
-      context.fill();
-
-      context.beginPath();
-      context.arc(node.screenX - radius * 0.28, node.screenY - radius * 0.31, radius * 0.12, 0, Math.PI * 2);
-      context.fillStyle = `rgba(255, 255, 255, ${lightTheme ? 0.54 : 0.74})`;
-      context.fill();
-    }
-
-    context.beginPath();
-    context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
-    context.strokeStyle = `hsla(${hue}, 92%, ${lightTheme ? 31 : 83}%, ${node.enabled ? highlighted ? 0.95 : 0.62 : 0.48})`;
-    context.lineWidth = node.enabled ? 1 : 1.15;
-    context.stroke();
-
-    context.beginPath();
-    context.arc(node.screenX, node.screenY, radius * 0.82, Math.PI * 0.9, Math.PI * 1.72);
-    context.strokeStyle = `rgba(255, 255, 255, ${node.enabled ? lightTheme ? 0.24 : 0.42 : 0.18})`;
-    context.lineWidth = Math.max(0.65, radius * 0.11);
-    context.stroke();
-
-    context.beginPath();
-    context.arc(node.screenX, node.screenY, radius + 4, 0, Math.PI * 2);
-    context.strokeStyle = `hsla(${hue}, 86%, ${lightTheme ? 34 : 76}%, ${highlighted ? 0.86 : 0.32})`;
-    context.lineWidth = 0.75;
-    context.stroke();
-
-    if (!interactive && lod < 2) {
-      const orbit = radius + 9 + Math.log10(node.stars + 1) * 0.7;
-      const markerAngle = time * 0.00032 + (node.seed % 360);
-      context.beginPath();
-      context.arc(node.screenX, node.screenY, orbit, markerAngle + 0.35, markerAngle + 4.8);
-      context.strokeStyle = `hsla(${hue}, 88%, ${lightTheme ? 36 : 82}%, ${lod === 0 ? 0.34 : 0.2})`;
-      context.lineWidth = 0.65;
+      context.arc(x, y, radius + 3.5, 0, Math.PI * 2);
+      context.strokeStyle = palette.node(node.hue, "source", alpha * 0.32);
+      context.lineWidth = 1;
       context.stroke();
-      context.beginPath();
-      context.arc(
-        node.screenX + Math.cos(markerAngle) * orbit,
-        node.screenY + Math.sin(markerAngle) * orbit,
-        highlighted ? 1.65 : 1.15,
-        0,
-        Math.PI * 2
-      );
-      context.fillStyle = `hsla(${hue}, 96%, ${lightTheme ? 34 : 84}%, .9)`;
-      context.fill();
     }
   } else if (node.kind === "router") {
-    if (node.enabled) {
-      const routerSphere = context.createRadialGradient(
-        node.screenX - radius * 0.3,
-        node.screenY - radius * 0.32,
-        Math.max(0.4, radius * 0.05),
-        node.screenX,
-        node.screenY,
-        radius
-      );
-      routerSphere.addColorStop(0, `hsla(${hue - 6}, 96%, ${lightTheme ? 80 : 91}%, .94)`);
-      routerSphere.addColorStop(0.28, `hsla(${hue}, 88%, ${lightTheme ? 52 : 68}%, ${highlighted ? 1 : baseAlpha})`);
-      routerSphere.addColorStop(1, `hsla(${hue + 12}, 74%, ${lightTheme ? 27 : 31}%, ${highlighted ? 0.98 : baseAlpha})`);
-      context.beginPath();
-      context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
-      context.fillStyle = routerSphere;
-      context.fill();
-      context.beginPath();
-      context.arc(node.screenX - radius * 0.24, node.screenY - radius * 0.26, radius * 0.15, 0, Math.PI * 2);
-      context.fillStyle = `rgba(255, 255, 255, ${lightTheme ? 0.48 : 0.7})`;
-      context.fill();
-    }
     context.beginPath();
-    context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
-    context.strokeStyle = `hsla(${hue}, 88%, ${lightTheme ? 31 : 82}%, ${node.enabled ? 0.66 : 0.5})`;
-    context.lineWidth = node.enabled ? 0.85 : 1.1;
+    context.arc(x, y, radius, 0, Math.PI * 2);
+    context.strokeStyle = palette.node(node.hue, "router", alpha);
+    context.lineWidth = 1.6;
     context.stroke();
-    for (const [offset, alpha] of [[2.7, 0.58], [5.8, 0.3]] as const) {
-      context.beginPath();
-      context.arc(node.screenX, node.screenY, radius + offset, 0, Math.PI * 2);
-      context.strokeStyle = `hsla(${hue}, 84%, ${lightTheme ? 34 : 79}%, ${highlighted ? Math.min(0.95, alpha * 1.5) : alpha})`;
-      context.lineWidth = offset < 3 ? 0.9 : 0.65;
-      context.stroke();
-    }
-    if (lod < 2 || highlighted) {
-      const activeSegments = clamp(Math.round(node.rating), 0, 5);
-      const segmentRadius = radius + 9;
-      const segmentSpan = (Math.PI * 2) / 5;
-      for (let segment = 0; segment < 5; segment += 1) {
-        const start = -Math.PI / 2 + segment * segmentSpan + 0.12;
-        context.beginPath();
-        context.arc(node.screenX, node.screenY, segmentRadius, start, start + segmentSpan - 0.24);
-        context.strokeStyle = `hsla(${hue + segment * 3}, 90%, ${lightTheme ? 34 : 82}%, ${segment < activeSegments ? highlighted ? 0.96 : 0.72 : 0.13})`;
-        context.lineWidth = segment < activeSegments ? 1.15 : 0.7;
-        context.stroke();
-      }
-    }
+    context.beginPath();
+    context.arc(x, y, Math.max(1.2, radius * 0.36), 0, Math.PI * 2);
+    context.fillStyle = palette.node(node.hue, "router", alpha);
+    context.fill();
   } else {
     context.beginPath();
-    context.arc(node.screenX, node.screenY, radius, 0, Math.PI * 2);
-    if (node.enabled) {
-      context.fillStyle = `hsla(${hue}, ${lightTheme ? 74 : 82}%, ${lightness}%, ${highlighted ? 1 : baseAlpha})`;
-      context.fill();
-    } else {
-      context.strokeStyle = `hsla(${hue}, 68%, ${lightTheme ? 35 : 72}%, .5)`;
-      context.lineWidth = 0.8;
-      context.stroke();
-    }
-    if (node.enabled && lod === 0 && radius > 2.35) {
-      context.beginPath();
-      context.arc(node.screenX - radius * 0.24, node.screenY - radius * 0.24, Math.max(0.42, radius * 0.17), 0, Math.PI * 2);
-      context.fillStyle = `rgba(255, 255, 255, ${lightTheme ? 0.38 : 0.58})`;
-      context.fill();
-    }
-    if (node.rating >= 4 || highlighted || neighbor) {
-      context.beginPath();
-      context.arc(node.screenX, node.screenY, radius + 2.2, 0, Math.PI * 2);
-      context.strokeStyle = `hsla(${hue}, 78%, ${lightTheme ? 32 : 84}%, ${highlighted ? 0.78 : neighbor ? 0.46 : 0.24})`;
-      context.lineWidth = 0.65;
-      context.stroke();
-    }
+    context.arc(x, y, Math.max(1.1, radius), 0, Math.PI * 2);
+    context.fillStyle = palette.node(node.hue, "skill", alpha);
+    context.fill();
+  }
+  if (active) {
+    context.beginPath();
+    context.arc(x, y, radius + (node.kind === "skill" ? 4 : 6.5), 0, Math.PI * 2);
+    context.strokeStyle = palette.ring;
+    context.lineWidth = focus === "selected" ? 2 : 1.4;
+    context.stroke();
   }
   context.restore();
 }
 
-type AtmospherePalette = {
-  center: string;
-  dust: string;
-  edge: string;
-  line: string;
-  mid: string;
-  shell: string;
+type StarPalette = {
+  star: string;
+  grid: string;
+  edge: (hue: number, alpha: number) => string;
+  edgeHot: string;
+  conflict: string;
+  node: (hue: number, kind: UniverseNodeKind, alpha: number) => string;
+  muted: string;
+  ring: string;
+  text: string;
+  halo: string;
+  chip: string;
+  chipBorder: string;
 };
 
-/* Light themes paint the same atmosphere with a translucent DARK tint, so a wide
-   aura reads as a dirty grey shadow instead of light. Keep the hue but drop the
-   aura/edge alpha far enough that only the nodes and rings stay legible. */
-function atmospherePalette(tone: UniverseTone, lightTheme: boolean): AtmospherePalette {
-  if (tone === "prism") {
+/** Restrained colours: category hue at moderate saturation; the warm Sky and
+ * Parchment tones highlight in amber/terracotta, the cool ones in blue. */
+function starPalette(tone: UniverseTone, lightTheme: boolean): StarPalette {
+  const warm = tone === "sky" || tone === "parchment";
+  if (lightTheme) {
     return {
-      center: lightTheme ? "rgba(64, 104, 184, .055)" : "rgba(161, 190, 255, .16)",
-      mid: lightTheme ? "rgba(127, 91, 166, .022)" : "rgba(112, 90, 190, .07)",
-      edge: lightTheme ? "rgba(71, 117, 198, .008)" : "rgba(71, 117, 198, .025)",
-      line: lightTheme ? "rgba(54, 83, 145, .085)" : "rgba(165, 194, 255, .11)",
-      shell: lightTheme ? "rgba(60, 85, 136, .2)" : "rgba(221, 232, 255, .27)",
-      dust: lightTheme ? "rgba(77, 91, 131, .085)" : "rgba(202, 217, 255, .14)"
-    };
-  }
-  if (tone === "parchment") {
-    return {
-      center: "rgba(154, 78, 48, .05)",
-      mid: "rgba(68, 91, 112, .022)",
-      edge: "rgba(122, 87, 55, .008)",
-      line: "rgba(122, 75, 49, .085)",
-      shell: "rgba(97, 73, 55, .19)",
-      dust: "rgba(108, 78, 55, .08)"
+      star: "40, 62, 92",
+      grid: "rgba(40, 62, 92, ",
+      edge: (hue, alpha) => `hsla(${hue}, 26%, 48%, ${alpha})`,
+      edgeHot: warm ? "rgba(196, 100, 60, " : "rgba(44, 100, 166, ",
+      conflict: "rgba(168, 112, 31, ",
+      node: (hue, kind, alpha) => kind === "skill" ? `hsla(${hue}, 28%, 52%, ${alpha})` : `hsla(${hue}, 44%, ${kind === "router" ? 38 : 44}%, ${alpha})`,
+      muted: "rgba(115, 130, 149, ",
+      ring: warm ? "#b9552e" : "#1d4c84",
+      text: "#1b2a3a",
+      halo: "rgba(241, 245, 249, .9)",
+      chip: "rgba(255, 255, 255, .97)",
+      chipBorder: "rgba(31, 51, 74, .16)"
     };
   }
   return {
-    center: lightTheme ? "rgba(23, 121, 111, .06)" : "rgba(205, 255, 249, .18)",
-    mid: lightTheme ? "rgba(41, 90, 128, .024)" : "rgba(68, 188, 180, .072)",
-    edge: lightTheme ? "rgba(41, 90, 128, .008)" : "rgba(88, 129, 166, .026)",
-    line: lightTheme ? "rgba(25, 105, 99, .085)" : "rgba(176, 239, 232, .12)",
-    shell: lightTheme ? "rgba(27, 98, 93, .19)" : "rgba(213, 246, 242, .26)",
-    dust: lightTheme ? "rgba(22, 93, 88, .085)" : "rgba(212, 247, 243, .13)"
+    star: warm ? "244, 236, 246" : "226, 234, 252",
+    grid: warm ? "rgba(236, 220, 244, " : "rgba(200, 216, 255, ",
+    edge: (hue, alpha) => `hsla(${hue}, 26%, 72%, ${alpha})`,
+    edgeHot: warm ? "rgba(240, 180, 110, " : "rgba(140, 180, 255, ",
+    conflict: "rgba(232, 180, 95, ",
+    node: (hue, kind, alpha) => kind === "skill" ? `hsla(${hue}, 28%, 66%, ${alpha})` : `hsla(${hue}, 48%, ${kind === "router" ? 74 : 68}%, ${alpha})`,
+    muted: "rgba(150, 140, 165, ",
+    ring: warm ? "#ffd9aa" : "#e2ebff",
+    text: warm ? "#f5efe9" : "#eef2fb",
+    halo: warm ? "rgba(21, 17, 28, .88)" : "rgba(6, 8, 14, .88)",
+    chip: warm ? "rgba(36, 30, 47, .97)" : "rgba(15, 19, 29, .97)",
+    chipBorder: warm ? "rgba(240, 180, 110, .5)" : "rgba(140, 180, 255, .45)"
   };
 }
 
-function getAuraSprite(key: string, palette: AtmospherePalette) {
-  const cached = AURA_SPRITES.get(key);
-  if (cached) return cached;
-  if (typeof document === "undefined") return null;
-  const canvas = document.createElement("canvas");
-  canvas.width = 384;
-  canvas.height = 384;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-  const aura = context.createRadialGradient(192, 192, 2, 192, 192, 190);
-  aura.addColorStop(0, palette.center);
-  aura.addColorStop(0.18, palette.center);
-  aura.addColorStop(0.42, palette.mid);
-  aura.addColorStop(0.72, palette.edge);
-  aura.addColorStop(1, "rgba(0, 0, 0, 0)");
-  context.fillStyle = aura;
-  context.fillRect(0, 0, 384, 384);
-  AURA_SPRITES.set(key, canvas);
-  return canvas;
-}
+const LABEL_FONT = "'Segoe UI Variable Text', 'Microsoft YaHei UI', 'Segoe UI', sans-serif";
 
-function drawHoverLabel(
+/** Names stay readable: the focused node and its neighbours first, then
+ * sources by size and nearness; each label tries four sides of its node and
+ * is skipped when every side would overlap a label already placed. */
+function drawUniverseLabels(
   context: CanvasRenderingContext2D,
-  node: ProjectedNode,
+  runtime: UniverseRuntime,
+  palette: StarPalette,
   width: number,
   height: number,
-  lightTheme: boolean
+  focusId: string,
+  neighbors: Set<string> | undefined,
+  lod: UniverseLod,
+  interactive: boolean
 ) {
-  const label = node.kind === "source" ? node.label : `/${node.label}`;
+  const limit = interactive ? 10 : lod === 0 ? 40 : lod === 1 ? 26 : 14;
+  const candidates = runtime.projected
+    .filter(node => node.rendered && (focusId
+      ? node.id === focusId || node.id === runtime.selectedId || neighbors?.has(node.id)
+      : node.kind === "source" || (node.kind === "router" && lod === 0 && node.depth > 0.55)))
+    .map(node => ({
+      node,
+      score: (node.id === focusId ? 1e7 : 0) + (node.id === runtime.selectedId ? 1e6 : 0) +
+        (node.kind === "source" ? 1e4 : node.kind === "router" ? 1e3 : 0) + node.radius * 40 + node.depth * 200
+    }))
+    .sort((a, b) => b.score - a.score);
+  const placed: Array<{ left: number; top: number; right: number; bottom: number }> = [];
   context.save();
-  context.font = "650 11px 'Segoe UI Variable Text', 'Microsoft YaHei UI', sans-serif";
-  const textWidth = context.measureText(label).width;
-  const boxWidth = Math.min(textWidth + 20, 240);
-  const x = clamp(node.screenX + 16, 10, width - boxWidth - 10);
-  const y = clamp(node.screenY - 26, 18, height - 18);
-  context.fillStyle = lightTheme ? "rgba(249, 252, 250, .92)" : "rgba(5, 14, 15, .9)";
-  roundRect(context, x, y - 16, boxWidth, 28, 14);
-  context.fill();
-  context.fillStyle = lightTheme ? "#10201e" : "#f1faf8";
-  context.fillText(truncateText(context, label, boxWidth - 20), x + 10, y + 2);
+  context.textBaseline = "middle";
+  let count = 0;
+  for (const { node } of candidates) {
+    if (count >= limit) break;
+    const focused = node.id === focusId || node.id === runtime.selectedId;
+    const size = focused ? 12.5 : node.kind === "source" ? 12 : 11;
+    context.font = `${focused || node.kind === "source" ? 600 : 500} ${size}px ${LABEL_FONT}`;
+    const text = truncateText(context, node.kind === "source" ? node.label : `/${node.label}`, focused ? 280 : 200);
+    const titleFont = context.font;
+    const ownerFont = `400 ${size - 1}px ${LABEL_FONT}`;
+    const owner = node.kind === "source" && node.owner ? ` ${node.owner}` : "";
+    const titleWidth = context.measureText(text).width;
+    context.font = ownerFont;
+    const ownerText = owner ? truncateText(context, owner, 120) : "";
+    const ownerWidth = ownerText ? context.measureText(ownerText).width : 0;
+    context.font = titleFont;
+    const textWidth = titleWidth + ownerWidth;
+    const padX = focused ? 9 : 3, boxHeight = size + (focused ? 12 : 6);
+    const boxWidth = textWidth + padX * 2;
+    const gap = node.radius + (focused ? 10 : 6);
+    const options = [
+      { left: node.screenX + gap, top: node.screenY - boxHeight / 2 },
+      { left: node.screenX - gap - boxWidth, top: node.screenY - boxHeight / 2 },
+      { left: node.screenX - boxWidth / 2, top: node.screenY - gap - boxHeight },
+      { left: node.screenX - boxWidth / 2, top: node.screenY + gap }
+    ];
+    const spot = options.find(option => {
+      const rect = { left: option.left, top: option.top, right: option.left + boxWidth, bottom: option.top + boxHeight };
+      if (rect.left < 8 || rect.right > width - 8 || rect.top < 8 || rect.bottom > height - 8) return false;
+      if (runtime.obstacles.some(other => rect.left < other.right && rect.right > other.left && rect.top < other.bottom && rect.bottom > other.top)) return false;
+      return !placed.some(other => rect.left < other.right + 4 && rect.right + 4 > other.left && rect.top < other.bottom + 2 && rect.bottom + 2 > other.top);
+    });
+    if (!spot) continue;
+    placed.push({ left: spot.left, top: spot.top, right: spot.left + boxWidth, bottom: spot.top + boxHeight });
+    count += 1;
+    const textY = spot.top + boxHeight / 2 + 0.5;
+    if (focused) {
+      roundRect(context, spot.left, spot.top, boxWidth, boxHeight, 7);
+      context.fillStyle = palette.chip;
+      context.fill();
+      context.strokeStyle = palette.chipBorder;
+      context.lineWidth = 1;
+      context.stroke();
+      context.fillStyle = palette.text;
+      context.fillText(text, spot.left + padX, textY);
+      if (ownerText) {
+        context.font = ownerFont;
+        context.globalAlpha = 0.6;
+        context.fillText(ownerText, spot.left + padX + titleWidth, textY);
+        context.globalAlpha = 1;
+      }
+    } else {
+      context.globalAlpha = neighbors?.has(node.id) ? 0.95 : 0.45 + node.depth * 0.5;
+      context.lineJoin = "round";
+      context.lineWidth = 3;
+      context.strokeStyle = palette.halo;
+      context.strokeText(text, spot.left + padX, textY);
+      context.fillStyle = palette.text;
+      context.fillText(text, spot.left + padX, textY);
+      if (ownerText) {
+        context.font = ownerFont;
+        const alpha = context.globalAlpha;
+        context.strokeText(ownerText, spot.left + padX + titleWidth, textY);
+        context.globalAlpha = alpha * 0.55;
+        context.fillText(ownerText, spot.left + padX + titleWidth, textY);
+      }
+      context.globalAlpha = 1;
+    }
+  }
   context.restore();
-}
-
-function drawRelationshipPulse(
-  context: CanvasRenderingContext2D,
-  from: ProjectedNode,
-  to: ProjectedNode,
-  controlX: number,
-  controlY: number,
-  edgeIndex: number,
-  time: number,
-  lightTheme: boolean
-) {
-  const progress = time === 0 ? 0.52 : (time * 0.00038 + edgeIndex * 0.137) % 1;
-  const inverse = 1 - progress;
-  const x = inverse * inverse * from.screenX + 2 * inverse * progress * controlX + progress * progress * to.screenX;
-  const y = inverse * inverse * from.screenY + 2 * inverse * progress * controlY + progress * progress * to.screenY;
-  context.beginPath();
-  context.arc(x, y, 4, 0, Math.PI * 2);
-  context.fillStyle = `hsla(${to.hue}, 94%, ${lightTheme ? 40 : 82}%, .12)`;
-  context.fill();
-  context.beginPath();
-  context.arc(x, y, 1.25, 0, Math.PI * 2);
-  context.fillStyle = `hsla(${to.hue}, 98%, ${lightTheme ? 34 : 88}%, .96)`;
-  context.fill();
 }
 
 function resolveUniverseLod(nodeCount: number, quality: number, interactive: boolean): UniverseLod {

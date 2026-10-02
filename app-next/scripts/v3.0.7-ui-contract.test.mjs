@@ -20,16 +20,15 @@ test("editor portal inherits the active theme and keeps explicit readable surfac
   assert.doesNotMatch(app, /,\s*document\.body\s*\);/);
 });
 
-test("the volumetric core has one geometric center and richer bounded space motion", () => {
-  assert.equal((universe.match(/createRadialGradient\(192, 192, 2, 192, 192, 190\)/g) ?? []).length, 1);
-  assert.doesNotMatch(universe, /createRadialGradient\(165, 154, 3, 192, 192, 190\)/);
-  assert.match(universe, /length:\s*5 \+ \(METEOR_SESSION_SEED % 16\)/);
-  assert.match(universe, /direction:/);
-  assert.match(universe, /head:/);
-  assert.match(universe, /opacity:/);
-  assert.match(universe, /width:/);
-  assert.match(universe, /twinkle:/);
-  assert.match(universe, /if \(time === 0 \|\| interactive \|\| lod === 2\) return/);
+test("star map nodes are flat shapes with explicit focus states and placed labels", () => {
+  assert.match(universe, /type UniverseNodeFocus = "active" \| "selected" \| "neighbor" \| "muted" \| "normal";/);
+  assert.match(universe, /function drawUniverseLabels\(/);
+  // Labels skip any side that would overlap a placed label or an HTML control.
+  assert.match(universe, /runtime\.obstacles\.some\(/);
+  assert.match(universe, /!placed\.some\(/);
+  // Project name first, owner de-emphasised.
+  assert.match(universe, /label: sourcePresentation\(source\)\.title/);
+  assert.match(universe, /onClick=\{selectNode\}/);
 });
 
 test("startup loading is not mislabeled as a remote synchronization", () => {

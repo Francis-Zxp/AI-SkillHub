@@ -57,7 +57,7 @@ async function visiblePixelCenter(locator) {
   assert.ok(Math.abs(logoCenter.y - brandCenter.y) < 0.8, `logo y offset ${logoCenter.y - brandCenter.y}`);
 
   const cacheAudit = await page.evaluate(() => {
-    const raw = localStorage.getItem("ai-skillhub-universe-cache-v1") || "";
+    const raw = localStorage.getItem("ai-skillhub-universe-cache-v2") || "";
     return {
       bytes: new Blob([raw]).size,
       leaksAbsolutePath: /(?:[A-Za-z]:\\|\/Users\/|\/home\/)/.test(raw),

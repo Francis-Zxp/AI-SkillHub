@@ -80,7 +80,7 @@ fs.mkdirSync(reportDir, { recursive: true });
   await page.waitForFunction(() => !document.querySelector(".shell")?.classList.contains("dashboard-immersive"));
 
   const cacheAudit = await page.evaluate(() => {
-    const raw = localStorage.getItem("ai-skillhub-universe-cache-v1") || "";
+    const raw = localStorage.getItem("ai-skillhub-universe-cache-v2") || "";
     return {
       bytes: new Blob([raw]).size,
       leaksAbsolutePath: /(?:[A-Za-z]:\\|\/Users\/|\/home\/)/.test(raw),

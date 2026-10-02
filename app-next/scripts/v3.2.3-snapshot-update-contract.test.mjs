@@ -67,24 +67,17 @@ test("the sync report names the snapshot result instead of calling the source un
   }
 });
 
-test("light themes never paint the galaxy atmosphere as a grey shadow", () => {
-  // A translucent DARK tint spread over a light page reads as a dirty smudge,
-  // which is exactly what the wide aura used to produce on every light theme.
-  const paletteBody = universe.slice(
-    universe.indexOf("function atmospherePalette("),
-    universe.indexOf("function getAuraSprite(")
+test("light themes never paint the star map backdrop as a grey shadow", () => {
+  // A translucent DARK tint spread over a light page reads as a dirty smudge.
+  // The backdrop now only draws tiny stars and hairline circles; light themes
+  // halve the star alpha and keep the circles faint.
+  const atmosphere = universe.slice(
+    universe.indexOf("function drawUniverseAtmosphere("),
+    universe.indexOf("function drawUniverseNode(")
   );
-  assert.ok(paletteBody.length > 0);
-  const lightAlphas = [...paletteBody.matchAll(/"rgba\(\d+, \d+, \d+, (\.\d+)\)"(?!\s*:)/g)].map(
-    match => Number(match[1])
-  );
-  assert.ok(lightAlphas.length >= 12);
-  // The widest layers (center/mid/edge) are the ones that read as a smudge.
-  assert.ok(Math.min(...lightAlphas) <= 0.01);
-  assert.ok(paletteBody.match(/lightTheme \? "rgba\(\d+, \d+, \d+, \.\d+\)"/g).every(value =>
-    Number(value.match(/(\.\d+)\)"$/)[1]) <= 0.2
-  ));
-  assert.match(universe, /center: lightTheme \? "rgba\(23, 121, 111, \.06\)"/);
-  assert.match(universe, /center: "rgba\(154, 78, 48, \.05\)"/);
+  assert.ok(atmosphere.length > 0);
+  assert.doesNotMatch(atmosphere, /createRadialGradient|fillRect\(0, 0/);
+  assert.match(atmosphere, /lightTheme \? 0\.5 : 1/);
+  assert.match(atmosphere, /lightTheme \? 0\.16 : 0\.13/);
   assert.match(styles, /--hero-grad: radial-gradient\(circle at 66% 48%, rgba\(22, 121, 111, \.05\), transparent 52%\);/);
 });

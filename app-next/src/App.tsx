@@ -62,6 +62,8 @@ import type {
 declare const __APP_VERSION__: string;
 
 type ThemeName =
+  | "sky-dusk"
+  | "sky-day"
   | "nocturne"
   | "parchment"
   | "atlas-dark"
@@ -357,6 +359,8 @@ function hasInternalSkillDrag(dataTransfer: DataTransfer) {
 
 const UI_SCALE_OPTIONS: UiScalePreset[] = ["compact", "standard", "comfortable", "large"];
 const THEME_OPTIONS: Array<{ icon: IconName; labelKey: string; value: ThemeName }> = [
+  { value: "sky-dusk", labelKey: "theme.skyDusk", icon: "moon" },
+  { value: "sky-day", labelKey: "theme.skyDay", icon: "sun" },
   { value: "nocturne", labelKey: "theme.nocturne", icon: "moon" },
   { value: "parchment", labelKey: "theme.parchment", icon: "sun" },
   { value: "atlas-dark", labelKey: "theme.atlasDark", icon: "moon" },
@@ -2511,7 +2515,9 @@ function Dashboard({
             onOpenSource={onOpenSource}
             snapshot={snapshot}
             tone={
-              theme === "nocturne"
+              theme === "sky-dusk" || theme === "sky-day"
+                ? "sky"
+                : theme === "nocturne"
                 ? "prism"
                 : theme === "parchment"
                   ? "parchment"
@@ -2562,7 +2568,6 @@ function Dashboard({
         )}
         <div aria-hidden={atlasMode && (!atlasIntroVisible || homeVisual === "islands")} className="dashboard-hero-inner">
           <div className="atlas-hero-copy">
-            <span className="eyebrow"><Icon name="sparkle" /> AI SkillHub · {atlasMode ? t("atlas.releaseTag") : "3.0 / CLASSIC"}</span>
             <h2>{atlasMode ? t("atlas.heroTitle") : t("dash.title")}</h2>
             <p>{atlasMode ? t("atlas.heroSubtitle", { skills: summary.skills, sources: summary.sources }) : t("dash.subtitle")}</p>
             {atlasMode && (
@@ -3610,7 +3615,7 @@ function Library(props: LibraryProps) {
           <aside className="atlas-library-filter-deck" aria-label={t("atlas.filterDeck")}>
             <header>
               <span>{t("nav.library")}</span>
-              <b>{visibleSources.length.toString().padStart(2, "0")}</b>
+              <b>{visibleSources.length.toLocaleString()}</b>
             </header>
             <div className="atlas-filter-meter">
               <span>{t("atlas.enabledSkills")}</span>
@@ -6673,12 +6678,27 @@ function initialNavKey(): NavKey {
   return isNavKey(view) ? view : "dashboard";
 }
 
+const DEFAULT_THEME: ThemeName = "sky-dusk";
+const SKY_THEME_MIGRATION_KEY = "ai-skillhub-theme-sky-default-v1";
+
 function initialTheme(): ThemeName {
-  if (typeof window === "undefined") return "nocturne";
+  if (typeof window === "undefined") return DEFAULT_THEME;
   const searchTheme = new URLSearchParams(window.location.search).get("theme");
   if (isThemeName(searchTheme)) return searchTheme;
-  const savedTheme = window.localStorage.getItem("ai-skillhub-theme");
-  return isThemeName(savedTheme) ? savedTheme : "nocturne";
+  try {
+    const savedTheme = window.localStorage.getItem("ai-skillhub-theme");
+    // One time only: "nocturne" was the previous default, so a saved
+    // "nocturne" usually means "never chose". Move it to the new default;
+    // any other saved choice is kept, and nocturne stays selectable.
+    if (savedTheme === "nocturne" && !window.localStorage.getItem(SKY_THEME_MIGRATION_KEY)) {
+      window.localStorage.setItem(SKY_THEME_MIGRATION_KEY, "1");
+      return DEFAULT_THEME;
+    }
+    window.localStorage.setItem(SKY_THEME_MIGRATION_KEY, "1");
+    return isThemeName(savedTheme) ? savedTheme : DEFAULT_THEME;
+  } catch {
+    return DEFAULT_THEME;
+  }
 }
 
 function initialUiScale(storageKey: string, fallback: UiScalePreset): UiScalePreset {
@@ -6693,6 +6713,8 @@ function isUiScalePreset(value: string | null): value is UiScalePreset {
 
 function isThemeName(value: string | null): value is ThemeName {
   return (
+    value === "sky-dusk" ||
+    value === "sky-day" ||
     value === "nocturne" ||
     value === "parchment" ||
     value === "atlas-dark" ||
@@ -6708,6 +6730,8 @@ function isThemeName(value: string | null): value is ThemeName {
 
 function isAtlasTheme(theme: ThemeName): boolean {
   return (
+    theme === "sky-dusk" ||
+    theme === "sky-day" ||
     theme === "nocturne" ||
     theme === "parchment" ||
     theme === "atlas-dark" ||
@@ -6719,6 +6743,7 @@ function isAtlasTheme(theme: ThemeName): boolean {
 
 function isLightTheme(theme: ThemeName): boolean {
   return (
+    theme === "sky-day" ||
     theme === "parchment" ||
     theme === "atlas-light" ||
     theme === "atlas-legacy-light" ||
@@ -6728,6 +6753,12 @@ function isLightTheme(theme: ThemeName): boolean {
 }
 
 function atlasThemeVisual(theme: ThemeName) {
+  if (theme === "sky-dusk") {
+    return { accent: "#f0b46e", palette: ["#f0b46e", "#a99ad8", "#7cc6a0", "#93b3e8"] };
+  }
+  if (theme === "sky-day") {
+    return { accent: "#2c64a6", palette: ["#2c64a6", "#c4643c", "#2e8463", "#738295"] };
+  }
   if (theme === "parchment") {
     return {
       accent: "#b7603f",

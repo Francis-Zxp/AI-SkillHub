@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sky Trial</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; font: 13px/1.35 "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; }
+      #host { position: fixed; inset: 0; }
+      .sky-world-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+      .label { position: absolute; left: 0; top: 0; padding: 5px 10px 6px; border-radius: 10px; border: 0; background: rgba(255, 252, 245, .92); color: #23301f; box-shadow: 0 1px 2px rgba(30, 40, 30, .18); cursor: pointer; text-align: center; white-space: nowrap; }
+      .label strong { display: block; font-size: 13px; font-weight: 600; }
+      .label span { display: block; font-size: 11px; color: #5a6656; font-variant-numeric: tabular-nums; }
+      .label.is-hovered { background: #fff; box-shadow: 0 2px 8px rgba(30, 40, 30, .25); }
+      .dark .label { background: rgba(28, 30, 44, .86); color: #f2ece2; }
+      .dark .label span { color: #c7c0b6; }
+      #stats { position: fixed; right: 8px; bottom: 8px; padding: 4px 8px; background: rgba(0,0,0,.45); color: #fff; border-radius: 6px; font: 11px monospace; }
+    </style>
+  </head>
+  <body>
+    <div id="host"></div>
+    <div id="stats"></div>
+    <script type="module" src="./skyTrial.ts"></script>
+  </body>
+</html>

@@ -52,16 +52,15 @@ test("logo and theme labels keep optical alignment and one-line names", () => {
 });
 
 test("universe starts from a bounded real cache and promotes to the SQLite model", () => {
-  assert.match(universe, /UNIVERSE_CACHE_KEY = "ai-skillhub-universe-cache-v1"/);
+  assert.match(universe, /UNIVERSE_CACHE_KEY = "ai-skillhub-universe-cache-v2"/);
   assert.match(universe, /raw\.length > 2_000_000/);
   assert.match(universe, /data-universe-state=/);
   assert.match(universe, /writeUniverseModelCache\(liveModel\)/);
   assert.match(styles, /@keyframes universe-cache-promote/);
 });
 
-test("universe uses one volumetric core and session-random subtle meteors", () => {
-  assert.match(universe, /METEOR_SESSION_SEED = randomSessionSeed\(\)/);
-  assert.match(universe, /length: 5 \+ \(METEOR_SESSION_SEED % 16\)/);
-  assert.doesNotMatch(universe, /upperBloom|lowerBloom/);
-  assert.equal((universe.match(/createRadialGradient\(192, 192, 2, 192, 192, 190\)/g) ?? []).length, 1);
+test("star map backdrop is a quiet star field with great circles, no aura or meteors", () => {
+  assert.match(universe, /const STAR_FIELD = Array\.from\(\{ length: 170 \}/);
+  assert.match(universe, /const GREAT_CIRCLES: Array<\[Point3, Point3\]>/);
+  assert.doesNotMatch(universe, /METEOR|AURA_SPRITES|DUST_PARTICLES|createRadialGradient/);
 });

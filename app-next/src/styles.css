@@ -6450,3 +6450,176 @@ code { font-family: var(--ui-mono); font-size: .92em; }
     white-space: nowrap;
   }
 }
+
+/* =============================================================
+   Sky · Dusk / Day (v3.2.8 default family)
+   Tokens come from the sky-island scene: dusk plum and lamplight
+   amber for dark, high-altitude haze blue and roof-tile terracotta
+   for light. Flat fills, thin borders, no glow: the scenes carry
+   the atmosphere, the chrome stays quiet.
+   ============================================================= */
+
+.theme-sky-dusk {
+  --ui-font: "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", "Noto Sans KR", sans-serif;
+  --ui-display: "Segoe UI Variable Display", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  --bg: #15121c;
+  --bg-soft: #1a1623;
+  --surface: rgba(32, 27, 42, .94);
+  --surface-soft: rgba(43, 37, 56, .9);
+  --surface-strong: rgba(57, 49, 73, .96);
+  --surface-elevated: rgba(26, 22, 35, .99);
+  --border: rgba(236, 224, 242, .1);
+  --border-strong: rgba(240, 180, 110, .42);
+  --text: #f5efe9;
+  --text-soft: #cdc3d0;
+  --text-muted: #978da2;
+  --brand: #f0b46e;
+  --brand-strong: #ffd9aa;
+  --brand-glow: rgba(240, 180, 110, .14);
+  --accent: #a99ad8;
+  --success: #7cc6a0;
+  --warning: #e8b45f;
+  --danger: #f2858c;
+  --info: #93b3e8;
+  --success-soft: rgba(124, 198, 160, .12);
+  --warning-soft: rgba(232, 180, 95, .12);
+  --danger-soft: rgba(242, 133, 140, .12);
+  --info-soft: rgba(147, 179, 232, .12);
+  --shadow-card: 0 10px 30px rgba(8, 5, 14, .32);
+  --shadow-card-hover: 0 14px 38px rgba(8, 5, 14, .42);
+  --shadow-glow: none;
+  --shadow-chrome: 0 2px 10px rgba(8, 5, 14, .28);
+  --hero-grad: linear-gradient(180deg, #17131f 0%, #1c1727 58%, #221a2b 100%);
+  --on-brand: #2a1a0a;
+  color: var(--text);
+  color-scheme: dark;
+}
+
+.theme-sky-day {
+  --ui-font: "Segoe UI Variable Text", "Microsoft YaHei UI", "Segoe UI", "Noto Sans KR", sans-serif;
+  --ui-display: "Segoe UI Variable Display", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  --bg: #edf2f7;
+  --bg-soft: #f6f8fb;
+  --surface: rgba(255, 255, 255, .97);
+  --surface-soft: rgba(235, 241, 247, .95);
+  --surface-strong: rgba(220, 229, 239, .98);
+  --surface-elevated: #ffffff;
+  --border: rgba(31, 51, 74, .12);
+  --border-strong: rgba(44, 100, 166, .4);
+  --text: #1b2a3a;
+  --text-soft: #46576a;
+  --text-muted: #738295;
+  --brand: #2c64a6;
+  --brand-strong: #1d4c84;
+  --brand-glow: rgba(44, 100, 166, .12);
+  --accent: #c4643c;
+  --success: #2e8463;
+  --warning: #a8701f;
+  --danger: #bd4652;
+  --info: #3a6fb0;
+  --success-soft: rgba(46, 132, 99, .1);
+  --warning-soft: rgba(168, 112, 31, .1);
+  --danger-soft: rgba(189, 70, 82, .09);
+  --info-soft: rgba(58, 111, 176, .1);
+  --shadow-card: 0 8px 26px rgba(31, 51, 74, .08);
+  --shadow-card-hover: 0 12px 32px rgba(31, 51, 74, .13);
+  --shadow-glow: none;
+  --shadow-chrome: 0 2px 10px rgba(31, 51, 74, .08);
+  --hero-grad: linear-gradient(180deg, #e9f0f7 0%, #edf2f7 60%, #f2f5f9 100%);
+  --on-brand: #ffffff;
+  color: var(--text);
+  color-scheme: light;
+}
+
+.theme-sky-dusk.shell { background: linear-gradient(180deg, #16121d 0%, #191521 100%); }
+.theme-sky-day.shell { background: linear-gradient(180deg, #eaf0f6 0%, #f1f5f9 100%); }
+.theme-sky-dusk .sidebar,
+.theme-sky-day .sidebar { background: var(--surface-elevated); border-right: 1px solid var(--border); box-shadow: none; backdrop-filter: none; }
+.theme-sky-dusk .topbar,
+.theme-sky-day .topbar { border: 1px solid var(--border); background: var(--surface-elevated); box-shadow: var(--shadow-chrome); }
+.theme-sky-dusk > .particle-field-cosmos,
+.theme-sky-dusk > .particle-field-backdrop,
+.theme-sky-day > .particle-field-cosmos,
+.theme-sky-day > .particle-field-backdrop { display: none; }
+.theme-sky-dusk.theme-family-atlas:not(.page-dashboard) .page-header,
+.theme-sky-day.theme-family-atlas:not(.page-dashboard) .page-header {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: none;
+}
+.theme-sky-dusk.theme-family-atlas:not(.page-dashboard) .panel,
+.theme-sky-dusk.theme-family-atlas:not(.page-dashboard) .library-toolbar,
+.theme-sky-dusk.theme-family-atlas:not(.page-dashboard) .source-group,
+.theme-sky-day.theme-family-atlas:not(.page-dashboard) .panel,
+.theme-sky-day.theme-family-atlas:not(.page-dashboard) .library-toolbar,
+.theme-sky-day.theme-family-atlas:not(.page-dashboard) .source-group {
+  border-color: var(--border);
+  box-shadow: var(--shadow-card);
+}
+/* One flat primary colour with readable text; no gradients or glow. */
+.theme-sky-dusk .primary-action,
+.theme-sky-dusk .primary-pill,
+.theme-sky-day .primary-action,
+.theme-sky-day .primary-pill,
+.theme-sky-dusk.theme-family-atlas.page-dashboard .hero-actions .primary-action,
+.theme-sky-day.theme-family-atlas.page-dashboard .hero-actions .primary-action {
+  background: var(--brand);
+  color: var(--on-brand);
+  box-shadow: none;
+}
+.theme-sky-dusk .primary-action:hover:not(:disabled),
+.theme-sky-dusk .primary-pill:hover,
+.theme-sky-day .primary-action:hover:not(:disabled),
+.theme-sky-day .primary-pill:hover {
+  background: var(--brand-strong);
+  box-shadow: none;
+  transform: none;
+}
+.theme-sky-dusk :focus-visible,
+.theme-sky-day :focus-visible { outline-color: var(--brand); }
+
+/* Star map overlays: plain readable type (no tiny uppercase mono labels),
+   colours from the theme tokens, no glow. */
+.skill-universe-inspector header {
+  font: 600 calc(11px * var(--ui-text-scale, 1))/1.25 var(--ui-font);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.skill-universe-inspector header i { box-shadow: none; background: hsl(var(--universe-hue) 45% 62%); }
+.skill-universe-inspector header b { color: var(--text-soft); font-weight: 600; }
+.skill-universe-inspector dt { font-size: calc(11px * var(--ui-text-scale, 1)); }
+.skill-universe-inspector dd { font-variant-numeric: tabular-nums; }
+.skill-universe-counter small,
+.skill-universe-legend b {
+  font-family: var(--ui-font);
+  font-size: calc(10.5px * var(--ui-text-scale, 1));
+  font-variant-numeric: tabular-nums;
+}
+.theme-sky-dusk .skill-universe-inspector,
+.theme-sky-day .skill-universe-inspector {
+  border: 1px solid var(--border);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-card);
+  backdrop-filter: none;
+}
+.theme-sky-dusk .skill-universe-modes,
+.theme-sky-day .skill-universe-modes { border-color: var(--border); background: var(--surface-elevated); box-shadow: none; backdrop-filter: none; }
+.theme-sky-dusk .skill-universe-modes button.active,
+.theme-sky-day .skill-universe-modes button.active { background: var(--brand); color: var(--on-brand); box-shadow: none; }
+
+/* Sky family: the sidebar and the title already name the page, so the
+   header eyebrow is dropped; kickers read as plain text, and page titles are
+   sized for a working tool rather than a poster. */
+.theme-sky-dusk .page-header > div > .eyebrow:first-child,
+.theme-sky-day .page-header > div > .eyebrow:first-child { display: none; }
+.theme-sky-dusk .eyebrow,
+.theme-sky-day .eyebrow { text-transform: none; letter-spacing: 0; }
+.theme-sky-dusk.theme-family-atlas .page-header h2,
+.theme-sky-day.theme-family-atlas .page-header h2 {
+  font-size: clamp(26px, 2.1vw, 34px);
+  font-weight: 650;
+  letter-spacing: -.02em;
+  line-height: 1.2;
+}
+.theme-sky-dusk.theme-family-atlas .page-header p,
+.theme-sky-day.theme-family-atlas .page-header p { margin-top: 6px; color: var(--text-soft); }

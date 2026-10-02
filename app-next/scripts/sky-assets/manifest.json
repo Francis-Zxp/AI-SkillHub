@@ -1,0 +1,244 @@
+{
+  "sources": {
+    "nature": {
+      "pack": "Stylized Nature MegaKit (Standard)",
+      "author": "Quaternius",
+      "license": "CC0 1.0",
+      "url": "https://opengameart.org/content/stylized-nature-megakit",
+      "file": "stylized_nature_megakitstandard.zip",
+      "sha256": ""
+    },
+    "village": {
+      "pack": "Medieval Village MegaKit (Standard)",
+      "author": "Quaternius",
+      "license": "CC0 1.0",
+      "url": "https://opengameart.org/content/medieval-village-megakit",
+      "file": "medieval_village_megakitstandard.zip",
+      "sha256": ""
+    },
+    "props": {
+      "pack": "Fantasy Props MegaKit (Standard)",
+      "author": "Quaternius",
+      "license": "CC0 1.0",
+      "url": "https://opengameart.org/content/fantasy-props-megakit",
+      "file": "fantasy_props_megakitstandard.zip",
+      "sha256": ""
+    },
+    "villager": {
+      "pack": "Ultimate Modular Women Pack — Animated Woman",
+      "author": "Quaternius",
+      "license": "CC0 1.0",
+      "url": "https://poly.pizza/m/nIItLV9nxS",
+      "file": "villager-woman.glb",
+      "sha256": ""
+    },
+    "gull": {
+      "pack": "Flying gull",
+      "author": "Poly by Google",
+      "license": "CC-BY 3.0",
+      "url": "https://poly.pizza/m/eMNhHDZakYp",
+      "file": "gull-flying-b.glb",
+      "attribution": "Flying gull by Poly by Google, CC-BY 3.0 (https://creativecommons.org/licenses/by/3.0/), via Poly Pizza. Re-exported with optimised geometry; wings animated in a shader.",
+      "sha256": ""
+    }
+  },
+  "textures": [
+    {
+      "source": "nature/Leaves_NormalTree_C.png",
+      "size": 512,
+      "alpha": true
+    },
+    {
+      "source": "nature/Leaf_Pine_C.png",
+      "size": 512,
+      "alpha": true
+    },
+    {
+      "source": "nature/Leaves_TwistedTree_C.png",
+      "size": 512,
+      "alpha": true
+    },
+    {
+      "source": "nature/Leaves_GiantPine_C.png",
+      "size": 512,
+      "alpha": true
+    },
+    {
+      "source": "nature/Bark_NormalTree.png",
+      "size": 512
+    },
+    {
+      "source": "nature/Bark_TwistedTree.png",
+      "size": 512
+    },
+    {
+      "source": "nature/Bark_DeadTree.png",
+      "size": 512
+    },
+    {
+      "source": "nature/Flowers.png",
+      "size": 512,
+      "alpha": true
+    },
+    {
+      "source": "nature/Grass.png",
+      "size": 128
+    },
+    {
+      "source": "nature/Rocks_Diffuse.png",
+      "size": 1024
+    },
+    {
+      "source": "nature/PathRocks_Diffuse.png",
+      "size": 512
+    },
+    {
+      "source": "nature/Mushrooms.png",
+      "size": 256
+    },
+    {
+      "source": "nature/Leaves.png",
+      "size": 512,
+      "alpha": true
+    },
+    {
+      "source": "village/T_Plaster_BaseColor.png",
+      "size": 512
+    },
+    {
+      "source": "village/T_WoodTrim_BaseColor.png",
+      "size": 1024
+    },
+    {
+      "source": "village/T_RoundTiles_BaseColor.png",
+      "size": 1024
+    },
+    {
+      "source": "village/T_RoundTiles_Normal.png",
+      "size": 512
+    },
+    {
+      "source": "village/T_UnevenBrick_BaseColor.png",
+      "size": 512
+    },
+    {
+      "source": "village/T_Brick_BaseColor.png",
+      "size": 512
+    },
+    {
+      "source": "village/T_RedBrick_BaseColor.png",
+      "size": 512
+    },
+    {
+      "source": "village/T_RockTrim_BaseColor.png",
+      "size": 512
+    },
+    {
+      "source": "village/T_MetalOrnaments_BaseColor.png",
+      "size": 256
+    },
+    {
+      "source": "village/T_VineLeaf_png.png",
+      "size": 256,
+      "alpha": true
+    },
+    {
+      "source": "props/T_Trim_Furniture_BaseColor.png",
+      "size": 512
+    },
+    {
+      "source": "props/T_Trim_Metal_BaseColor.png",
+      "size": 256
+    },
+    {
+      "source": "props/T_Trim_Props_BaseColor.png",
+      "size": 512
+    },
+    {
+      "source": "props/T_Trim_Cloth_BaseColor.png",
+      "size": 256
+    },
+    {
+      "source": "village-extra/T_Noise_Terrain.png",
+      "size": 512
+    },
+    {
+      "source": "village-extra/T_BrushedNoise.png",
+      "size": 512
+    }
+  ],
+  "libraries": {
+    "nature": {
+      "dir": "nature",
+      "models": [
+        "CommonTree_1",
+        "CommonTree_2",
+        "CommonTree_3",
+        "CommonTree_4",
+        "CommonTree_5",
+        "Pine_1",
+        "Pine_2",
+        "Pine_3",
+        "Pine_4",
+        "Pine_5",
+        "TwistedTree_1",
+        "DeadTree_1",
+        "Bush_Common",
+        "Bush_Common_Flowers",
+        "Fern_1",
+        "Plant_1",
+        "Plant_1_Big",
+        "Plant_7",
+        "Plant_7_Big",
+        "Clover_1",
+        "Flower_3_Group",
+        "Flower_4_Group",
+        "Flower_3_Single",
+        "Flower_4_Single",
+        "Grass_Common_Short",
+        "Grass_Common_Tall",
+        "Grass_Wispy_Short",
+        "Rock_Medium_1",
+        "Rock_Medium_2",
+        "Rock_Medium_3",
+        "RockPath_Round_Small_1",
+        "RockPath_Round_Small_2",
+        "RockPath_Round_Small_3",
+        "Mushroom_Common",
+        "Mushroom_Laetiporus"
+      ],
+      "dropMaps": [
+        "normalTexture"
+      ]
+    },
+    "props": {
+      "dir": "props",
+      "models": [
+        "Barrel",
+        "Barrel_Apples",
+        "Crate_Wooden",
+        "FarmCrate_Apple",
+        "FarmCrate_Carrot",
+        "Bench",
+        "Stall_Empty",
+        "Stall_Cart_Empty",
+        "Workbench",
+        "Anvil",
+        "Anvil_Log",
+        "BookStand",
+        "Book_Stack_1",
+        "Scroll_1",
+        "Banner_1",
+        "Bucket_Wooden_1",
+        "Chest_Wood",
+        "Pot_1",
+        "Vase_2"
+      ],
+      "dropMaps": [
+        "normalTexture",
+        "metallicRoughnessTexture",
+        "occlusionTexture"
+      ]
+    }
+  }
+}
