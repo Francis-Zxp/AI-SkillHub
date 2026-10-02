@@ -1,6 +1,6 @@
 # AI SkillHub
 
-[English](README.md) · **简体中文** · [한국어](README_KO.md)
+**简体中文** · [English](README_EN.md) · [한국어](README_KO.md)
 
 ### 在一个地方，整理你的 AI Skills。
 
@@ -8,9 +8,23 @@
 
 [**下载最新正式版**](https://github.com/Francis-Zxp/AI-SkillHub/releases/latest) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/Francis-Zxp/AI-SkillHub/issues)
 
-![AI SkillHub — 英文界面的天空正午主题仪表盘](docs/images/sky-noon-festival-en.png)
+## 界面预览
 
-*英文演示技能库，天空正午主题。每座岛代表一个分类，岛屿大小反映分类中包含的内容量。*
+### 天空正午 · 群岛
+
+![天空正午群岛 — 普通窗口、英文界面](docs/images/sky-noon-festival-en.png)
+
+*每座岛代表一个分类，岛屿大小反映分类中包含的内容量。*
+
+### 极夜 · 星图
+
+![极夜星图 — 普通窗口、英文界面](docs/images/midnight-window-en.png)
+
+### 关系图谱 · 沉浸视图
+
+![关系图谱 — 普通窗口内的应用沉浸视图](docs/images/relations-immersive-window-en.png)
+
+*截图使用英文演示技能库。三张均按 1440 × 960 普通窗口布局，以 4320 × 2880 高分辨率输出。关系图谱开启应用内的沉浸按钮，程序与桌面均未全屏。点击图片可查看原图。*
 
 ## 可以做什么
 

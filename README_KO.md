@@ -1,6 +1,6 @@
 # AI SkillHub
 
-[English](README.md) · [简体中文](README_ZH.md) · **한국어**
+[简体中文](README.md) · [English](README_EN.md) · **한국어**
 
 ### AI Skills를 한곳에서 정리하세요.
 
@@ -8,9 +8,23 @@ Skills를 모으고 원본 저장소를 업데이트하며 AI 도구에 연결�
 
 [**최신 정식 버전 다운로드**](https://github.com/Francis-Zxp/AI-SkillHub/releases/latest) · [업데이트 내역](CHANGELOG.md) · [문제 제보](https://github.com/Francis-Zxp/AI-SkillHub/issues)
 
-![AI SkillHub — 영어 인터페이스의 하늘 정오 테마 대시보드](docs/images/sky-noon-festival-en.png)
+## 화면 미리보기
 
-*영어 예시 라이브러리의 하늘 정오 테마. 각 섬은 하나의 분류를 나타내며, 섬의 크기는 해당 분류의 콘텐츠 양을 반영합니다.*
+### 하늘 정오 · 군도
+
+![하늘 정오 군도 — 일반 창, 영어 인터페이스](docs/images/sky-noon-festival-en.png)
+
+*각 섬은 하나의 분류를 나타내며, 섬의 크기는 해당 분류의 콘텐츠 양을 반영합니다.*
+
+### 미드나이트 · 별자리 지도
+
+![미드나이트 별자리 지도 — 일반 창, 영어 인터페이스](docs/images/midnight-window-en.png)
+
+### 관계 지도 · 집중 보기
+
+![관계 지도 — 일반 창 안의 앱 집중 보기](docs/images/relations-immersive-window-en.png)
+
+*영어 예시 라이브러리입니다. 모든 이미지는 1440 × 960 일반 창 레이아웃을 4320 × 2880 해상도로 출력했습니다. 관계 지도는 앱 내부의 집중 보기 버튼만 사용하며, 프로그램과 데스크톱의 전체 화면 모드는 사용하지 않았습니다. 이미지를 누르면 원본 해상도로 볼 수 있습니다.*
 
 ## 주요 기능
 
