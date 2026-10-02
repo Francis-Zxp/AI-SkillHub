@@ -410,6 +410,25 @@ pub(crate) fn remap_keys(connection: &Connection, entry: &JournalEntry) -> Resul
     let old_parent_id = stable_id("skill", &entry.old_parent);
     let new_parent_id = stable_id("skill", &entry.new_parent);
     if old_parent_id != new_parent_id {
+        // The parent row moves with its key first: tags and preset links point
+        // at it through foreign keys, so moving only those rows would leave
+        // them pointing at a parent that does not exist yet.
+        if table_exists(connection, "skills") {
+            connection
+                .execute(
+                    "UPDATE OR REPLACE skills SET id = ?2,
+                         name = CASE WHEN name = ?3 THEN ?4 ELSE name END,
+                         folder_name = CASE WHEN folder_name = ?3 THEN ?4 ELSE folder_name END
+                     WHERE id = ?1",
+                    params![
+                        old_parent_id,
+                        new_parent_id,
+                        entry.old_parent,
+                        entry.new_parent
+                    ],
+                )
+                .map_err(|failure| error("skills", failure))?;
+        }
         for (table, column) in SKILL_KEYED_TABLES {
             if !table_exists(connection, table) {
                 continue;
@@ -946,6 +965,59 @@ mod tests {
     }
 
     #[test]
+    fn parent_skill_tags_move_with_the_parent_under_enforced_foreign_keys() {
+        // Real libraries tag their generated parent Skills; the parent id
+        // changes with its name, so the tag rows must find the moved row.
+        let (library, mut connection) = Library::new("parent-tags");
+        let source_id = library.add(
+            &connection,
+            "gstack",
+            Some("https://github.com/garrytan/gstack.git"),
+        );
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .unwrap();
+        let old_parent = stable_id("skill", "gstack");
+        connection
+            .execute(
+                "INSERT INTO skills (id, source_id, name, folder_name, relative_path, created_at, updated_at, is_router_hub)
+                 VALUES (?1, ?2, 'gstack', 'gstack', 'AI-SkillHub-local-routers/gstack/SKILL.md', '1', '1', 1)",
+                params![old_parent, source_id],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO tags (id, name) VALUES ('tag-planning', 'planning')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO skill_tags (skill_id, tag_id) VALUES (?1, 'tag-planning')",
+                [&old_parent],
+            )
+            .unwrap();
+        let journal = apply(&library.root, &mut connection, &[source_id]).unwrap();
+        assert!(journal.completed);
+        let new_parent = stable_id("skill", "gstack--garrytan");
+        let (name, tag): (String, String) = connection
+            .query_row(
+                "SELECT s.name, t.tag_id FROM skills s JOIN skill_tags t ON t.skill_id = s.id WHERE s.id = ?1",
+                [&new_parent],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "gstack--garrytan");
+        assert_eq!(tag, "tag-planning");
+        let orphans: i64 = connection
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(orphans, 0);
+    }
+
+    #[test]
     fn an_interrupted_migration_is_finished_on_the_next_call() {
         let (library, mut connection) = Library::new("resume");
         let old_id = library.add(
@@ -1028,6 +1100,34 @@ mod tests {
     /// Read-only audit of a real library: copy its SQLite file first, then
     /// `AI_SKILLHUB_IDENTITY_AUDIT_DB=<copy> AI_SKILLHUB_IDENTITY_AUDIT_SOURCES=<sources>
     /// cargo test --lib identity_audit -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "remaps a copy of a real database; run manually"]
+    fn remap_dry_run_on_a_database_copy_keeps_foreign_keys_whole() {
+        let (Ok(database), Ok(plan)) = (
+            std::env::var("AI_SKILLHUB_IDENTITY_DRYRUN_DB"),
+            std::env::var("AI_SKILLHUB_IDENTITY_DRYRUN_PLAN"),
+        ) else {
+            return;
+        };
+        let journal: Journal = serde_json::from_str(&fs::read_to_string(plan).unwrap()).unwrap();
+        let mut connection = Connection::open(database).unwrap();
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON;")
+            .unwrap();
+        let transaction = connection.transaction().unwrap();
+        for entry in &journal.entries {
+            remap_keys(&transaction, entry).unwrap();
+        }
+        let orphans: i64 = transaction
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        println!("entries={} orphans={orphans}", journal.entries.len());
+        transaction.commit().unwrap();
+        assert_eq!(orphans, 0);
+    }
+
     #[test]
     #[ignore = "reads a real user library; run manually against a database copy"]
     fn identity_audit_of_real_library_is_read_only() {

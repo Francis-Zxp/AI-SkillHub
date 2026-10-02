@@ -328,8 +328,9 @@ pub(crate) fn merge_round(
                 .get(&key)
                 .is_some_and(|previous| previous.outcome != "deferred");
         if !keep_previous {
-            // An earlier round may already have recorded new Skills; a later
-            // unchanged pull must not erase that evidence from the same run.
+            // An earlier round may already have recorded new Skills (also
+            // while its pull was deferred); a later unchanged pull must not
+            // erase that evidence from the same run.
             let merged = match by_folder.remove(&key) {
                 Some(previous) if entry.outcome == "unchanged" && previous.outcome == "updated" => {
                     SourceRunEntry {
@@ -337,7 +338,8 @@ pub(crate) fn merge_round(
                         ..previous
                     }
                 }
-                _ => entry,
+                Some(previous) => carry_evidence(previous, entry),
+                None => entry,
             };
             by_folder.insert(key, merged);
         }
@@ -345,6 +347,31 @@ pub(crate) fn merge_round(
     // Keyed by the lowercase folder, so this is already in display order.
     run.sources = by_folder.into_values().collect();
     run
+}
+
+/// Keeps what earlier rounds of the same run found (new Skills, removed
+/// paths, dependencies, discoveries, kept local files) when a later round
+/// reports the source again. A source that received new Skills earlier and is
+/// now unchanged counts as updated.
+fn carry_evidence(previous: SourceRunEntry, mut entry: SourceRunEntry) -> SourceRunEntry {
+    let union = |earlier: Vec<String>, later: &mut Vec<String>| {
+        for item in earlier {
+            if !later.contains(&item) {
+                later.push(item);
+            }
+        }
+    };
+    union(previous.added_skills, &mut entry.added_skills);
+    union(previous.removed_paths, &mut entry.removed_paths);
+    union(previous.added_dependencies, &mut entry.added_dependencies);
+    union(previous.discovered_skills, &mut entry.discovered_skills);
+    union(previous.kept_local_paths, &mut entry.kept_local_paths);
+    if entry.outcome == "unchanged"
+        && (!entry.added_skills.is_empty() || !entry.removed_paths.is_empty())
+    {
+        entry.outcome = "updated".to_string();
+    }
+    entry
 }
 
 pub(crate) fn read_run(state_dir: &Path) -> Option<UpdateRun> {
@@ -535,5 +562,36 @@ mod tests {
         fs::write(root.join(".git/HEAD"), "0123456789abcdef\n").unwrap();
         assert_eq!(tracked_branch(&root), "detached@0123456");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn skills_found_while_a_pull_was_deferred_survive_the_next_round() {
+        let entry = |outcome: &str, added: &[&str]| SourceRunEntry {
+            folder: "K-Dense-AI--scientific-agent-skills".to_string(),
+            outcome: outcome.to_string(),
+            added_skills: added.iter().map(|item| item.to_string()).collect(),
+            ..SourceRunEntry::default()
+        };
+        let first = merge_round(
+            None,
+            vec![entry("deferred", &["skills/alphagenome", "skills/datalad"])],
+            false,
+            "t1",
+            || "run".into(),
+        );
+        assert_eq!(first.sources[0].outcome, "deferred");
+        let second = merge_round(
+            Some(first),
+            vec![entry("unchanged", &[])],
+            true,
+            "t2",
+            || "other".into(),
+        );
+        assert_eq!(second.run_id, "run");
+        assert_eq!(second.sources[0].outcome, "updated");
+        assert_eq!(
+            second.sources[0].added_skills,
+            vec!["skills/alphagenome", "skills/datalad"]
+        );
     }
 }

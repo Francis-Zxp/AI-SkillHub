@@ -4569,10 +4569,12 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   grid-template-columns: 1fr 1fr;
   gap: 4px;
   align-self: stretch;
-  width: 174px;
+  width: 196px;
   padding-left: 4px;
   border-left: 1px solid var(--border);
 }
+/* Action names stay on one line ("更新全部来源" used to wrap mid-word). */
+.atlas-touchbar-actions button span { white-space: nowrap; }
 .atlas-touchbar-actions button {
   display: grid;
   place-items: center;

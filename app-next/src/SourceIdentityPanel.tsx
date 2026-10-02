@@ -209,7 +209,7 @@ type Dictionary = Record<string, string>;
 
 const zh: Dictionary = {
   title: "来源命名",
-  body: "仓库身份统一为“作者/仓库”。早期安装的来源没有作者前缀，父入口可能和别的作者同名；统一后调用名改为“作者--仓库”。标题、备注、分类、评分、固定版本和使用记录都会保留。",
+  body: "按 GitHub 仓库身份统一来源命名：文件夹与调用名改为“项目--作者”，项目名在前，界面仍以项目名为主。早期安装的来源没有作者部分，父入口可能和别的作者同名。标题、备注、分类、评分、固定版本和使用记录都会保留。",
   recheck: "重新检查",
   statRename: "可统一",
   statAligned: "已统一",
@@ -228,12 +228,12 @@ const zh: Dictionary = {
   cancel: "取消",
   interrupted: "上次命名统一被中断。继续完成后索引才会一致。",
   finish: "继续完成",
-  allAligned: "所有 GitHub 来源都已使用“作者--仓库”命名。"
+  allAligned: "所有 GitHub 来源都已使用“项目--作者”命名。"
 };
 
 const en: Dictionary = {
   title: "Source names",
-  body: "Repository identity is unified as owner/repo. Sources installed by early versions have no owner prefix, so their parent name can clash with another author's. Unifying changes the invocation name to owner--repo. Titles, notes, folders, ratings, pins and usage history are kept.",
+  body: "Source names follow the GitHub repository: folders and invocation names become project--owner, project first, and the interface keeps showing the project name. Sources installed by early versions have no owner part, so their parent name can clash with another author's. Titles, notes, folders, ratings, pins and usage history are kept.",
   recheck: "Check again",
   statRename: "Can unify",
   statAligned: "Unified",
@@ -252,12 +252,12 @@ const en: Dictionary = {
   cancel: "Cancel",
   interrupted: "The last name unification was interrupted. Finish it to keep the index consistent.",
   finish: "Finish now",
-  allAligned: "Every GitHub source already uses owner--repo."
+  allAligned: "Every GitHub source already uses project--owner."
 };
 
 const ko: Dictionary = {
   title: "소스 이름",
-  body: "저장소 식별자를 작성자/저장소로 통일합니다. 초기 버전에서 설치한 소스는 작성자 접두사가 없어 다른 작성자와 부모 이름이 겹칠 수 있습니다. 통일하면 호출 이름이 작성자--저장소로 바뀝니다. 제목, 메모, 폴더, 평점, 버전 고정, 사용 기록은 유지됩니다.",
+  body: "GitHub 저장소 기준으로 소스 이름을 통일합니다. 폴더와 호출 이름은 프로젝트--작성자 형식이 되고, 화면은 계속 프로젝트 이름을 앞에 보여 줍니다. 초기 버전에서 설치한 소스는 작성자 부분이 없어 다른 작성자와 부모 이름이 겹칠 수 있습니다. 제목, 메모, 폴더, 평점, 버전 고정, 사용 기록은 유지됩니다.",
   recheck: "다시 확인",
   statRename: "통일 가능",
   statAligned: "통일됨",
@@ -276,7 +276,7 @@ const ko: Dictionary = {
   cancel: "취소",
   interrupted: "지난 이름 통일이 중단되었습니다. 인덱스를 일관되게 하려면 완료하세요.",
   finish: "지금 완료",
-  allAligned: "모든 GitHub 소스가 이미 작성자--저장소 이름을 사용합니다."
+  allAligned: "모든 GitHub 소스가 이미 프로젝트--작성자 이름을 사용합니다."
 };
 
 const dictionaries: Record<Lang, Dictionary> = { zh, en, ko };
