@@ -25,7 +25,7 @@ import { sourcePresentation } from "./sourceIdentity";
 import { buildSkyIslands, isRouterHubSkill as modelIsRouterHubSkill, skillBelongsToSource as modelSkillBelongsToSource } from "./skyIslandModel";
 import { PromptLauncherAction } from "./PromptLauncherAction";
 const SourceUpdatePanel = lazy(() => import("./SourceUpdatePanel").then(module => ({ default: module.SourceUpdatePanel })));
-import { SourceIdentityPanel } from "./SourceIdentityPanel";
+const SourceIdentityPanel = lazy(() => import("./SourceIdentityPanel").then(module => ({ default: module.SourceIdentityPanel })));
 import { SKY_SCENE_EVENT, setSkySceneEnabled, skySceneEnabled } from "./skyScene";
 import { rt, shouldAutoContinue, sourceUpdateToast, summarizeSourceUpdateRun } from "./sourceUpdateRun";
 import { externalSkillsText } from "./externalSkills";
@@ -449,6 +449,8 @@ export function App() {
     return initial;
   });
   const [active, setActive] = useState<NavKey>(() => initialNavKey());
+  const [dashboardVisited, setDashboardVisited] = useState(active === "dashboard");
+  useEffect(() => { if (active === "dashboard") setDashboardVisited(true); }, [active]);
   const [externalImportPath, setExternalImportPath] = useState("");
   const [theme, setTheme] = useState<ThemeName>(() => initialTheme());
   const skyPhase = useSkyPhase();
@@ -2054,8 +2056,9 @@ export function App() {
             />
           )}
 
-          {active === "dashboard" && (
+          {(dashboardVisited || active === "dashboard") && (
             <Dashboard
+              visible={active === "dashboard"}
               immersive={dashboardImmersive}
               loading={mutationBusy}
               onCopySkill={skill => void copySkillPrompt(skill, recordUsage)}
@@ -2423,6 +2426,7 @@ function GlobalSearchResults({
 const ATLAS_INTRO_VISIBILITY_KEY = "ai-skillhub-atlas-intro-visible";
 
 function Dashboard({
+  visible,
   immersive,
   loading,
   onCopySkill,
@@ -2440,6 +2444,7 @@ function Dashboard({
   syncing,
   theme
 }: {
+  visible: boolean;
   immersive: boolean;
   loading: boolean;
   onCopySkill: (skill: SkillCard) => void;
@@ -2511,16 +2516,17 @@ function Dashboard({
   };
 
   return (
-    <div className="view dashboard-view">
+    <div className="view dashboard-view" hidden={!visible}>
       <section className={`dashboard-hero glow-card${atlasMode && (!atlasIntroVisible || homeVisual === "islands") ? " intro-collapsed" : ""}${atlasMode && homeVisual === "islands" ? " islands-home" : " universe-home"}`}>
         {atlasMode && homeVisual === "islands" && (
           <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
-            <SkillArchipelago centered lightTheme={isLightTheme(theme)} phase={theme.startsWith("sky-") ? (theme.slice(4) as SkyPhase) : isLightTheme(theme) ? "noon" : "night"} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} snapshot={snapshot} />
+            <SkillArchipelago visible={visible} centered lightTheme={isLightTheme(theme)} phase={theme.startsWith("sky-") ? (theme.slice(4) as SkyPhase) : isLightTheme(theme) ? "noon" : "night"} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} snapshot={snapshot} />
           </Suspense>
         )}
         {atlasMode && homeVisual === "universe" && (
           <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
           <SkillUniverse
+              visible={visible}
             centered={!atlasIntroVisible}
             lightTheme={isLightTheme(theme)}
             onOpenSkill={onOpenSkill}
@@ -6409,12 +6415,14 @@ function Settings({
         </section>
       )}
 
+      <Suspense fallback={<DeferredSurface label="" />}>
       <SourceIdentityPanel
         disabled={disabled}
         onApplied={onSnapshotChange}
         onError={onError}
         runtimeAvailable={hasTauriRuntime()}
       />
+      </Suspense>
 
       <section className="preset-concept-strip glow-card">
         <article><Icon name="folder" /><div><strong>{t("preset.folderTitle")}</strong><span>{t("preset.folderBody")}</span></div></article>

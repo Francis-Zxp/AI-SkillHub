@@ -23,7 +23,7 @@ const ASSET_CREDITS = [
   { work: "Flying gull (via Poly Pizza, modified)", author: "Poly by Google", licence: "CC-BY 3.0" }
 ];
 
-export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, phase }: SkillArchipelagoProps) {
+export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, phase, visible = true }: SkillArchipelagoProps) {
   const timeOfDay: SkyPhase = phase ?? (lightTheme ? "noon" : "night");
   const [sceneOn, setSceneOn] = useState(skySceneEnabled);
   useEffect(() => {
@@ -50,7 +50,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, phase }: 
   const [credits, setCredits] = useState(false);
   const visibleIslands = islands.filter(island => island.name.toLocaleLowerCase().includes(query.toLocaleLowerCase().trim()));
   const totalSkills = islands.reduce((sum, island) => sum + island.skillCount, 0);
-  const current = useRef({ paused, lowPower }); current.current = { paused, lowPower };
+  const current = useRef({ paused, lowPower, visible }); current.current = { paused, lowPower, visible };
 
   useEffect(() => {
     if (!host.current || !stableIslands.length) return;
@@ -72,6 +72,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, phase }: 
         labels: labels.current,
         direction: timeOfDay,
         paused: current.current.paused,
+        visible: current.current.visible,
         lowPower: current.current.lowPower,
         onOpen: id => openRef.current?.(id),
         onHover: setHovered,
@@ -86,6 +87,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, phase }: 
           return;
         }
         world.current = created;
+        created.setVisible(current.current.visible);
         setStatus("ready");
       });
     }).catch(() => {
@@ -97,6 +99,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, phase }: 
       world.current = null;
     };
   }, [stableIslands, timeOfDay, retry, sceneOn]);
+  useEffect(() => { world.current?.setVisible(visible); }, [visible]);
   useEffect(() => { world.current?.setPaused(paused); writeSetting("skillhub-sky-paused", paused ? "1" : "0"); }, [paused]);
   useEffect(() => { world.current?.setLowPower(lowPower); }, [lowPower]);
   const open = (id: string) => openRef.current?.(id);

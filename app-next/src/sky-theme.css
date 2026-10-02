@@ -178,7 +178,7 @@
   border: 1px solid var(--border);
   border-radius: 22px;
   background: var(--surface-elevated);
-  box-shadow: var(--shadow-chrome);
+  box-shadow: none;
   backdrop-filter: none;
 }
 .theme-family-sky .brand { width: 54px; height: 54px; margin: 0 auto 12px; border: 0; background: transparent; padding: 0; }

@@ -11,6 +11,14 @@ export function createStarField(count = 720) {
   }));
 }
 
+/** The outer ten percent stays clear; the field grows gently toward the scene. */
+export function starFieldOpacity(x: number, y: number, centerX: number, centerY: number, width: number, height: number) {
+  const smooth = (v: number) => { const t = Math.max(0, Math.min(1, v)); return t * t * (3 - 2 * t); };
+  const edge = smooth((Math.min(x / width, 1 - x / width, y / height, 1 - y / height) - 0.1) / 0.18);
+  const distance = Math.hypot((x - centerX) / (width * 0.62), (y - centerY) / (height * 0.65));
+  return edge * smooth(1 - distance) * 0.32;
+}
+
 const patterns = new WeakMap<CanvasRenderingContext2D, CanvasPattern>();
 
 /** Subtle, static dithering breaks up 8-bit gradient steps without blur. */

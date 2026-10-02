@@ -11,8 +11,9 @@ import { Icon } from "./icons";
 import { categoryName, getLang, t } from "./i18n";
 import { localizedSkillDescription } from "./localizedDescriptions";
 import { sourcePresentation } from "./sourceIdentity";
-import { createStarField, drawAtmosphereDither } from "./universeAtmosphere";
+import { createStarField, drawAtmosphereDither, starFieldOpacity } from "./universeAtmosphere";
 import "./SkillUniverse.css";
+import { advanceLabel, type LabelState } from "./universeLabels";
 import type { LegacySnapshot, SkillCard, SourceCard, SourcePopularityCard } from "./types";
 
 export type SkillUniverseMode = "relations" | "sources" | "categories";
@@ -78,6 +79,7 @@ type UniverseRuntime = {
   /** Screen areas covered by HTML controls; labels are not drawn there. */
   obstacles: Array<{ left: number; top: number; right: number; bottom: number }>;
   refreshObstacles: () => void;
+  labelStates: Map<string, LabelState>;
   pointerX: number;
   pointerY: number;
   pointerInside: boolean;
@@ -103,6 +105,7 @@ type UniverseRuntime = {
 };
 
 export type SkillUniverseProps = {
+  visible?: boolean;
   centered: boolean;
   lightTheme: boolean;
   mode?: SkillUniverseMode;
@@ -146,6 +149,7 @@ const GREAT_CIRCLES: Array<[Point3, Point3]> = [
 const UNIVERSE_CACHE_KEY = "ai-skillhub-universe-cache-v2";
 
 export function SkillUniverse({
+  visible = true,
   centered,
   lightTheme,
   mode: controlledMode,
@@ -162,6 +166,8 @@ export function SkillUniverse({
   const mode = controlledMode ?? internalMode;
   const modeRef = useRef(mode);
   const centeredRef = useRef(centered);
+  const visibleRef = useRef(visible); visibleRef.current = visible;
+  useEffect(() => { runtimeRef.current?.requestDraw(); }, [visible]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const runtimeRef = useRef<UniverseRuntime | null>(null);
   const hoverRef = useRef("");
@@ -222,6 +228,7 @@ export function SkillUniverse({
       selectedId: "",
       obstacles: [],
       refreshObstacles: () => undefined,
+      labelStates: new Map(),
       frameIndex: 0,
       frameMs: 16.7,
       frameSamples: [],
@@ -271,7 +278,7 @@ export function SkillUniverse({
       frameTimer = 0;
     };
 
-    const canRender = () => pageVisible && intersecting && contextReady;
+    const canRender = () => visibleRef.current && pageVisible && intersecting && contextReady;
     const hasInteractiveMotion = () => {
       const now = performance.now();
       return runtime.dragging ||
@@ -323,6 +330,7 @@ export function SkillUniverse({
 
     const resize = () => {
       const rect = host.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
       width = Math.max(1, Math.floor(rect.width));
       height = Math.max(1, Math.floor(rect.height));
       // Preserve native 4K detail (8.3M pixels). Adaptive frame rate / LOD already
@@ -1037,11 +1045,11 @@ function drawUniverseAtmosphere(
   lightTheme: boolean
 ) {
   context.save();
-  // A soft core inside the sphere gives it volume; the nodes in front of it
-  // read brighter, the ones behind recede into it.
-  const core = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius * 1.05);
-  core.addColorStop(0, `${palette.core}${lightTheme ? 0.1 : 0.2})`);
-  core.addColorStop(0.45, `${palette.core}${lightTheme ? 0.04 : 0.08})`);
+  // Off-axis light adds volume without washing out the central data.
+  const lightX = centerX + radius * 0.42, lightY = centerY - radius * 0.24;
+  const core = context.createRadialGradient(lightX, lightY, 0, centerX, centerY, radius * 1.05);
+  core.addColorStop(0, `${palette.core}${lightTheme ? 0.06 : 0.11})`);
+  core.addColorStop(0.45, `${palette.core}${lightTheme ? 0.025 : 0.045})`);
   core.addColorStop(1, `${palette.core}0)`);
   context.fillStyle = core;
   context.beginPath();
@@ -1052,7 +1060,9 @@ function drawUniverseAtmosphere(
   for (let i = 0; i < starCount; i += 1) {
     const star = STAR_FIELD[i];
     const twinkle = star.twinkle && time > 0 ? 0.8 + 0.2 * Math.sin(time * 0.0011 + star.x * 40) : 1;
-    context.fillStyle = `rgba(${palette.star}, ${(star.alpha * twinkle * (lightTheme ? 0.55 : 1)).toFixed(3)})`;
+    const fade = starFieldOpacity(star.x * width, star.y * height, centerX, centerY, width, height);
+    if (fade < 0.002) continue;
+    context.fillStyle = `rgba(${palette.star}, ${(star.alpha * twinkle * fade * (lightTheme ? 0.65 : 1)).toFixed(3)})`;
     context.beginPath();
     context.arc(star.x * width, star.y * height, star.size * 0.6, 0, Math.PI * 2);
     context.fill();
@@ -1171,7 +1181,7 @@ function drawUniverseNode(
     if (depth > 0.55 && radius > 4) {
       // A small lit cap on the near side, from the same light as the core.
       context.beginPath();
-      context.arc(x - radius * 0.3, y - radius * 0.32, radius * 0.32, 0, Math.PI * 2);
+      context.arc(x + radius * 0.3, y - radius * 0.32, radius * 0.32, 0, Math.PI * 2);
       context.fillStyle = `${palette.highlight}${(alpha * (depth - 0.55) * 0.9).toFixed(3)})`;
       context.fill();
     }
@@ -1240,8 +1250,8 @@ function starPalette(tone: UniverseTone, lightTheme: boolean): StarPalette {
       edgeHot: warm ? "rgba(196, 100, 60, " : "rgba(44, 100, 166, ",
       conflict: "rgba(168, 112, 31, ",
       node: (hue, kind, alpha, depth) => kind === "skill"
-        ? `hsla(${hue}, ${Math.round(18 + depth * 40)}%, ${Math.round(66 - depth * 18)}%, ${alpha})`
-        : `hsla(${hue}, ${Math.round(28 + depth * 46)}%, ${Math.round((kind === "router" ? 56 : 62) - depth * 22)}%, ${alpha})`,
+        ? `hsla(${hue}, ${Math.round(58 + depth * 26)}%, ${Math.round(42 - depth * 5)}%, ${alpha})`
+        : `hsla(${hue}, ${Math.round(64 + depth * 22)}%, ${Math.round((kind === "router" ? 44 : 48) - depth * 9)}%, ${alpha})`,
       core: warm ? "rgba(214, 150, 92, " : "rgba(70, 116, 196, ",
       highlight: "rgba(255, 255, 255, ",
       meteor: warm ? "rgba(196, 100, 60, " : "rgba(44, 100, 166, ",
@@ -1260,8 +1270,8 @@ function starPalette(tone: UniverseTone, lightTheme: boolean): StarPalette {
     edgeHot: warm ? "rgba(240, 180, 110, " : "rgba(140, 180, 255, ",
     conflict: "rgba(232, 180, 95, ",
     node: (hue, kind, alpha, depth) => kind === "skill"
-      ? `hsla(${hue}, ${Math.round(16 + depth * 46)}%, ${Math.round(42 + depth * 30)}%, ${alpha})`
-      : `hsla(${hue}, ${Math.round(26 + depth * 54)}%, ${Math.round((kind === "router" ? 50 : 44) + depth * 28)}%, ${alpha})`,
+      ? `hsla(${hue}, ${Math.round(60 + depth * 24)}%, ${Math.round(42 + depth * 14)}%, ${alpha})`
+      : `hsla(${hue}, ${Math.round(66 + depth * 22)}%, ${Math.round((kind === "router" ? 48 : 50) + depth * 13)}%, ${alpha})`,
     core: warm ? "rgba(255, 196, 140, " : "rgba(150, 186, 255, ",
     highlight: "rgba(255, 255, 255, ",
     meteor: warm ? "rgba(255, 226, 190, " : "rgba(214, 230, 255, ",
@@ -1290,6 +1300,8 @@ function drawUniverseLabels(
   lod: UniverseLod,
   interactive: boolean
 ) {
+  const now = performance.now();
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const limit = interactive ? 10 : lod === 0 ? 40 : lod === 1 ? 26 : 14;
   const candidates = runtime.projected
     .filter(node => node.rendered && (focusId
@@ -1298,15 +1310,15 @@ function drawUniverseLabels(
     .map(node => ({
       node,
       score: (node.id === focusId ? 1e7 : 0) + (node.id === runtime.selectedId ? 1e6 : 0) +
-        (node.kind === "source" ? 1e4 : node.kind === "router" ? 1e3 : 0) + node.radius * 40 + node.depth * 200
+        (node.kind === "source" ? 1e4 : node.kind === "router" ? 1e3 : 0) + Math.log2(node.childCount + 1) * 40
     }))
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => b.score - a.score || a.node.id.localeCompare(b.node.id));
   const placed: Array<{ left: number; top: number; right: number; bottom: number }> = [];
   context.save();
   context.textBaseline = "middle";
   let count = 0;
   for (const { node } of candidates) {
-    if (count >= limit) break;
+
     const focused = node.id === focusId || node.id === runtime.selectedId;
     const size = focused ? 12.5 : node.kind === "source" ? 12 : 11;
     context.font = `${focused || node.kind === "source" ? 600 : 500} ${size}px ${LABEL_FONT}`;
@@ -1329,13 +1341,19 @@ function drawUniverseLabels(
       { left: node.screenX - boxWidth / 2, top: node.screenY - gap - boxHeight },
       { left: node.screenX - boxWidth / 2, top: node.screenY + gap }
     ];
-    const spot = options.find(option => {
+    const available = options.map(option => {
+      if (count >= limit) return false;
       const rect = { left: option.left, top: option.top, right: option.left + boxWidth, bottom: option.top + boxHeight };
       if (rect.left < 8 || rect.right > width - 8 || rect.top < 8 || rect.bottom > height - 8) return false;
       if (runtime.obstacles.some(other => rect.left < other.right && rect.right > other.left && rect.top < other.bottom && rect.bottom > other.top)) return false;
       return !placed.some(other => rect.left < other.right + 4 && rect.right + 4 > other.left && rect.top < other.bottom + 2 && rect.bottom + 2 > other.top);
     });
-    if (!spot) continue;
+    const state = runtime.labelStates.get(node.id) ?? { side: Math.max(0, available.findIndex(Boolean)), opacity: reducedMotion ? 1 : 0, blockedSince: 0, updatedAt: now - 16 };
+    advanceLabel(state, available, now, reducedMotion);
+    runtime.labelStates.set(node.id, state);
+    if (state.opacity <= 0.01) continue;
+    const spot = { left: Math.round(options[state.side].left), top: Math.round(options[state.side].top) };
+    context.globalAlpha = state.opacity;
     placed.push({ left: spot.left, top: spot.top, right: spot.left + boxWidth, bottom: spot.top + boxHeight });
     count += 1;
     const textY = spot.top + boxHeight / 2 + 0.5;
@@ -1350,12 +1368,12 @@ function drawUniverseLabels(
       context.fillText(text, spot.left + padX, textY);
       if (ownerText) {
         context.font = ownerFont;
-        context.globalAlpha = 0.6;
+        context.globalAlpha = state.opacity * 0.6;
         context.fillText(ownerText, spot.left + padX + titleWidth, textY);
         context.globalAlpha = 1;
       }
     } else {
-      context.globalAlpha = neighbors?.has(node.id) ? 0.95 : 0.45 + node.depth * 0.5;
+      context.globalAlpha = state.opacity * (neighbors?.has(node.id) ? 0.95 : 0.5 + node.depth * 0.45);
       context.lineJoin = "round";
       context.lineWidth = 3;
       context.strokeStyle = palette.halo;

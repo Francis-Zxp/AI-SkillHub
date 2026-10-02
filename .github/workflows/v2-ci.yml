@@ -119,7 +119,7 @@ jobs:
         run: pnpm exec tsc --noEmit -p .
 
       - name: Frontend behavior contracts
-        run: node --test ./scripts/*.test.mjs
+        run: node --test ./scripts/*.test.mjs ./scripts/*.test.cjs
 
       - name: Vite production build
         run: pnpm exec vite build

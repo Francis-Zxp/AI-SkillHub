@@ -2,6 +2,16 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.11 - 2026-10-02 - Calm skies, stable navigation and MCP compatibility
+
+- Replace opaque cloud clusters with soft density-shaped clouds; remove detached island spikes and grade light topsoil into darker rock.
+- Subdue stars toward clear screen edges, move the atmospheric light off-axis and strengthen category colours. Stabilize rotating labels with persistent positions and brief-occlusion hysteresis.
+- Keep the dashboard scene and camera when changing pages, suspend hidden rendering and remove the sidebar shadow.
+- Restore compact layouts for source naming and Origin MCP setup; keep errors and retry actions visible.
+- Parse valid Codex TOML using the standard parser, including non-MCP array tables and multiline strings; preserve strict validation and transactional writes.
+- Correct Origin next steps when the application is closed and detect Python paths containing spaces. Origin must still be running with its Bridge before connection can be confirmed.
+- Retain v3.2.10 safe legacy Prompt checkout migration and clean-text-script import checks; manual sources without a trusted upstream still require reimport.
+
 ## 3.2.10 - 2026-10-02 - Scene detail and source update reliability
 
 - Restore a denser, evenly distributed star field; simplify overlapping background gradients and dither the remaining atmosphere to reduce visible banding.

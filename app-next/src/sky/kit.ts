@@ -204,25 +204,12 @@ function mushroom(): KitModel {
   };
 }
 
-/** Puffy cartoon cloud: flattened bottom, rounded top. */
+/** A lightweight cloud sheet. The shader makes one continuous soft density
+ * field rather than intersecting opaque sphere shells. */
 export function cloudGeometry(seed: number) {
-  const random = seededRandom(seed);
-  const balls: THREE.BufferGeometry[] = [];
-  const count = 5 + Math.floor(random() * 3);
-  for (let index = 0; index < count; index++) {
-    const t = index / (count - 1) - 0.5;
-    const radius = 0.9 + Math.cos(t * Math.PI) * 0.9 + random() * 0.3;
-    balls.push(blob(radius, t * 4.4 + (random() - 0.5) * 0.4, radius * 0.35, (random() - 0.5) * 1.2, 0.8, 2));
-  }
-  const flatBottom = merged(balls);
-  const position = flatBottom.getAttribute("position");
-  for (let index = 0; index < position.count; index++) {
-    if (position.getY(index) < 0) position.setY(index, position.getY(index) * 0.25);
-  }
-  flatBottom.deleteAttribute("normal");
-  const geometry = mergeVertices(flatBottom, 1e-3);
-  geometry.computeVertexNormals();
-  return shade(geometry, WHITE, 0.82, 1.0);
+  const geometry = new THREE.PlaneGeometry(8, 3.8);
+  geometry.setAttribute("aCloudSeed", new THREE.Float32BufferAttribute(new Float32Array(4).fill(seed), 1));
+  return geometry;
 }
 
 export const TREE_KINDS = ["round", "pine", "poplar", "bush"] as const;

@@ -113,7 +113,7 @@ pub(crate) struct RecipeStatus {
     /// not-installed | needs-origin | needs-connection | ready | error
     pub state: String,
     /// install-python | install-origin | install | connect | register-app |
-    /// start-bridge | verify | none
+    /// open-origin | start-bridge | verify | none
     pub next_step: String,
     pub steps: Vec<RecipeStep>,
     pub origin: Option<OriginInstallation>,
@@ -175,6 +175,16 @@ fn python_version(python: &Path) -> Option<String> {
     output.status.success().then(|| text(&output.stdout))
 }
 
+fn launcher_python_path(line: &str) -> Option<PathBuf> {
+    let start = line.as_bytes().windows(3).position(|part| {
+        part[0].is_ascii_alphabetic() && part[1] == b':' && matches!(part[2], b'\\' | b'/')
+    })?;
+    let path = line[start..].trim().trim_matches('"');
+    path.to_ascii_lowercase()
+        .ends_with("python.exe")
+        .then(|| PathBuf::from(path))
+}
+
 /// Interpreters that can host the isolated runtime, best first. The Microsoft
 /// Store alias under WindowsApps is skipped: it opens the Store instead.
 pub(crate) fn find_base_pythons(home: &Path, local_app_data: &Path) -> Vec<(PathBuf, String)> {
@@ -185,10 +195,8 @@ pub(crate) fn find_base_pythons(home: &Path, local_app_data: &Path) -> Vec<(Path
         "列出 Python",
     ) {
         for line in String::from_utf8_lossy(&output.stdout).lines() {
-            if let Some(path) = line.split_whitespace().last() {
-                if path.to_ascii_lowercase().ends_with("python.exe") {
-                    candidates.push(PathBuf::from(path));
-                }
+            if let Some(path) = launcher_python_path(line) {
+                candidates.push(path);
             }
         }
     }
@@ -510,6 +518,18 @@ fn write_verification(context: &RecipeContext, verification: &Verification) {
     }
 }
 
+fn bridge_next_step(app_staged: bool, origin_running: bool) -> &'static str {
+    if !app_staged {
+        "install"
+    } else if origin_running {
+        "start-bridge"
+    } else {
+        // A closed Origin process says nothing about whether its Apps were
+        // already registered. Do not ask users to register them again.
+        "open-origin"
+    }
+}
+
 /// Read-only status. Starts no server; runs the runtime's own `status` CLI
 /// only when the runtime exists.
 pub(crate) fn detect(context: &RecipeContext) -> RecipeStatus {
@@ -693,16 +713,15 @@ pub(crate) fn detect(context: &RecipeContext) -> RecipeStatus {
     } else if connected == 0 {
         ("needs-connection", "connect")
     } else if bridge != "running" {
-        if !status.app_staged {
-            ("needs-origin", "install")
-        } else if origin
-            .as_ref()
-            .is_some_and(|installation| installation.running)
-        {
-            ("needs-origin", "start-bridge")
-        } else {
-            ("needs-origin", "register-app")
-        }
+        (
+            "needs-origin",
+            bridge_next_step(
+                status.app_staged,
+                origin
+                    .as_ref()
+                    .is_some_and(|installation| installation.running),
+            ),
+        )
     } else if !ping_ok || stale {
         ("needs-connection", "verify")
     } else {
@@ -766,7 +785,7 @@ pub(crate) fn install(context: &RecipeContext, base_python: &Path) -> Result<Rec
             Duration::from_secs(180),
             "创建独立运行环境",
         )
-        .map_err(&cleanup)?;
+        .map_err(cleanup)?;
         if !output.status.success() {
             return Err(cleanup(format!(
                 "创建独立运行环境失败：{}",
@@ -789,7 +808,7 @@ pub(crate) fn install(context: &RecipeContext, base_python: &Path) -> Result<Rec
         Duration::from_secs(900),
         "下载并安装 origin-mcp",
     )
-    .map_err(&cleanup)?;
+    .map_err(cleanup)?;
     if !output.status.success() {
         return Err(cleanup(format!(
             "安装 origin-mcp {ORIGIN_MCP_VERSION} 失败：{}",
@@ -1056,6 +1075,22 @@ pub(crate) fn verify(context: &RecipeContext) -> RecipeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launcher_keeps_python_paths_containing_spaces() {
+        assert_eq!(
+            launcher_python_path(r" -V:3.13 * C:\Program Files\Python313\python.exe"),
+            Some(PathBuf::from(r"C:\Program Files\Python313\python.exe")),
+        );
+        assert_eq!(launcher_python_path("No installed Pythons found"), None);
+    }
+
+    #[test]
+    fn closed_origin_does_not_imply_missing_app_registration() {
+        assert_eq!(bridge_next_step(true, false), "open-origin");
+        assert_eq!(bridge_next_step(true, true), "start-bridge");
+        assert_eq!(bridge_next_step(false, false), "install");
+    }
 
     #[test]
     fn registry_listing_picks_the_origin_entry_with_a_real_install_dir() {

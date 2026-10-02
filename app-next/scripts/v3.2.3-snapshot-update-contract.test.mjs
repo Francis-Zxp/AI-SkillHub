@@ -77,8 +77,8 @@ test("light themes never paint the star map backdrop as a grey shadow", () => {
   );
   assert.ok(atmosphere.length > 0);
   assert.doesNotMatch(atmosphere, /fillRect\(0, 0/);
-  assert.match(atmosphere, /lightTheme \? 0\.55 : 1/);
-  assert.match(atmosphere, /lightTheme \? 0\.1 : 0\.2/);
+  assert.match(atmosphere, /lightTheme \? 0\.65 : 1/);
+  assert.match(atmosphere, /lightTheme \? 0\.06 : 0\.11/);
   assert.match(atmosphere, /lightTheme \? 0\.2 : 0\.17/);
   assert.match(styles, /--hero-grad: radial-gradient\(circle at 66% 48%, rgba\(22, 121, 111, \.05\), transparent 52%\);/);
 });

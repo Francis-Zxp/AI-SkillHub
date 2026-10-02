@@ -1,8 +1,7 @@
 // Island terrain: an organic outline, a gentle grassy top with flattened pads
 // for buildings and basins for ponds, and one continuous rock skirt: a cliff
 // band under the grass lip, then an underside shaped like earth torn from the
-// ground — several hanging rock masses of different depths with terraced
-// strata, not a single cone — and a few spires below the deepest masses.
+// ground — several rounded hanging rock masses of different depths.
 // Everything derives from a seed, and objects are placed with `heightAt`, the
 // same function that built the mesh, so nothing floats or sinks.
 import * as THREE from "three";
@@ -26,7 +25,6 @@ export class IslandShape {
   private elongAngle: number;
   private masses: Array<{ x: number; z: number; width: number; depth: number }>;
   readonly bottomDepth: number;
-  readonly spires: Array<{ angle: number; distance: number; radius: number; length: number }>;
 
   constructor(radius: number, seed: number) {
     this.radius = radius;
@@ -54,16 +52,6 @@ export class IslandShape {
       };
     });
     this.bottomDepth = radius * (0.85 + random() * 0.3);
-    const spireCount = radius > 5 ? 2 + Math.floor(random() * 2) : 1;
-    this.spires = Array.from({ length: spireCount }, (_, index) => {
-      const mass = this.masses[index % this.masses.length];
-      return {
-        angle: Math.atan2(mass.z, mass.x),
-        distance: Math.hypot(mass.x, mass.z) / radius,
-        radius: radius * (0.07 + random() * 0.05),
-        length: radius * (index === 0 ? 0.3 + random() * 0.2 : 0.12 + random() * 0.18)
-      };
-    });
   }
 
   rimRadius(theta: number): number {
@@ -158,7 +146,7 @@ export class IslandShape {
   }
 
   /** Depth of the underside below the cliff foot at (x, z): zero on the rim,
-   * deepest under the hanging masses, with terraced strata. */
+   * deepest under the connected hanging masses. */
   undersideDepth(x: number, z: number): number {
     const q = Math.min(1, this.normalizedDistance(x, z));
     const envelope = (1 - q * q) ** 0.55;
@@ -216,6 +204,7 @@ export class IslandShape {
     // gap), with a slight bulge under the lip and stepped strata ledges.
     const cliff = this.cliff;
     const maxDepth = cliff + this.bottomDepth * 1.1;
+    const rimLevel = rimCache.reduce((sum, item) => sum + item.y, 0) / rimCache.length;
     const skirtStart = positions.length / 3;
     const cliffRings = Math.round(5 * quality) + 3;
     const foot: Array<{ r: number; y: number }> = [];
@@ -233,7 +222,7 @@ export class IslandShape {
         }
         if (ring === cliffRings) foot.push({ r: radius, y });
         positions.push(cos * radius, y, sin * radius);
-        rock.push(1); depth.push(((rimY - y) / maxDepth) * 0.6); worn.push(0);
+        rock.push(1); depth.push(THREE.MathUtils.clamp((rimLevel - y) / maxDepth, 0, 1)); worn.push(0);
       }
     }
     // Part 2: the underside, rings from the cliff foot in to the axis, each
@@ -252,7 +241,7 @@ export class IslandShape {
         const y = level - this.undersideDepth(x, z);
         radius += fbm3(x * 0.4, y * 0.35, z * 0.4, this.seed + 17, 3) * this.radius * 0.018 * q * (1 - q) * 4;
         positions.push(cos * Math.max(0, radius), y, sin * Math.max(0, radius));
-        rock.push(1); depth.push(Math.min(1, 0.25 + ((footLevel - y + cliff) / maxDepth) * 0.75)); worn.push(0);
+        rock.push(1); depth.push(THREE.MathUtils.clamp((rimLevel - y) / maxDepth, 0, 1)); worn.push(0);
       }
     }
     const skirtRings = cliffRings + underRings;
@@ -261,33 +250,6 @@ export class IslandShape {
       for (let segment = 0; segment < segments; segment++) {
         const next = (segment + 1) % segments;
         indices.push(a + segment, a + next, b + segment, a + next, b + next, b + segment);
-      }
-    }
-
-    // Hanging spires: they start inside the underside, so the joint is hidden.
-    for (const spire of this.spires) {
-      const cx = Math.cos(spire.angle) * this.radius * spire.distance;
-      const cz = Math.sin(spire.angle) * this.radius * spire.distance;
-      const top = this.heightAt(cx, cz) - this.cliff - this.undersideDepth(cx, cz) * 0.85;
-      const start = positions.length / 3;
-      const spireRings = 8, spireSegments = 14;
-      for (let ring = 0; ring <= spireRings; ring++) {
-        const u = ring / spireRings;
-        for (let segment = 0; segment < spireSegments; segment++) {
-          const theta = (segment / spireSegments) * Math.PI * 2;
-          const wobble = 1 + noise2(theta * 2, u * 3, this.seed + spire.angle * 10) * 0.18;
-          const radius = spire.radius * (1 - u) ** 0.8 * wobble;
-          const y = top - spire.length * u;
-          positions.push(cx + Math.cos(theta) * radius, y, cz + Math.sin(theta) * radius);
-          rock.push(1); depth.push(0.55 + u * 0.45); worn.push(0);
-        }
-      }
-      for (let ring = 0; ring < spireRings; ring++) {
-        const a = start + ring * spireSegments, b = start + (ring + 1) * spireSegments;
-        for (let segment = 0; segment < spireSegments; segment++) {
-          const next = (segment + 1) % spireSegments;
-          indices.push(a + segment, a + next, b + segment, a + next, b + next, b + segment);
-        }
       }
     }
 

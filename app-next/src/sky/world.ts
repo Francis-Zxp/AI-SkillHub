@@ -29,6 +29,7 @@ export type SkyWorldOptions = {
   direction: keyof typeof SKY_DIRECTIONS | string;
   paused: boolean;
   lowPower: boolean;
+  visible?: boolean;
   onOpen: (id: string) => void;
   onHover: (id: string | null) => void;
   onFailure: (reason: string) => void;
@@ -38,6 +39,7 @@ export type SkyWorld = {
   dispose: () => void;
   setPaused: (paused: boolean) => void;
   setLowPower: (lowPower: boolean) => void;
+  setVisible: (visible: boolean) => void;
   focus: (id: string | null) => void;
   reset: () => void;
   stats: () => Record<string, number | string>;
@@ -488,8 +490,9 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   };
 
   const resize = () => {
-    width = Math.max(1, options.host.clientWidth);
-    height = Math.max(1, options.host.clientHeight);
+    if (!visible || !options.host.clientWidth || !options.host.clientHeight) return;
+    width = options.host.clientWidth;
+    height = options.host.clientHeight;
     renderer.setPixelRatio(pixelRatio());
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
@@ -520,6 +523,8 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   // State and loop.
   let disposed = false, failed = false, initialized = false;
   let paused = options.paused, lowPower = options.lowPower;
+  let visible = options.visible ?? true;
+  let intersecting = true;
   let raf = 0, lastFrame = 0, clock = 0, frames = 0, dirty = true;
   let frameTimes: number[] = [];
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -533,7 +538,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
 
   function requestDraw() {
     dirty = true;
-    if (!raf && !disposed && !failed && !document.hidden) raf = requestAnimationFrame(draw);
+    if (!raf && visible && intersecting && !disposed && !failed && !document.hidden) raf = requestAnimationFrame(draw);
   }
 
   function settle(delta: number) {
@@ -621,7 +626,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
 
   function draw(now: number) {
     raf = 0;
-    if (disposed || failed || document.hidden) {
+    if (disposed || failed || !visible || !intersecting || document.hidden) {
       lastFrame = 0;
       return;
     }
@@ -781,7 +786,8 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(options.host);
   const intersection = new IntersectionObserver(entries => {
-    if (entries.some(entry => entry.isIntersecting)) requestDraw();
+    intersecting = entries.some(entry => entry.isIntersecting);
+    if (intersecting && visible) requestDraw();
     else {
       cancelAnimationFrame(raf);
       raf = 0;
@@ -795,6 +801,18 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   requestDraw();
 
   return {
+    setVisible(value) {
+      visible = value;
+      lastFrame = 0;
+      if (!value) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+        pointerDown = false;
+      } else {
+        resize();
+        requestDraw();
+      }
+    },
     setPaused(value) {
       paused = value;
       lastFrame = 0;

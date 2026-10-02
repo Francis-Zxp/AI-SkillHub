@@ -11,3 +11,5 @@
 .theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) .skill-universe-inspector { top: 68px; }
 .dashboard-immersive.theme-family-atlas.page-dashboard .workspace-body:has(> .operation-banner) { padding-top: 0; }
 @media (max-width: 1000px) { .theme-family-atlas.page-dashboard .operation-banner { flex-wrap: wrap; gap: 6px 12px; } .theme-family-atlas.page-dashboard .operation-banner > div { flex-basis: 70%; } }
+
+.dashboard-view[hidden] { display: none !important; }

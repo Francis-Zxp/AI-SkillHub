@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { getLang } from "./i18n";
 import type { Lang } from "./i18n";
 import { Icon } from "./icons";
+import "./McpRecipeCard.css";
 
 export type RecipeStep = { id: string; status: "ok" | "pending" | "failed" | "user" | string; detail: string };
 
@@ -54,10 +55,10 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
   const [plan, setPlan] = useState<MutationPlan | null>(null);
   const [copied, setCopied] = useState(-1);
 
-  async function detect() {
+  async function detect(clearError = true) {
     if (!runtimeAvailable) return;
     setPhase("detecting");
-    setError("");
+    if (clearError) setError("");
     try {
       const [next, options] = await Promise.all([
         invoke<RecipeStatus>("detect_mcp_recipe"),
@@ -127,7 +128,7 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
     } catch (reason) {
       setError(String(reason));
       setPhase("");
-      await detect();
+      await detect(false);
     }
   }
 
@@ -167,18 +168,19 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
       window.setTimeout(() => setCopied(-1), 1600);
     } catch {
       setCopied(-1);
+      setError(rt("copyFailed"));
     }
   }
 
   if (!runtimeAvailable) return null;
   const busy = phase !== "";
-  const state = status?.state ?? "";
+  const state = status?.state ?? (error ? "error" : "");
   const next = status?.nextStep ?? "";
   const primary = (() => {
-    if (!status) return null;
+    if (!status) return { label: rt("recheck"), run: detect };
     if (next === "install") return { label: rt("installAndConnect"), run: installAndConnect };
     if (next === "connect") return { label: rt("connect"), run: () => planConnection(status) };
-    if (next === "verify") return { label: rt("verify"), run: verify };
+    if (["verify", "register-app", "start-bridge", "open-origin"].includes(next)) return { label: rt("verify"), run: verify };
     if (state === "ready") return { label: rt("verifyAgain"), run: verify };
     return { label: rt("recheck"), run: detect };
   })();
@@ -195,7 +197,7 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
         </div>
         <span className={`recipe-state state-${state || "unknown"}`}>
           <i aria-hidden="true" />
-          {status ? rt(`state.${state}`) : rt("checking")}
+          {next === "register-app" ? rt("state.needs-registration") : next === "start-bridge" ? rt("state.needs-bridge") : state ? rt(`state.${state}`) : rt("checking")}
         </span>
       </header>
 
@@ -208,8 +210,10 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
         </p>
       )}
 
-      {status && next === "register-app" && status.mkopxCommands.length > 0 && (
-        <ol className="recipe-guide">
+      {status && ["register-app", "open-origin", "start-bridge"].includes(next) && status.mkopxCommands.length > 0 && (
+        <details className="recipe-guide-disclosure">
+          <summary>{rt("guide.title")}</summary>
+          <ol className="recipe-guide">
           <li>{rt("guide.open")}</li>
           <li>
             {rt("guide.pack")}
@@ -224,7 +228,8 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
           </li>
           <li>{rt("guide.drag")}</li>
           <li>{rt("guide.start")}</li>
-        </ol>
+          </ol>
+        </details>
       )}
 
       {plan && (
@@ -247,7 +252,7 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
         </div>
       )}
 
-      {error && <p className="recipe-error" role="alert">{error}</p>}
+      {(error || status?.failure) && <p className="recipe-error" role="alert">{error || status?.failure}</p>}
 
       {!plan && primary && (
         <div className="recipe-actions">
@@ -271,7 +276,7 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
               ))}
             </fieldset>
           )}
-          <button className="primary-action" disabled={busy || !status} onClick={() => void primary.run()} type="button">
+          <button className="primary-action" disabled={busy} onClick={() => void primary.run()} type="button">
             {busy ? <Icon className="icon-spin" name="refresh" /> : null}
             {busy ? rt(`phase.${phase}`) : primary.label}
           </button>
@@ -292,7 +297,7 @@ export function McpRecipeCard({ runtimeAvailable, onConfigChanged }: Props) {
                 <li className={`step-${item.status}`} key={item.id}>
                   <span className="recipe-step-dot" aria-hidden="true" />
                   <div>
-                    <strong>{rt(`step.${item.id}`)}</strong>
+                    <strong>{rt(`step.${item.id}`)} <em>{rt(`check.${item.status}`)}</em></strong>
                     <small>{item.detail}</small>
                   </div>
                 </li>
@@ -313,10 +318,18 @@ type Dictionary = Record<string, string>;
 
 const zh: Dictionary = {
   title: "Origin 绘图（origin-mcp）",
-  subtitle: "让 AI 工具操作本机 Origin/OriginPro · 已核验版本 {version}",
+  "guide.title": "查看首次注册步骤",
+  "check.ok": "通过",
+  "check.pending": "待检测",
+  "check.failed": "失败",
+  "check.user": "待操作",
+  copyFailed: "未能复制，请选中命令手动复制。",
+  subtitle: "让 AI 工具操作本机 Origin/OriginPro · 安装目标 {version}",
   checking: "检测中",
   "state.not-installed": "待安装",
   "state.needs-origin": "待启动 Origin",
+  "state.needs-registration": "待注册 App",
+  "state.needs-bridge": "待启动 Bridge",
   "state.needs-connection": "待连接",
   "state.ready": "可用",
   "state.error": "异常",
@@ -325,6 +338,7 @@ const zh: Dictionary = {
   "next.install-python": "安装 Python 3.10–3.14（不会改动现有环境），然后点“重新检测”。",
   "next.install": "安装独立运行环境，并写入所选 AI 工具。",
   "next.connect": "把 Origin 服务器写入所选 AI 工具。",
+  "next.open-origin": "打开 Origin，在 Apps 中点击 Origin MCP Bridge Start，然后验证连接。首次使用请展开注册步骤。",
   "next.register-app": "在 Origin 里注册 Start/Stop 两个 App（只需一次）。",
   "next.start-bridge": "在 Origin 的 Apps 中点击 Origin MCP Bridge Start，然后点“验证连接”。",
   "next.verify": "进行连接验证（握手、工具列表、桥接和一次只读调用）。",
@@ -368,10 +382,18 @@ const zh: Dictionary = {
 
 const en: Dictionary = {
   title: "Origin plotting (origin-mcp)",
-  subtitle: "Lets AI tools drive Origin/OriginPro on this PC · verified version {version}",
+  "guide.title": "Show first-time registration steps",
+  "check.ok": "Passed",
+  "check.pending": "Pending",
+  "check.failed": "Failed",
+  "check.user": "Action needed",
+  copyFailed: "Could not copy. Select the command and copy it manually.",
+  subtitle: "Lets AI tools drive Origin/OriginPro on this PC · target version {version}",
   checking: "Checking",
   "state.not-installed": "Not installed",
   "state.needs-origin": "Start Origin",
+  "state.needs-registration": "Register Apps",
+  "state.needs-bridge": "Start Bridge",
   "state.needs-connection": "Not connected",
   "state.ready": "Ready",
   "state.error": "Problem",
@@ -380,6 +402,7 @@ const en: Dictionary = {
   "next.install-python": "Install Python 3.10–3.14 (existing environments stay untouched), then click “Check again”.",
   "next.install": "Install the isolated runtime and add it to the selected AI tools.",
   "next.connect": "Add the Origin server to the selected AI tools.",
+  "next.open-origin": "Open Origin, click Origin MCP Bridge Start in Apps, then verify. For first use, open the registration steps.",
   "next.register-app": "Register the Start/Stop Apps in Origin (one time).",
   "next.start-bridge": "In Origin's Apps, click Origin MCP Bridge Start, then click “Verify”.",
   "next.verify": "Verify the connection (handshake, tool list, bridge and one read-only call).",
@@ -423,10 +446,18 @@ const en: Dictionary = {
 
 const ko: Dictionary = {
   title: "Origin 그래프 (origin-mcp)",
-  subtitle: "AI 도구가 이 PC의 Origin/OriginPro를 조작 · 검증된 버전 {version}",
+  "guide.title": "최초 등록 단계 보기",
+  "check.ok": "통과",
+  "check.pending": "확인 대기",
+  "check.failed": "실패",
+  "check.user": "조치 필요",
+  copyFailed: "복사하지 못했습니다. 명령을 선택하여 직접 복사하세요.",
+  subtitle: "AI 도구가 이 PC의 Origin/OriginPro를 조작 · 설치 대상 버전 {version}",
   checking: "확인 중",
   "state.not-installed": "설치 필요",
   "state.needs-origin": "Origin 시작 필요",
+  "state.needs-registration": "앱 등록 필요",
+  "state.needs-bridge": "Bridge 시작 필요",
   "state.needs-connection": "연결 필요",
   "state.ready": "사용 가능",
   "state.error": "문제",
@@ -435,6 +466,7 @@ const ko: Dictionary = {
   "next.install-python": "Python 3.10–3.14를 설치하세요(기존 환경은 그대로). 그런 다음 “다시 확인”을 누르세요.",
   "next.install": "독립 실행 환경을 설치하고 선택한 AI 도구에 추가합니다.",
   "next.connect": "선택한 AI 도구에 Origin 서버를 추가합니다.",
+  "next.open-origin": "Origin을 열고 Apps에서 Origin MCP Bridge Start를 누른 뒤 연결을 확인하세요. 처음이라면 등록 단계를 펼치세요.",
   "next.register-app": "Origin에서 Start/Stop 앱을 등록하세요(한 번만).",
   "next.start-bridge": "Origin의 Apps에서 Origin MCP Bridge Start를 누른 뒤 “연결 확인”을 누르세요.",
   "next.verify": "연결을 확인합니다(핸드셰이크, 도구 목록, 브리지, 읽기 전용 호출 1회).",

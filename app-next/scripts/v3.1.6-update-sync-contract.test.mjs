@@ -13,7 +13,7 @@ const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.j
 const cargoToml = await readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
 
 test("software updater sees one consistent installed version", () => {
-  assert.equal(packageJson.version, "3.2.10");
+  assert.equal(packageJson.version, "3.2.11");
   assert.equal(tauriConfig.version, packageJson.version);
   assert.equal(cargoToml.match(/^version = "([^"]+)"$/m)?.[1], packageJson.version);
   assert.equal(tauriConfig.bundle.createUpdaterArtifacts, true);

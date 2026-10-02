@@ -1,6 +1,6 @@
 {
   "name": "ai-skillhub-next",
-  "version": "3.2.10",
+  "version": "3.2.11",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.2.2",

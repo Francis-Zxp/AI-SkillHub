@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -762,93 +762,82 @@ fn read_existing_config(path: &Path) -> Option<Result<String, &'static str>> {
 }
 
 fn parse_codex_mcp_toml(text: &str) -> Result<Vec<RawBinding>, ()> {
-    let mut entries: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-    let mut current: Option<(String, String)> = None;
-    let mut pending = String::new();
-    for raw_line in text.lines() {
-        let line = strip_toml_comment(raw_line).trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        if !pending.is_empty() {
-            pending.push(' ');
-            pending.push_str(&line);
-            if toml_value_complete(&pending) {
-                if let Some((name, subsection)) = &current {
-                    parse_toml_assignment(&mut entries, name, subsection, &pending)?;
-                }
-                pending.clear();
-            }
-            continue;
-        }
-        if line.starts_with('[') {
-            if !line.ends_with(']') || line.starts_with("[[") {
-                return Err(());
-            }
-            current = parse_mcp_toml_section(&line)?;
-            continue;
-        }
-        let Some((name, subsection)) = &current else {
-            continue;
-        };
-        if !line.contains('=') {
-            return Err(());
-        }
-        if !toml_value_complete(&line) {
-            pending = line;
-            continue;
-        }
-        parse_toml_assignment(&mut entries, name, subsection, &line)?;
-    }
-    if !pending.is_empty() {
-        return Err(());
-    }
-
+    // Parse the complete document with the same TOML implementation used for
+    // lossless writes. Non-MCP array tables and multiline strings are valid
+    // configuration, not malformed MCP. Never expose parser errors: they can
+    // contain credential-bearing source lines.
+    let document = text.parse::<toml_edit::DocumentMut>().map_err(|_| ())?;
+    let Some(servers) = document.get("mcp_servers") else {
+        return Ok(Vec::new());
+    };
+    let servers = servers.as_table_like().ok_or(())?;
     let mut result = Vec::new();
-    for (name, values) in entries {
-        let command = values.get("command").and_then(|value| toml_string(value));
-        let url = values.get("url").and_then(|value| toml_string(value));
+    for (name, entry) in servers.iter() {
+        let values = entry.as_table_like().ok_or(())?;
+        let string = |key: &str| -> Result<Option<String>, ()> {
+            values
+                .get(key)
+                .map(|item| item.as_str().map(str::to_string).ok_or(()))
+                .transpose()
+        };
+        let boolean = |key: &str, default| -> Result<bool, ()> {
+            values
+                .get(key)
+                .map(|item| item.as_bool().ok_or(()))
+                .transpose()
+                .map(|value| value.unwrap_or(default))
+        };
+        let command = string("command")?;
+        let url = string("url")?;
         let mut requirements = Vec::new();
-        collect_toml_map_requirements(&values, "env", "process-env-inline", &mut requirements);
-        collect_toml_map_requirements(
-            &values,
-            "http_headers",
-            "http-header-inline",
-            &mut requirements,
-        );
-        collect_toml_env_reference_requirements(
-            &values,
-            "env_http_headers",
-            "http-header-env",
-            &mut requirements,
-        );
-        if let Some(env_name) = values
-            .get("bearer_token_env_var")
-            .and_then(|value| toml_string(value))
-        {
+        for (key, use_kind, reference) in [
+            ("env", "process-env-inline", false),
+            ("http_headers", "http-header-inline", false),
+            ("env_http_headers", "http-header-env", true),
+        ] {
+            if let Some(map) = values.get(key) {
+                for (name, value) in map.as_table_like().ok_or(())?.iter() {
+                    let value = value.as_str().ok_or(())?;
+                    if reference {
+                        requirements.push(env_requirement(value, use_kind));
+                    } else {
+                        requirements.push(RawSecretRequirement {
+                            key_name: name.to_string(),
+                            use_kind: use_kind.to_string(),
+                            presence_state: "inline-value-present".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        if let Some(env_name) = string("bearer_token_env_var")? {
             requirements.push(env_requirement(&env_name, "bearer-token-env"));
         }
-        if let Some(url_value) = url.as_deref() {
-            collect_url_secret_requirements(url_value, &mut requirements);
+        if let Some(url) = url.as_deref() {
+            collect_url_secret_requirements(url, &mut requirements);
         }
-        if let Some(env_names) = values.get("env_vars") {
-            for env_name in toml_string_array(env_names) {
-                requirements.push(env_requirement(&env_name, "process-env"));
+        if let Some(names) = values.get("env_vars") {
+            for item in names.as_array().ok_or(())? {
+                // Codex supports both plain names and {name, source} entries.
+                // Inventory the name only; mutation still preserves its
+                // existing guard against rewriting structured env_vars.
+                let name = item
+                    .as_str()
+                    .or_else(|| item.as_inline_table()?.get("name")?.as_str())
+                    .ok_or(())?;
+                requirements.push(env_requirement(name, "process-env"));
             }
         }
-        let args = values
-            .get("args")
-            .map(|value| toml_string_array(value))
-            .unwrap_or_default();
+        let args = match values.get("args") {
+            Some(args) => args
+                .as_array()
+                .ok_or(())?
+                .iter()
+                .map(|value| value.as_str().map(str::to_string).ok_or(()))
+                .collect::<Result<Vec<_>, _>>()?,
+            None => Vec::new(),
+        };
         collect_sensitive_args(&args, &mut requirements);
-        let enabled = values
-            .get("enabled")
-            .and_then(|value| parse_bool(value))
-            .unwrap_or(true);
-        let required = values
-            .get("required")
-            .and_then(|value| parse_bool(value))
-            .unwrap_or(false);
         let transport = if url.is_some() {
             "http"
         } else if command.is_some() {
@@ -858,12 +847,12 @@ fn parse_codex_mcp_toml(text: &str) -> Result<Vec<RawBinding>, ()> {
         };
         let auth_kind = auth_kind(&requirements);
         result.push(RawBinding {
-            name,
+            name: name.to_string(),
             transport: transport.to_string(),
             command,
             url,
-            enabled,
-            required,
+            enabled: boolean("enabled", true)?,
+            required: boolean("required", false)?,
             auth_kind,
             secret_requirements: requirements,
             warnings: Vec::new(),
@@ -872,135 +861,10 @@ fn parse_codex_mcp_toml(text: &str) -> Result<Vec<RawBinding>, ()> {
     Ok(result)
 }
 
-/// Mutation code uses the same bounded static interpretation as the read-only
-/// inventory after an atomic write. This validates configuration structure
-/// only; it never starts a server or exposes parsed credential values.
+/// Validate syntax and the MCP structure without starting a server or
+/// returning credentials. Invalid/ambiguous documents remain unwritable.
 pub(crate) fn validate_codex_mcp_config(text: &str) -> bool {
     parse_codex_mcp_toml(text).is_ok()
-}
-
-fn parse_mcp_toml_section(line: &str) -> Result<Option<(String, String)>, ()> {
-    let inner = line[1..line.len() - 1].trim();
-    let Some(rest) = inner.strip_prefix("mcp_servers.") else {
-        return Ok(None);
-    };
-    let parts = split_toml_path(rest)?;
-    if parts.is_empty() || parts[0].is_empty() {
-        return Err(());
-    }
-    Ok(Some((parts[0].clone(), parts[1..].join("."))))
-}
-
-fn split_toml_path(input: &str) -> Result<Vec<String>, ()> {
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    for character in input.chars() {
-        if escaped {
-            current.push(character);
-            escaped = false;
-            continue;
-        }
-        if character == '\\' && quote == Some('"') {
-            escaped = true;
-            continue;
-        }
-        if character == '\'' || character == '"' {
-            if quote == Some(character) {
-                quote = None;
-            } else if quote.is_none() {
-                quote = Some(character);
-            } else {
-                current.push(character);
-            }
-            continue;
-        }
-        if character == '.' && quote.is_none() {
-            parts.push(current.trim().to_string());
-            current.clear();
-        } else {
-            current.push(character);
-        }
-    }
-    if quote.is_some() || escaped {
-        return Err(());
-    }
-    parts.push(current.trim().to_string());
-    Ok(parts)
-}
-
-fn parse_toml_assignment(
-    entries: &mut BTreeMap<String, BTreeMap<String, String>>,
-    name: &str,
-    subsection: &str,
-    line: &str,
-) -> Result<(), ()> {
-    let Some((key, value)) = split_unquoted_once(line, '=') else {
-        return Err(());
-    };
-    let key = key.trim().trim_matches(['"', '\'']).to_string();
-    if key.is_empty() {
-        return Err(());
-    }
-    let full_key = if subsection.is_empty() {
-        key
-    } else {
-        format!("{subsection}.{key}")
-    };
-    entries
-        .entry(name.to_string())
-        .or_default()
-        .insert(full_key, value.trim().to_string());
-    Ok(())
-}
-
-fn collect_toml_map_requirements(
-    values: &BTreeMap<String, String>,
-    prefix: &str,
-    use_kind: &str,
-    requirements: &mut Vec<RawSecretRequirement>,
-) {
-    for key in values.keys() {
-        if let Some(name) = key.strip_prefix(&format!("{prefix}.")) {
-            requirements.push(RawSecretRequirement {
-                key_name: name.to_string(),
-                use_kind: use_kind.to_string(),
-                presence_state: "inline-value-present".to_string(),
-            });
-        }
-    }
-    if let Some(map) = values.get(prefix) {
-        for (key, _) in parse_toml_inline_map(map) {
-            requirements.push(RawSecretRequirement {
-                key_name: key,
-                use_kind: use_kind.to_string(),
-                presence_state: "inline-value-present".to_string(),
-            });
-        }
-    }
-}
-
-fn collect_toml_env_reference_requirements(
-    values: &BTreeMap<String, String>,
-    prefix: &str,
-    use_kind: &str,
-    requirements: &mut Vec<RawSecretRequirement>,
-) {
-    if let Some(map) = values.get(prefix) {
-        for (_, raw_value) in parse_toml_inline_map(map) {
-            if let Some(env_name) = toml_string(&raw_value) {
-                requirements.push(env_requirement(&env_name, use_kind));
-            }
-        }
-    }
-    for (key, raw_value) in values {
-        if key.starts_with(&format!("{prefix}.")) {
-            if let Some(env_name) = toml_string(raw_value) {
-                requirements.push(env_requirement(&env_name, use_kind));
-            }
-        }
-    }
 }
 
 fn json_mcp_servers(value: Option<&JsonValue>) -> Vec<RawBinding> {
@@ -1547,206 +1411,6 @@ fn is_safe_profile_name(value: &str) -> bool {
         && !value.contains("..")
 }
 
-fn strip_toml_comment(line: &str) -> &str {
-    let mut quote = None;
-    let mut escaped = false;
-    for (index, character) in line.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if character == '\\' && quote == Some('"') {
-            escaped = true;
-            continue;
-        }
-        if character == '\'' || character == '"' {
-            if quote == Some(character) {
-                quote = None;
-            } else if quote.is_none() {
-                quote = Some(character);
-            }
-        } else if character == '#' && quote.is_none() {
-            return &line[..index];
-        }
-    }
-    line
-}
-
-fn toml_value_complete(value: &str) -> bool {
-    let mut quote = None;
-    let mut escaped = false;
-    let mut square = 0_i32;
-    let mut curly = 0_i32;
-    for character in value.chars() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if character == '\\' && quote == Some('"') {
-            escaped = true;
-            continue;
-        }
-        if character == '\'' || character == '"' {
-            if quote == Some(character) {
-                quote = None;
-            } else if quote.is_none() {
-                quote = Some(character);
-            }
-            continue;
-        }
-        if quote.is_none() {
-            match character {
-                '[' => square += 1,
-                ']' => square -= 1,
-                '{' => curly += 1,
-                '}' => curly -= 1,
-                _ => {}
-            }
-        }
-    }
-    quote.is_none() && square == 0 && curly == 0
-}
-
-fn split_unquoted_once(input: &str, delimiter: char) -> Option<(&str, &str)> {
-    let mut quote = None;
-    let mut escaped = false;
-    for (index, character) in input.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if character == '\\' && quote == Some('"') {
-            escaped = true;
-            continue;
-        }
-        if character == '\'' || character == '"' {
-            if quote == Some(character) {
-                quote = None;
-            } else if quote.is_none() {
-                quote = Some(character);
-            }
-        } else if character == delimiter && quote.is_none() {
-            return Some((&input[..index], &input[index + delimiter.len_utf8()..]));
-        }
-    }
-    None
-}
-
-fn toml_string(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.len() < 2 {
-        return None;
-    }
-    let quote = trimmed.chars().next()?;
-    if (quote != '"' && quote != '\'') || !trimmed.ends_with(quote) {
-        return None;
-    }
-    let inner = &trimmed[1..trimmed.len() - 1];
-    if quote == '\'' {
-        Some(inner.to_string())
-    } else {
-        let mut result = String::new();
-        let mut escaped = false;
-        for character in inner.chars() {
-            if escaped {
-                result.push(match character {
-                    'n' => '\n',
-                    'r' => '\r',
-                    't' => '\t',
-                    other => other,
-                });
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else {
-                result.push(character);
-            }
-        }
-        if escaped {
-            result.push('\\');
-        }
-        Some(result)
-    }
-}
-
-fn toml_string_array(value: &str) -> Vec<String> {
-    let trimmed = value.trim();
-    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
-        return Vec::new();
-    }
-    split_unquoted_list(&trimmed[1..trimmed.len() - 1], ',')
-        .into_iter()
-        .filter_map(|item| toml_string(item.trim()))
-        .collect()
-}
-
-fn parse_toml_inline_map(value: &str) -> Vec<(String, String)> {
-    let trimmed = value.trim();
-    if !trimmed.starts_with('{') || !trimmed.ends_with('}') {
-        return Vec::new();
-    }
-    split_unquoted_list(&trimmed[1..trimmed.len() - 1], ',')
-        .into_iter()
-        .filter_map(|item| {
-            let (key, raw_value) = split_unquoted_once(item.trim(), '=')?;
-            Some((
-                key.trim().trim_matches(['"', '\'']).to_string(),
-                raw_value.trim().to_string(),
-            ))
-        })
-        .collect()
-}
-
-fn split_unquoted_list(input: &str, delimiter: char) -> Vec<&str> {
-    let mut result = Vec::new();
-    let mut start = 0;
-    let mut quote = None;
-    let mut escaped = false;
-    let mut square = 0_i32;
-    let mut curly = 0_i32;
-    for (index, character) in input.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if character == '\\' && quote == Some('"') {
-            escaped = true;
-            continue;
-        }
-        if character == '\'' || character == '"' {
-            if quote == Some(character) {
-                quote = None;
-            } else if quote.is_none() {
-                quote = Some(character);
-            }
-            continue;
-        }
-        if quote.is_none() {
-            match character {
-                '[' => square += 1,
-                ']' => square -= 1,
-                '{' => curly += 1,
-                '}' => curly -= 1,
-                _ => {}
-            }
-            if character == delimiter && square == 0 && curly == 0 {
-                result.push(&input[start..index]);
-                start = index + character.len_utf8();
-            }
-        }
-    }
-    result.push(&input[start..]);
-    result
-}
-
-fn parse_bool(value: &str) -> Option<bool> {
-    match value.trim() {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
-}
-
 fn fnv1a64(value: &str) -> u64 {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in value.as_bytes() {
@@ -1828,6 +1492,68 @@ mod tests {
             .config_locations
             .iter()
             .all(|location| location.parse_status == "error"));
+    }
+
+    #[test]
+    fn codex_inventory_accepts_unrelated_array_tables_and_multiline_strings() {
+        let root = TestDir::new("codex-array-tables");
+        let config = r#"
+instructions = '''
+[mcp_servers.not_a_server]
+this is ordinary multiline text
+'''
+[mcp_servers.actual]
+command = 'C:\Program Files\Python\python.exe'
+args = [
+    "-m", # comments are valid inside multiline arrays
+    "server\u005fmodule",
+]
+env_vars = [{ name = "AI_SKILLHUB_MISSING_EXAMPLE", source = "local" }]
+[[skills.config]]
+path = 'C:\Skills\example'
+enabled = false
+[[skills.config]]
+path = 'C:\Skills\other'
+"#;
+        let path = root.path().join(".codex/config.toml");
+        write(&path, config);
+        let snapshot = scan_read_only(&request(root.path()));
+        assert_eq!(snapshot.summary.error_count, 0);
+        assert_eq!(snapshot.summary.binding_count, 1);
+        assert_eq!(fs::read_to_string(path).unwrap(), config);
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        assert!(!serialized.contains("not_a_server"));
+        assert!(serialized.contains("AI_SKILLHUB_MISSING_EXAMPLE"));
+    }
+
+    #[test]
+    fn codex_duplicate_tables_and_invalid_mcp_types_remain_rejected() {
+        for invalid in [
+            "[mcp_servers.x]\ncommand='a'\n[mcp_servers.x]\ncommand='secret-value'\n",
+            "[mcp_servers.x]\ncommand='a'\ncommand='secret-value'\n",
+            "mcp_servers = 12\n",
+            "[mcp_servers.x]\nargs = [42]\n",
+            "[mcp_servers.x]\nenabled = 'yes'\n",
+        ] {
+            assert!(parse_codex_mcp_toml(invalid).is_err());
+        }
+    }
+
+    #[test]
+    #[ignore = "read-only local config audit; requires AI_SKILLHUB_CODEX_CONFIG_AUDIT"]
+    fn real_codex_config_inventory_does_not_change_the_file() {
+        let path = std::env::var_os("AI_SKILLHUB_CODEX_CONFIG_AUDIT").unwrap();
+        let before = fs::read(&path).unwrap();
+        let text = std::str::from_utf8(&before).unwrap();
+        let bindings = parse_codex_mcp_toml(text);
+        assert!(
+            bindings.is_ok(),
+            "valid local config must parse without exposing its contents"
+        );
+        assert!(
+            fs::read(&path).unwrap() == before,
+            "read-only audit changed the file"
+        );
     }
 
     #[test]

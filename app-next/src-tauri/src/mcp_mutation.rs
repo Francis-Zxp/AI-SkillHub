@@ -3204,6 +3204,15 @@ command = "old-command"
 args = ["old-package"]
 env = { API_TOKEN = "do-not-leak-this-secret" }
 custom_key = "keep-me"
+
+[[skills.config]]
+path = 'C:\Skills\fixture'
+enabled = false
+
+[profiles.fixture]
+developer_instructions = '''
+Preserve this multiline note and unrelated tables.
+'''
 "#;
         fs::write(&path, original).unwrap();
         let plan = plan_mcp_changes(
@@ -3236,6 +3245,8 @@ custom_key = "keep-me"
         let written = fs::read_to_string(&path).unwrap();
         assert!(written.contains("# keep this comment"));
         assert!(written.contains("custom_key = \"keep-me\""));
+        assert!(written.contains("[[skills.config]]"));
+        assert!(written.contains("Preserve this multiline note and unrelated tables."));
         assert!(written.contains("do-not-leak-this-secret"));
         assert!(written.contains("DEMO_TOKEN"));
         assert!(written.contains("enabled = false"));

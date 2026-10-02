@@ -2,8 +2,8 @@
 // shading (a few soft light steps) and coloured procedurally: no textures,
 // so nothing repeats, stretches or seams, and every colour comes from the
 // palette of the current time of day.
-//   - terrain: grass in soft patches, worn paths, then earth bands down the
-//     cliff and faceted rock under the island;
+//   - terrain: grass in soft patches, worn paths, then light soil fading to
+//     deeper rock under the island;
 //   - objects: vertex-colour light-to-shade gradients tinted per instance;
 //   - water, waterfalls, clouds and a sky dome with stars at night.
 import * as THREE from "three";
@@ -152,9 +152,11 @@ export function terrainMaterial(palette: SkyPalette, tone?: GroundTone, paths: P
         // Restrained mineral variation, with a single soil-to-stone transition.
         // Cartesian noise has no angular seam around the back of the island.
         float mineral = skyNoise(vLocal.xz * 0.24 + vLocal.y * 0.08);
-        vec3 earth = mix(uEarthA, uEarthB, 0.32 + mineral * 0.3);
-        earth = mix(uSoil, earth, smoothstep(0.01, 0.17, vDepth));
-        vec3 rock = mix(earth, uRockDeep, smoothstep(0.28, 0.98, vDepth));
+        vec3 earth = mix(uSoil, uEarthA, smoothstep(0.0, 0.5, vDepth));
+        earth = mix(earth, uEarthB, smoothstep(0.18, 0.75, vDepth) * 0.55);
+        vec3 rock = mix(earth, uRockDeep, smoothstep(0.25, 1.0, vDepth));
+        // Low-contrast, irregular mineral grain, never alternating strata.
+        rock *= 0.95 + 0.05 * mineral + 0.025 * skyNoise(vLocal.xz * 2.8 + vLocal.y * 1.4);
         float rockMask = vRock * smoothstep(0.001, 0.016, vDepth);
         diffuseColor = vec4(mix(ground, rock, rockMask), opacity);
         diffuseColor.rgb += uHighlight * vec3(0.08, 0.07, 0.03) * (1.0 - rockMask);
@@ -268,30 +270,58 @@ export function waterfallMaterial(palette: SkyPalette) {
 }
 
 export function cloudMaterial(palette: SkyPalette) {
-  // Keep cloud shading within the palette. Multiplying white toon clouds by
-  // the bright sun, fill and emissive term clipped all their volume to white.
+  // Camera-facing soft clouds for this fixed-pitch world. Each sheet contains
+  // a continuous density field, with airy edges and wisps instead of visible
+  // overlapping balls. Their 3D positions still determine depth and parallax.
   return new THREE.ShaderMaterial({
     fog: true,
-    uniforms: { ...THREE.UniformsLib.fog, uLight: { value: color(palette.cloud) }, uShade: { value: color(palette.cloudShade) }, uSunDirection: SHARED_UNIFORMS.uSunDirection },
+    transparent: true,
+    depthWrite: false,
+    uniforms: { ...THREE.UniformsLib.fog, uLight: { value: color(palette.cloud) }, uShade: { value: color(palette.cloudShade) }, uTime: SHARED_UNIFORMS.uTime },
     vertexShader: `
-      varying vec3 vCloudNormal;
+      attribute float aCloudSeed;
+      varying vec2 vCloudUv;
+      varying float vCloudSeed;
       #include <fog_pars_vertex>
       void main() {
-        vCloudNormal = normalize(mat3(modelMatrix) * normal);
-        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vCloudUv = uv;
+        vCloudSeed = aCloudSeed;
+        vec2 scale = vec2(length(modelMatrix[0].xyz), length(modelMatrix[1].xyz));
+        vec4 mvPosition = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+        mvPosition.xy += position.xy * scale;
         gl_Position = projectionMatrix * mvPosition;
         #include <fog_vertex>
       }`,
     fragmentShader: `
       uniform vec3 uLight;
       uniform vec3 uShade;
-      uniform vec3 uSunDirection;
-      varying vec3 vCloudNormal;
+      uniform float uTime;
+      varying vec2 vCloudUv;
+      varying float vCloudSeed;
+      ${NOISE_GLSL}
       #include <fog_pars_fragment>
       void main() {
-        vec3 normal = normalize(vCloudNormal);
-        float light = smoothstep(-0.7, 1.0, dot(normal, uSunDirection)) * 0.72 + smoothstep(-0.6, 0.8, normal.y) * 0.28;
-        gl_FragColor = vec4(mix(uShade, uLight, light), 1.0);
+        vec2 p = (vCloudUv - 0.5) * vec2(8.0, 3.8);
+        float density = 0.0;
+        for (int i = 0; i < 7; i++) {
+          float k = float(i);
+          float r = skyHash(vec2(k + 0.3, vCloudSeed * 11.0));
+          float arch = sin((k + 0.5) / 7.0 * 3.14159);
+          vec2 center = vec2((k - 3.0) * 0.78, -0.18 + arch * arch * (0.45 + r * 0.55));
+          vec2 q = (p - center) / vec2(0.62 + r * 0.48, 0.38 + r * 0.55);
+          density += exp(-dot(q, q) * 1.7) * 0.7;
+        }
+        vec2 drift = vec2(uTime * 0.008, 0.0);
+        float detail = skyNoise(p * 2.4 + drift + vCloudSeed * 7.0) * 0.6
+          + skyNoise(p * 6.5 - drift * 0.5) * 0.28 + skyNoise(p * 15.0) * 0.12;
+        vec2 wisp = (p - vec2(0.2, -0.12)) / vec2(3.2, 0.35);
+        density += exp(-dot(wisp, wisp)) * 0.22;
+        density *= 0.75 + detail * 0.5;
+        float edge = max(abs(vCloudUv.x - 0.5), abs(vCloudUv.y - 0.5)) * 2.0;
+        float alpha = smoothstep(0.04, 0.75, density) * (1.0 - smoothstep(0.88, 1.0, edge)) * 0.9;
+        if (alpha < 0.004) discard;
+        float light = clamp(0.68 + p.y * 0.26 + (detail - 0.5) * 0.28, 0.15, 1.0);
+        gl_FragColor = vec4(mix(uShade, uLight, light), alpha);
         #include <colorspace_fragment>
         #include <fog_fragment>
       }`

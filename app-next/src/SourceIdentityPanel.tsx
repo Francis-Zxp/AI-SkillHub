@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { getLang } from "./i18n";
 import type { Lang } from "./i18n";
 import { Icon } from "./icons";
 import type { LegacySnapshot } from "./types";
+import "./SourceIdentityPanel.css";
 
 export type IdentityPlanEntry = {
   sourceId: string;
@@ -36,6 +37,7 @@ type Props = {
 };
 
 export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onError }: Props) {
+  const listId = useId();
   const [plan, setPlan] = useState<IdentityPlan | null>(null);
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -93,12 +95,19 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
       <header className="identity-head">
         <div>
           <h3>{it("title")}</h3>
-          <p>{it("body")}</p>
+          <p>{it("summary")}</p>
         </div>
         <button className="ghost-action small" disabled={busy} onClick={() => void refresh()} type="button">
           <Icon className={loading ? "icon-spin" : ""} name="refresh" /> {it("recheck")}
         </button>
       </header>
+
+      <details className="identity-explainer">
+        <summary>{it("rules")}</summary>
+        <p>{it("body")}</p>
+      </details>
+
+      {loading && !plan && <p className="identity-loading" role="status">{it("loading")}</p>}
 
       {plan && (
         <dl className="identity-stats">
@@ -129,12 +138,12 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
               />
               {it("selectAll", { n: renames.length })}
             </label>
-            <button className="text-action" onClick={() => setExpanded(value => !value)} type="button">
+            <button aria-controls={listId} aria-expanded={expanded} className="text-action" onClick={() => setExpanded(value => !value)} type="button">
               {expanded ? it("collapse") : it("expand")}
             </button>
           </div>
-          <ul className={expanded ? "identity-list is-expanded" : "identity-list"}>
-            {(expanded ? renames : renames.slice(0, 6)).map(entry => (
+          <ul className="identity-list" hidden={!expanded} id={listId}>
+            {renames.map(entry => (
               <li key={entry.sourceId}>
                 <label className="identity-check">
                   <input
@@ -158,7 +167,6 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
               </li>
             ))}
           </ul>
-          {!expanded && renames.length > 6 && <p className="identity-more">{it("more", { n: renames.length - 6 })}</p>}
           {!confirming ? (
             <button
               className="primary-action"
@@ -209,6 +217,9 @@ type Dictionary = Record<string, string>;
 
 const zh: Dictionary = {
   title: "来源命名",
+  summary: "调用名使用“项目--作者”，界面优先显示项目名。",
+  rules: "命名规则与保留内容",
+  loading: "正在检查来源名称…",
   body: "按 GitHub 仓库身份统一来源命名：文件夹与调用名改为“项目--作者”，项目名在前，界面仍以项目名为主。早期安装的来源没有作者部分，父入口可能和别的作者同名。标题、备注、分类、评分、固定版本和使用记录都会保留。",
   recheck: "重新检查",
   statRename: "可统一",
@@ -233,6 +244,9 @@ const zh: Dictionary = {
 
 const en: Dictionary = {
   title: "Source names",
+  summary: "Use project--owner for invocation; show the project name first.",
+  rules: "Naming rules and preserved data",
+  loading: "Checking source names…",
   body: "Source names follow the GitHub repository: folders and invocation names become project--owner, project first, and the interface keeps showing the project name. Sources installed by early versions have no owner part, so their parent name can clash with another author's. Titles, notes, folders, ratings, pins and usage history are kept.",
   recheck: "Check again",
   statRename: "Can unify",
@@ -257,6 +271,9 @@ const en: Dictionary = {
 
 const ko: Dictionary = {
   title: "소스 이름",
+  summary: "호출 이름은 프로젝트--작성자, 화면에는 프로젝트 이름을 먼저 표시합니다.",
+  rules: "이름 규칙과 유지되는 정보",
+  loading: "소스 이름 확인 중…",
   body: "GitHub 저장소 기준으로 소스 이름을 통일합니다. 폴더와 호출 이름은 프로젝트--작성자 형식이 되고, 화면은 계속 프로젝트 이름을 앞에 보여 줍니다. 초기 버전에서 설치한 소스는 작성자 부분이 없어 다른 작성자와 부모 이름이 겹칠 수 있습니다. 제목, 메모, 폴더, 평점, 버전 고정, 사용 기록은 유지됩니다.",
   recheck: "다시 확인",
   statRename: "통일 가능",
