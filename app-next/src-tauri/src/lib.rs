@@ -2462,6 +2462,37 @@ fn directory_has_name_prefix(directory: &Path, prefixes: &[&str]) -> bool {
     })
 }
 
+fn claude_desktop_code_executable(roaming_root: &Path) -> Option<PathBuf> {
+    let runtime_root = roaming_root.join("Claude").join("claude-code");
+    for version in fs::read_dir(runtime_root).ok()?.take(128).flatten() {
+        let name = version.file_name().to_string_lossy().into_owned();
+        if !name.split('.').take(3).all(|part| {
+            !part.is_empty() && part.chars().all(|character| character.is_ascii_digit())
+        }) || name.split('.').count() < 3
+            || !version.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            continue;
+        }
+        let direct = version.path().join("claude.exe");
+        if direct.is_file() {
+            return Some(direct);
+        }
+        // Desktop's engine is versioned separately from its UI and is not on
+        // PATH. Only inspect the documented-on-disk version/build shape.
+        if let Ok(builds) = fs::read_dir(version.path()) {
+            for build in builds.take(128).flatten() {
+                if build.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    let binary = build.path().join("claude.exe");
+                    if binary.is_file() {
+                        return Some(binary);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn delivery_recipient_states(
     connection: &Connection,
 ) -> Result<Vec<AgentDeliveryRecipientState>, String> {
@@ -2476,8 +2507,12 @@ fn delivery_recipient_states(
         .map(|value| expand_delivery_environment_path(&value))
         .unwrap_or_else(|| home.join(".claude"));
     let claude_target = claude_root.join("skills");
+    let roaming_root = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData").join("Roaming"));
     let claude_detected = command_exists("claude")
         || home.join(".local").join("bin").join("claude.exe").is_file()
+        || claude_desktop_code_executable(&roaming_root).is_some()
         || directory_has_any_marker(
             &claude_root,
             &[
@@ -2503,6 +2538,8 @@ fn delivery_recipient_states(
     let program_files = std::env::var_os("ProgramFiles")
         .map(PathBuf::from)
         .unwrap_or_default();
+    let workbuddy_detected =
+        command_exists("workbuddy") || workbuddy_install_present(&local_app_data, &program_files);
     let codex_target = home.join(".agents").join("skills");
     let mut codex_detected = command_exists("codex")
         || directory_has_any_marker(
@@ -2562,7 +2599,7 @@ fn delivery_recipient_states(
         let identity = format!("{} {}", name, path)
             .replace('/', "\\")
             .to_lowercase();
-        // `agents.detected` also covers Claude Desktop, which cannot consume
+        // `agents.detected` also covers Desktop Chat/Cowork, which do not consume
         // local Claude Code Skills. Do not turn a Desktop-only cached row into
         // a delivery recipient merely because an old `.claude\skills` folder
         // exists; the command/native install/config markers above are the
@@ -2580,6 +2617,11 @@ fn delivery_recipient_states(
     }
 
     Ok(vec![
+        AgentDeliveryRecipientState {
+            id: "workbuddy",
+            path: home.join(".codebuddy").join("skills"),
+            detected: workbuddy_detected,
+        },
         AgentDeliveryRecipientState {
             id: "claude",
             path: claude_target,
@@ -2601,6 +2643,19 @@ fn delivery_recipient_states(
             path: legacy_codex,
         },
     ])
+}
+
+fn workbuddy_install_present(local_app_data: &Path, program_files: &Path) -> bool {
+    [
+        local_app_data
+            .join("Programs")
+            .join("WorkBuddy")
+            .join("WorkBuddy.exe"),
+        local_app_data.join("WorkBuddy").join("WorkBuddy.exe"),
+        program_files.join("WorkBuddy").join("WorkBuddy.exe"),
+    ]
+    .iter()
+    .any(|binary| binary.is_absolute() && binary.is_file())
 }
 
 fn build_agent_delivery_plan(
@@ -15437,7 +15492,15 @@ fn derive_agent_doctors(
                 apps.push(adapter_doctor::AppProbeEvidence {
                     product_id: format!("{}-code", adapter.id),
                     display_name: adapter.name.clone(),
-                    role: "code-app".to_string(),
+                    role: if adapter.id == "claude"
+                        && command_detail
+                            .split(", ")
+                            .any(|kind| kind == "desktop-code-runtime")
+                    {
+                        "desktop-code-runtime".to_string()
+                    } else {
+                        "code-app".to_string()
+                    },
                     installed: true,
                     running: false,
                     executable_path: String::new(),
@@ -15746,6 +15809,7 @@ fn derive_adapter_capabilities(adapters: &[AgentAdapterCard]) -> Vec<AdapterCapa
                 | "windsurf"
                 | "hermes"
                 | "openclaw"
+                | "workbuddy"
         );
         capabilities.push(adapter_capability(
             adapter,
@@ -16006,6 +16070,13 @@ fn agent_adapter_catalog() -> Vec<AgentAdapterCard> {
             "global",
         ),
         agent_adapter(
+            "workbuddy",
+            "WorkBuddy",
+            "Tencent",
+            "~\\.codebuddy\\skills",
+            "global",
+        ),
+        agent_adapter(
             "cursor",
             "Cursor",
             "Anysphere",
@@ -16074,7 +16145,11 @@ fn agent_adapter(
         detection_kind: "skills-folder".to_string(),
         install_scope: install_scope.to_string(),
         capability_level: "skills".to_string(),
-        docs_url: String::new(),
+        docs_url: if id == "workbuddy" {
+            "https://www.codebuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Setting".to_string()
+        } else {
+            String::new()
+        },
         status: "not-detected".to_string(),
         detected: false,
         managed: false,
@@ -17629,7 +17704,7 @@ fn parse_agents(diagnostics: Option<&Value>) -> Vec<AgentCard> {
                 .cloned()
                 .unwrap_or_default();
             let raw_detected = json_bool(agent, "detected");
-            let supports_split_detection = matches!(id.as_str(), "claude" | "codex");
+            let supports_split_detection = matches!(id.as_str(), "claude" | "codex" | "workbuddy");
             let explicit_product_detection = supports_split_detection
                 && (json_bool(agent, "desktopDetected") || json_bool(agent, "codeDetected"));
             let directory_only_detection = raw_detected
@@ -19048,6 +19123,62 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_desktop_code_detection_requires_an_engine_not_a_desktop_folder() {
+        let root =
+            std::env::temp_dir().join(format!("skillhub-claude-engine-{}", uuid::Uuid::new_v4()));
+        let runtime = root.join("Claude").join("claude-code");
+        fs::create_dir_all(&runtime).unwrap();
+        assert!(claude_desktop_code_executable(&root).is_none());
+        let misleading = runtime.join("plugins");
+        fs::create_dir_all(&misleading).unwrap();
+        fs::write(misleading.join("claude.exe"), b"fixture").unwrap();
+        assert!(claude_desktop_code_executable(&root).is_none());
+        let binary = runtime
+            .join("2.1.286")
+            .join("635c1867224a")
+            .join("claude.exe");
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, b"fixture; never execute").unwrap();
+        assert_eq!(claude_desktop_code_executable(&root), Some(binary));
+        assert!(!root.join(".claude").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workbuddy_requires_installation_and_is_ready_without_cli() {
+        let root =
+            std::env::temp_dir().join(format!("skillhub-workbuddy-{}", uuid::Uuid::new_v4()));
+        let local = root.join("Local");
+        let programs = root.join("ProgramFiles");
+        fs::create_dir_all(local.join("Programs/WorkBuddy")).unwrap();
+        assert!(!workbuddy_install_present(&local, &programs));
+        fs::write(
+            local.join("Programs/WorkBuddy/WorkBuddy.exe"),
+            b"never execute",
+        )
+        .unwrap();
+        assert!(workbuddy_install_present(&local, &programs));
+        let diagnostics = serde_json::json!({"agents": [{
+            "id": "workbuddy", "name": "WorkBuddy", "detected": true,
+            "desktopDetected": true, "codeDetected": true, "command": "",
+            "skillsDirs": [{"path": "~/.codebuddy/skills", "exists": true,
+                "writable": true, "containsSkillMd": true}]
+        }]});
+        let agents = parse_agents(Some(&diagnostics));
+        assert!(agents[0].enabled);
+        let doctors = derive_agent_doctors(Some(&diagnostics), &derive_agent_adapters(&agents));
+        assert_eq!(
+            doctors
+                .iter()
+                .find(|doctor| doctor.adapter_id == "workbuddy")
+                .unwrap()
+                .verdict,
+            "ready"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn write_runtime_markers(root: &Path) {
         let runtime = app_next_runtime_root(root);
@@ -20548,6 +20679,30 @@ mod tests {
         assert!(claude.detected);
         assert!(!claude.managed);
         assert!(!claude.enabled);
+    }
+
+    #[test]
+    fn claude_embedded_diagnostics_become_ready_without_path_command() {
+        let diagnostics = serde_json::json!({
+            "agents": [{
+                "id": "claude", "name": "Claude Desktop / Claude Code",
+                "detected": true, "desktopDetected": true, "codeDetected": true,
+                "detectionKinds": ["desktop-app", "claude-code", "desktop-code-runtime"],
+                "command": "",
+                "skillsDirs": [{ "path": "C:/Users/Recipient/.claude/skills",
+                    "exists": true, "writable": true, "containsSkillMd": true }]
+            }]
+        });
+        let agents = parse_agents(Some(&diagnostics));
+        assert!(agents[0].enabled);
+        let doctors = derive_agent_doctors(Some(&diagnostics), &derive_agent_adapters(&agents));
+        let claude = doctors
+            .iter()
+            .find(|card| card.adapter_id == "claude")
+            .unwrap();
+        assert_eq!(claude.verdict, "ready");
+        assert_eq!(claude.skills_status, "ready");
+        assert!(!claude.safe_fix_available);
     }
 
     #[test]

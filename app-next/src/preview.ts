@@ -1305,7 +1305,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
     ],
     diagnostics: {
       available: false,
-      appVersion: "3.2.15 preview",
+      appVersion: "3.2.16 preview",
       generatedAt: new Date().toISOString(),
       overallStatus: "preview",
       ok: 6,

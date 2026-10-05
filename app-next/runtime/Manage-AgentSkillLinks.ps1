@@ -255,12 +255,33 @@ function Test-ClaudeCodePresent {
   $nativeBinary = Join-Path $EffectiveHome '.local\bin\claude.exe'
   if (Test-Path -LiteralPath $nativeBinary -PathType Leaf) { return $true }
 
+  $roamingRoot = if ($HomePath) { Join-Path $EffectiveHome 'AppData\Roaming' } else { [Environment]::GetFolderPath('ApplicationData') }
+  if (Get-ClaudeDesktopCodeExecutable $roamingRoot) { return $true }
+
   $claudeHome = Get-ClaudeConfigRoot
   foreach ($marker in @('settings.json', 'history.jsonl', 'projects', 'sessions', 'plugins', 'local')) {
     if (Test-Path -LiteralPath (Join-Path $claudeHome $marker)) { return $true }
   }
 
   return $false
+}
+
+function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot) {
+  if ([string]::IsNullOrWhiteSpace($RoamingRoot)) { return '' }
+  $runtimeRoot = Join-Path $RoamingRoot 'Claude\claude-code'
+  # Desktop downloads its own engine; it need not install a global CLI. Inspect
+  # only the two version/hash levels, never recursively walk the user profile.
+  foreach ($version in @(Get-ChildItem -LiteralPath $runtimeRoot -Directory -ErrorAction SilentlyContinue | Select-Object -First 128)) {
+    if ($version.Name -notmatch '^\d+\.\d+\.\d+' -or ($version.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+    $direct = Join-Path $version.FullName 'claude.exe'
+    if (Test-Path -LiteralPath $direct -PathType Leaf) { return $direct }
+    foreach ($build in @(Get-ChildItem -LiteralPath $version.FullName -Directory -ErrorAction SilentlyContinue | Select-Object -First 128)) {
+      if ($build.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+      $binary = Join-Path $build.FullName 'claude.exe'
+      if (Test-Path -LiteralPath $binary -PathType Leaf) { return $binary }
+    }
+  }
+  return ''
 }
 
 function Test-AntigravityPresent {
@@ -271,6 +292,20 @@ function Test-AntigravityPresent {
   if (Test-Path -LiteralPath $antigravityHome -PathType Container) { return $true }
   $legacyAntigravityHome = Join-Path $EffectiveHome '.antigravity'
   if (Test-Path -LiteralPath $legacyAntigravityHome -PathType Container) { return $true }
+  return $false
+}
+
+function Test-WorkBuddyPresent {
+  if ($null -ne (Get-Command workbuddy -ErrorAction SilentlyContinue)) { return $true }
+  $localData = if ($HomePath) { Join-Path $EffectiveHome 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
+  $candidates = @(
+    (Join-Path $localData 'Programs\WorkBuddy\WorkBuddy.exe'),
+    (Join-Path $localData 'WorkBuddy\WorkBuddy.exe')
+  )
+  if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) { $candidates += Join-Path $env:ProgramFiles 'WorkBuddy\WorkBuddy.exe' }
+  foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
+  }
   return $false
 }
 
@@ -328,6 +363,7 @@ $claudePresent = Test-ClaudeCodePresent
 
 $antigravityPath = Join-Path $EffectiveHome '.gemini\antigravity\skills'
 $antigravityPresent = Test-AntigravityPresent
+$workbuddyPresent = Test-WorkBuddyPresent
 
 function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot) {
   # Older SkillHub releases linked the entire recipient Skills directory to the
@@ -433,6 +469,18 @@ $openAIDesktopPresent = Test-OpenAIDesktopPresent
 $codexPresent = $codexCodePresent -or $openAIDesktopPresent
 $recipientFailures = [System.Collections.Generic.List[string]]::new()
 
+if ($workbuddyPresent) {
+  $workbuddyPath = Join-Path $EffectiveHome '.codebuddy\skills'
+  try {
+    $workbuddyCount = Sync-ManagedSkillDirectory $workbuddyPath
+    $workbuddyStatus = "$workbuddyCount verified parent-first links"
+  } catch {
+    $workbuddyStatus = 'Preserved existing directory: ' + $_.Exception.Message
+    $recipientFailures.Add('WorkBuddy: ' + $_.Exception.Message) | Out-Null
+  }
+  $rows.Add([PSCustomObject]@{ App = 'WorkBuddy'; Entry = $workbuddyPath; Status = $workbuddyStatus; Target = $Shared }) | Out-Null
+}
+
 if ($claudePresent) {
   try {
     $claudeCount = Sync-ManagedSkillDirectory $claudePath
@@ -491,7 +539,7 @@ if ($codexPresent) {
   $rows.Add([PSCustomObject]@{ App = 'ChatGPT / Codex'; Entry = $codexRoot; Status = 'Skipped (ChatGPT/Codex not installed)'; Target = $Shared }) | Out-Null
 }
 
-if (-not $claudePresent -and -not $codexPresent -and -not $antigravityPresent) {
+if (-not $claudePresent -and -not $codexPresent -and -not $antigravityPresent -and -not $workbuddyPresent) {
   Write-Step '未识别到可接管的 AI 工具。安装 ChatGPT Desktop、Codex、Claude Code 或 Antigravity 后，再重新同步。'
 }
 

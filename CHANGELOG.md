@@ -2,6 +2,15 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.16 - 2026-10-05 - Local compatibility fixes
+
+Local validation build; not published to the public update channel.
+
+- Keep desktop navigation vertical at narrow window sizes, including Settings and Safety, without an unwanted navigation scrollbar. Align Islands/Star map and fullscreen controls in immersive mode.
+- Refresh the island renderer when a window crosses displays with different scaling; allow windows down to 860 logical pixels wide.
+- Detect Claude Desktop's embedded local Code runtime without requiring a separate global CLI installation.
+- Add installation-aware WorkBuddy Skills discovery and delivery. Host acceptance remains pending on a computer with WorkBuddy installed.
+
 ## 3.2.15 - 2026-10-03 - Stable update progress and clearer source browsing
 
 - Keep the dashboard scene in place while source updates run, so the background and controls no longer move with the progress panel.

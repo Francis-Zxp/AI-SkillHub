@@ -5952,6 +5952,7 @@ function Agents({
             </header>
             <p>{adapter.skillsPathHint || t("agents.noPath")}</p>
             {adapter.id === "claude" && <p className="adapter-note">{t("agents.claudeSkillsNote")}</p>}
+            {adapter.id === "workbuddy" && <p className="adapter-note">{t("agents.workbuddySkillsNote")}</p>}
             {doctor && (
               <div className={`adapter-doctor verdict-${doctor.verdict}`}>
                 <header>

@@ -91,6 +91,12 @@ fn roots(home: &Path, project: Option<&Path>) -> Result<Vec<ScanRoot>, String> {
         "global",
         home.join(".codex/skills"),
     ));
+    result.push(root(
+        "workbuddy-legacy",
+        "WorkBuddy（兼容目录）",
+        "global",
+        home.join(".workbuddy/skills"),
+    ));
     if let Some(codex_home) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
         if codex_home.is_absolute() && codex_home != home.join(".codex") {
             result.push(root(
@@ -110,6 +116,16 @@ fn roots(home: &Path, project: Option<&Path>) -> Result<Vec<ScanRoot>, String> {
         for (id, name, relative) in [
             ("agents", "共享 Agent Skills", ".agents/skills"),
             ("claude", "Claude Code", ".claude/skills"),
+            (
+                "workbuddy-legacy",
+                "WorkBuddy（兼容目录）",
+                ".workbuddy/skills",
+            ),
+            (
+                "workbuddy-code",
+                "WorkBuddy / CodeBuddy",
+                ".codebuddy/skills",
+            ),
             ("cursor", "Cursor", ".cursor/skills"),
             ("github-copilot", "GitHub Copilot", ".github/skills"),
             ("gemini-cli", "Gemini CLI", ".gemini/skills"),
@@ -424,6 +440,30 @@ mod tests {
         fn drop(&mut self) {
             fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn workbuddy_global_and_project_skills_are_discovered_without_writes() {
+        let fixture = Fixture::new();
+        fixture.skill("home/.codebuddy/skills/review");
+        fixture.skill("home/.workbuddy/skills/legacy");
+        fixture.skill("project/.codebuddy/skills/review");
+        let found = roots(&fixture.0.join("home"), Some(&fixture.0.join("project"))).unwrap();
+        let report = scan_roots(found, &[]);
+        assert_eq!(report.skills.len(), 3);
+        assert!(report
+            .skills
+            .iter()
+            .any(|skill| skill.agent_id == "workbuddy"));
+        assert!(report
+            .skills
+            .iter()
+            .any(|skill| skill.agent_id == "workbuddy-code"));
+        assert!(report
+            .skills
+            .iter()
+            .any(|skill| skill.agent_id == "workbuddy-legacy"));
+        assert!(!fixture.0.join("home/.claude").exists());
     }
 
     #[test]

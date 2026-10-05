@@ -140,6 +140,10 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
         .apps
         .iter()
         .any(|probe| probe.installed && is_code_app(probe));
+    let embedded_code_installed = adapter_id == "claude"
+        && input.apps.iter().any(|probe| {
+            probe.installed && probe.role.eq_ignore_ascii_case("desktop-code-runtime")
+        });
     let code_installed =
         cli_on_path || cli_executable_exists || cli_package_installed || code_app_installed;
 
@@ -154,14 +158,21 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
         .any(|probe| probe.exists && probe.is_directory);
     let path_refresh_needed =
         !cli_on_path && (cli_executable_exists || cli_package_installed) && code_installed;
-    let desktop_supports_local_skills = adapter_id == "codex" && desktop_installed;
+    let desktop_supports_local_skills = (matches!(adapter_id.as_str(), "codex" | "workbuddy")
+        && desktop_installed)
+        || embedded_code_installed;
 
     let (verdict, summary, safe_fix_available) = if skills_directory_usable
         && (cli_on_path || desktop_supports_local_skills)
     {
         (
             VERDICT_READY,
-            if desktop_supports_local_skills {
+            if embedded_code_installed {
+                "Claude 桌面 Code 本地运行时与 Skills 目录已确认；无需单独安装全局 CLI。"
+                    .to_string()
+            } else if adapter_id == "workbuddy" {
+                "WorkBuddy 与用户级 Skills 目录已确认；请在代码开发会话中刷新技能列表。".to_string()
+            } else if desktop_supports_local_skills {
                 format!(
                     "{} 与官方用户级 .agents/skills 目录均已确认。",
                     display_name(input)
@@ -305,6 +316,7 @@ fn is_desktop_package(adapter_id: &str, probe: &PackageProbeEvidence) -> bool {
 
 fn is_code_app(probe: &AppProbeEvidence) -> bool {
     probe.role.eq_ignore_ascii_case("code-app")
+        || probe.role.eq_ignore_ascii_case("desktop-code-runtime")
 }
 
 fn is_code_package(probe: &PackageProbeEvidence) -> bool {
@@ -345,7 +357,7 @@ fn desktop_only_summary(adapter_id: &str, running: bool) -> String {
             activity
         ),
         "claude" => format!(
-            "Claude Desktop {}，但未发现 Claude Code CLI；桌面聊天能力不等于本地 Skills 代码能力。",
+            "Claude Desktop {}，但未发现本地 Code 运行时；Chat/Cowork 不读取本机 Skills 目录。",
             activity
         ),
         _ => format!("桌面应用{}，但未发现可管理的 CLI/Skills 能力。", activity),
@@ -383,6 +395,14 @@ fn next_steps(
             _ => vec!["确认该桌面产品是否公开支持本地 Skills，再决定是否接管。".to_string()],
         },
         VERDICT_CODE_DETECTED => {
+            if input.adapter_id == "claude"
+                && input
+                    .apps
+                    .iter()
+                    .any(|probe| probe.installed && probe.role == "desktop-code-runtime")
+            {
+                return vec!["点击同步，准备 Claude 桌面 Code 的本地 Skills；无需另装全局 CLI。同步后在本地 Code 会话中输入 /。".to_string()];
+            }
             let mut steps = vec![
                 "确认工具官方文档声明的 Skills 目录；诊断不会为了变成绿色而创建空目录。"
                     .to_string(),
@@ -808,5 +828,35 @@ mod tests {
         assert_eq!(card.cli_status, "on-path");
         assert_eq!(card.skills_status, "ready");
         assert!(card.summary.contains("Claude Code"));
+    }
+
+    #[test]
+    fn claude_embedded_runtime_is_ready_without_a_global_cli() {
+        let mut input = AdapterDoctorInput {
+            adapter_id: "claude".to_string(),
+            apps: vec![AppProbeEvidence {
+                role: "desktop-code-runtime".to_string(),
+                installed: true,
+                ..AppProbeEvidence::default()
+            }],
+            ..AdapterDoctorInput::default()
+        };
+        assert_eq!(diagnose_adapter(&input).verdict, VERDICT_CODE_DETECTED);
+        input.paths.push(PathProbeEvidence {
+            purpose: "skills-directory".to_string(),
+            exists: true,
+            is_directory: true,
+            contains_skill_md: true,
+            ..PathProbeEvidence::default()
+        });
+        let card = diagnose_adapter(&input);
+        assert_eq!(card.verdict, VERDICT_READY);
+        assert_eq!(card.skills_status, "ready");
+        assert_eq!(card.cli_status, "installed-off-path");
+        assert!(!card.safe_fix_available);
+        // Desktop UI alone still does not prove a local Code runtime exists.
+        input.apps[0].role = "desktop-app".to_string();
+        input.apps[0].product_id = "claude-desktop".to_string();
+        assert_eq!(diagnose_adapter(&input).verdict, VERDICT_DESKTOP_ONLY);
     }
 }

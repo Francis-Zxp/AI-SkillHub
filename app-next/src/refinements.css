@@ -3,8 +3,8 @@
 .home-visual-switch button { padding: 7px 14px; color: var(--text-soft); border-radius: 8px; font: 600 13px var(--ui-font); background: transparent; }
 .home-visual-switch button[aria-pressed="true"] { background: var(--brand); color: var(--bg); }
 .islands-home .dashboard-hero-inner { display: none; }
-.theme-family-atlas.page-dashboard .islands-home .atlas-immersive-toggle { top: 100px; right: 24px; }
-.browser-preview-shell.theme-family-atlas.page-dashboard .islands-home .atlas-immersive-toggle { top: 166px; }
+.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .islands-home .atlas-immersive-toggle { top: 100px; right: 24px; }
+.browser-preview-shell.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .islands-home .atlas-immersive-toggle { top: 166px; }
 .theme-family-atlas .atlas-library-stage { grid-template-columns: 202px minmax(0, 1fr); }
 .theme-family-atlas .atlas-library-filter-deck { min-height: 0; align-self: start; }
 .theme-family-atlas .atlas-filter-meter { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; padding: 18px 16px; }

@@ -11,6 +11,8 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+$RoamingAppData = if ($PSBoundParameters.ContainsKey('HomePath')) { Join-Path $HomePath 'AppData\Roaming' } else { [Environment]::GetFolderPath('ApplicationData') }
+$LocalAppDataPath = if ($PSBoundParameters.ContainsKey('HomePath')) { Join-Path $HomePath 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $AppRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -229,8 +231,40 @@ function Test-ClaudeCodePresent([string]$ConfigRoot) {
   $nativeBinary = Join-Path $script:HomePath '.local\bin\claude.exe'
   if (Test-Path -LiteralPath $nativeBinary -PathType Leaf) { return $true }
 
+  if (Get-ClaudeDesktopCodeExecutable $script:RoamingAppData) { return $true }
+
   foreach ($marker in @('settings.json', 'history.jsonl', 'projects', 'sessions', 'plugins', 'local')) {
     if (Test-Path -LiteralPath (Join-Path $ConfigRoot $marker)) { return $true }
+  }
+  return $false
+}
+
+function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot) {
+  if ([string]::IsNullOrWhiteSpace($RoamingRoot)) { return '' }
+  $runtimeRoot = Join-Path $RoamingRoot 'Claude\claude-code'
+  foreach ($version in @(Get-ChildItem -LiteralPath $runtimeRoot -Directory -ErrorAction SilentlyContinue | Select-Object -First 128)) {
+    if ($version.Name -notmatch '^\d+\.\d+\.\d+' -or ($version.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+    $direct = Join-Path $version.FullName 'claude.exe'
+    if (Test-Path -LiteralPath $direct -PathType Leaf) { return $direct }
+    foreach ($build in @(Get-ChildItem -LiteralPath $version.FullName -Directory -ErrorAction SilentlyContinue | Select-Object -First 128)) {
+      if ($build.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+      $binary = Join-Path $build.FullName 'claude.exe'
+      if (Test-Path -LiteralPath $binary -PathType Leaf) { return $binary }
+    }
+  }
+  return ''
+}
+
+function Test-WorkBuddyPresent {
+  if ($script:SimulateNoAgents) { return $false }
+  if ($null -ne (Get-Command workbuddy -ErrorAction SilentlyContinue)) { return $true }
+  $candidates = @(
+    (Join-Path $script:LocalAppDataPath 'Programs\WorkBuddy\WorkBuddy.exe'),
+    (Join-Path $script:LocalAppDataPath 'WorkBuddy\WorkBuddy.exe')
+  )
+  if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) { $candidates += Join-Path $env:ProgramFiles 'WorkBuddy\WorkBuddy.exe' }
+  foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
   }
   return $false
 }
@@ -332,7 +366,7 @@ function Add-AgentStatus(
       containsSkillMd = $containsSkillMd
     }
   }
-  $detected = $baseExists -or ($null -ne $command) -or $AdditionalDetected
+  $detected = ($baseExists -and $Id -ne 'workbuddy') -or ($null -ne $command) -or $AdditionalDetected
   $status = if ($detected) { 'ok' } else { 'info' }
   $summary = if ($Id -eq 'claude' -and $DesktopDetected -and $CodeDetected) {
     'Claude Desktop 与 Claude Code 已检测到。'
@@ -352,7 +386,7 @@ function Add-AgentStatus(
     "$Name 未检测到；如果这台电脑不用它，可以忽略。"
   }
   $fix = if ($Id -eq 'claude' -and $DesktopDetected -and -not $CodeDetected) {
-    '点击同步后可为 Claude Code/Code 模式准备本地 Skills；Chat/Cowork 的自定义 Skill 请在 Claude 设置中上传 ZIP。'
+    '请先在 Claude 打开 Code 并完成本地运行环境准备，再回到这里同步。Chat/Cowork 的自定义 Skill 请在 Customize → Skills 上传 ZIP。'
   } elseif ($Id -eq 'codex' -and $DesktopDetected -and -not $CodeDetected) {
     '点击同步后写入官方用户级 .agents\skills；不会创建假的 .codex 目录。'
   } elseif ($detected) {
@@ -435,6 +469,10 @@ $claudeCodeDetected = Test-ClaudeCodePresent $claudeConfigRoot
 $claudeDetectionKinds = @()
 if ($claudeDesktopDetected) { $claudeDetectionKinds += 'desktop-app' }
 if ($claudeCodeDetected) { $claudeDetectionKinds += 'claude-code' }
+if (-not $script:SimulateNoAgents -and -not $script:SimulateClaudeDesktopOnly -and
+    (Get-ClaudeDesktopCodeExecutable $RoamingAppData)) {
+  $claudeDetectionKinds += 'desktop-code-runtime'
+}
 Add-AgentStatus 'claude' 'Claude Desktop / Claude Code' $claudeConfigRoot @((Join-Path $claudeConfigRoot 'skills')) 'claude' ($claudeDesktopDetected -or $claudeCodeDetected) $claudeCodeDetected $claudeDesktopDetected $claudeDetectionKinds
 $codexConfigRoot = Join-Path $HomePath '.codex'
 $openAIDesktopDetected = Test-OpenAIDesktopPresent
@@ -444,6 +482,8 @@ if ($openAIDesktopDetected) { $codexDetectionKinds += 'desktop-app' }
 if ($codexCodeDetected) { $codexDetectionKinds += 'codex-code' }
 Add-AgentStatus 'codex' 'ChatGPT Desktop / OpenAI Codex' $codexConfigRoot @((Join-Path $HomePath '.agents\skills'), (Join-Path $codexConfigRoot 'skills')) 'codex' ($openAIDesktopDetected -or $codexCodeDetected) $codexCodeDetected $openAIDesktopDetected $codexDetectionKinds
 Add-AgentStatus 'antigravity' 'Antigravity' (Join-Path $HomePath '.gemini\antigravity') @((Join-Path $HomePath '.gemini\antigravity\skills'), (Join-Path $HomePath '.antigravity\skills')) 'antigravity'
+$workbuddyDetected = Test-WorkBuddyPresent
+Add-AgentStatus 'workbuddy' 'WorkBuddy' (Join-Path $HomePath '.codebuddy') @((Join-Path $HomePath '.codebuddy\skills')) 'workbuddy' $workbuddyDetected $workbuddyDetected $workbuddyDetected @('desktop-app')
 
 if ((@($Agents | Where-Object { $_.detected }).Count) -eq 0) {
   Add-Check 'agent.noneDetected' 'AI Coding 工具' 'info' '未识别到可接管的 AI Coding 工具。' '' '安装 Claude Code、Codex 或 Antigravity 后，再点击“接管 AI 软件链接”。AI SkillHub 不会创建假的工具目录。'

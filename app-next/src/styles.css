@@ -3848,6 +3848,8 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   position: sticky;
   top: 0;
   z-index: 50;
+  flex-direction: column;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 16px;
   width: 84px;
@@ -3873,7 +3875,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .theme-family-atlas .brand-logo { width: 38px; height: 38px; border-radius: 11px; }
 .theme-family-atlas .brand > div,
 .theme-family-atlas .atlas-rail-mark { display: none; }
-.theme-family-atlas .nav { align-items: center; gap: 8px; overflow: visible; }
+.theme-family-atlas .nav { flex-direction: column; flex-wrap: nowrap; min-height: 0; align-items: center; gap: 8px; overflow: visible; }
 .theme-family-atlas .nav-item,
 .theme-family-atlas .sidebar-footer .nav-item {
   position: relative;
@@ -3923,7 +3925,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 .theme-family-atlas .nav-item:focus-visible .nav-text { opacity: 1; transform: translate(0, -50%) scale(1); }
 .theme-family-atlas .nav-text strong { font: 600 calc(12px * var(--ui-text-scale, 1))/1 var(--ui-font); }
 .theme-family-atlas .nav-text small { display: none; }
-.theme-family-atlas .sidebar-footer { width: 100%; gap: 7px; padding: 12px 0 0; border-color: var(--border); align-items: center; }
+.theme-family-atlas .sidebar-footer { flex-direction: column; flex-shrink: 0; width: 100%; gap: 7px; padding: 12px 0 0; border-top: 1px solid var(--border); align-items: center; }
 
 .theme-family-atlas .workspace { position: relative; z-index: 1; min-height: 100vh; padding: 0 0 34px; }
 .theme-family-atlas .topbar {
@@ -4478,7 +4480,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 }
 .atlas-intro-toggle:focus-visible { outline: 2px solid var(--brand-strong); outline-offset: 3px; }
 .atlas-intro-toggle[aria-pressed="true"] { color: var(--brand-strong); }
-.browser-preview-shell.page-dashboard .atlas-intro-toggle { top: 166px; }
+.browser-preview-shell.page-dashboard:not(.dashboard-immersive) .atlas-intro-toggle { top: 166px; }
 
 .atlas-immersive-toggle {
   position: absolute;
@@ -4509,7 +4511,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
 }
 .atlas-immersive-toggle:focus-visible { outline: 2px solid var(--brand-strong); outline-offset: 3px; }
 .atlas-immersive-toggle[aria-pressed="true"] { color: var(--brand-strong); }
-.browser-preview-shell.page-dashboard .atlas-immersive-toggle { top: 166px; }
+.browser-preview-shell.page-dashboard:not(.dashboard-immersive) .atlas-immersive-toggle { top: 166px; }
 
 .theme-family-atlas.page-dashboard .skill-universe::before {
   opacity: .78;
@@ -4607,7 +4609,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   .atlas-intro-toggle { top: 80px; right: auto; left: 18px; min-width: 38px; width: 38px; padding: 0; }
   .atlas-intro-toggle span { display: none; }
   .atlas-immersive-toggle { top: 80px; right: auto; left: 64px; }
-  .browser-preview-shell.page-dashboard .atlas-intro-toggle { top: 146px; }
+  .browser-preview-shell.page-dashboard:not(.dashboard-immersive) .atlas-intro-toggle { top: 146px; }
   .theme-family-atlas.page-dashboard .dashboard-hero-inner { padding: 132px 24px 196px; }
   .theme-family-atlas.page-dashboard .dashboard-hero h2 { font-size: clamp(34px, 9vw, 54px); }
   .theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar { grid-template-columns: repeat(2, minmax(0, 1fr)); width: calc(100% - 28px); margin-top: -150px; }
@@ -5627,7 +5629,7 @@ code { font-family: var(--ui-mono); font-size: .92em; }
   .dashboard-immersive.theme-family-atlas { grid-template-columns: 1fr; }
   .dashboard-immersive.theme-family-atlas.page-dashboard .workspace { height: 100dvh; }
   .atlas-immersive-toggle { top: 80px; right: auto; left: 64px; }
-  .browser-preview-shell.page-dashboard .atlas-immersive-toggle { top: 146px; }
+  .browser-preview-shell.page-dashboard:not(.dashboard-immersive) .atlas-immersive-toggle { top: 146px; }
   .dashboard-immersive .atlas-intro-toggle { top: 18px; left: auto; right: 62px; }
   .dashboard-immersive .atlas-immersive-toggle { top: 18px; right: 14px; }
   .dashboard-immersive .skill-universe-modes { top: 64px; right: 14px; }

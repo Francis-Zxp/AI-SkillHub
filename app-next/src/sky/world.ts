@@ -779,6 +779,15 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   reduced.addEventListener("change", requestDraw);
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(options.host);
+  // A move between displays can change DPR without changing the CSS bounds.
+  let resolutionQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+  const onResolutionChange = () => {
+    resolutionQuery.removeEventListener("change", onResolutionChange);
+    resolutionQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    resolutionQuery.addEventListener("change", onResolutionChange);
+    resize();
+  };
+  resolutionQuery.addEventListener("change", onResolutionChange);
   // Fullscreen changes the floating rail without resizing the full-bleed
   // canvas; re-read safe areas when the application shell class changes.
   const shellObserver = new MutationObserver(resize);
@@ -870,6 +879,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       disposed = true;
       cancelAnimationFrame(raf);
       resizeObserver.disconnect();
+      resolutionQuery.removeEventListener("change", onResolutionChange);
       shellObserver.disconnect();
       intersection.disconnect();
       canvas.removeEventListener("pointerdown", onPointerDown);
