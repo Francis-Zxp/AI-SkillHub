@@ -45,6 +45,8 @@
 
 界面支持中文、英文和韩文。可调整主题、文字大小、图标大小、动画和省电模式。
 
+**Claude 桌面端**：先在 Code 中完成本机 Windows 环境的初始化，再到 AI SkillHub 连接并同步；新建本地 Code 会话后用 `/` 查找父 Skill。Chat/Cowork 的账户技能、Cloud/SSH/WSL 使用不同位置。详见 [3.2.16 使用说明](docs/release-notes/v3.2.16.md)。
+
 ## Skills、Prompts 与 MCP
 
 - **Skills** 包含 `SKILL.md`，描述 Agent 可以加载的能力。父入口组织同一来源下的子 Skills。

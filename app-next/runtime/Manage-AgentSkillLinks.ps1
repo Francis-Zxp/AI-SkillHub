@@ -256,7 +256,8 @@ function Test-ClaudeCodePresent {
   if (Test-Path -LiteralPath $nativeBinary -PathType Leaf) { return $true }
 
   $roamingRoot = if ($HomePath) { Join-Path $EffectiveHome 'AppData\Roaming' } else { [Environment]::GetFolderPath('ApplicationData') }
-  if (Get-ClaudeDesktopCodeExecutable $roamingRoot) { return $true }
+  $localRoot = if ($HomePath) { Join-Path $EffectiveHome 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
+  if (Get-ClaudeDesktopCodeExecutable $roamingRoot $localRoot) { return $true }
 
   $claudeHome = Get-ClaudeConfigRoot
   foreach ($marker in @('settings.json', 'history.jsonl', 'projects', 'sessions', 'plugins', 'local')) {
@@ -266,7 +267,7 @@ function Test-ClaudeCodePresent {
   return $false
 }
 
-function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot) {
+function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot, [string]$LocalRoot = '') {
   if ([string]::IsNullOrWhiteSpace($RoamingRoot)) { return '' }
   $runtimeRoot = Join-Path $RoamingRoot 'Claude\claude-code'
   # Desktop downloads its own engine; it need not install a global CLI. Inspect
@@ -280,6 +281,10 @@ function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot) {
       $binary = Join-Path $build.FullName 'claude.exe'
       if (Test-Path -LiteralPath $binary -PathType Leaf) { return $binary }
     }
+  }
+  if (-not [string]::IsNullOrWhiteSpace($LocalRoot)) {
+    # Store MSIX redirects Desktop's Roaming data into its package cache.
+    return Get-ClaudeDesktopCodeExecutable (Join-Path $LocalRoot 'Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming')
   }
   return ''
 }

@@ -49,6 +49,14 @@ description: Research drawing tools.
   if ([IO.File]::ReadAllText($delivered) -ne [IO.File]::ReadAllText((Join-Path $parent 'SKILL.md'))) { throw 'Parent manifest changed in delivery.' }
   if (-not (Test-Path -LiteralPath $child)) { throw 'Parent target is not readable.' }
 
+  # Store Desktop's engine is visible outside MSIX only under LocalCache.
+  $storeRuntime = Join-Path $recipientHome 'AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude-code\2.1.286\635c1867224a'
+  New-Item -ItemType Directory -Force -Path $storeRuntime | Out-Null
+  Move-Item -LiteralPath (Join-Path $runtime 'claude.exe') -Destination (Join-Path $storeRuntime 'claude.exe')
+  $env:CLAUDE_CONFIG_DIR = Join-Path $recipientHome 'store-code-profile'
+  & $hostBinary -NoProfile -ExecutionPolicy Bypass -File $delivery -Quiet -HomePath $recipientHome
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $env:CLAUDE_CONFIG_DIR 'skills\research--author\SKILL.md'))) { throw 'Store Code without visible Roaming runtime failed delivery.' }
+
   # Probe the production diagnostics functions directly without running a report
   # or scanning the real user's profile. No fake engine is ever launched.
   foreach ($filename in @('Manage-AgentSkillLinks.ps1', 'Export-SkillHubDiagnostics.ps1')) {
@@ -57,7 +65,8 @@ description: Research drawing tools.
     if ($parseErrors.Count) { throw "Invalid PowerShell syntax in $filename" }
     $function = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-ClaudeDesktopCodeExecutable' }, $true)
     . ([scriptblock]::Create($function.Extent.Text))
-    if (-not (Get-ClaudeDesktopCodeExecutable (Join-Path $recipientHome 'AppData\Roaming'))) { throw "Embedded runtime missing from $filename" }
+    if (Get-ClaudeDesktopCodeExecutable (Join-Path $recipientHome 'AppData\Roaming')) { throw 'Virtual Roaming path incorrectly contains runtime.' }
+    if (-not (Get-ClaudeDesktopCodeExecutable (Join-Path $recipientHome 'AppData\Roaming') (Join-Path $recipientHome 'AppData\Local'))) { throw "Store embedded runtime missing from $filename" }
     if (Get-ClaudeDesktopCodeExecutable (Join-Path $testRoot 'empty-roaming')) { throw 'Missing runtime was detected.' }
   }
 

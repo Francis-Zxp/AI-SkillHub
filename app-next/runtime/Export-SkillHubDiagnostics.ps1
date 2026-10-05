@@ -231,7 +231,7 @@ function Test-ClaudeCodePresent([string]$ConfigRoot) {
   $nativeBinary = Join-Path $script:HomePath '.local\bin\claude.exe'
   if (Test-Path -LiteralPath $nativeBinary -PathType Leaf) { return $true }
 
-  if (Get-ClaudeDesktopCodeExecutable $script:RoamingAppData) { return $true }
+  if (Get-ClaudeDesktopCodeExecutable $script:RoamingAppData $script:LocalAppDataPath) { return $true }
 
   foreach ($marker in @('settings.json', 'history.jsonl', 'projects', 'sessions', 'plugins', 'local')) {
     if (Test-Path -LiteralPath (Join-Path $ConfigRoot $marker)) { return $true }
@@ -239,7 +239,7 @@ function Test-ClaudeCodePresent([string]$ConfigRoot) {
   return $false
 }
 
-function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot) {
+function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot, [string]$LocalRoot = '') {
   if ([string]::IsNullOrWhiteSpace($RoamingRoot)) { return '' }
   $runtimeRoot = Join-Path $RoamingRoot 'Claude\claude-code'
   foreach ($version in @(Get-ChildItem -LiteralPath $runtimeRoot -Directory -ErrorAction SilentlyContinue | Select-Object -First 128)) {
@@ -251,6 +251,10 @@ function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot) {
       $binary = Join-Path $build.FullName 'claude.exe'
       if (Test-Path -LiteralPath $binary -PathType Leaf) { return $binary }
     }
+  }
+  if (-not [string]::IsNullOrWhiteSpace($LocalRoot)) {
+    # Store MSIX redirects Desktop's Roaming data into its package cache.
+    return Get-ClaudeDesktopCodeExecutable (Join-Path $LocalRoot 'Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming')
   }
   return ''
 }
@@ -470,7 +474,7 @@ $claudeDetectionKinds = @()
 if ($claudeDesktopDetected) { $claudeDetectionKinds += 'desktop-app' }
 if ($claudeCodeDetected) { $claudeDetectionKinds += 'claude-code' }
 if (-not $script:SimulateNoAgents -and -not $script:SimulateClaudeDesktopOnly -and
-    (Get-ClaudeDesktopCodeExecutable $RoamingAppData)) {
+    (Get-ClaudeDesktopCodeExecutable $RoamingAppData $LocalAppDataPath)) {
   $claudeDetectionKinds += 'desktop-code-runtime'
 }
 Add-AgentStatus 'claude' 'Claude Desktop / Claude Code' $claudeConfigRoot @((Join-Path $claudeConfigRoot 'skills')) 'claude' ($claudeDesktopDetected -or $claudeCodeDetected) $claudeCodeDetected $claudeDesktopDetected $claudeDetectionKinds

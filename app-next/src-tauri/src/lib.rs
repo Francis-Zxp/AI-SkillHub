@@ -2493,6 +2493,14 @@ fn claude_desktop_code_executable(roaming_root: &Path) -> Option<PathBuf> {
     None
 }
 
+fn claude_desktop_code_installation(roaming_root: &Path, local_root: &Path) -> Option<PathBuf> {
+    claude_desktop_code_executable(roaming_root).or_else(|| {
+        claude_desktop_code_executable(
+            &local_root.join("Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming"),
+        )
+    })
+}
+
 fn delivery_recipient_states(
     connection: &Connection,
 ) -> Result<Vec<AgentDeliveryRecipientState>, String> {
@@ -2510,9 +2518,12 @@ fn delivery_recipient_states(
     let roaming_root = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| home.join("AppData").join("Roaming"));
+    let claude_local_root = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join("AppData").join("Local"));
     let claude_detected = command_exists("claude")
         || home.join(".local").join("bin").join("claude.exe").is_file()
-        || claude_desktop_code_executable(&roaming_root).is_some()
+        || claude_desktop_code_installation(&roaming_root, &claude_local_root).is_some()
         || directory_has_any_marker(
             &claude_root,
             &[
@@ -19177,6 +19188,23 @@ mod tests {
                 .verdict,
             "ready"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn claude_store_code_runtime_is_detected_outside_virtual_roaming_path() {
+        let root = std::env::temp_dir().join(format!("skillhub-store-{}", uuid::Uuid::new_v4()));
+        let roaming = root.join("redirected-roaming");
+        let local = root.join("redirected-local");
+        let binary = local.join("Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude/claude-code/2.1.286/build/claude.exe");
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        assert!(claude_desktop_code_installation(&roaming, &local).is_none());
+        fs::write(&binary, "fixture only").unwrap();
+        assert_eq!(
+            claude_desktop_code_installation(&roaming, &local),
+            Some(binary)
+        );
+        assert!(!roaming.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

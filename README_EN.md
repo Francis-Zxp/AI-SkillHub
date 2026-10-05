@@ -45,6 +45,8 @@ A Windows desktop app for collecting Skills, keeping their sources up to date, a
 
 The interface is available in English, Chinese, and Korean. Theme, text size, icon size, animation, and power-saving controls let you adjust the workspace.
 
+**Claude Desktop**: initialize Code on local Windows, connect and sync Claude in AI SkillHub, then open a new local Code session and find the parent Skill with `/`. Chat/Cowork account Skills and Cloud/SSH/WSL use different locations. See the [3.2.16 guide](docs/release-notes/v3.2.16.md).
+
 ## Skills, Prompts, and MCP
 
 - **Skills** contain `SKILL.md` and describe capabilities an agent can load. Parent entries organize the child Skills belonging to the same source.

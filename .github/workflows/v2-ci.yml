@@ -52,6 +52,8 @@ jobs:
             ~/.cargo/git
             app-next/src-tauri/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('app-next/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: cargo check
         run: cargo check --manifest-path src-tauri/Cargo.toml --tests
@@ -84,6 +86,10 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-parent-router-powershell.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-codex-skill-delivery.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-claude-desktop-delivery.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-workbuddy-skill-delivery.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real Imbad0202 codeload recipient gate

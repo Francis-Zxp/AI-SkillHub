@@ -45,6 +45,8 @@ Skills를 모으고 원본 저장소를 업데이트하며 AI 도구에 연결�
 
 인터페이스는 영어, 중국어와 한국어를 지원합니다. 테마, 글자 및 아이콘 크기, 애니메이션과 절전 모드를 조절할 수 있습니다.
 
+**Claude Desktop**: Windows 로컬 Code를 먼저 초기화하고 AI SkillHub에서 Claude를 연결·동기화하세요. 새 로컬 Code 세션에서 `/`로 부모 Skill을 찾습니다. Chat/Cowork 계정 Skills 및 Cloud/SSH/WSL은 별도 경로를 사용합니다. [3.2.16 안내](docs/release-notes/v3.2.16.md)를 참고하세요.
+
 ## Skills, Prompts와 MCP
 
 - **Skills**는 `SKILL.md`를 포함하며 에이전트가 불러올 수 있는 기능을 설명합니다. 부모 진입점은 같은 소스의 하위 Skills를 정리합니다.
