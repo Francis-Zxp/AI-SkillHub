@@ -1,6 +1,6 @@
 [package]
 name = "ai-skillhub-next"
-version = "3.2.16"
+version = "3.2.17"
 description = "AI SkillHub desktop app"
 authors = ["FrancisZhu"]
 edition = "2021"
@@ -37,3 +37,7 @@ minisign-verify = "0.2"
 debug = 0
 incremental = false
 strip = "symbols"
+
+[patch.crates-io]
+# Preserve the validated dependency graph; see vendor PATCH.md for the Windows fix.
+tauri-plugin-updater = { path = "../vendor/tauri-plugin-updater" }

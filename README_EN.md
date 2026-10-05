@@ -1,6 +1,6 @@
 # AI SkillHub
 
-**Release status:** v3.2.16 is temporarily withdrawn because the Windows installer lacks a trusted publisher signature. The current stable release is v3.2.15.
+**Latest release:** v3.2.17 · Keep the app open when Windows cannot launch an update installer.
 
 [简体中文](README.md) · **English** · [한국어](README_KO.md)
 
@@ -47,7 +47,7 @@ A Windows desktop app for collecting Skills, keeping their sources up to date, a
 
 The interface is available in English, Chinese, and Korean. Theme, text size, icon size, animation, and power-saving controls let you adjust the workspace.
 
-**Claude Desktop**: initialize Code on local Windows, connect and sync Claude in AI SkillHub, then open a new local Code session and find the parent Skill with `/`. Chat/Cowork account Skills and Cloud/SSH/WSL use different locations. See the [3.2.16 guide](docs/release-notes/v3.2.16.md).
+**Claude Desktop**: initialize Code on local Windows, connect and sync Claude in AI SkillHub, then open a new local Code session and find the parent Skill with `/`. Chat/Cowork account Skills and Cloud/SSH/WSL use different locations. See the [3.2.17 guide](docs/release-notes/v3.2.17.md).
 
 ## Skills, Prompts, and MCP
 

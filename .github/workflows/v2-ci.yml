@@ -67,6 +67,9 @@ jobs:
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
+      - name: Windows updater failure lifecycle
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p tauri-plugin-updater --lib
+
       - name: MCP read-only integration contract
         run: cargo test --manifest-path src-tauri/Cargo.toml --test mcp_center_read_only
 

@@ -758,7 +758,7 @@ export function App() {
     }
     let downloaded = 0;
     let total = 0;
-    let installStage: UpdateFailureStage = "download";
+    const installStage: { current: UpdateFailureStage } = { current: "download" };
     setAppUpdate(current => ({ ...current, phase: "downloading", progress: 1 }));
     try {
       await nextUpdate.downloadAndInstall(event => {
@@ -770,14 +770,14 @@ export function App() {
           const progress = total > 0 ? Math.min(94, Math.max(2, Math.round((downloaded / total) * 94))) : 36;
           setAppUpdate(current => ({ ...current, phase: "downloading", progress }));
         } else {
-          installStage = "install";
+          installStage.current = "install";
           setAppUpdate(current => ({ ...current, phase: "installing", progress: 98 }));
         }
       }, { headers: UPDATE_CHECK_HEADERS, timeout: 600_000 });
       setAppUpdate(current => ({ ...current, phase: "installing", progress: 100 }));
       await relaunch();
     } catch (error) {
-      const stage = installStage;
+      const stage = installStage.current;
       const failure = classifyUpdateFailure(error, stage);
       const checkedAt = new Date().toISOString();
       persistUpdateDiagnostic({ kind: failure, stage, checkedAt, appVersion: APP_VERSION });
@@ -789,7 +789,7 @@ export function App() {
         failureStage: stage,
         checkedAt
       }));
-      toastMessage(t("update.errorToast"), "error");
+      toastMessage(t(stage === "install" ? "update.failure.install" : "update.errorToast"), "error");
     }
   }
 

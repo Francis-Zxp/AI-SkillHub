@@ -1,6 +1,6 @@
 # AI SkillHub
 
-**发布状态：** v3.2.16 因 Windows 安装包缺少受信任的发布者签名，已暂停公开下载和自动更新。当前正式版为 v3.2.15。
+**最新正式版：** v3.2.17 · 修复 Windows 更新安装失败后应用消失的问题。
 
 **简体中文** · [English](README_EN.md) · [한국어](README_KO.md)
 
@@ -47,7 +47,7 @@
 
 界面支持中文、英文和韩文。可调整主题、文字大小、图标大小、动画和省电模式。
 
-**Claude 桌面端**：先在 Code 中完成本机 Windows 环境的初始化，再到 AI SkillHub 连接并同步；新建本地 Code 会话后用 `/` 查找父 Skill。Chat/Cowork 的账户技能、Cloud/SSH/WSL 使用不同位置。详见 [3.2.16 使用说明](docs/release-notes/v3.2.16.md)。
+**Claude 桌面端**：先在 Code 中完成本机 Windows 环境的初始化，再到 AI SkillHub 连接并同步；新建本地 Code 会话后用 `/` 查找父 Skill。Chat/Cowork 的账户技能、Cloud/SSH/WSL 使用不同位置。详见 [3.2.17 使用说明](docs/release-notes/v3.2.17.md)。
 
 ## Skills、Prompts 与 MCP
 

@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "ai-skillhub-next"
-version = "3.2.16"
+version = "3.2.17"
 dependencies = [
  "base64 0.22.1",
  "minisign-verify",
@@ -3830,8 +3830,6 @@ dependencies = [
 [[package]]
 name = "tauri-plugin-updater"
 version = "2.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "806d9dac662c2e4594ff03c647a552f2c9bd544e7d0f683ec58f872f952ce4af"
 dependencies = [
  "base64 0.22.1",
  "dirs",

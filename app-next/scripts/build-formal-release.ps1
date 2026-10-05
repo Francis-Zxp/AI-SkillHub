@@ -7,6 +7,7 @@ param(
   [string]$ExistingInstallerPath = '',
   [string]$ExpectedInstallerSha256 = '',
   [switch]$AllowUnsignedLocalCandidate,
+  [switch]$AllowUnsignedPublicRelease,
   [switch]$PublishFallbackManifest
 )
 
@@ -177,6 +178,9 @@ if ($SkipBuild) {
 if ($AllowUnsignedLocalCandidate -and $PublishFallbackManifest) {
   throw 'An unsigned local candidate cannot publish the fallback updater manifest.'
 }
+if ($AllowUnsignedLocalCandidate -and $AllowUnsignedPublicRelease) {
+  throw 'Choose either a local candidate or an explicitly unsigned public release.'
+}
 
 if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $PasswordPath -PathType Leaf)) {
@@ -263,9 +267,12 @@ if ($SkipBuild) {
   throw "The signed v$Version installer was not freshly produced by this build: $($Installer.FullName)"
 }
 $InstallerSignature = Assert-SignedInstaller $Installer.FullName $Version
-if (-not $AllowUnsignedLocalCandidate) {
+if (-not $AllowUnsignedLocalCandidate -and -not $AllowUnsignedPublicRelease) {
   Assert-WindowsPublisherSignature $BuiltExe
   Assert-WindowsPublisherSignature $Installer.FullName
+}
+if ($AllowUnsignedPublicRelease) {
+  Write-Warning 'Public release explicitly authorized without Authenticode. Tauri signature verification remains mandatory; Windows Smart App Control may still block this build.'
 }
 
 $ReleaseInstaller = Join-Path $ReleaseRoot "AI-SkillHub-$Version-setup.exe"

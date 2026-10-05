@@ -101,6 +101,9 @@ try {
     throw "Release executable is $builtVersion; expected $Version. Run a formal build first."
   }
   Copy-FileRequired $BuiltAppPath (Join-Path $StagingRoot 'AI SkillHub.exe')
+  foreach ($notice in @('LICENSE_MIT', 'LICENSE_APACHE-2.0', 'PATCH.md')) {
+    Copy-FileRequired (Join-Path $V2Root "vendor\tauri-plugin-updater\$notice") (Join-Path $StagingRoot "licenses\tauri-plugin-updater\$notice")
+  }
   Copy-FileRequired $BuiltAppPath $DeveloperRootExe
   $developerVersion = ([string](Get-Item -LiteralPath $DeveloperRootExe).VersionInfo.ProductVersion -split '[+-]')[0]
   if ($developerVersion -ne $Version) {
