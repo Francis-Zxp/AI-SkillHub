@@ -1,11 +1,11 @@
 {
-    "version":  "3.2.16",
-    "notes":  "Claude Desktop and Microsoft Store local Code discovery; mixed-DPI fullscreen navigation; WorkBuddy code Skills.",
-    "pub_date":  "2026-10-05T13:39:17Z",
-    "platforms":  {
-                      "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVV4dm1jOW15OTA3ZDIrSk0xbHlPUlhTc2p2bG9mTnJhbGRyTXlNSnhRc3ozY0loVUxvTXA1VUdnNHNyRkUrTEZhN3ZkUGMwM3NUY08rVkJHUXdEUGc4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMjA3NTU1CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjE2X3g2NC1zZXR1cC5leGUKdWxwSDJrZ0NZR0FFMjdXSW5JU0ZaRXFPSGpzb2NHY09QWGd4dllBL2JtTFlWRlFCTko0RXdDYTdlSC9qRWE4d3o0UWtuK0tGblJwK29HajlmdkgyQnc9PQo=",
-                                             "url":  "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.16/AI-SkillHub-3.2.16-setup.exe"
-                                         }
-                  }
+  "version": "3.2.15",
+  "notes": "Stable dashboard update progress, source-type filters, per-source update results and clearer multilingual project guides.",
+  "pub_date": "2026-10-02T18:52:21Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcWRpRnRJeDBueitJa2FZamxjbEFNOEhwT1VvTHo2UHZWTHNudTBHODhhMXRYYmN1bW02MTZ4ZXA0MVF3bnNObmt6ejlLTEJJTytSUzlvaE1peDJJNVF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTY3MDA5CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjE1X3g2NC1zZXR1cC5leGUKb3hkZFRxTXFPL1FoT3ZGMlhSYmZDaDkyOEQzTlZoVEJHRFFSZjNDSzZEV3NUM2daT3Y0ZTcvK2kyZlJlUW9rcnJpQ0pFUjBTUUhIRjA4R2duUU1MQ0E9PQo=",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.15/AI-SkillHub-3.2.15-setup.exe"
+    }
+  }
 }

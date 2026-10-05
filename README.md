@@ -1,5 +1,7 @@
 # AI SkillHub
 
+**发布状态：** v3.2.16 因 Windows 安装包缺少受信任的发布者签名，已暂停公开下载和自动更新。当前正式版为 v3.2.15。
+
 **简体中文** · [English](README_EN.md) · [한국어](README_KO.md)
 
 ### 在一个地方，整理你的 AI Skills。

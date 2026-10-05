@@ -4,6 +4,8 @@ All notable changes to AI SkillHub are documented here.
 
 ## 3.2.16 - 2026-10-05 - Desktop compatibility and fullscreen navigation
 
+- 发布暂停：Windows 安装包缺少可信发布者签名，智能应用控制可能阻止安装；自动更新已回退到 3.2.15。
+
 - Keep desktop navigation vertical at narrow window sizes, including Settings and Safety, without an unwanted navigation scrollbar. Align Islands/Star map and fullscreen controls in immersive mode.
 - Refresh the island renderer when a window crosses displays with different scaling; allow windows down to 860 logical pixels wide.
 - Detect Claude Desktop's embedded local Code runtime, including Microsoft Store package caches, without requiring a separate global CLI installation.

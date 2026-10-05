@@ -1,5 +1,7 @@
 # AI SkillHub
 
+**Release status:** v3.2.16 is temporarily withdrawn because the Windows installer lacks a trusted publisher signature. The current stable release is v3.2.15.
+
 [简体中文](README.md) · **English** · [한국어](README_KO.md)
 
 ### Your AI Skills, organized in one place.

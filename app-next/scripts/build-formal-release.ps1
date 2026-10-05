@@ -6,6 +6,7 @@ param(
   [switch]$SkipBuild,
   [string]$ExistingInstallerPath = '',
   [string]$ExpectedInstallerSha256 = '',
+  [switch]$AllowUnsignedLocalCandidate,
   [switch]$PublishFallbackManifest
 )
 
@@ -76,6 +77,16 @@ function Assert-SignedInstaller([string]$Path, [string]$ExpectedVersion) {
     throw "The installer signature contains no signature text: $signaturePath"
   }
   return $signaturePath
+}
+
+function Assert-WindowsPublisherSignature([string]$Path) {
+  $signature = Get-AuthenticodeSignature -LiteralPath $Path
+  if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) {
+    throw "Windows publisher signature is not trusted for public distribution: $Path ($($signature.Status)). Tauri updater .sig is a different signature."
+  }
+  if ($signature.SignerCertificate.PublicKey.Oid.Value -ne '1.2.840.113549.1.1.1') {
+    throw "Smart App Control requires an RSA publisher certificate: $Path"
+  }
 }
 
 function Get-ReleaseRustFlags {
@@ -163,6 +174,9 @@ if ($SkipBuild) {
           -not [string]::IsNullOrWhiteSpace($ExpectedInstallerSha256)) {
   throw '-ExistingInstallerPath and -ExpectedInstallerSha256 are only valid together with -SkipBuild.'
 }
+if ($AllowUnsignedLocalCandidate -and $PublishFallbackManifest) {
+  throw 'An unsigned local candidate cannot publish the fallback updater manifest.'
+}
 
 if (-not (Test-Path -LiteralPath $KeyPath -PathType Leaf) -or
     -not (Test-Path -LiteralPath $PasswordPath -PathType Leaf)) {
@@ -249,6 +263,10 @@ if ($SkipBuild) {
   throw "The signed v$Version installer was not freshly produced by this build: $($Installer.FullName)"
 }
 $InstallerSignature = Assert-SignedInstaller $Installer.FullName $Version
+if (-not $AllowUnsignedLocalCandidate) {
+  Assert-WindowsPublisherSignature $BuiltExe
+  Assert-WindowsPublisherSignature $Installer.FullName
+}
 
 $ReleaseInstaller = Join-Path $ReleaseRoot "AI-SkillHub-$Version-setup.exe"
 $ReleaseSignature = $ReleaseInstaller + '.sig'
