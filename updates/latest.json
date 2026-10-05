@@ -1,11 +1,11 @@
 {
-  "version": "3.2.15",
-  "notes": "Stable dashboard update progress, source-type filters, per-source update results and clearer multilingual project guides.",
-  "pub_date": "2026-10-02T18:52:21Z",
+  "version": "3.2.17",
+  "notes": "修复 Windows 安装器启动失败后窗口消失的问题。保留 Tauri 更新包签名验证；Windows 发布者签名暂不可用，智能应用控制仍可能拦截安装。",
+  "pub_date": "2026-10-05T15:23:46Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcWRpRnRJeDBueitJa2FZamxjbEFNOEhwT1VvTHo2UHZWTHNudTBHODhhMXRYYmN1bW02MTZ4ZXA0MVF3bnNObmt6ejlLTEJJTytSUzlvaE1peDJJNVF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwOTY3MDA5CWZpbGU6QUkgU2tpbGxIdWJfMy4yLjE1X3g2NC1zZXR1cC5leGUKb3hkZFRxTXFPL1FoT3ZGMlhSYmZDaDkyOEQzTlZoVEJHRFFSZjNDSzZEV3NUM2daT3Y0ZTcvK2kyZlJlUW9rcnJpQ0pFUjBTUUhIRjA4R2duUU1MQ0E9PQo=",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.15/AI-SkillHub-3.2.15-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVVpUDE3Z3FpTzBVU2tYS1hyVnlORDRHV2ZtNjdzMWY0Y0xaeXNpb2VWSlY4MmpOUmhZejNKampSTzg2bTRsRjNiWWFCUTBnZEcrRHdka0JSa2pjS2dvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMjEzODIzCWZpbGU6QUkgU2tpbGxIdWJfMy4yLjE3X3g2NC1zZXR1cC5leGUKaU8zcXBpcENxRlZYdjg0N2ZKSGRZQThqczBYQ3VMTjRBeG54V3BCQzNRTUdUYlN4ZW1jRENiWmpHVzlGbkxFUG42U0UxaDhrTTNiZVgwd0x1UDFQQlE9PQo=",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.17/AI-SkillHub-3.2.17-setup.exe"
     }
   }
 }
