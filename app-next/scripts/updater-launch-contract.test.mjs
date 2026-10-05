@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-const read = p => fs.readFileSync(new URL(p, import.meta.url), "utf8");
+const read = p => fs.readFileSync(new URL(p, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 test("Windows install checks launch before cleanup and exit", () => {
   const source = read("../vendor/tauri-plugin-updater/src/updater.rs");

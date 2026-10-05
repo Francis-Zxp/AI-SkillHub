@@ -138,7 +138,10 @@ if ([string]::IsNullOrWhiteSpace($Version)) { $Version = Get-ConfiguredVersion }
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Release version must use x.y.z: $Version" }
 if ($PreviousVersion -notmatch '^\d+\.\d+\.\d+$') { throw "Previous release version must use x.y.z: $PreviousVersion" }
 if ([string]::IsNullOrWhiteSpace($ReleaseNotes)) {
-  $ReleaseNotes = "AI SkillHub v${Version}: signed stable update with preserved local user data."
+  $ReleaseNotes = "AI SkillHub v${Version}: Tauri-verified update package."
+  if ($AllowUnsignedPublicRelease) {
+    $ReleaseNotes += ' Windows publisher (Authenticode) signature is not available; Smart App Control may block installation.'
+  }
 }
 
 $packageVersion = [string](Get-Content -LiteralPath $PackagePath -Raw -Encoding UTF8 | ConvertFrom-Json).version
