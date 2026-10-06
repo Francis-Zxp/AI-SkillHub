@@ -2,14 +2,14 @@
 
 All notable changes to AI SkillHub are documented here.
 
-## 3.2.18 — Local validation candidate (2026-10-06)
+## 3.2.18 — Client discovery and Coze delivery (2026-10-06)
 
 - Detect WorkBuddy AI installations outside default folders and resolve the Skills profile from installed product metadata.
 - Probe every listed AI tool; retain desktop evidence when a CLI is absent, and distinguish discovery from automatic delivery.
 - Detect Coze desktop and automatically deliver real Skill entries to its default shared scan directory, preserving personal entries and existing registered paths. Explain the separate cloud Agent selection step required by `/`.
 - Require actual SkillHub-owned delivery evidence before labeling personal Skills as managed.
 - Read registered Codex desktop versions and inspect plugin manifests without traversing runtime dependencies.
-- Public release remains 3.2.17 until this candidate is published.
+- User confirmed Coze invocation after adding the discovered local Skill to a cloud Agent.
 
 ## 3.2.17 - 2026-10-06 - Recoverable Windows update failures
 

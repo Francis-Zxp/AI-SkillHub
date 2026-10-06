@@ -1,6 +1,6 @@
 # AI SkillHub
 
-**Latest release:** v3.2.17 · Keep the app open when Windows cannot launch an update installer.
+**Latest release:** v3.2.18 · Improved AI tool detection and automatic Coze default-directory delivery.
 
 [简体中文](README.md) · **English** · [한국어](README_KO.md)
 
