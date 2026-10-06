@@ -1,11 +1,11 @@
 {
-  "version": "3.2.17",
-  "notes": "修复 Windows 安装器启动失败后窗口消失的问题。保留 Tauri 更新包签名验证；Windows 发布者签名暂不可用，智能应用控制仍可能拦截安装。",
-  "pub_date": "2026-10-05T15:23:46Z",
+  "version": "3.2.18",
+  "notes": "修复 WorkBuddy AI 与其他工具识别；扣子默认目录自动投递，添加到云端 Agent 后可调用；修复 Codex 插件医生版本与扫描误报。",
+  "pub_date": "2026-10-06T08:16:25Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVVpUDE3Z3FpTzBVU2tYS1hyVnlORDRHV2ZtNjdzMWY0Y0xaeXNpb2VWSlY4MmpOUmhZejNKampSTzg2bTRsRjNiWWFCUTBnZEcrRHdka0JSa2pjS2dvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMjEzODIzCWZpbGU6QUkgU2tpbGxIdWJfMy4yLjE3X3g2NC1zZXR1cC5leGUKaU8zcXBpcENxRlZYdjg0N2ZKSGRZQThqczBYQ3VMTjRBeG54V3BCQzNRTUdUYlN4ZW1jRENiWmpHVzlGbkxFUG42U0UxaDhrTTNiZVgwd0x1UDFQQlE9PQo=",
-      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.17/AI-SkillHub-3.2.17-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUV1ZJUVZYMGlCcVNiR3hwTjczbUhqWDNaSGxtOHgxWGJZanBnd1EyUk9zVCtHb2xoZnhIL3kveUlHSDZZUks2cTk4VE8yNkdRY2hCc2V0bVZsQ0Z0cU9odTBFYW9aMlFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMjc0NTgzCWZpbGU6QUkgU2tpbGxIdWJfMy4yLjE4X3g2NC1zZXR1cC5leGUKUy9jcXRRRE5Db3RGWG5mWWx1ME1Ob0g4UE9abTFYdXpUYndtME56aXpjYU9vNHVnV0NFZ2VPZFZLRGNpNHVkNHJVSmg1QXdyaDRzcW1heUorcW1SREE9PQo=",
+      "url": "https://github.com/Francis-Zxp/AI-SkillHub/releases/download/v3.2.18/AI-SkillHub-3.2.18-setup.exe"
     }
   }
 }
