@@ -5897,6 +5897,7 @@ function Agents({
   const capabilities = snapshot?.adapterCapabilities ?? [];
   const safetyChecks = snapshot?.adapterSafetyChecks ?? [];
   const enabledSkillCount = snapshot?.skills.filter(skill => skill.enabled).length ?? 0;
+  const sharedSkillsDirectory = snapshot?.skillsDir ? `${snapshot.skillsDir}-catalog` : "";
   return (
     <div className="view agents-view">
       <section className="page-header glow-card">
@@ -5950,9 +5951,19 @@ function Agents({
               <strong>{adapter.name}</strong>
               <span className={`adapter-status ${adapter.status}`}>{adapterStatusLabel(adapter.status)}</span>
             </header>
-            <p>{adapter.skillsPathHint || t("agents.noPath")}</p>
+            <p>{adapter.id === "coze" ? t("agents.cozeDirectoryLabel") : adapter.skillsPathHint || t("agents.noPath")}</p>
             {adapter.id === "claude" && <p className="adapter-note">{t("agents.claudeSkillsNote")}</p>}
             {adapter.id === "workbuddy" && <p className="adapter-note">{t("agents.workbuddySkillsNote")}</p>}
+            {adapter.id === "coze" && (
+              <div className="adapter-note">
+                <p>{t("agents.cozeSkillsNote")}</p>
+                <p>{sharedSkillsDirectory}</p>
+                <button className="secondary-action" disabled={!runtimeAvailable || !sharedSkillsDirectory} onClick={() => void copyTextToClipboard(sharedSkillsDirectory, t("agents.cozeFolderCopied"))} type="button">
+                  <Icon name="copy" /> {t("agents.cozeCopyDirectory")}
+                </button>
+              </div>
+            )}
+            {!["claude", "codex", "antigravity", "workbuddy", "coze"].includes(adapter.id) && <p className="adapter-note">{t("agents.inventoryOnlyNote")}</p>}
             {doctor && (
               <div className={`adapter-doctor verdict-${doctor.verdict}`}>
                 <header>
@@ -6005,7 +6016,7 @@ function Agents({
               <span>{adapter.vendor}</span>
               <span>{adapter.detected ? t("agents.detectedFlag") : t("agents.notDetectedFlag")}</span>
               <span className={`readonly-badge ${adapter.managed ? "is-managed" : ""}`}>
-                {adapter.managed ? t("agents.managed") : adapter.detected ? t("agents.pendingSync") : t("agents.notDetectedFlag")}
+                {adapter.id === "coze" && adapter.detected ? t("agents.cozeManualSetup") : adapter.managed ? t("agents.managed") : adapter.detected ? t(["claude", "codex", "antigravity", "workbuddy"].includes(adapter.id) ? "agents.pendingSync" : "agents.inventoryOnly") : t("agents.notDetectedFlag")}
               </span>
             </footer>
           </article>

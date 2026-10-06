@@ -12,6 +12,8 @@ $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = $Utf8NoBom
 
 $AppRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $AppRoot 'AgentInstallDiscovery.ps1')
+$IsolatedHome = -not [string]::IsNullOrWhiteSpace($HomePath)
 $EffectiveHome = if (-not [string]::IsNullOrWhiteSpace($HomePath)) {
   [System.IO.Path]::GetFullPath($HomePath)
 } else {
@@ -116,10 +118,9 @@ function Remove-ReparsePointPath([string]$Path) {
 
 function Test-CodexCodePresent {
   if ($SimulateCodexPresent) { return $true }
-  $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
-  if ($null -ne $codexCommand) { return $true }
+  if (Get-AgentCliExecutable 'codex' -Isolated:$IsolatedHome) { return $true }
 
-  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+  $localAppData = if ($IsolatedHome) { Join-Path $EffectiveHome 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
   $bundledBinary = Join-Path $localAppData 'OpenAI\Codex\bin\codex.exe'
   if (Test-Path -LiteralPath $bundledBinary -PathType Leaf) { return $true }
 
@@ -133,6 +134,9 @@ function Test-CodexCodePresent {
 function Test-OpenAIDesktopPresent {
   if ($SimulateOpenAIDesktopPresent) { return $true }
   if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return $false }
+  $localAppData = if ($IsolatedHome) { Join-Path $EffectiveHome 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
+  if (Get-AgentDesktopExecutable $localAppData @('Codex', 'OpenAI Codex', 'ChatGPT', 'OpenAI ChatGPT') @('Codex.exe', 'ChatGPT.exe') @('Codex', 'ChatGPT', 'OpenAI\Codex', 'OpenAI\ChatGPT') -Isolated:$IsolatedHome) { return $true }
+  if ($IsolatedHome) { return $false }
 
   try {
     if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
@@ -156,24 +160,6 @@ function Test-OpenAIDesktopPresent {
   } catch {
   }
 
-  try {
-    $runningApp = Get-Process -Name 'ChatGPT', 'Codex' -ErrorAction SilentlyContinue |
-      Select-Object -First 1
-    if ($null -ne $runningApp) { return $true }
-  } catch {
-  }
-
-  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-  foreach ($candidate in @(
-    (Join-Path $localAppData 'Programs\ChatGPT\ChatGPT.exe'),
-    (Join-Path $localAppData 'OpenAI\ChatGPT\ChatGPT.exe'),
-    (Join-Path $localAppData 'Programs\Codex\Codex.exe'),
-    (Join-Path $localAppData 'OpenAI\Codex\Codex.exe'),
-    (Join-Path $env:ProgramFiles 'ChatGPT\ChatGPT.exe'),
-    (Join-Path $env:ProgramFiles 'Codex\Codex.exe')
-  )) {
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
-  }
   return $false
 }
 
@@ -249,8 +235,7 @@ function Get-ClaudeConfigRoot {
 
 function Test-ClaudeCodePresent {
   if ($SimulateClaudePresent) { return $true }
-  $claudeCommand = Get-Command claude -ErrorAction SilentlyContinue
-  if ($null -ne $claudeCommand) { return $true }
+  if (Get-AgentCliExecutable 'claude' -Isolated:$IsolatedHome) { return $true }
 
   $nativeBinary = Join-Path $EffectiveHome '.local\bin\claude.exe'
   if (Test-Path -LiteralPath $nativeBinary -PathType Leaf) { return $true }
@@ -290,28 +275,15 @@ function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot, [string]$LocalRoo
 }
 
 function Test-AntigravityPresent {
-  $antigravityCommand = Get-Command antigravity -ErrorAction SilentlyContinue
-  if ($null -ne $antigravityCommand) { return $true }
-
-  $antigravityHome = Join-Path $EffectiveHome '.gemini\antigravity'
-  if (Test-Path -LiteralPath $antigravityHome -PathType Container) { return $true }
-  $legacyAntigravityHome = Join-Path $EffectiveHome '.antigravity'
-  if (Test-Path -LiteralPath $legacyAntigravityHome -PathType Container) { return $true }
-  return $false
+  if (Get-AgentCliExecutable 'antigravity' -Isolated:$IsolatedHome) { return $true }
+  $localData = if ($IsolatedHome) { Join-Path $EffectiveHome 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
+  return [bool](Get-AgentDesktopExecutable $localData @('Antigravity', 'Antigravity (User)') @('Antigravity.exe') @('Antigravity') -Isolated:$IsolatedHome)
 }
 
 function Test-WorkBuddyPresent {
-  if ($null -ne (Get-Command workbuddy -ErrorAction SilentlyContinue)) { return $true }
-  $localData = if ($HomePath) { Join-Path $EffectiveHome 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
-  $candidates = @(
-    (Join-Path $localData 'Programs\WorkBuddy\WorkBuddy.exe'),
-    (Join-Path $localData 'WorkBuddy\WorkBuddy.exe')
-  )
-  if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) { $candidates += Join-Path $env:ProgramFiles 'WorkBuddy\WorkBuddy.exe' }
-  foreach ($candidate in $candidates) {
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
-  }
-  return $false
+  $localData = if ($IsolatedHome) { Join-Path $EffectiveHome 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
+  $script:WorkBuddyExecutable = Get-WorkBuddyExecutable $localData -Isolated:$IsolatedHome
+  return -not [string]::IsNullOrWhiteSpace($script:WorkBuddyExecutable)
 }
 
 $allSkillDirsWithManifest = @(Get-ChildItem -LiteralPath $Shared -Force -Directory |
@@ -475,7 +447,7 @@ $codexPresent = $codexCodePresent -or $openAIDesktopPresent
 $recipientFailures = [System.Collections.Generic.List[string]]::new()
 
 if ($workbuddyPresent) {
-  $workbuddyPath = Join-Path $EffectiveHome '.codebuddy\skills'
+  $workbuddyPath = Join-Path (Get-WorkBuddyConfigRoot $EffectiveHome $WorkBuddyExecutable -Isolated:$IsolatedHome) 'skills'
   try {
     $workbuddyCount = Sync-ManagedSkillDirectory $workbuddyPath
     $workbuddyStatus = "$workbuddyCount verified parent-first links"

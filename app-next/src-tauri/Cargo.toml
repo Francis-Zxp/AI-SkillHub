@@ -1,6 +1,6 @@
 [package]
 name = "ai-skillhub-next"
-version = "3.2.17"
+version = "3.2.18"
 description = "AI SkillHub desktop app"
 authors = ["FrancisZhu"]
 edition = "2021"
@@ -28,7 +28,8 @@ ureq = { version = "2", features = ["json"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem"] }
+winreg = "0.55"
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
 
 [dev-dependencies]
 minisign-verify = "0.2"

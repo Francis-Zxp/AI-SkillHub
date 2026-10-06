@@ -1,10 +1,10 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
   [string]$InstallerPath,
   [string]$PreviousInstallerPath = '',
-  [string]$ExpectedVersion = '3.2.17',
-  [string]$PreviousExpectedVersion = '3.2.4',
+  [string]$ExpectedVersion = '3.2.18',
+  [string]$PreviousExpectedVersion = '3.2.17',
   [ValidateRange(10, 1800)]
   [int]$InstallerTimeoutSeconds = 300,
   [ValidateRange(5, 300)]
@@ -443,6 +443,14 @@ INSERT OR REPLACE INTO source_overrides (
     -Label 'In-place NSIS reinstall' `
     -TimeoutSeconds $InstallerTimeoutSeconds
   if ($secondExit -ne 0) { throw "In-place NSIS reinstall failed: $secondExit" }
+
+  $runtimeFiles += 'app-next\runtime\AgentInstallDiscovery.ps1'
+  $missingRuntime = @($runtimeFiles | Where-Object {
+    -not (Test-Path -LiteralPath (Join-Path $InstallRoot $_) -PathType Leaf)
+  })
+  if ($missingRuntime.Count -gt 0) {
+    throw "Upgraded runtime resources missing: $($missingRuntime -join ', ')"
+  }
 
   $sentinelPreserved =
     (Test-Path -LiteralPath $sentinel -PathType Leaf) -and

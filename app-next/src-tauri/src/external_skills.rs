@@ -92,10 +92,16 @@ fn roots(home: &Path, project: Option<&Path>) -> Result<Vec<ScanRoot>, String> {
         home.join(".codex/skills"),
     ));
     result.push(root(
-        "workbuddy-legacy",
-        "WorkBuddy（兼容目录）",
+        "codebuddy",
+        "CodeBuddy",
         "global",
-        home.join(".workbuddy/skills"),
+        home.join(".codebuddy/skills"),
+    ));
+    result.push(root(
+        "workbuddy-ai",
+        "WorkBuddy AI",
+        "global",
+        home.join(".workbuddy-ai/skills"),
     ));
     if let Some(codex_home) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
         if codex_home.is_absolute() && codex_home != home.join(".codex") {
@@ -116,16 +122,8 @@ fn roots(home: &Path, project: Option<&Path>) -> Result<Vec<ScanRoot>, String> {
         for (id, name, relative) in [
             ("agents", "共享 Agent Skills", ".agents/skills"),
             ("claude", "Claude Code", ".claude/skills"),
-            (
-                "workbuddy-legacy",
-                "WorkBuddy（兼容目录）",
-                ".workbuddy/skills",
-            ),
-            (
-                "workbuddy-code",
-                "WorkBuddy / CodeBuddy",
-                ".codebuddy/skills",
-            ),
+            ("workbuddy", "WorkBuddy", ".workbuddy/skills"),
+            ("codebuddy", "CodeBuddy", ".codebuddy/skills"),
             ("cursor", "Cursor", ".cursor/skills"),
             ("github-copilot", "GitHub Copilot", ".github/skills"),
             ("gemini-cli", "Gemini CLI", ".gemini/skills"),
@@ -159,7 +157,20 @@ pub(crate) fn scan(
     .into_iter()
     .filter_map(|path| path.canonicalize().ok())
     .collect::<Vec<_>>();
-    Ok(scan_roots(roots(home, project)?, &managed))
+    let mut scan_roots_list = roots(home, project)?;
+    let current_workbuddy = crate::client_installation::workbuddy_skills_root(home);
+    if !scan_roots_list
+        .iter()
+        .any(|root| root.path == current_workbuddy)
+    {
+        scan_roots_list.push(root(
+            "workbuddy-custom",
+            "WorkBuddy（自定义目录）",
+            "global",
+            current_workbuddy,
+        ));
+    }
+    Ok(scan_roots(scan_roots_list, &managed))
 }
 
 fn scan_roots(roots: Vec<ScanRoot>, managed_roots: &[PathBuf]) -> ExternalAgentSkillInventory {
@@ -447,10 +458,11 @@ mod tests {
         let fixture = Fixture::new();
         fixture.skill("home/.codebuddy/skills/review");
         fixture.skill("home/.workbuddy/skills/legacy");
+        fixture.skill("home/.workbuddy-ai/skills/current");
         fixture.skill("project/.codebuddy/skills/review");
         let found = roots(&fixture.0.join("home"), Some(&fixture.0.join("project"))).unwrap();
         let report = scan_roots(found, &[]);
-        assert_eq!(report.skills.len(), 3);
+        assert_eq!(report.skills.len(), 4);
         assert!(report
             .skills
             .iter()
@@ -458,11 +470,11 @@ mod tests {
         assert!(report
             .skills
             .iter()
-            .any(|skill| skill.agent_id == "workbuddy-code"));
+            .any(|skill| skill.agent_id == "codebuddy"));
         assert!(report
             .skills
             .iter()
-            .any(|skill| skill.agent_id == "workbuddy-legacy"));
+            .any(|skill| skill.agent_id == "workbuddy-ai"));
         assert!(!fixture.0.join("home/.claude").exists());
     }
 

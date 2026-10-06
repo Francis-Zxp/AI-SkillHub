@@ -24,7 +24,7 @@ foreach ($directory in $directories) { New-Item -ItemType Directory -Path $direc
 $originalExe = $exe
 $exe = Join-Path $qaRoot 'AI SkillHub.exe'
 Copy-Item -LiteralPath $originalExe -Destination $exe
-foreach ($file in @('SkillHub.ps1','Manage-AgentSkillLinks.ps1','Export-SkillHubDiagnostics.ps1','skillhub.config.example.json')) {
+foreach ($file in @('AgentInstallDiscovery.ps1', 'SkillHub.ps1','Manage-AgentSkillLinks.ps1','Export-SkillHubDiagnostics.ps1','skillhub.config.example.json')) {
   Copy-Item -LiteralPath (Join-Path $appNext "runtime\$file") -Destination (Join-Path $runtime $file)
 }
 $utf8 = [Text.UTF8Encoding]::new($false)

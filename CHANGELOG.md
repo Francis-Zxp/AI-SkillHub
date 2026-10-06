@@ -2,6 +2,15 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.2.18 — Local validation candidate (2026-10-06)
+
+- Detect WorkBuddy AI installations outside default folders and resolve the Skills profile from installed product metadata.
+- Probe every listed AI tool; retain desktop evidence when a CLI is absent, and distinguish discovery from automatic delivery.
+- Detect Coze desktop and generate a real-folder compatibility catalog for scanners that skip directory links.
+- Require actual SkillHub-owned delivery evidence before labeling personal Skills as managed.
+- Read registered Codex desktop versions and inspect plugin manifests without traversing runtime dependencies.
+- Public release remains 3.2.17 until this candidate is published.
+
 ## 3.2.17 - 2026-10-06 - Recoverable Windows update failures
 
 - Keep windows and app resources intact if Windows rejects the update installer launch; exit only after a successful launch.

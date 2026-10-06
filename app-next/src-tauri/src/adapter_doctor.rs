@@ -158,20 +158,35 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
         .any(|probe| probe.exists && probe.is_directory);
     let path_refresh_needed =
         !cli_on_path && (cli_executable_exists || cli_package_installed) && code_installed;
-    let desktop_supports_local_skills = (matches!(adapter_id.as_str(), "codex" | "workbuddy")
-        && desktop_installed)
-        || embedded_code_installed;
+    let desktop_supports_local_skills =
+        (matches!(adapter_id.as_str(), "codex" | "workbuddy" | "antigravity") && desktop_installed)
+            || embedded_code_installed;
 
-    let (verdict, summary, safe_fix_available) = if skills_directory_usable
-        && (cli_on_path || desktop_supports_local_skills)
-    {
+    let (verdict, summary, safe_fix_available) = if adapter_id == "coze" {
+        if desktop_installed {
+            (
+                VERDICT_DESKTOP_ONLY,
+                "已检测到扣子桌面端；需在扣子中确认目录授权与技能添加，当前未验证技能加载。无需安装 CLI。".to_string(),
+                false,
+            )
+        } else {
+            (
+                VERDICT_NOT_DETECTED,
+                "未检测到扣子桌面端的可靠安装证据；不会创建目录或改写扣子设置。".to_string(),
+                false,
+            )
+        }
+    } else if skills_directory_usable && (cli_on_path || desktop_supports_local_skills) {
         (
             VERDICT_READY,
             if embedded_code_installed {
                 "Claude 桌面 Code 本地运行时与 Skills 目录已确认；无需单独安装全局 CLI。"
                     .to_string()
             } else if adapter_id == "workbuddy" {
-                "WorkBuddy 与用户级 Skills 目录已确认；请在代码开发会话中刷新技能列表。".to_string()
+                "WorkBuddy 与当前安装对应的 Skills 目录已确认；同步后重新打开 WorkBuddy 技能列表。"
+                    .to_string()
+            } else if adapter_id == "antigravity" {
+                "Antigravity 与本地 Skills 目录已确认；无需单独安装 CLI。".to_string()
             } else if desktop_supports_local_skills {
                 format!(
                     "{} 与官方用户级 .agents/skills 目录均已确认。",
@@ -212,20 +227,42 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
             desktop_only_summary(&adapter_id, desktop_running),
             false,
         )
+    } else if desktop_installed {
+        (
+            VERDICT_CODE_DETECTED,
+            if matches!(adapter_id.as_str(), "cursor" | "windsurf") {
+                format!(
+                    "已检测到 {} 桌面应用{}；当前适配器仅检查本机 Skills，尚不自动投递。",
+                    display_name(input),
+                    if skills_directory_usable {
+                        "与 Skills 目录"
+                    } else {
+                        "，Skills 目录尚未确认"
+                    }
+                )
+            } else if desktop_supports_local_skills {
+                format!(
+                    "已检测到 {} 桌面应用；同步后准备本地 Skills 目录，无需另装 CLI。",
+                    display_name(input)
+                )
+            } else {
+                format!(
+                    "已检测到 {} 应用{}；本地 Skills 能力仍需确认。",
+                    display_name(input),
+                    if skills_directory_usable {
+                        "与 Skills 目录"
+                    } else {
+                        ""
+                    }
+                )
+            },
+            false,
+        )
     } else if skills_directory_exists {
         (
             VERDICT_DIRECTORY_RESIDUE,
             format!(
                 "只发现 {} 的 Skills 路径，未发现对应应用或 CLI；该目录可能是历史残留，不能作为已安装证据。",
-                display_name(input)
-            ),
-            false,
-        )
-    } else if desktop_installed {
-        (
-            VERDICT_CODE_DETECTED,
-            format!(
-                "已检测到 {} 应用，但还需要验证其 Skills 能力与目录。",
                 display_name(input)
             ),
             false,
@@ -248,7 +285,9 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
     } else {
         "not-detected"
     };
-    let cli_status = if cli_on_path {
+    let cli_status = if adapter_id == "coze" {
+        "not-required"
+    } else if cli_on_path {
         "on-path"
     } else if path_refresh_needed {
         "path-refresh-needed"
@@ -257,7 +296,13 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
     } else {
         "not-detected"
     };
-    let skills_status = if skills_directory_usable {
+    let skills_status = if adapter_id == "coze" {
+        if desktop_installed {
+            "manual-directory"
+        } else {
+            "missing"
+        }
+    } else if skills_directory_usable {
         if cli_on_path || desktop_supports_local_skills {
             "ready"
         } else {
@@ -380,6 +425,11 @@ fn next_steps(
                 .to_string(),
         ],
         VERDICT_DESKTOP_ONLY => match input.adapter_id.trim().to_ascii_lowercase().as_str() {
+            "coze" => vec![
+                "在扣子桌面端设置中开启“允许 Coze 访问本地文件”。".to_string(),
+                "打开“本机技能扫描 → 管理目录”，添加 AI SkillHub 当前启用的 Skills 目录；本工具不会代改扣子设置。".to_string(),
+                "在扣子对话中选择“+ → 技能 → 从个人设备添加技能”，勾选需要的技能；保持扣子桌面端与个人设备在线。".to_string(),
+            ],
             "codex" => vec![
                 "点击同步，将受管理 Skill 写入 ~/.agents/skills；不要创建假的 ~/.codex 目录。"
                     .to_string(),
@@ -395,6 +445,15 @@ fn next_steps(
             _ => vec!["确认该桌面产品是否公开支持本地 Skills，再决定是否接管。".to_string()],
         },
         VERDICT_CODE_DETECTED => {
+            if matches!(input.adapter_id.as_str(), "cursor" | "windsurf") {
+                return vec!["在本机 Skills 中查看已发现的内容；当前适配器不自动投递，请按客户端官方说明添加技能。".to_string()];
+            }
+            if matches!(input.adapter_id.as_str(), "workbuddy" | "antigravity") {
+                return vec![
+                    "点击同步以准备本地 Skills；同步后在桌面应用中重新打开技能列表，无需另装 CLI。"
+                        .to_string(),
+                ];
+            }
             if input.adapter_id == "claude"
                 && input
                     .apps
@@ -408,7 +467,9 @@ fn next_steps(
                     .to_string(),
             ];
             if desktop_running {
-                steps.push("桌面应用运行状态仅作为辅助证据，不替代 CLI 能力检查。".to_string());
+                steps.push(
+                    "应用运行状态不代表 Skills 已成功加载，请在客户端中确认技能列表。".to_string(),
+                );
             }
             steps
         }
@@ -858,5 +919,123 @@ mod tests {
         input.apps[0].role = "desktop-app".to_string();
         input.apps[0].product_id = "claude-desktop".to_string();
         assert_eq!(diagnose_adapter(&input).verdict, VERDICT_DESKTOP_ONLY);
+    }
+
+    #[test]
+    fn desktop_inventory_with_directory_is_not_mislabeled_as_residue() {
+        for id in ["cursor", "windsurf"] {
+            let input = AdapterDoctorInput {
+                adapter_id: id.to_string(),
+                apps: vec![AppProbeEvidence {
+                    role: "desktop-app".to_string(),
+                    installed: true,
+                    running: true,
+                    ..AppProbeEvidence::default()
+                }],
+                paths: vec![PathProbeEvidence {
+                    purpose: "skills-directory".to_string(),
+                    exists: true,
+                    is_directory: true,
+                    contains_skill_md: true,
+                    ..PathProbeEvidence::default()
+                }],
+                ..AdapterDoctorInput::default()
+            };
+            let card = diagnose_adapter(&input);
+            assert_eq!(card.verdict, VERDICT_CODE_DETECTED);
+            assert_eq!(card.desktop_status, "running");
+            assert_eq!(card.cli_status, "not-detected");
+            assert_eq!(card.skills_status, "directory-only");
+            assert!(card.summary.contains("桌面应用与 Skills 目录"));
+            assert!(card.summary.contains("尚不自动投递"));
+            assert!(!card.summary.contains("历史残留"));
+            assert!(!card.next_steps.iter().any(|step| step.contains("CLI")));
+            assert!(!card.safe_fix_available);
+        }
+    }
+
+    #[test]
+    fn antigravity_desktop_supports_delivery_without_cli() {
+        let mut input = AdapterDoctorInput {
+            adapter_id: "antigravity".to_string(),
+            adapter_name: "Antigravity".to_string(),
+            apps: vec![AppProbeEvidence {
+                role: "desktop-app".to_string(),
+                installed: true,
+                ..AppProbeEvidence::default()
+            }],
+            ..AdapterDoctorInput::default()
+        };
+        let card = diagnose_adapter(&input);
+        assert_eq!(card.verdict, VERDICT_CODE_DETECTED);
+        assert!(card.summary.contains("无需另装 CLI"));
+        input.paths.push(PathProbeEvidence {
+            purpose: "skills-directory".to_string(),
+            exists: true,
+            is_directory: true,
+            contains_skill_md: true,
+            ..PathProbeEvidence::default()
+        });
+        let card = diagnose_adapter(&input);
+        assert_eq!(card.verdict, VERDICT_READY);
+        assert_eq!(card.skills_status, "ready");
+        assert_eq!(card.cli_status, "not-detected");
+        assert!(card.summary.contains("Antigravity"));
+        assert!(!card.summary.contains(".agents/skills"));
+        assert!(!card.safe_fix_available);
+    }
+
+    #[test]
+    fn coze_desktop_requires_directory_authorization_not_cli_or_auto_repair() {
+        let mut input = AdapterDoctorInput {
+            adapter_id: "coze".to_string(),
+            adapter_name: "扣子桌面端".to_string(),
+            detection_kind: "manual-directory".to_string(),
+            apps: vec![AppProbeEvidence {
+                role: "desktop-app".to_string(),
+                installed: true,
+                ..AppProbeEvidence::default()
+            }],
+            ..AdapterDoctorInput::default()
+        };
+        let card = diagnose_adapter(&input);
+        assert_eq!(card.verdict, VERDICT_DESKTOP_ONLY);
+        assert_eq!(card.desktop_status, "installed");
+        assert_eq!(card.cli_status, "not-required");
+        assert_eq!(card.skills_status, "manual-directory");
+        assert!(!card.safe_fix_available);
+        assert!(card
+            .next_steps
+            .iter()
+            .any(|step| step.contains("允许 Coze 访问本地文件")));
+        assert!(card.next_steps.iter().any(|step| step.contains("管理目录")));
+        assert!(card
+            .next_steps
+            .iter()
+            .any(|step| step.contains("从个人设备添加技能")));
+
+        // A SkillHub directory and even a similarly named CLI are not evidence
+        // of the desktop user's file-access consent or Coze skill selection.
+        input.paths.push(PathProbeEvidence {
+            purpose: "skills-directory".to_string(),
+            exists: true,
+            is_directory: true,
+            contains_skill_md: true,
+            ..PathProbeEvidence::default()
+        });
+        input.commands.push(CommandProbeEvidence {
+            command: "coze".to_string(),
+            found_on_path: true,
+            ..CommandProbeEvidence::default()
+        });
+        let card = diagnose_adapter(&input);
+        assert_eq!(card.verdict, VERDICT_DESKTOP_ONLY);
+        assert_eq!(card.skills_status, "manual-directory");
+        assert!(!card.safe_fix_available);
+        input.apps.clear();
+        let card = diagnose_adapter(&input);
+        assert_eq!(card.verdict, VERDICT_NOT_DETECTED);
+        assert_eq!(card.skills_status, "missing");
+        assert_eq!(card.cli_status, "not-required");
     }
 }

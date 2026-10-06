@@ -1,4 +1,5 @@
 mod adapter_doctor;
+mod client_installation;
 mod codex_plugin_doctor;
 mod external_skills;
 mod identity_migration;
@@ -12,6 +13,7 @@ mod migration_v4;
 mod prompt_launcher;
 mod prompt_library;
 mod security_scan;
+mod shared_skill_catalog;
 mod source_governance;
 mod source_identity;
 mod sparse_scope;
@@ -1977,11 +1979,11 @@ fn refresh_agent_detection_blocking() -> Result<LegacySnapshot, String> {
     let _write_guard = acquire_background_write_guard("AI 工具检测刷新")?;
     let root = resolve_legacy_root()?;
 
+    run_diagnostics_export_script(&root)?;
+
     if !database_file(&root).exists() {
         return scan_legacy_snapshot_under_write_guard();
     }
-
-    run_diagnostics_export_script(&root)?;
 
     let diagnostics_json = read_json(&diagnostics_file(&root));
     let mut connection = open_index_database(&root)?;
@@ -2105,6 +2107,9 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<(), Str
         .arg(&script)
         .arg("-Quiet");
     configure_user_data_command(&mut command, root);
+    if std::env::var_os("AI_SKILLHUB_QA_ROOT").is_some() {
+        command.arg("-HomePath").arg(delivery_home_dir());
+    }
     if database_file(root).exists() {
         let allowlist = write_agent_skill_allowlist(root, connection)?;
         command.env("AI_SKILLHUB_AGENT_SKILL_ALLOWLIST", allowlist);
@@ -2131,7 +2136,26 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<(), Str
         return Err(format!("AI 工具链接同步失败：{detail}"));
     }
 
-    Ok(())
+    shared_skill_catalog::sync(
+        &shared_skill_catalog_root(root),
+        &shared_skill_catalog_entries(root, &expected_agent_skill_allowlist(root, connection)?),
+    )
+}
+
+fn shared_skill_catalog_root(root: &Path) -> PathBuf {
+    PathBuf::from(format!("{}-catalog", active_skills_dir(root).display()))
+}
+
+fn shared_skill_catalog_entries(root: &Path, names: &[String]) -> Vec<(String, PathBuf)> {
+    names
+        .iter()
+        .map(|name| {
+            (
+                name.clone(),
+                active_skills_dir(root).join(name).join("SKILL.md"),
+            )
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -2538,9 +2562,8 @@ fn delivery_recipient_states(
 
     let antigravity_root = home.join(".gemini").join("antigravity");
     let antigravity_target = antigravity_root.join("skills");
-    let mut antigravity_detected = command_exists("antigravity")
-        || antigravity_root.is_dir()
-        || home.join(".antigravity").is_dir();
+    let mut antigravity_detected =
+        command_exists("antigravity") || client_installation::antigravity_executable().is_some();
 
     let codex_home = home.join(".codex");
     let local_app_data = std::env::var_os("LOCALAPPDATA")
@@ -2550,7 +2573,7 @@ fn delivery_recipient_states(
         .map(PathBuf::from)
         .unwrap_or_default();
     let workbuddy_detected =
-        command_exists("workbuddy") || workbuddy_install_present(&local_app_data, &program_files);
+        command_exists("workbuddy") || client_installation::workbuddy_executable().is_some();
     let codex_target = home.join(".agents").join("skills");
     let mut codex_detected = command_exists("codex")
         || directory_has_any_marker(
@@ -2630,7 +2653,7 @@ fn delivery_recipient_states(
     Ok(vec![
         AgentDeliveryRecipientState {
             id: "workbuddy",
-            path: home.join(".codebuddy").join("skills"),
+            path: client_installation::workbuddy_skills_root(&home),
             detected: workbuddy_detected,
         },
         AgentDeliveryRecipientState {
@@ -2654,19 +2677,6 @@ fn delivery_recipient_states(
             path: legacy_codex,
         },
     ])
-}
-
-fn workbuddy_install_present(local_app_data: &Path, program_files: &Path) -> bool {
-    [
-        local_app_data
-            .join("Programs")
-            .join("WorkBuddy")
-            .join("WorkBuddy.exe"),
-        local_app_data.join("WorkBuddy").join("WorkBuddy.exe"),
-        program_files.join("WorkBuddy").join("WorkBuddy.exe"),
-    ]
-    .iter()
-    .any(|binary| binary.is_absolute() && binary.is_file())
 }
 
 fn build_agent_delivery_plan(
@@ -3124,7 +3134,14 @@ fn agent_delivery_links_are_healthy_for_plan(
         .filter(|recipient| recipient.detected)
         .map(|recipient| recipient.path.clone())
         .collect::<Vec<_>>();
-    agent_delivery_links_are_healthy_for_entries_and_recipients(root, &plan.allowlist, &recipients)
+    Ok(agent_delivery_links_are_healthy_for_entries_and_recipients(
+        root,
+        &plan.allowlist,
+        &recipients,
+    )? && shared_skill_catalog::verify(
+        &shared_skill_catalog_root(root),
+        &shared_skill_catalog_entries(root, &plan.allowlist),
+    ))
 }
 
 fn agent_delivery_is_current(root: &Path, connection: &Connection) -> Result<bool, String> {
@@ -3153,6 +3170,9 @@ fn run_diagnostics_export_script(root: &Path) -> Result<(), String> {
         .arg(&script)
         .arg("-Quiet");
     configure_user_data_command(&mut command, root);
+    if std::env::var_os("AI_SKILLHUB_QA_ROOT").is_some() {
+        command.arg("-HomePath").arg(delivery_home_dir());
+    }
     let output = command_output_with_timeout(
         &mut command,
         Duration::from_secs(90),
@@ -13932,7 +13952,7 @@ fn read_indexed_agents(connection: &Connection) -> Result<Vec<AgentCard>, String
 
     let rows = statement
         .query_map([], |row| {
-            let mut agent = AgentCard {
+            let agent = AgentCard {
                 id: row.get(0)?,
                 name: row.get(1)?,
                 path: row.get(2)?,
@@ -13941,20 +13961,11 @@ fn read_indexed_agents(connection: &Connection) -> Result<Vec<AgentCard>, String
                 enabled: row.get::<_, i64>(5)? != 0,
                 skill_count: 0,
             };
-            normalize_directory_only_agent_detection(&mut agent);
             Ok(agent)
         })
         .map_err(|error| format!("Cannot read indexed agents: {}", error))?;
 
     collect_rows(rows, "agent")
-}
-
-fn normalize_directory_only_agent_detection(agent: &mut AgentCard) {
-    if agent.id == "antigravity" && !command_exists("antigravity") {
-        agent.detected = false;
-        agent.managed = false;
-        agent.enabled = false;
-    }
 }
 
 fn command_exists(command: &str) -> bool {
@@ -15448,10 +15459,11 @@ fn derive_agent_doctors(
                 "claude" => "claude",
                 "codex" => "codex",
                 "antigravity" => "antigravity",
-                "gemini" => "gemini",
+                "gemini-cli" => "gemini",
                 "cursor" => "cursor",
                 "windsurf" => "windsurf",
-                "copilot" => "copilot",
+                "github-copilot" => "copilot",
+                "kiro" => "kiro-cli",
                 "aider" => "aider",
                 "opencode" => "opencode",
                 "cline" => "cline",
@@ -15734,6 +15746,15 @@ fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSaf
     let mut checks = Vec::new();
 
     for adapter in adapters {
+        if adapter.id == "coze" {
+            checks.push(adapter_safety_check(
+                adapter,
+                "manual-directory",
+                "info",
+                "在扣子中授权并添加技能目录；AI SkillHub 不修改扣子的访问权限或云端技能列表。",
+            ));
+            continue;
+        }
         checks.push(adapter_safety_check(
             adapter,
             "detection",
@@ -15808,6 +15829,9 @@ fn derive_adapter_capabilities(adapters: &[AgentAdapterCard]) -> Vec<AdapterCapa
     let mut capabilities = Vec::new();
 
     for adapter in adapters {
+        if adapter.id == "coze" {
+            continue;
+        }
         let has_path = !adapter.skills_path_hint.is_empty();
         let project_scope = matches!(
             adapter.id.as_str(),
@@ -15870,6 +15894,9 @@ fn derive_adapter_capabilities(adapters: &[AgentAdapterCard]) -> Vec<AdapterCapa
 fn derive_backup_targets(root: &Path, adapters: &[AgentAdapterCard]) -> Vec<BackupTargetCard> {
     adapters
         .iter()
+        // Coze uses an explicitly authorized directory chosen in its own UI.
+        // SkillHub does not manage or back up a Coze configuration directory.
+        .filter(|adapter| adapter.id != "coze")
         .map(|adapter| {
             let has_target = !adapter.skills_path_hint.trim().is_empty();
             let backup_path = private_state_dir(root)
@@ -16084,9 +16111,10 @@ fn agent_adapter_catalog() -> Vec<AgentAdapterCard> {
             "workbuddy",
             "WorkBuddy",
             "Tencent",
-            "~\\.codebuddy\\skills",
+            "~\\.workbuddy\\skills",
             "global",
         ),
+        agent_adapter("coze", "Coze / 扣子", "ByteDance", "", "manual"),
         agent_adapter(
             "cursor",
             "Cursor",
@@ -16156,7 +16184,9 @@ fn agent_adapter(
         detection_kind: "skills-folder".to_string(),
         install_scope: install_scope.to_string(),
         capability_level: "skills".to_string(),
-        docs_url: if id == "workbuddy" {
+        docs_url: if id == "coze" {
+            "https://docs.coze.cn/cozespace_using_skills".to_string()
+        } else if id == "workbuddy" {
             "https://www.codebuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Function-Description/Setting".to_string()
         } else {
             String::new()
@@ -17715,9 +17745,8 @@ fn parse_agents(diagnostics: Option<&Value>) -> Vec<AgentCard> {
                 .cloned()
                 .unwrap_or_default();
             let raw_detected = json_bool(agent, "detected");
-            let supports_split_detection = matches!(id.as_str(), "claude" | "codex" | "workbuddy");
-            let explicit_product_detection = supports_split_detection
-                && (json_bool(agent, "desktopDetected") || json_bool(agent, "codeDetected"));
+            let explicit_product_detection =
+                json_bool(agent, "desktopDetected") || json_bool(agent, "codeDetected");
             let directory_only_detection = raw_detected
                 && command.trim().is_empty()
                 && !explicit_product_detection
@@ -17728,6 +17757,9 @@ fn parse_agents(diagnostics: Option<&Value>) -> Vec<AgentCard> {
                 });
             let detected = raw_detected && !directory_only_detection;
             let local_skill_capable = match id.as_str() {
+                // Installation does not establish the user's directory grant
+                // or that a cloud Agent has added a local Skill in Coze.
+                "coze" => false,
                 // Current ChatGPT Desktop and Codex builds discover standalone
                 // user Skills from $HOME/.agents/skills. A CLI installation is
                 // therefore no longer required for the OpenAI adapter.
@@ -17739,11 +17771,10 @@ fn parse_agents(diagnostics: Option<&Value>) -> Vec<AgentCard> {
                 "claude" => !explicit_product_detection || json_bool(agent, "codeDetected"),
                 _ => true,
             };
-            let managed = skills_dirs.iter().any(|dir| {
-                json_bool(dir, "isLink")
-                    || json_bool(dir, "containsSkillMd")
-                    || (dir.get("containsSkillMd").is_none() && json_bool(dir, "writable"))
-            }) && detected
+            let managed = skills_dirs
+                .iter()
+                .any(|dir| json_bool(dir, "containsManagedSkillMd"))
+                && detected
                 && local_skill_capable;
             AgentCard {
                 id,
@@ -19164,18 +19195,22 @@ mod tests {
         let local = root.join("Local");
         let programs = root.join("ProgramFiles");
         fs::create_dir_all(local.join("Programs/WorkBuddy")).unwrap();
-        assert!(!workbuddy_install_present(&local, &programs));
+        assert!(!client_installation::workbuddy_in_default_locations(
+            &local, &programs
+        ));
         fs::write(
             local.join("Programs/WorkBuddy/WorkBuddy.exe"),
             b"never execute",
         )
         .unwrap();
-        assert!(workbuddy_install_present(&local, &programs));
+        assert!(client_installation::workbuddy_in_default_locations(
+            &local, &programs
+        ));
         let diagnostics = serde_json::json!({"agents": [{
             "id": "workbuddy", "name": "WorkBuddy", "detected": true,
             "desktopDetected": true, "codeDetected": true, "command": "",
-            "skillsDirs": [{"path": "~/.codebuddy/skills", "exists": true,
-                "writable": true, "containsSkillMd": true}]
+            "skillsDirs": [{"path": "~/.workbuddy/skills", "exists": true,
+                "writable": true, "containsSkillMd": true, "containsManagedSkillMd": true}]
         }]});
         let agents = parse_agents(Some(&diagnostics));
         assert!(agents[0].enabled);
@@ -20607,6 +20642,53 @@ mod tests {
     }
 
     #[test]
+    fn desktop_install_evidence_survives_parsing_without_a_cli() {
+        for id in ["antigravity", "cursor", "windsurf", "workbuddy"] {
+            let diagnostics = serde_json::json!({"agents": [{
+                "id": id, "name": id, "detected": true, "desktopDetected": true,
+                "codeDetected": true, "command": "", "skillsDirs": [{
+                    "path": "C:/Users/Test/.tool/skills", "exists": true,
+                    "containsSkillMd": false, "writable": true
+                }]
+            }]});
+            let agents = parse_agents(Some(&diagnostics));
+            assert!(
+                agents[0].detected,
+                "{id}: desktop installation is sufficient"
+            );
+            assert!(
+                !agents[0].managed,
+                "{id}: an empty Skills folder is not delivery"
+            );
+            let adapter = derive_agent_adapters(&agents)
+                .into_iter()
+                .find(|adapter| adapter.id == id)
+                .unwrap();
+            assert!(adapter.detected);
+        }
+    }
+
+    #[test]
+    fn personal_skills_and_legacy_diagnostics_are_not_managed_delivery() {
+        for owned in [None, Some(false), Some(true)] {
+            let mut dir = serde_json::json!({
+                "path": "~/.workbuddy-ai/skills", "exists": true,
+                "containsSkillMd": true, "writable": true, "isLink": true
+            });
+            if let Some(owned) = owned {
+                dir["containsManagedSkillMd"] = owned.into();
+            }
+            let diagnostics = serde_json::json!({"agents": [{
+                "id": "workbuddy", "name": "WorkBuddy", "detected": true,
+                "desktopDetected": true, "codeDetected": true, "skillsDirs": [dir]
+            }]});
+            let agents = parse_agents(Some(&diagnostics));
+            assert!(agents[0].detected);
+            assert_eq!(agents[0].managed, owned == Some(true));
+        }
+    }
+
+    #[test]
     fn parse_agents_keeps_command_detected_antigravity() {
         let diagnostics = serde_json::json!({
             "agents": [
@@ -20629,7 +20711,7 @@ mod tests {
         let agents = parse_agents(Some(&diagnostics));
         let antigravity = agents.first().expect("agent should parse");
         assert!(antigravity.detected);
-        assert!(antigravity.managed);
+        assert!(!antigravity.managed);
 
         let directory_only = serde_json::json!({
             "agents": [
@@ -20718,7 +20800,8 @@ mod tests {
                 "detectionKinds": ["desktop-app", "claude-code", "desktop-code-runtime"],
                 "command": "",
                 "skillsDirs": [{ "path": "C:/Users/Recipient/.claude/skills",
-                    "exists": true, "writable": true, "containsSkillMd": true }]
+                    "exists": true, "writable": true, "containsSkillMd": true,
+                    "containsManagedSkillMd": true }]
             }]
         });
         let agents = parse_agents(Some(&diagnostics));
@@ -20750,7 +20833,8 @@ mod tests {
                             "exists": true,
                             "writable": true,
                             "isLink": false,
-                            "containsSkillMd": true
+                            "containsSkillMd": true,
+                            "containsManagedSkillMd": true
                         }
                     ]
                 }

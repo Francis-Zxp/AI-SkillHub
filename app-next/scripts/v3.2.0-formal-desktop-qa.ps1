@@ -211,7 +211,7 @@ try {
   foreach ($directory in @($qaDataRoot, $qaProfileRoot, $qaLocalAppData, $qaRoamingAppData, $qaProjectRuntime, $qaSourceRoot, $qaChildRoot)) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
   }
-  foreach ($runtimeFile in @('SkillHub.ps1', 'Manage-AgentSkillLinks.ps1', 'Export-SkillHubDiagnostics.ps1', 'skillhub.config.example.json')) {
+  foreach ($runtimeFile in @('AgentInstallDiscovery.ps1', 'SkillHub.ps1', 'Manage-AgentSkillLinks.ps1', 'Export-SkillHubDiagnostics.ps1', 'skillhub.config.example.json')) {
     Copy-Item -LiteralPath (Join-Path $appNextRoot "runtime\$runtimeFile") -Destination (Join-Path $qaProjectRuntime $runtimeFile)
   }
   $utf8 = [Text.UTF8Encoding]::new($false)

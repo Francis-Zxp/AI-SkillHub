@@ -11,11 +11,13 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+$IsolatedHome = -not [string]::IsNullOrWhiteSpace($HomePath)
 $RoamingAppData = if ($PSBoundParameters.ContainsKey('HomePath')) { Join-Path $HomePath 'AppData\Roaming' } else { [Environment]::GetFolderPath('ApplicationData') }
 $LocalAppDataPath = if ($PSBoundParameters.ContainsKey('HomePath')) { Join-Path $HomePath 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
 $AppRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $AppRoot 'AgentInstallDiscovery.ps1')
 $V2Root = Split-Path -Parent $AppRoot
 $ProjectRoot = Split-Path -Parent $V2Root
 $SkillsRoot = if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_ACTIVE_SKILLS)) { [Environment]::ExpandEnvironmentVariables($env:AI_SKILLHUB_ACTIVE_SKILLS) } else { Join-Path $ProjectRoot 'skills' }
@@ -193,6 +195,8 @@ function Test-ClaudeDesktopPresent {
   if ($script:SimulateNoAgents) { return $false }
   if ($script:SimulateClaudeDesktopOnly) { return $true }
   if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return $false }
+  if (Get-AgentDesktopExecutable $script:LocalAppDataPath @('Claude', 'Claude Desktop') @('Claude.exe') @('Claude') -Isolated:$IsolatedHome) { return $true }
+  if ($IsolatedHome) { return $false }
 
   try {
     if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
@@ -212,21 +216,12 @@ function Test-ClaudeDesktopPresent {
   } catch {
   }
 
-  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-  $programFiles = [Environment]::GetFolderPath([Environment+SpecialFolder]::ProgramFiles)
-  foreach ($candidate in @(
-    (Join-Path $localAppData 'Programs\Claude\Claude.exe'),
-    (Join-Path $localAppData 'Claude\Claude.exe'),
-    (Join-Path $programFiles 'Claude\Claude.exe')
-  )) {
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
-  }
   return $false
 }
 
 function Test-ClaudeCodePresent([string]$ConfigRoot) {
   if ($script:SimulateNoAgents -or $script:SimulateClaudeDesktopOnly) { return $false }
-  if ($null -ne (Get-Command claude -ErrorAction SilentlyContinue)) { return $true }
+  if (Get-AgentCliExecutable 'claude' -Isolated:$IsolatedHome) { return $true }
 
   $nativeBinary = Join-Path $script:HomePath '.local\bin\claude.exe'
   if (Test-Path -LiteralPath $nativeBinary -PathType Leaf) { return $true }
@@ -261,22 +256,16 @@ function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot, [string]$LocalRoo
 
 function Test-WorkBuddyPresent {
   if ($script:SimulateNoAgents) { return $false }
-  if ($null -ne (Get-Command workbuddy -ErrorAction SilentlyContinue)) { return $true }
-  $candidates = @(
-    (Join-Path $script:LocalAppDataPath 'Programs\WorkBuddy\WorkBuddy.exe'),
-    (Join-Path $script:LocalAppDataPath 'WorkBuddy\WorkBuddy.exe')
-  )
-  if (-not [string]::IsNullOrWhiteSpace($env:ProgramFiles)) { $candidates += Join-Path $env:ProgramFiles 'WorkBuddy\WorkBuddy.exe' }
-  foreach ($candidate in $candidates) {
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
-  }
-  return $false
+  $script:WorkBuddyExecutable = Get-WorkBuddyExecutable $script:LocalAppDataPath -Isolated:$IsolatedHome
+  return -not [string]::IsNullOrWhiteSpace($script:WorkBuddyExecutable)
 }
 
 function Test-OpenAIDesktopPresent {
   if ($script:SimulateNoAgents) { return $false }
   if ($script:SimulateOpenAIDesktopOnly) { return $true }
   if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return $false }
+  if (Get-AgentDesktopExecutable $script:LocalAppDataPath @('Codex', 'OpenAI Codex', 'ChatGPT', 'OpenAI ChatGPT') @('Codex.exe', 'ChatGPT.exe') @('Codex', 'ChatGPT', 'OpenAI\Codex', 'OpenAI\ChatGPT') -Isolated:$IsolatedHome) { return $true }
+  if ($IsolatedHome) { return $false }
 
   try {
     if (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue) {
@@ -300,38 +289,47 @@ function Test-OpenAIDesktopPresent {
   } catch {
   }
 
-  try {
-    $runningApp = Get-Process -Name 'ChatGPT', 'Codex' -ErrorAction SilentlyContinue |
-      Select-Object -First 1
-    if ($null -ne $runningApp) { return $true }
-  } catch {
-  }
-
-  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-  foreach ($candidate in @(
-    (Join-Path $localAppData 'Programs\ChatGPT\ChatGPT.exe'),
-    (Join-Path $localAppData 'OpenAI\ChatGPT\ChatGPT.exe'),
-    (Join-Path $localAppData 'Programs\Codex\Codex.exe'),
-    (Join-Path $localAppData 'OpenAI\Codex\Codex.exe'),
-    (Join-Path $env:ProgramFiles 'ChatGPT\ChatGPT.exe'),
-    (Join-Path $env:ProgramFiles 'Codex\Codex.exe')
-  )) {
-    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return $true }
-  }
   return $false
 }
 
 function Test-CodexCodePresent([string]$ConfigRoot) {
   if ($script:SimulateNoAgents -or $script:SimulateOpenAIDesktopOnly) { return $false }
-  if ($null -ne (Get-Command codex -ErrorAction SilentlyContinue)) { return $true }
-
-  $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
-  $bundledBinary = Join-Path $localAppData 'OpenAI\Codex\bin\codex.exe'
+  if (Get-AgentCliExecutable 'codex' -Isolated:$IsolatedHome) { return $true }
+  $bundledBinary = Join-Path $script:LocalAppDataPath 'OpenAI\Codex\bin\codex.exe'
   if (Test-Path -LiteralPath $bundledBinary -PathType Leaf) { return $true }
 
   foreach ($marker in @('auth.json', 'config.toml', 'installation_id', 'sessions', 'state_5.sqlite')) {
     if (Test-Path -LiteralPath (Join-Path $ConfigRoot $marker)) { return $true }
   }
+  return $false
+}
+
+function Test-AgentManagedSkillLink($Item, [string]$ManagedRoot) {
+  if ($null -eq $Item -or -not ($Item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+  try {
+    $target = [string]$Item.Target
+    if ([string]::IsNullOrWhiteSpace($target) -or -not [IO.Path]::IsPathRooted($target)) { return $false }
+    $root = [IO.Path]::GetFullPath($ManagedRoot).TrimEnd('\', '/')
+    $full = [IO.Path]::GetFullPath($target).TrimEnd('\', '/')
+    return [string]::Equals($full, $root, [StringComparison]::OrdinalIgnoreCase) -or
+      $full.StartsWith(($root + [IO.Path]::DirectorySeparatorChar), [StringComparison]::OrdinalIgnoreCase)
+  } catch { return $false }
+}
+
+function Test-AgentManagedSkillDirectory([string]$Directory, [string]$ManagedRoot) {
+  if ([string]::IsNullOrWhiteSpace($ManagedRoot)) { return $false }
+  try {
+    $root = Get-Item -LiteralPath $Directory -Force -ErrorAction Stop
+    $rootManaged = Test-AgentManagedSkillLink $root $ManagedRoot
+    # Only inspect direct entries. Personal Skills and unrelated directory links
+    # remain visible in inventory but are not evidence of SkillHub management.
+    foreach ($entry in @(Get-ChildItem -LiteralPath $Directory -Force -Directory -ErrorAction SilentlyContinue)) {
+      if (($rootManaged -or (Test-AgentManagedSkillLink $entry $ManagedRoot)) -and
+          (Test-Path -LiteralPath (Join-Path $entry.FullName 'SKILL.md') -PathType Leaf)) {
+        try { [IO.File]::OpenRead((Join-Path $entry.FullName 'SKILL.md')).Dispose(); return $true } catch { }
+      }
+    }
+  } catch { }
   return $false
 }
 
@@ -350,8 +348,8 @@ function Add-AgentStatus(
   $simulateDesktopOnly =
     ($Id -eq 'claude' -and $script:SimulateClaudeDesktopOnly) -or
     ($Id -eq 'codex' -and $script:SimulateOpenAIDesktopOnly)
-  $command = if ($CommandName -and -not $simulateMissing -and -not $simulateDesktopOnly) { Get-Command $CommandName -ErrorAction SilentlyContinue } else { $null }
-  $baseExists = if ($simulateMissing -or $simulateDesktopOnly) { $false } else { (Test-Path -LiteralPath $BaseDir -PathType Container) }
+  $command = if ($CommandName -and -not $simulateMissing -and -not $simulateDesktopOnly -and -not $IsolatedHome) { Get-Command $CommandName -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null }
+  $baseExists = if ($simulateMissing -or $simulateDesktopOnly -or [string]::IsNullOrWhiteSpace($BaseDir)) { $false } else { (Test-Path -LiteralPath $BaseDir -PathType Container) }
   $skillsInfo = @()
   foreach ($dir in $SkillsDirs) {
     $exists = if ($simulateMissing -or $simulateDesktopOnly) { $false } else { Test-Path -LiteralPath $dir -PathType Container }
@@ -368,9 +366,12 @@ function Add-AgentStatus(
       writable = if ($exists) { Test-DirWritable $dir } else { $false }
       isLink = if ($exists) { ((Get-Item -LiteralPath $dir -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0 } else { $false }
       containsSkillMd = $containsSkillMd
+      containsManagedSkillMd = $exists -and (Test-AgentManagedSkillDirectory $dir $script:SkillsRoot)
     }
   }
-  $detected = ($baseExists -and $Id -ne 'workbuddy') -or ($null -ne $command) -or $AdditionalDetected
+  # Only the original Claude/Codex adapters use account/runtime markers. A bare
+  # settings or Skills directory is not installation evidence for other tools.
+  $detected = ($baseExists -and $Id -in @('claude', 'codex')) -or ($null -ne $command) -or $AdditionalDetected
   $status = if ($detected) { 'ok' } else { 'info' }
   $summary = if ($Id -eq 'claude' -and $DesktopDetected -and $CodeDetected) {
     'Claude Desktop 与 Claude Code 已检测到。'
@@ -393,6 +394,8 @@ function Add-AgentStatus(
     '请先在 Claude 打开 Code 并完成本地运行环境准备，再回到这里同步。Chat/Cowork 的自定义 Skill 请在 Customize → Skills 上传 ZIP。'
   } elseif ($Id -eq 'codex' -and $DesktopDetected -and -not $CodeDetected) {
     '点击同步后写入官方用户级 .agents\skills；不会创建假的 .codex 目录。'
+  } elseif ($Id -eq 'coze' -and $detected) {
+    '请在扣子的 Skills 设置中添加 AI SkillHub 技能库目录；目录授权和技能可用性由扣子确认。'
   } elseif ($detected) {
     '如需接管，请确认对应 skills 目录存在且可写。'
   } else {
@@ -485,9 +488,39 @@ $codexDetectionKinds = @()
 if ($openAIDesktopDetected) { $codexDetectionKinds += 'desktop-app' }
 if ($codexCodeDetected) { $codexDetectionKinds += 'codex-code' }
 Add-AgentStatus 'codex' 'ChatGPT Desktop / OpenAI Codex' $codexConfigRoot @((Join-Path $HomePath '.agents\skills'), (Join-Path $codexConfigRoot 'skills')) 'codex' ($openAIDesktopDetected -or $codexCodeDetected) $codexCodeDetected $openAIDesktopDetected $codexDetectionKinds
-Add-AgentStatus 'antigravity' 'Antigravity' (Join-Path $HomePath '.gemini\antigravity') @((Join-Path $HomePath '.gemini\antigravity\skills'), (Join-Path $HomePath '.antigravity\skills')) 'antigravity'
 $workbuddyDetected = Test-WorkBuddyPresent
-Add-AgentStatus 'workbuddy' 'WorkBuddy' (Join-Path $HomePath '.codebuddy') @((Join-Path $HomePath '.codebuddy\skills')) 'workbuddy' $workbuddyDetected $workbuddyDetected $workbuddyDetected @('desktop-app')
+$workbuddyConfigRoot = Get-WorkBuddyConfigRoot $HomePath $WorkBuddyExecutable -Isolated:$IsolatedHome
+$workbuddyKinds = if ($workbuddyDetected) { @('installed-executable') } else { @() }
+Add-AgentStatus 'workbuddy' 'WorkBuddy' $workbuddyConfigRoot @((Join-Path $workbuddyConfigRoot 'skills')) 'workbuddy' $workbuddyDetected $workbuddyDetected $workbuddyDetected $workbuddyKinds
+
+$otherTools = @(
+  @{ Id = 'antigravity'; Name = 'Antigravity'; Command = 'antigravity'; Folder = '.gemini\antigravity'; Products = @('Antigravity', 'Antigravity (User)'); Exes = @('Antigravity.exe'); Installs = @('Antigravity') },
+  @{ Id = 'cursor'; Name = 'Cursor'; Command = 'cursor'; Folder = '.cursor'; Products = @('Cursor', 'Cursor (User)'); Exes = @('Cursor.exe'); Installs = @('cursor', 'Cursor') },
+  @{ Id = 'windsurf'; Name = 'Windsurf'; Command = 'windsurf'; Folder = '.codeium\windsurf'; Products = @('Windsurf', 'Windsurf (User)'); Exes = @('Windsurf.exe'); Installs = @('Windsurf') },
+  @{ Id = 'coze'; Name = 'Coze / 扣子'; Command = ''; Folder = ''; Products = @('Coze', '扣子'); Exes = @('Coze.exe'); Installs = @('Coze') },
+  @{ Id = 'gemini-cli'; Name = 'Gemini CLI'; Command = 'gemini'; Folder = '.gemini' },
+  @{ Id = 'github-copilot'; Name = 'GitHub Copilot'; Command = 'copilot'; Folder = '.copilot' },
+  @{ Id = 'opencode'; Name = 'OpenCode'; Command = 'opencode'; Folder = '.config\opencode' },
+  @{ Id = 'kiro'; Name = 'Kiro CLI'; Command = 'kiro-cli'; Folder = '.kiro' },
+  @{ Id = 'hermes'; Name = 'Hermes Agent'; Command = 'hermes'; Folder = '.hermes' },
+  @{ Id = 'openclaw'; Name = 'OpenClaw'; Command = 'openclaw'; Folder = '.openclaw' },
+  @{ Id = 'amp'; Name = 'Amp'; Command = 'amp'; Folder = '.config\agents' }
+)
+foreach ($tool in $otherTools) {
+  $cli = ''; $desktop = ''
+  if (-not $SimulateNoAgents) {
+    if ($tool.Command) { $cli = Get-AgentCliExecutable $tool.Command -Isolated:$IsolatedHome }
+    if ($tool.Products) { $desktop = Get-AgentDesktopExecutable $LocalAppDataPath $tool.Products $tool.Exes $tool.Installs -Isolated:$IsolatedHome }
+  }
+  $kinds = @()
+  if ($cli) { $kinds += 'command' }
+  if ($desktop) { $kinds += 'desktop-app' }
+  $base = if ($tool.Folder) { Join-Path $HomePath $tool.Folder } else { '' }
+  $skillDirs = @()
+  if ($base) { $skillDirs += Join-Path $base 'skills' }
+  if ($tool.Id -eq 'antigravity') { $skillDirs += Join-Path $HomePath '.antigravity\skills' }
+  Add-AgentStatus $tool.Id $tool.Name $base $skillDirs $tool.Command ([bool]($cli -or $desktop)) ([bool]$cli) ([bool]$desktop) $kinds
+}
 
 if ((@($Agents | Where-Object { $_.detected }).Count) -eq 0) {
   Add-Check 'agent.noneDetected' 'AI Coding 工具' 'info' '未识别到可接管的 AI Coding 工具。' '' '安装 Claude Code、Codex 或 Antigravity 后，再点击“接管 AI 软件链接”。AI SkillHub 不会创建假的工具目录。'

@@ -31,7 +31,7 @@ foreach ($directory in @($data, $profile, $runtime, $upstream, $sources, (Join-P
 }
 $exe = Join-Path $qaRoot 'AI SkillHub.exe'
 Copy-Item -LiteralPath $exeSource -Destination $exe
-foreach ($file in @('SkillHub.ps1', 'Manage-AgentSkillLinks.ps1', 'Export-SkillHubDiagnostics.ps1', 'skillhub.config.example.json')) {
+foreach ($file in @('AgentInstallDiscovery.ps1', 'SkillHub.ps1', 'Manage-AgentSkillLinks.ps1', 'Export-SkillHubDiagnostics.ps1', 'skillhub.config.example.json')) {
   Copy-Item -LiteralPath (Join-Path $appNext "runtime\$file") -Destination (Join-Path $runtime $file)
 }
 $utf8 = [Text.UTF8Encoding]::new($false)

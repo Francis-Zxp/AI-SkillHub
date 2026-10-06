@@ -7,7 +7,7 @@
 //! macOS, and in hermetic tests.
 
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -32,7 +32,7 @@ impl Default for ProbeLimits {
     fn default() -> Self {
         Self {
             max_entries: 2_048,
-            max_depth: 5,
+            max_depth: 12,
             max_manifest_bytes: CONFIG_READ_LIMIT,
             max_hash_bytes: HASH_READ_LIMIT,
         }
@@ -51,9 +51,8 @@ pub struct ProbeEnvironment {
     pub environment: BTreeMap<String, String>,
     pub desktop_candidates: Vec<DesktopInstallCandidate>,
     pub appx_package_roots: Vec<PathBuf>,
-    /// Versions for which the signed, bundled diagnostic rules are known. An
-    /// absent or different version is still scanned, but remains read-only and
-    /// receives an explicit `unknown` version verdict.
+    /// Optional versions covered by version-specific checks. Other detected
+    /// versions still support generic read-only checks; none enable repairs.
     pub known_codex_versions: Vec<String>,
     pub limits: ProbeLimits,
 }
@@ -168,11 +167,55 @@ pub fn scan_default() -> CodexPluginDoctorReport {
         roaming_app_data: std::env::var_os("APPDATA").map(PathBuf::from),
         environment: environment_values,
         desktop_candidates: Vec::new(),
-        appx_package_roots: Vec::new(),
+        appx_package_roots: registered_codex_package_roots(),
         known_codex_versions: Vec::new(),
         limits: ProbeLimits::default(),
     };
     scan(&environment)
+}
+
+/// Read current-user package registration; never enumerate protected WindowsApps
+/// contents or invoke a shell. A registration is only a locator: its manifest is
+/// checked separately before the version is accepted.
+#[cfg(windows)]
+fn registered_codex_package_roots() -> Vec<PathBuf> {
+    use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+    let Ok(packages) = RegKey::predef(HKEY_CURRENT_USER).open_subkey(
+        r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages",
+    ) else {
+        return Vec::new();
+    };
+    let mut roots = BTreeSet::new();
+    for name in packages.enum_keys().take(4096).flatten() {
+        if !is_codex_package_registration(&name) {
+            continue;
+        }
+        let Ok(package) = packages.open_subkey(&name) else {
+            continue;
+        };
+        let Ok(root) = package.get_value::<String, _>("PackageRootFolder") else {
+            continue;
+        };
+        let path = PathBuf::from(root);
+        if path.is_absolute() {
+            roots.insert(path);
+        }
+        if roots.len() >= 16 {
+            break;
+        }
+    }
+    roots.into_iter().collect()
+}
+
+#[cfg(not(windows))]
+fn registered_codex_package_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+#[cfg(any(windows, test))]
+fn is_codex_package_registration(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("openai.codex_") && lower.ends_with("__2p2nqsd0c76g0")
 }
 
 /// Run the probe against explicit inputs. This is the preferred entry for tests
@@ -807,7 +850,9 @@ fn inspect_installation_evidence(
         if matches!(&kind, Err(error) if error.kind() == io::ErrorKind::NotFound) {
             continue;
         }
-        if !candidate.version.trim().is_empty() {
+        if matches!(kind, Ok(EntryKind::File | EntryKind::Directory))
+            && !candidate.version.trim().is_empty()
+        {
             versions.push(candidate.version.trim().to_string());
         }
         let detail = match kind {
@@ -851,7 +896,7 @@ fn inspect_installation_evidence(
                 &format!("appx-package-link-{index}"),
                 "desktop-install",
                 STATUS_WARN,
-                "ChatGPT Desktop AppX 包目录",
+                "Codex AppX 包目录",
                 "包目录是链接；为避免越界，本次不读取其清单。",
                 package_root,
                 environment,
@@ -879,7 +924,16 @@ fn inspect_installation_evidence(
                     .ok()
                     .and_then(extract_appx_version)
                     .unwrap_or_default();
-                (STATUS_READY, version, sha256_hex(&body), body.len() as u64)
+                (
+                    if version.is_empty() {
+                        STATUS_WARN
+                    } else {
+                        STATUS_READY
+                    },
+                    version,
+                    sha256_hex(&body),
+                    body.len() as u64,
+                )
             }
             Err(_) => (STATUS_ERROR, String::new(), String::new(), 0),
         };
@@ -890,7 +944,7 @@ fn inspect_installation_evidence(
             &format!("appx-manifest-{index}"),
             "desktop-install",
             status,
-            "ChatGPT Desktop AppX manifest",
+            "Codex AppX 清单",
             if version.is_empty() {
                 "发现 AppX 清单，但没有读取到可识别版本；未启动应用。"
             } else {
@@ -906,7 +960,7 @@ fn inspect_installation_evidence(
             findings.push(finding(
                 "appx-manifest-unreadable",
                 STATUS_WARN,
-                "ChatGPT Desktop 清单不可读",
+                "Codex 清单不可读",
                 "只读探针无法确认 AppX 版本。",
                 "通过 Microsoft Store 或系统应用设置确认安装状态。",
             ));
@@ -930,7 +984,7 @@ fn classify_version(
                 "codex-version-unknown",
                 STATUS_WARN,
                 "Codex 版本未知",
-                "发现 Codex 用户数据，但没有可信版本证据；只允许查看，不提供修复。",
+                "发现 Codex 用户数据，但未读取到安装版本；这不表示插件损坏。",
                 "从 Codex/ChatGPT 官方界面确认版本；不要运行来源不明的修复脚本。",
             ));
         }
@@ -944,14 +998,10 @@ fn classify_version(
         return ("known".to_string(), detected);
     }
 
-    findings.push(finding(
-        "codex-version-unsupported",
-        STATUS_WARN,
-        "Codex 版本尚未验证",
-        "检测到版本，但当前正式包没有匹配的签名诊断规则；保持完全只读。",
-        "更新 AI SkillHub 后重新扫描；不要套用其他版本的修复规则。",
-    ));
-    (STATUS_UNKNOWN.to_string(), detected)
+    // Version discovery and repair compatibility are separate. This module
+    // has no repair operation, so absence of version-specific rules is not a
+    // plugin fault and must not make every newly released Codex unhealthy.
+    ("detected".to_string(), detected)
 }
 
 fn inspect_plugin_cache(
@@ -1049,9 +1099,10 @@ fn inspect_plugin_cache(
         0,
     ));
 
-    let mut stack = vec![(cache_root.to_path_buf(), 0usize)];
+    let mut pending = VecDeque::from([(cache_root.to_path_buf(), 0usize)]);
+    let mut excluded_directories = 0usize;
     let mut visited = 0usize;
-    while let Some((directory, depth)) = stack.pop() {
+    while let Some((directory, depth)) = pending.pop_front() {
         if depth > environment.limits.max_depth {
             inventory.truncated = true;
             continue;
@@ -1086,7 +1137,11 @@ fn inspect_plugin_cache(
             match kind {
                 EntryKind::Directory => {
                     inventory.directories += 1;
-                    stack.push((path, depth + 1));
+                    if is_dependency_or_template_directory(&path) {
+                        excluded_directories += 1;
+                    } else {
+                        pending.push_back((path, depth + 1));
+                    }
                 }
                 EntryKind::Link => {
                     inventory.links += 1;
@@ -1232,20 +1287,43 @@ fn inspect_plugin_cache(
                 EntryKind::Other => {}
             }
         }
-        if inventory.truncated {
+        if visited >= environment.limits.max_entries && inventory.truncated {
             break;
         }
     }
+
+    evidence.push(path_evidence(
+        "plugin-cache-scope",
+        "plugin-cache",
+        STATUS_READY,
+        "缓存检查范围",
+        &format!("检查插件清单与入口文件；略过 {excluded_directories} 个依赖、生成缓存或模板目录。此检查不验证插件运行结果。"),
+        cache_root,
+        environment,
+        Some(EntryKind::Directory),
+        String::new(),
+        0,
+    ));
 
     if inventory.truncated {
         findings.push(finding(
             "plugin-cache-scan-truncated",
             STATUS_WARN,
             "插件缓存扫描已达到安全上限",
-            "缓存条目或目录深度超过只读扫描预算，剩余内容未遍历。",
-            "可在高级诊断中缩小到单个插件；不要提高到无限制扫描。",
+            "插件目录超过本次只读检查范围，部分内容未遍历；这不代表插件损坏。",
+            "可先查看已完成的清单检查；如插件使用异常，再在 Codex 中检查对应插件。",
         ));
     }
+}
+
+fn is_dependency_or_template_directory(path: &Path) -> bool {
+    matches!(
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("node_modules" | ".git" | "__pycache__" | ".venv" | "venv" | "templates")
+    )
 }
 
 fn inspect_entry_kind(path: &Path) -> io::Result<EntryKind> {
@@ -1333,7 +1411,7 @@ fn overall_status(findings: &[ProbeFinding], version_state: &str, has_home: bool
         STATUS_ERROR.to_string()
     } else if findings.iter().any(|item| item.severity == STATUS_WARN) {
         STATUS_WARN.to_string()
-    } else if has_home && version_state == "known" {
+    } else if has_home && matches!(version_state, "known" | "detected") {
         STATUS_READY.to_string()
     } else {
         STATUS_UNKNOWN.to_string()
@@ -1548,25 +1626,39 @@ fn is_executable_payload_name(file_name: &str) -> bool {
 
 fn extract_appx_version(xml: &str) -> Option<String> {
     let identity = xml.find("<Identity")?;
-    let rest = &xml[identity..];
-    let version = rest.find("Version=")?;
-    let rest = &rest[version + "Version=".len()..];
-    let quote = rest.chars().next()?;
-    if quote != '"' && quote != '\'' {
+    let rest = &xml[identity + "<Identity".len()..];
+    if !rest.starts_with(char::is_whitespace) {
         return None;
     }
-    let value = &rest[1..];
-    let end = value.find(quote)?;
-    let version = value[..end].trim();
-    if version.is_empty()
-        || !version
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '-')
-    {
-        None
-    } else {
-        Some(version.to_string())
+    let tag = &rest[..rest.find('>')?];
+    let attribute = |name: &str| -> Option<&str> {
+        let start = tag.find(&format!("{name}="))?;
+        if start > 0 && !tag[..start].ends_with(char::is_whitespace) {
+            return None;
+        }
+        let value = &tag[start + name.len() + 1..];
+        let quote = value.chars().next()?;
+        if !matches!(quote, '\'' | '"') {
+            return None;
+        }
+        let value = &value[1..];
+        Some(&value[..value.find(quote)?])
+    };
+    if attribute("Name")? != "OpenAI.Codex" {
+        return None;
     }
+    let version = attribute("Version")?;
+    let parts: Vec<_> = version.split('.').collect();
+    if parts.len() != 4
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || !part.bytes().all(|byte| byte.is_ascii_digit())
+                || part.parse::<u16>().is_err()
+        })
+    {
+        return None;
+    }
+    Some(version.to_string())
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -1835,7 +1927,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_version_is_explicit_and_disables_repair() {
+    fn detected_version_without_repair_rules_is_not_a_fault() {
         let root = fixture_root("unknown-version");
         let mut env = environment(&root);
         let codex_home = env.user_home.join(".codex");
@@ -1850,14 +1942,14 @@ mod tests {
         });
         env.known_codex_versions = vec!["1.0.0".to_string()];
         let report = probe_codex_plugin_health(&env);
-        assert_eq!(report.version_state, STATUS_UNKNOWN);
+        assert_eq!(report.version_state, "detected");
         assert_eq!(report.detected_version, "99.0.0");
         assert!(!report.repair_available);
         assert!(!report.write_capable);
-        assert!(report
+        assert!(!report
             .findings
             .iter()
-            .any(|item| item.code == "codex-version-unsupported"));
+            .any(|item| item.code.starts_with("codex-version-")));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1916,11 +2008,125 @@ mod tests {
     fn appx_version_parser_is_bounded_and_strict() {
         assert_eq!(
             extract_appx_version(
-                r#"<Package><Identity Name="OpenAI.ChatGPT" Version="3.1.4.0" /></Package>"#
+                r#"<Package><Identity Name="OpenAI.Codex" Version="3.1.4.0" /></Package>"#
             ),
             Some("3.1.4.0".to_string())
         );
         assert_eq!(extract_appx_version("<Package />"), None);
+    }
+
+    #[test]
+    fn codex_manifest_identifies_version_without_version_whitelist() {
+        let root = fixture_root("package-version");
+        let mut env = environment(&root);
+        let package = root.join("registered-codex");
+        fs::create_dir_all(&package).unwrap();
+        fs::create_dir_all(env.user_home.join(".codex")).unwrap();
+        fs::write(
+            package.join("AppxManifest.xml"),
+            r#"<Package><Identity Name="OpenAI.Codex" Version="26.930.4958.0" /></Package>"#,
+        )
+        .unwrap();
+        env.appx_package_roots.push(package);
+        let before = snapshot(&root);
+        let report = scan(&env);
+        assert_eq!(report.detected_version, "26.930.4958.0");
+        assert_eq!(report.version_state, "detected");
+        assert!(!report.repair_available);
+        assert_eq!(before, snapshot(&root));
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.code.starts_with("codex-version-")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn package_identity_and_version_must_be_codex_and_bounded() {
+        assert!(is_codex_package_registration(
+            "OpenAI.Codex_26.930.4958.0_x64__2p2nqsd0c76g0"
+        ));
+        assert!(!is_codex_package_registration(
+            "Other.Codex_26.930.4958.0_x64__2p2nqsd0c76g0"
+        ));
+        assert!(!is_codex_package_registration(
+            "OpenAI.Codex_26.930.4958.0_x64__untrusted"
+        ));
+        for text in [
+            r#"<Identity Name="Other.App" Version="1.2.3.4" />"#,
+            r#"<Identity Name="OpenAI.Codex"/><Else Version="1.2.3.4"/>"#,
+            r#"<IdentityFake Name="OpenAI.Codex" Version="1.2.3.4" />"#,
+            r#"<Identity Name="OpenAI.Codex" Version="99999.0.0.0" />"#,
+            r#"<Identity Name="OpenAI.Codex" Version="1.2.3.4-private" />"#,
+        ] {
+            assert_eq!(extract_appx_version(text), None);
+        }
+    }
+
+    #[test]
+    fn cache_dependencies_do_not_hide_plugin_manifests() {
+        let root = fixture_root("cache-scope");
+        let env = environment(&root);
+        let plugin = env
+            .user_home
+            .join(".codex/plugins/cache/publisher/plugin/1.0.0");
+        let dependency = plugin.join("node_modules/a/b/c/d/e/f/g");
+        fs::create_dir_all(&dependency).unwrap();
+        fs::write(dependency.join("package.json"), b"not a plugin manifest").unwrap();
+        fs::create_dir_all(plugin.join(".codex-plugin")).unwrap();
+        fs::write(plugin.join(".codex-plugin/plugin.json"), b"{}").unwrap();
+        let before = snapshot(&root);
+        let report = scan(&env);
+        assert!(!report.inventory.truncated);
+        assert_eq!(report.inventory.manifests, 1);
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.code.starts_with("plugin-")));
+        assert_eq!(before, snapshot(&root));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_limit_stays_bounded_and_deep_branch_does_not_abort_siblings() {
+        let root = fixture_root("cache-depth");
+        let mut env = environment(&root);
+        env.limits.max_depth = 4;
+        let cache = env.user_home.join(".codex/plugins/cache");
+        fs::create_dir_all(cache.join("publisher/first/1.0.0/deep/deeper/last")).unwrap();
+        fs::create_dir_all(cache.join("publisher/second/1.0.0/.codex-plugin")).unwrap();
+        fs::write(
+            cache.join("publisher/second/1.0.0/.codex-plugin/plugin.json"),
+            b"broken",
+        )
+        .unwrap();
+        let report = scan(&env);
+        assert!(report.inventory.truncated);
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.code == "plugin-manifest-invalid-json"));
+        env.limits.max_entries = 2;
+        let report = scan(&env);
+        assert!(report.inventory.truncated);
+        assert!(
+            report.inventory.directories + report.inventory.files + report.inventory.links <= 2
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "explicit read-only inspection of this computer"]
+    fn inspect_local_codex_plugin_doctor() {
+        let report = scan_default();
+        eprintln!("status={} version={} version_state={} entries={} manifests={} truncated={} findings={:?}",
+            report.status, report.detected_version, report.version_state,
+            report.inventory.directories + report.inventory.files + report.inventory.links,
+            report.inventory.manifests, report.inventory.truncated,
+            report.findings.iter().map(|f| f.code.as_str()).collect::<Vec<_>>());
+        assert_eq!(report.mutation_count, 0);
+        assert!(report.read_only);
+        assert!(!report.write_capable);
     }
 
     #[test]

@@ -131,6 +131,7 @@ try {
   foreach ($runtimeFile in @(
     'SkillHub.ps1',
     'Manage-AgentSkillLinks.ps1',
+    'AgentInstallDiscovery.ps1',
     'Export-SkillHubDiagnostics.ps1',
     'skillhub.config.example.json'
   )) {

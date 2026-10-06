@@ -2,19 +2,21 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const [app, diagnostics, i18n, rust, links] = await Promise.all([
+const [app, diagnostics, i18n, rust, links, discovery] = await Promise.all([
   readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
   readFile(new URL("../runtime/Export-SkillHubDiagnostics.ps1", import.meta.url), "utf8"),
   readFile(new URL("../src/i18n.ts", import.meta.url), "utf8"),
   readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8"),
-  readFile(new URL("../runtime/Manage-AgentSkillLinks.ps1", import.meta.url), "utf8")
+  readFile(new URL("../runtime/Manage-AgentSkillLinks.ps1", import.meta.url), "utf8"),
+  readFile(new URL("../runtime/AgentInstallDiscovery.ps1", import.meta.url), "utf8")
 ]);
 
 test("Codex delivery uses the official user scope with safe legacy compatibility", () => {
   assert.match(links, /Join-Path \$EffectiveHome '\.agents\\skills'/);
   assert.match(links, /Test-OpenAIDesktopPresent/);
-  assert.match(links, /Get-Process -Name 'ChatGPT', 'Codex'/);
-  assert.match(diagnostics, /Get-Process -Name 'ChatGPT', 'Codex'/);
+  assert.match(links, /Get-AgentDesktopExecutable[^\r\n]+@\('Codex\.exe', 'ChatGPT\.exe'\)/);
+  assert.match(diagnostics, /Get-AgentDesktopExecutable[^\r\n]+@\('Codex\.exe', 'ChatGPT\.exe'\)/);
+  assert.match(discovery, /Get-Process -Name/);
   assert.match(links, /\$codexPresent = \$codexCodePresent -or \$openAIDesktopPresent/);
   assert.match(links, /Test-Path -LiteralPath \(Join-Path \(Join-Path \$RecipientSkillsRoot \$_\.Name\) 'SKILL\.md'\)/);
   assert.match(links, /if \(Test-Path -LiteralPath \$legacyCodexRoot -PathType Container\)/);
