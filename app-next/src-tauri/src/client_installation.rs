@@ -375,10 +375,19 @@ mod tests {
         let folder = root.join("Antigravity");
         let binary = folder.join("Antigravity.exe");
         fs::create_dir_all(&folder).unwrap();
-        assert!(default_desktop(&[root.clone()], &["Antigravity"], &["Antigravity.exe"]).is_none());
+        assert!(default_desktop(
+            std::slice::from_ref(&root),
+            &["Antigravity"],
+            &["Antigravity.exe"]
+        )
+        .is_none());
         fs::write(&binary, b"fixture; never executed").unwrap();
         assert_eq!(
-            default_desktop(&[root.clone()], &["Antigravity"], &["Antigravity.exe"]),
+            default_desktop(
+                std::slice::from_ref(&root),
+                &["Antigravity"],
+                &["Antigravity.exe"]
+            ),
             Some(binary.clone())
         );
         assert_eq!(
