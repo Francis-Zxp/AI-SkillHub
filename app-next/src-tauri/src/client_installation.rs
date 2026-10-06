@@ -45,6 +45,10 @@ pub(crate) fn antigravity_executable() -> Option<PathBuf> {
     )
 }
 
+pub(crate) fn coze_executable() -> Option<PathBuf> {
+    desktop_executable(&["Coze", "扣子"], &["Coze.exe"], &["Coze"])
+}
+
 fn desktop_executable(products: &[&str], binaries: &[&str], folders: &[&str]) -> Option<PathBuf> {
     registered_desktop(products, binaries)
         .or_else(|| {

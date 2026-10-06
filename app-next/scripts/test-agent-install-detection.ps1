@@ -99,7 +99,7 @@ try {
   if (-not (Test-OpenAIDesktopPresent)) { throw 'Delivery missed desktop-only Codex fixture.' }
   Write-Output 'PASS: desktop-only Codex diagnosis and delivery use the same evidence.'
 
-  foreach ($name in @('Test-AgentManagedSkillLink', 'Test-AgentManagedSkillDirectory')) {
+  foreach ($name in @('Test-AgentManagedSkillLink', 'Test-AgentManagedRealSkill', 'Test-AgentManagedSkillDirectory')) {
     $definition = $diagnosticsAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
     . ([scriptblock]::Create($definition.Extent.Text))
   }

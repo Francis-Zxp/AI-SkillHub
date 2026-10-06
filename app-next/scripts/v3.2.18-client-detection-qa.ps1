@@ -39,6 +39,8 @@ foreach ($file in @('AgentInstallDiscovery.ps1', 'SkillHub.ps1', 'Manage-AgentSk
 }
 Write-Fixture (Join-Path $installed 'WorkBuddyAI.exe') 'Detection fixture only. Never execute this file.'
 Write-Fixture (Join-Path $installed 'resources\app.asar.unpacked\cli\product.json') ('{"dataFolderName":".workbuddy-ai","metadata":"' + ('x' * 386000) + '"}')
+Write-Fixture (Join-Path $localData 'Programs\Coze\Coze.exe') 'Coze detection fixture only. Never execute.'
+Write-Fixture (Join-Path $profile '.agents\skills\personal-shared\SKILL.md') "---`nname: personal-shared`ndescription: Preserve shared user Skill.`n---`n# Personal`n"
 Write-Fixture (Join-Path $data 'sources\qa-client-pack\qa-child\SKILL.md') "---`nname: qa-child`ndescription: Client detection delivery fixture.`n---`n# QA child`nUse only supplied text. No scripts or network.`n"
 Write-Fixture (Join-Path $profile '.workbuddy-ai\skills\personal-skill\SKILL.md') "---`nname: personal-skill`ndescription: User-owned fixture; keep unchanged.`n---`n# Personal`n"
 Write-Fixture (Join-Path $profile '.codebuddy\skills\personal-skill\SKILL.md') 'Existing CodeBuddy Skill: preserve these exact bytes.'

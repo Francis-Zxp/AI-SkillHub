@@ -316,6 +316,23 @@ function Test-AgentManagedSkillLink($Item, [string]$ManagedRoot) {
   } catch { return $false }
 }
 
+function Test-AgentManagedRealSkill($Entry, [string]$ManagedRoot) {
+  try {
+    if (-not $Entry.PSIsContainer -or ($Entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+    $manifest = Get-Item -LiteralPath (Join-Path $Entry.FullName 'SKILL.md') -Force -ErrorAction Stop
+    if ($manifest.PSIsContainer -or ($manifest.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $manifest.Length -gt 2097152) { return $false }
+    $content = [IO.File]::ReadAllText($manifest.FullName, [Text.UTF8Encoding]::new($false, $true))
+    $marker = "`n<!-- AI SkillHub shared-skill v1 sha256:"
+    $offset = $content.LastIndexOf($marker, [StringComparison]::Ordinal)
+    if ($offset -lt 0) { return $false }
+    $body = $content.Substring(0, $offset)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($body)))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+    $original = (Join-Path (Join-Path $ManagedRoot $Entry.Name) 'SKILL.md').Replace('\', '/')
+    return $content -ceq ($body + $marker + $hash + " -->`n") -and $body.Contains('](<' + $original + '>).')
+  } catch { return $false }
+}
+
 function Test-AgentManagedSkillDirectory([string]$Directory, [string]$ManagedRoot) {
   if ([string]::IsNullOrWhiteSpace($ManagedRoot)) { return $false }
   try {
@@ -324,6 +341,18 @@ function Test-AgentManagedSkillDirectory([string]$Directory, [string]$ManagedRoo
     # Only inspect direct entries. Personal Skills and unrelated directory links
     # remain visible in inventory but are not evidence of SkillHub management.
     foreach ($entry in @(Get-ChildItem -LiteralPath $Directory -Force -Directory -ErrorAction SilentlyContinue)) {
+      if (-not ($root.Attributes -band [IO.FileAttributes]::ReparsePoint) -and (Test-AgentManagedRealSkill $entry $ManagedRoot)) { return $true }
+      # Existing Codex compatibility links may now point at the shared real
+      # entry. Require that exact recipient and its complete owned manifest.
+      if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        $sharedRoot = Join-Path $HomePath '.agents\skills'
+        $expected = Join-Path $sharedRoot $entry.Name
+        if ([string]$entry.Target -eq $expected -and (Test-Path -LiteralPath $sharedRoot)) {
+          $sharedItem = Get-Item -LiteralPath $sharedRoot -Force
+          if (-not ($sharedItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+              (Test-AgentManagedRealSkill (Get-Item -LiteralPath $expected -Force) $ManagedRoot)) { return $true }
+        }
+      }
       if (($rootManaged -or (Test-AgentManagedSkillLink $entry $ManagedRoot)) -and
           (Test-Path -LiteralPath (Join-Path $entry.FullName 'SKILL.md') -PathType Leaf)) {
         try { [IO.File]::OpenRead((Join-Path $entry.FullName 'SKILL.md')).Dispose(); return $true } catch { }
@@ -395,7 +424,7 @@ function Add-AgentStatus(
   } elseif ($Id -eq 'codex' -and $DesktopDetected -and -not $CodeDetected) {
     '点击同步后写入官方用户级 .agents\skills；不会创建假的 .codex 目录。'
   } elseif ($Id -eq 'coze' -and $detected) {
-    '请在扣子的 Skills 设置中添加 AI SkillHub 技能库目录；目录授权和技能可用性由扣子确认。'
+    '同步后会将入口写入默认共享 Skills 目录。请刷新扣子的本地技能；目录授权和会话可用性仍由扣子确认。'
   } elseif ($detected) {
     '如需接管，请确认对应 skills 目录存在且可写。'
   } else {
@@ -518,6 +547,7 @@ foreach ($tool in $otherTools) {
   $base = if ($tool.Folder) { Join-Path $HomePath $tool.Folder } else { '' }
   $skillDirs = @()
   if ($base) { $skillDirs += Join-Path $base 'skills' }
+  if ($tool.Id -eq 'coze') { $skillDirs += Join-Path $HomePath '.agents\skills' }
   if ($tool.Id -eq 'antigravity') { $skillDirs += Join-Path $HomePath '.antigravity\skills' }
   Add-AgentStatus $tool.Id $tool.Name $base $skillDirs $tool.Command ([bool]($cli -or $desktop)) ([bool]$cli) ([bool]$desktop) $kinds
 }

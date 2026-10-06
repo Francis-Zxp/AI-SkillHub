@@ -5897,7 +5897,7 @@ function Agents({
   const capabilities = snapshot?.adapterCapabilities ?? [];
   const safetyChecks = snapshot?.adapterSafetyChecks ?? [];
   const enabledSkillCount = snapshot?.skills.filter(skill => skill.enabled).length ?? 0;
-  const sharedSkillsDirectory = snapshot?.skillsDir ? `${snapshot.skillsDir}-catalog` : "";
+  const sharedSkillsDirectory = adapters.find(adapter => adapter.id === "coze")?.skillsPathHint ?? "";
   return (
     <div className="view agents-view">
       <section className="page-header glow-card">

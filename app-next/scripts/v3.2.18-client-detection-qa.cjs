@@ -92,15 +92,28 @@ async function main() {
     record('connect-delivers-to-native-profile', verifySnapshot(snapshot, true));
     const first = verifyFiles();
     record('readable-parent-and-preserved-user-files', first);
-    const sharedRoot = path.join(dataRoot, 'skills-catalog');
+    const sharedRoot = path.join(profile, '.agents/skills');
     const scannable = fs.readdirSync(sharedRoot, { withFileTypes: true }).filter(entry => entry.isDirectory());
     assert.ok(scannable.length > 0, 'Coze requires real direct child folders');
-    for (const entry of scannable) {
+    for (const entry of scannable.filter(entry => entry.name !== 'personal-shared')) {
       const body = fs.readFileSync(path.join(sharedRoot, entry.name, 'SKILL.md'), 'utf8');
       assert.match(body, /^---\r?\nname: .+\r?\ndescription: .+\r?\n---/);
       assert.ok(body.includes('SKILL.md'), 'Compatible entry must reference the original definition');
     }
     record('coze-compatible-scan-finds-real-directories', scannable.map(entry => entry.name));
+    const coze = snapshot.agentAdapters.find(adapter => adapter.id === 'coze');
+    assert.equal(coze.detected, true);
+    assert.equal(coze.managed, false, 'Filesystem discovery is not cloud Agent registration');
+    const defaultScanRoot = path.join(profile, '.agents/skills');
+    assert.equal(comparable(coze.skillsPathHint), comparable(defaultScanRoot));
+    const defaults = fs.readdirSync(defaultScanRoot, { withFileTypes: true }).filter(entry => entry.isDirectory());
+    assert.ok(defaults.some(entry => entry.name === 'personal-shared'));
+    for (const delivered of first.entries) {
+      assert.ok(defaults.some(entry => entry.name === delivered.name), 'Coze default scanner must see each enabled parent without adding a scan directory');
+    }
+    assert.equal(fs.readFileSync(path.join(defaultScanRoot, 'personal-shared/SKILL.md'), 'utf8'), '---\nname: personal-shared\ndescription: Preserve shared user Skill.\n---\n# Personal\n');
+    assert.ok(!fs.existsSync(path.join(profile, '.codex')), 'Coze installation must not create a fake Codex profile');
+    record('coze-default-scan-needs-no-extra-directory', defaults.map(entry => entry.name));
     snapshot = await invoke('load_indexed_snapshot');
     record('sqlite-reload-preserves-managed-state', verifySnapshot(snapshot, true));
     snapshot = await invoke('connect_detected_agents');

@@ -105,7 +105,7 @@ try {
     if (@($report.agents | Where-Object id -eq $id).Count -ne 1) { throw "Missing or duplicate adapter diagnostic: $id" }
   }
   $coze = @($report.agents | Where-Object id -eq 'coze')[0]
-  if (-not $coze.detected -or -not $coze.desktopDetected -or $coze.codeDetected -or $coze.baseDir -or @($coze.skillsDirs).Count -ne 0) { throw 'Coze installation must not imply a local CLI or Skills directory.' }
+  if (-not $coze.detected -or -not $coze.desktopDetected -or $coze.codeDetected -or $coze.baseDir -or @($coze.skillsDirs).Count -ne 1 -or $coze.skillsDirs[0].exists) { throw 'Coze must discover shared Skills without implying a CLI or creating a profile.' }
   if (Test-Path -LiteralPath (Join-Path $recipient '.coze')) { throw 'A fake Coze profile was created.' }
   if (@($report.agents | Where-Object { $_.id -in @('cursor','windsurf','gemini-cli','github-copilot','opencode','kiro','hermes','openclaw','amp') -and $_.detected }).Count) { throw 'Isolated fixture inspected a real installed tool.' }
   Write-Output 'PASS: old/current WorkBuddy, custom install records, stale/unrelated records, profile metadata/override, delivery/diagnosis agreement, 14 adapters, Coze without fake profile, and user-data preservation.'

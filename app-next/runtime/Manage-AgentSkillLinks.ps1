@@ -84,6 +84,20 @@ function Test-UnderRoot([string]$Child, [string]$Root) {
 $Shared = Resolve-AppPath $Config.activeSkillsFolder
 $SourceRoot = Resolve-AppPath $Config.githubSourcesFolder
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$RealSharedSkillsRoot = ''
+if (-not [string]::IsNullOrWhiteSpace($env:AI_SKILLHUB_REAL_SHARED_SKILLS)) {
+  $requestedRoot = $env:AI_SKILLHUB_REAL_SHARED_SKILLS
+  $expectedRoot = Convert-ToFullPath (Join-Path $EffectiveHome '.agents\skills')
+  if (-not [IO.Path]::IsPathRooted($requestedRoot) -or
+      (Convert-ToFullPath $requestedRoot).TrimEnd('\', '/') -ne $expectedRoot.TrimEnd('\', '/')) {
+    throw 'Real shared Skills must use the current user .agents\skills directory.'
+  }
+  $rootItem = Get-Item -LiteralPath $expectedRoot -Force -ErrorAction Stop
+  if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'Real shared Skills must already be a normal directory.'
+  }
+  $RealSharedSkillsRoot = $expectedRoot
+}
 
 if (-not (Test-Path -LiteralPath $Shared)) {
   throw "Active skills folder not found: $Shared"
@@ -342,7 +356,79 @@ $antigravityPath = Join-Path $EffectiveHome '.gemini\antigravity\skills'
 $antigravityPresent = Test-AntigravityPresent
 $workbuddyPresent = Test-WorkBuddyPresent
 
-function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot) {
+function Test-SharedSkillManifest([string]$Directory, [string]$OriginalDirectory) {
+  try {
+    $item = Get-Item -LiteralPath $Directory -Force -ErrorAction Stop
+    $manifest = Get-Item -LiteralPath (Join-Path $Directory 'SKILL.md') -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        $manifest.PSIsContainer -or ($manifest.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $manifest.Length -gt 2097152) { return $false }
+    $content = [IO.File]::ReadAllText($manifest.FullName, [Text.UTF8Encoding]::new($false, $true))
+    $marker = "`n<!-- AI SkillHub shared-skill v1 sha256:"
+    $offset = $content.LastIndexOf($marker, [StringComparison]::Ordinal)
+    if ($offset -lt 0) { return $false }
+    $body = $content.Substring(0, $offset)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $hash = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($body)))).Replace('-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+    $original = (Join-Path $OriginalDirectory 'SKILL.md').Replace('\', '/')
+    return $content -ceq ($body + $marker + $hash + " -->`n") -and $body.Contains('](<' + $original + '>).')
+  } catch { return $false }
+}
+
+function Sync-LegacySharedCatalog {
+  $catalog = $Shared.TrimEnd('\', '/') + '-catalog'
+  $rootItem = Get-PathItemNoFollow $catalog
+  if ($null -eq $rootItem) { return }
+  if (-not $rootItem.PSIsContainer -or ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "Legacy shared catalog is not a normal directory and was preserved: $catalog"
+  }
+  $changes = [System.Collections.Generic.List[object]]::new()
+  # Validate the whole migration before moving anything. The old catalog may
+  # already be registered in Coze; leave readable aliases that its scanner skips.
+  foreach ($entry in @(Get-ChildItem -LiteralPath $catalog -Force -Directory)) {
+    $target = Join-Path $RealSharedSkillsRoot $entry.Name
+    if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+      if ([string]$entry.Target -ne $target) { throw "External catalog link preserved: $($entry.FullName)" }
+      if (-not $activeSkillNames.ContainsKey($entry.Name)) {
+        $changes.Add([PSCustomObject]@{ Entry = $entry.FullName; Name = $entry.Name; Target = $target; RemoveLink = $true }) | Out-Null
+      }
+      continue
+    }
+    $files = @(Get-ChildItem -LiteralPath $entry.FullName -Force)
+    if ($files.Count -ne 1 -or $files[0].Name -ne 'SKILL.md' -or
+        -not (Test-SharedSkillManifest $entry.FullName (Join-Path $Shared $entry.Name))) {
+      throw "Modified or personal catalog directory preserved: $($entry.FullName)"
+    }
+    $changes.Add([PSCustomObject]@{ Entry = $entry.FullName; Name = $entry.Name; Target = $target; RemoveLink = $false }) | Out-Null
+  }
+  $backupRoot = $catalog + '-backup-' + [guid]::NewGuid().ToString('N')
+  foreach ($change in $changes) {
+    if ($change.RemoveLink) {
+      $current = Get-PathItemNoFollow $change.Entry
+      if ($null -ne $current -and [string]$current.Target -eq $change.Target) { Remove-ReparsePointPath $change.Entry }
+      continue
+    }
+    # Recheck ownership immediately before each reversible directory move.
+    if (@(Get-ChildItem -LiteralPath $change.Entry -Force).Count -ne 1 -or
+        -not (Test-SharedSkillManifest $change.Entry (Join-Path $Shared $change.Name))) {
+      throw "Catalog entry changed during migration and was preserved: $($change.Entry)"
+    }
+    New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
+    $backup = Join-Path $backupRoot $change.Name
+    Move-Item -LiteralPath $change.Entry -Destination $backup
+    if (-not $activeSkillNames.ContainsKey($change.Name)) { continue }
+    try {
+      New-Item -ItemType Junction -Path $change.Entry -Target $change.Target | Out-Null
+    } catch {
+      $failed = Get-PathItemNoFollow $change.Entry
+      if ($null -ne $failed -and [string]$failed.Target -eq $change.Target) { Remove-ReparsePointPath $change.Entry }
+      if ($null -eq (Get-PathItemNoFollow $change.Entry)) { Move-Item -LiteralPath $backup -Destination $change.Entry }
+      throw
+    }
+  }
+  if (Test-Path -LiteralPath $backupRoot) { Write-Step "Shared catalog migration backup: $backupRoot" }
+}
+
+function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot, [string]$LinkSourceRoot = $Shared, [switch]$PreserveConflicts) {
   # Older SkillHub releases linked the entire recipient Skills directory to the
   # flat active catalog. Convert only that known managed junction into a real
   # directory. Any external/user-owned link is preserved and rejected.
@@ -361,11 +447,24 @@ function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot) {
   }
   New-Item -ItemType Directory -Force -Path $RecipientSkillsRoot | Out-Null
 
+  if ($PreserveConflicts) {
+    # Preflight before cleanup or replacement. A same-name personal entry is not
+    # ours merely because it contains SKILL.md.
+    foreach ($skill in $activeSkillDirs) {
+      $entry = Get-PathItemNoFollow (Join-Path $RecipientSkillsRoot $skill.Name)
+      if ($null -ne $entry -and (-not ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+          -not ((Test-UnderRoot ([string]$entry.Target) $Shared) -or (Test-UnderRoot ([string]$entry.Target) $LinkSourceRoot)))) {
+        throw "Personal or external Skill entry preserved: $($entry.FullName)"
+      }
+    }
+  }
+
   foreach ($oldName in @('AI_global_skills')) {
     $oldPath = Join-Path $RecipientSkillsRoot $oldName
     $oldItem = Get-PathItemNoFollow $oldPath
     if ($null -ne $oldItem) {
-      if (($oldItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      if (($oldItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -and
+          (-not $PreserveConflicts -or ([string]$oldItem.Target -eq $Shared) -or (Test-UnderRoot ([string]$oldItem.Target) $Shared))) {
         Remove-ReparsePointPath $oldPath
       }
     }
@@ -377,19 +476,20 @@ function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot) {
       $item = Get-Item -LiteralPath $_.FullName -Force
       if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         $target = [string]$item.Target
-        if ((Test-UnderRoot $target $Shared) -and -not $activeSkillNames.ContainsKey($item.Name)) {
+        if (((Test-UnderRoot $target $Shared) -or (Test-UnderRoot $target $LinkSourceRoot)) -and -not $activeSkillNames.ContainsKey($item.Name)) {
           Remove-ReparsePointPath $item.FullName
         }
       }
     }
 
   foreach ($skill in $activeSkillDirs) {
+    $target = Join-Path $LinkSourceRoot $skill.Name
     $dest = Join-Path $RecipientSkillsRoot $skill.Name
     $item = Get-PathItemNoFollow $dest
     if ($null -ne $item) {
       if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         $currentTarget = [string]$item.Target
-        if ($currentTarget -eq $skill.FullName) { continue }
+        if ($currentTarget -eq $target) { continue }
         Remove-ReparsePointPath $dest
       } elseif ($item.Name -ne '.system') {
         $backupRoot = Join-Path $RecipientSkillsRoot ('AI_global接管前备份_' + $Stamp)
@@ -397,7 +497,7 @@ function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot) {
         Move-Item -LiteralPath $dest -Destination (Join-Path $backupRoot $skill.Name)
       }
     }
-    New-Item -ItemType Junction -Path $dest -Target $skill.FullName | Out-Null
+    New-Item -ItemType Junction -Path $dest -Target $target | Out-Null
   }
 
   $missingSkillMd = @($activeSkillDirs | Where-Object {
@@ -446,6 +546,16 @@ $openAIDesktopPresent = Test-OpenAIDesktopPresent
 $codexPresent = $codexCodePresent -or $openAIDesktopPresent
 $recipientFailures = [System.Collections.Generic.List[string]]::new()
 
+if ($RealSharedSkillsRoot) {
+  foreach ($skill in $activeSkillDirs) {
+    if (-not (Test-SharedSkillManifest (Join-Path $RealSharedSkillsRoot $skill.Name) $skill.FullName)) {
+      throw "Shared Skill entry is missing, modified or not a normal directory: $($skill.Name)"
+    }
+  }
+  Sync-LegacySharedCatalog
+  $rows.Add([PSCustomObject]@{ App = 'Shared Skills'; Entry = $RealSharedSkillsRoot; Status = "$($activeSkillDirs.Count) verified real entries"; Target = $Shared }) | Out-Null
+}
+
 if ($workbuddyPresent) {
   $workbuddyPath = Join-Path (Get-WorkBuddyConfigRoot $EffectiveHome $WorkBuddyExecutable -Isolated:$IsolatedHome) 'skills'
   try {
@@ -489,8 +599,12 @@ $rows.Add([PSCustomObject]@{ App = 'Antigravity'; Entry = $antigravityPath; Stat
 $codexRoot = Join-Path $EffectiveHome '.agents\skills'
 if ($codexPresent) {
   try {
-    $verifiedCount = Sync-ManagedSkillDirectory $codexRoot
-    $codexStatus = "$verifiedCount verified parent-first user-scope links"
+    if ($RealSharedSkillsRoot) {
+      $codexStatus = "$($activeSkillDirs.Count) verified parent-first real user-scope entries"
+    } else {
+      $verifiedCount = Sync-ManagedSkillDirectory $codexRoot
+      $codexStatus = "$verifiedCount verified parent-first user-scope links"
+    }
   } catch {
     $codexStatus = 'Preserved existing directory: ' + $_.Exception.Message
     $recipientFailures.Add('ChatGPT / Codex: ' + $_.Exception.Message) | Out-Null
@@ -503,7 +617,9 @@ if ($codexPresent) {
   $legacyCodexRoot = Join-Path $EffectiveHome '.codex\skills'
   if (Test-Path -LiteralPath $legacyCodexRoot -PathType Container) {
     try {
-      $legacyVerifiedCount = Sync-ManagedSkillDirectory $legacyCodexRoot
+      $legacyVerifiedCount = if ($RealSharedSkillsRoot) {
+        Sync-ManagedSkillDirectory $legacyCodexRoot $RealSharedSkillsRoot -PreserveConflicts
+      } else { Sync-ManagedSkillDirectory $legacyCodexRoot }
       $legacyStatus = "$legacyVerifiedCount parent-first compatibility links"
     } catch {
       $legacyStatus = 'Preserved existing directory: ' + $_.Exception.Message
@@ -516,7 +632,7 @@ if ($codexPresent) {
   $rows.Add([PSCustomObject]@{ App = 'ChatGPT / Codex'; Entry = $codexRoot; Status = 'Skipped (ChatGPT/Codex not installed)'; Target = $Shared }) | Out-Null
 }
 
-if (-not $claudePresent -and -not $codexPresent -and -not $antigravityPresent -and -not $workbuddyPresent) {
+if (-not $claudePresent -and -not $codexPresent -and -not $antigravityPresent -and -not $workbuddyPresent -and -not $RealSharedSkillsRoot) {
   Write-Step '未识别到可接管的 AI 工具。安装 ChatGPT Desktop、Codex、Claude Code 或 Antigravity 后，再重新同步。'
 }
 

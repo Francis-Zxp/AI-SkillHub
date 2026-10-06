@@ -166,7 +166,7 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
         if desktop_installed {
             (
                 VERDICT_DESKTOP_ONLY,
-                "已检测到扣子桌面端；需在扣子中确认目录授权与技能添加，当前未验证技能加载。无需安装 CLI。".to_string(),
+                "已检测到扣子；同步后需在云端 Agent 添加个人设备技能，/ 仅搜索已添加项。当前未验证对话调用。".to_string(),
                 false,
             )
         } else {
@@ -298,7 +298,7 @@ pub(crate) fn diagnose_adapter(input: &AdapterDoctorInput) -> AgentDoctorCard {
     };
     let skills_status = if adapter_id == "coze" {
         if desktop_installed {
-            "manual-directory"
+            "agent-selection-required"
         } else {
             "missing"
         }
@@ -427,7 +427,7 @@ fn next_steps(
         VERDICT_DESKTOP_ONLY => match input.adapter_id.trim().to_ascii_lowercase().as_str() {
             "coze" => vec![
                 "在扣子桌面端设置中开启“允许 Coze 访问本地文件”。".to_string(),
-                "打开“本机技能扫描 → 管理目录”，添加 AI SkillHub 当前启用的 Skills 目录；本工具不会代改扣子设置。".to_string(),
+                "在 SkillHub 点击同步，自动准备 .agents/skills 默认扫描目录；只有曾移除该默认目录时，才需要在“管理目录”中恢复。".to_string(),
                 "在扣子对话中选择“+ → 技能 → 从个人设备添加技能”，勾选需要的技能；保持扣子桌面端与个人设备在线。".to_string(),
             ],
             "codex" => vec![
@@ -986,7 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn coze_desktop_requires_directory_authorization_not_cli_or_auto_repair() {
+    fn coze_desktop_requires_agent_selection_even_when_local_skills_exist() {
         let mut input = AdapterDoctorInput {
             adapter_id: "coze".to_string(),
             adapter_name: "扣子桌面端".to_string(),
@@ -1002,7 +1002,7 @@ mod tests {
         assert_eq!(card.verdict, VERDICT_DESKTOP_ONLY);
         assert_eq!(card.desktop_status, "installed");
         assert_eq!(card.cli_status, "not-required");
-        assert_eq!(card.skills_status, "manual-directory");
+        assert_eq!(card.skills_status, "agent-selection-required");
         assert!(!card.safe_fix_available);
         assert!(card
             .next_steps
@@ -1030,7 +1030,7 @@ mod tests {
         });
         let card = diagnose_adapter(&input);
         assert_eq!(card.verdict, VERDICT_DESKTOP_ONLY);
-        assert_eq!(card.skills_status, "manual-directory");
+        assert_eq!(card.skills_status, "agent-selection-required");
         assert!(!card.safe_fix_available);
         input.apps.clear();
         let card = diagnose_adapter(&input);

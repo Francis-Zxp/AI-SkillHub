@@ -69,7 +69,7 @@ const GITHUB_FALLBACK_MAX_BYTES: u64 = 80 * 1024 * 1024;
 const GITHUB_FALLBACK_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MANAGED_SOURCE_METADATA_FILE: &str = ".skillhub-source.json";
 const AGENT_DELIVERY_FINGERPRINT_KEY: &str = "agent_delivery_fingerprint_v1";
-const AGENT_DELIVERY_POLICY_VERSION: &str = "parent-first-v3.2";
+const AGENT_DELIVERY_POLICY_VERSION: &str = "parent-first-v3.3-real-shared";
 static SNAPSHOT_SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 // Heavy reconciliation jobs touch the same SQLite index, generated routers and
 // recipient links. Keep them single-flight so a user action cannot overlap a
@@ -2101,12 +2101,28 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<(), Str
         return Err(format!("找不到 AI 工具链接脚本：{}", script.display()));
     }
 
+    let names = expected_agent_skill_allowlist(root, connection)?;
+    let shared_entries = shared_skill_catalog_entries(root, &names);
+    let real_shared = delivery_recipient_states(connection)?
+        .into_iter()
+        .find(|recipient| recipient.id == "coze-shared" && recipient.detected);
+    if let Some(recipient) = &real_shared {
+        shared_skill_catalog::sync_shared(
+            &recipient.path,
+            &shared_entries,
+            &active_skills_dir(root),
+        )?;
+    }
+
     let mut command = Command::new("powershell.exe");
     command
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script)
         .arg("-Quiet");
     configure_user_data_command(&mut command, root);
+    if let Some(recipient) = &real_shared {
+        command.env("AI_SKILLHUB_REAL_SHARED_SKILLS", &recipient.path);
+    }
     if std::env::var_os("AI_SKILLHUB_QA_ROOT").is_some() {
         command.arg("-HomePath").arg(delivery_home_dir());
     }
@@ -2136,10 +2152,13 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<(), Str
         return Err(format!("AI 工具链接同步失败：{detail}"));
     }
 
-    shared_skill_catalog::sync(
-        &shared_skill_catalog_root(root),
-        &shared_skill_catalog_entries(root, &expected_agent_skill_allowlist(root, connection)?),
-    )
+    if real_shared.is_some() {
+        // PowerShell retains any previously registered catalog paths as aliases
+        // so Coze does not scan the same Skill twice after default-root migration.
+        Ok(())
+    } else {
+        shared_skill_catalog::sync(&shared_skill_catalog_root(root), &shared_entries)
+    }
 }
 
 fn shared_skill_catalog_root(root: &Path) -> PathBuf {
@@ -2575,6 +2594,14 @@ fn delivery_recipient_states(
     let workbuddy_detected =
         command_exists("workbuddy") || client_installation::workbuddy_executable().is_some();
     let codex_target = home.join(".agents").join("skills");
+    // Keep an already migrated shared catalog stable if Coze is later removed.
+    // A personal folder alone never enables this delivery mode.
+    let real_shared = client_installation::coze_executable().is_some()
+        || fs::read_dir(&codex_target).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|entry| shared_skill_catalog::is_managed_entry(&entry.path()))
+        });
     let mut codex_detected = command_exists("codex")
         || directory_has_any_marker(
             &codex_home,
@@ -2641,16 +2668,17 @@ fn delivery_recipient_states(
         if antigravity_target.is_dir() && identity.contains("antigravity") {
             antigravity_detected = true;
         }
-        if codex_target.is_dir()
-            && (identity.contains("codex")
-                || identity.contains("chatgpt")
-                || identity.contains("\\.agents\\skills"))
-        {
+        if codex_target.is_dir() && (identity.contains("codex") || identity.contains("chatgpt")) {
             codex_detected = true;
         }
     }
 
     Ok(vec![
+        AgentDeliveryRecipientState {
+            id: "coze-shared",
+            path: codex_target.clone(),
+            detected: real_shared,
+        },
         AgentDeliveryRecipientState {
             id: "workbuddy",
             path: client_installation::workbuddy_skills_root(&home),
@@ -3128,17 +3156,78 @@ fn agent_delivery_links_are_healthy_for_plan(
     root: &Path,
     plan: &AgentDeliveryPlan,
 ) -> Result<bool, String> {
+    let shared = plan
+        .recipients
+        .iter()
+        .find(|recipient| recipient.id == "coze-shared" && recipient.detected);
     let recipients = plan
         .recipients
         .iter()
         .filter(|recipient| recipient.detected)
+        .filter(|recipient| {
+            shared.is_none() || !matches!(recipient.id, "coze-shared" | "codex" | "codex-legacy")
+        })
         .map(|recipient| recipient.path.clone())
         .collect::<Vec<_>>();
-    Ok(agent_delivery_links_are_healthy_for_entries_and_recipients(
+    if !agent_delivery_links_are_healthy_for_entries_and_recipients(
         root,
         &plan.allowlist,
         &recipients,
-    )? && shared_skill_catalog::verify(
+    )? {
+        return Ok(false);
+    }
+    if let Some(shared) = shared {
+        if !shared_skill_catalog::verify_shared(
+            &shared.path,
+            &shared_skill_catalog_entries(root, &plan.allowlist),
+            &active_skills_dir(root),
+        ) {
+            return Ok(false);
+        }
+        for legacy in plan
+            .recipients
+            .iter()
+            .filter(|recipient| recipient.id == "codex-legacy" && recipient.detected)
+        {
+            for name in &plan.allowlist {
+                let entry = legacy.path.join(name);
+                if !delivery_link_target(&entry)
+                    .is_some_and(|target| delivery_paths_equal(&target, &shared.path.join(name)))
+                    || !entry.join("SKILL.md").is_file()
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        let legacy_catalog = shared_skill_catalog_root(root);
+        if legacy_catalog.exists() {
+            if external_skills::is_link(&legacy_catalog) {
+                return Ok(false);
+            }
+            let entries = fs::read_dir(&legacy_catalog).map_err(|error| error.to_string())?;
+            for entry in entries {
+                let entry = entry.map_err(|error| error.to_string())?.path();
+                let Some(name) = entry.file_name().and_then(|value| value.to_str()) else {
+                    return Ok(false);
+                };
+                if !plan
+                    .allowlist
+                    .iter()
+                    .any(|allowed| allowed.eq_ignore_ascii_case(name))
+                {
+                    return Ok(false);
+                }
+                if !delivery_link_target(&entry)
+                    .is_some_and(|target| delivery_paths_equal(&target, &shared.path.join(name)))
+                    || !entry.join("SKILL.md").is_file()
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        return Ok(true);
+    }
+    Ok(shared_skill_catalog::verify(
         &shared_skill_catalog_root(root),
         &shared_skill_catalog_entries(root, &plan.allowlist),
     ))
@@ -15431,6 +15520,12 @@ fn derive_agent_adapters(agents: &[AgentCard]) -> Vec<AgentAdapterCard> {
                     adapter.skills_path_hint = agent.path.clone();
                 }
             }
+            if adapter.id == "coze" {
+                adapter.skills_path_hint = delivery_home_dir()
+                    .join(".agents/skills")
+                    .display()
+                    .to_string();
+            }
             adapter
         })
         .collect()
@@ -15749,9 +15844,9 @@ fn derive_adapter_safety_checks(adapters: &[AgentAdapterCard]) -> Vec<AdapterSaf
         if adapter.id == "coze" {
             checks.push(adapter_safety_check(
                 adapter,
-                "manual-directory",
+                "agent-selection",
                 "info",
-                "在扣子中授权并添加技能目录；AI SkillHub 不修改扣子的访问权限或云端技能列表。",
+                "同步到默认扫描目录后，请在扣子云端 Agent 添加个人设备技能；扫描数量不代表已添加到对话。",
             ));
             continue;
         }
@@ -16114,7 +16209,13 @@ fn agent_adapter_catalog() -> Vec<AgentAdapterCard> {
             "~\\.workbuddy\\skills",
             "global",
         ),
-        agent_adapter("coze", "Coze / 扣子", "ByteDance", "", "manual"),
+        agent_adapter(
+            "coze",
+            "Coze / 扣子",
+            "ByteDance",
+            "~\\.agents\\skills",
+            "global",
+        ),
         agent_adapter(
             "cursor",
             "Cursor",
@@ -19998,6 +20099,78 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn shared_delivery_health_requires_real_entries_and_one_canonical_legacy_path() {
+        let root =
+            std::env::temp_dir().join(format!("skillhub-shared-health-{}", uuid::Uuid::new_v4()));
+        let connection = seed_agent_delivery_fixture(&root);
+        write_agent_skill_allowlist(&root, &connection).unwrap();
+        let names = expected_agent_skill_allowlist(&root, &connection).unwrap();
+        let shared = root.join("profile").join(".agents").join("skills");
+        let legacy = root.join("profile").join(".codex").join("skills");
+        fs::create_dir_all(&legacy).unwrap();
+        let plan = AgentDeliveryPlan {
+            allowlist: names.clone(),
+            recipients: vec![
+                AgentDeliveryRecipientState {
+                    id: "coze-shared",
+                    path: shared.clone(),
+                    detected: true,
+                },
+                AgentDeliveryRecipientState {
+                    id: "codex",
+                    path: shared.clone(),
+                    detected: true,
+                },
+                AgentDeliveryRecipientState {
+                    id: "codex-legacy",
+                    path: legacy.clone(),
+                    detected: true,
+                },
+            ],
+        };
+        assert!(!agent_delivery_links_are_healthy_for_plan(&root, &plan).unwrap());
+        shared_skill_catalog::sync_shared(
+            &shared,
+            &shared_skill_catalog_entries(&root, &names),
+            &active_skills_dir(&root),
+        )
+        .unwrap();
+        let delivered = legacy.join("paper-helper");
+        assert!(make_directory_junction(
+            &active_skills_dir(&root).join("paper-helper"),
+            &delivered
+        ));
+        assert!(
+            !agent_delivery_links_are_healthy_for_plan(&root, &plan).unwrap(),
+            "Old canonical target would duplicate Codex entries"
+        );
+        fs::remove_dir(&delivered).unwrap();
+        assert!(make_directory_junction(
+            &shared.join("paper-helper"),
+            &delivered
+        ));
+        assert!(agent_delivery_links_are_healthy_for_plan(&root, &plan).unwrap());
+        // The old scan directory only retains aliases for existing cloud paths;
+        // newly enabled Skills need no duplicate entry in that retired catalog.
+        let old_catalog = shared_skill_catalog_root(&root);
+        fs::create_dir_all(&old_catalog).unwrap();
+        assert!(agent_delivery_links_are_healthy_for_plan(&root, &plan).unwrap());
+        let old_alias = old_catalog.join("paper-helper");
+        assert!(make_directory_junction(
+            &shared.join("paper-helper"),
+            &old_alias
+        ));
+        assert!(agent_delivery_links_are_healthy_for_plan(&root, &plan).unwrap());
+        fs::remove_dir(old_alias).unwrap();
+        fs::write(shared.join("paper-helper/SKILL.md"), "user edit").unwrap();
+        assert!(!agent_delivery_links_are_healthy_for_plan(&root, &plan).unwrap());
+        fs::remove_dir(&delivered).unwrap();
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn agent_delivery_fingerprint_ignores_ui_metadata_but_tracks_effective_changes() {
         let root = std::env::temp_dir().join(format!(
@@ -21409,10 +21582,12 @@ mod tests {
     /// Create a directory junction, returning false when the platform refuses.
     #[cfg(windows)]
     fn make_directory_junction(target: &Path, link: &Path) -> bool {
+        use std::os::windows::process::CommandExt;
         std::process::Command::new("cmd")
-            .args(["/C", "mklink", "/J"])
+            .args(["/D", "/C", "mklink", "/J"])
             .arg(link)
             .arg(target)
+            .creation_flags(0x08000000)
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
