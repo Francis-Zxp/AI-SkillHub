@@ -795,13 +795,20 @@ pub(crate) fn refresh_status(
     )
 }
 
-/// Returns one plain warning per Git source whose revision could not be read
-/// (unborn HEAD after an interrupted clone, empty repository …). Such a source
-/// is skipped; it never aborts the whole sync (bug: unresolvable HEAD).
+/// A Git source whose current revision could not be read (unborn HEAD after an
+/// interrupted clone, empty repository …). The source is skipped and reported;
+/// it never aborts the whole sync (bug: unresolvable HEAD).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RevisionWarning {
+    pub folder: String,
+    pub message: String,
+}
+
+/// Returns one plain warning per Git source whose revision could not be read.
 pub(crate) fn prepare_sync_backups(
     root: &Path,
     connection: &Connection,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<RevisionWarning>, String> {
     ensure_schema(connection)?;
     write_pin_manifest(root, connection)?;
     let sources = read_sources(connection)?;
@@ -828,7 +835,7 @@ pub(crate) fn prepare_sync_backups(
         let revision = match git_revision(&path) {
             Ok(revision) => revision,
             Err(error) => {
-                warnings.push(unreadable_revision_warning(&source.name, &error));
+                warnings.push(unreadable_revision_warning(&folder, &source.name, &error));
                 continue;
             }
         };
@@ -846,16 +853,19 @@ pub(crate) fn prepare_sync_backups(
     Ok(warnings)
 }
 
-fn unreadable_revision_warning(source_name: &str, error: &str) -> String {
+fn unreadable_revision_warning(folder: &str, source_name: &str, error: &str) -> RevisionWarning {
     let detail = error.lines().next().unwrap_or_default().trim();
     let detail = detail.chars().take(160).collect::<String>();
-    format!("{source_name}：无法读取当前 Git 版本，已跳过这个技能包（{detail}）")
+    RevisionWarning {
+        folder: folder.to_string(),
+        message: format!("{source_name}：无法读取当前 Git 版本，已跳过这个技能包（{detail}）"),
+    }
 }
 
 pub(crate) fn refresh_local_revisions(
     root: &Path,
     connection: &Connection,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<RevisionWarning>, String> {
     ensure_schema(connection)?;
     let mut warnings = Vec::new();
     for source in read_sources(connection)? {
@@ -869,7 +879,7 @@ pub(crate) fn refresh_local_revisions(
         let revision = match git_revision(&path) {
             Ok(revision) => revision,
             Err(error) => {
-                warnings.push(unreadable_revision_warning(&source.name, &error));
+                warnings.push(unreadable_revision_warning(&folder, &source.name, &error));
                 continue;
             }
         };
@@ -1811,6 +1821,32 @@ mod tests {
             source_type: "skill".to_string(),
             local_path: repo.display().to_string(),
         }
+    }
+
+    #[test]
+    fn unborn_head_source_is_skipped_with_a_warning_not_a_failed_sync() {
+        // bug: an interrupted clone leaves `.git` with an unborn HEAD; every
+        // full sync used to abort with a raw `git rev-parse` message.
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-unborn-head-test-{}",
+            super::super::unix_timestamp_string()
+        ));
+        let repo = root
+            .join("app-next")
+            .join("data")
+            .join("github_sources")
+            .join("sample-source");
+        fs::create_dir_all(&repo).expect("repo folder");
+        run(&repo, &["init", "--quiet"]);
+        let connection = Connection::open_in_memory().expect("database should open");
+        insert_source(&connection, &root);
+        let warnings = prepare_sync_backups(&root, &connection).expect("sync must continue");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].folder, "sample-source");
+        assert!(warnings[0].message.contains("Sample Source"));
+        let warnings = refresh_local_revisions(&root, &connection).expect("refresh continues");
+        assert_eq!(warnings.len(), 1);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

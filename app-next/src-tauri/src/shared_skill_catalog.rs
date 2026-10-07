@@ -164,31 +164,6 @@ pub fn verify_shared(
         && plan_shared(root, entries, managed_source_root).is_ok_and(|(plan, _)| plan.is_empty())
 }
 
-/// Read-only conflict check for one shared entry, used by the read-back.
-pub fn classify_existing(path: &Path, original: Option<&Path>) -> Option<SharedConflict> {
-    let metadata = fs::symlink_metadata(path).ok()?;
-    let name = path
-        .file_name()
-        .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_default();
-    if is_managed_entry(path) {
-        return None;
-    }
-    let kind = if is_link(path).unwrap_or(false) {
-        "external-link"
-    } else if metadata.is_dir() {
-        "personal-folder"
-    } else {
-        "not-a-folder"
-    };
-    Some(SharedConflict {
-        name,
-        path: path.to_path_buf(),
-        kind,
-        same_content: original.is_some_and(|original| same_manifest_bytes(path, original)),
-    })
-}
-
 fn same_manifest_bytes(entry: &Path, original_manifest: &Path) -> bool {
     match (
         read_manifest(&entry.join("SKILL.md")),

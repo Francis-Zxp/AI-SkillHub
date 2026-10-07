@@ -49,6 +49,13 @@ pub(crate) fn coze_executable() -> Option<PathBuf> {
     desktop_executable(&["Coze", "扣子"], &["Coze.exe"], &["Coze"])
 }
 
+/// v3.3 experimental recipient. Same registry and known-path probes as
+/// `AgentInstallDiscovery.ps1` (`%LOCALAPPDATA%\Programs\cursor\Cursor.exe`
+/// or the registered install). A `~/.cursor` folder alone is not evidence.
+pub(crate) fn cursor_executable() -> Option<PathBuf> {
+    desktop_executable(&["Cursor"], &["Cursor.exe"], &["cursor", "Cursor"])
+}
+
 fn desktop_executable(products: &[&str], binaries: &[&str], folders: &[&str]) -> Option<PathBuf> {
     registered_desktop(products, binaries)
         .or_else(|| {

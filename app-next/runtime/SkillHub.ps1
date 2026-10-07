@@ -756,6 +756,8 @@ function Ensure-CollectionRouterSkill($List, [string]$RepoName, $RepoCandidates)
   if ($RepoName -eq 'AI-SkillHub-local-routers') { return }
 
   $repoKey = Normalize-SkillLookupName $RepoName
+  $RepoCandidates = @($RepoCandidates | Where-Object { -not (Test-DisabledChildSkill ([string]$_.Source)) })
+  if ($RepoCandidates.Count -lt 1) { return }
   $parentCandidate = @(
     $RepoCandidates | Where-Object {
       (Normalize-SkillLookupName ([string]$_.Skill)) -eq $repoKey
@@ -1131,6 +1133,31 @@ if (Test-Path -LiteralPath $GovernancePath -PathType Leaf) {
     $GovernanceManifestReadable = $false
     Write-Warning "Source pin manifest could not be read. Repository updates are blocked so a pinned source cannot drift: $($_.Exception.Message)"
   }
+}
+
+# v3.3 bug #18: children whose own switch is off leave their parent's child
+# list. Rust writes the absolute SKILL.md paths; an unreadable list fails open
+# exactly like the Rust router builder (every child stays listed).
+$DisabledChildSkillFiles = @{}
+$disabledChildListPath = [Environment]::GetEnvironmentVariable('AI_SKILLHUB_DISABLED_CHILD_SKILLS')
+if (-not [string]::IsNullOrWhiteSpace($disabledChildListPath) -and
+    (Test-Path -LiteralPath $disabledChildListPath -PathType Leaf)) {
+  try {
+    $disabledChildState = [IO.File]::ReadAllText($disabledChildListPath, [Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+    foreach ($disabledFile in @($disabledChildState.skillFiles)) {
+      if (-not [string]::IsNullOrWhiteSpace([string]$disabledFile)) {
+        $DisabledChildSkillFiles[([string]$disabledFile).ToLowerInvariant()] = $true
+      }
+    }
+  } catch {
+    Write-Warning "Disabled child Skill list is unreadable; every child stays listed: $($_.Exception.Message)"
+  }
+}
+
+function Test-DisabledChildSkill([string]$SkillDirectory) {
+  if ($DisabledChildSkillFiles.Count -eq 0) { return $false }
+  $key = ([IO.Path]::GetFullPath((Join-Path $SkillDirectory 'SKILL.md')) -replace '\\', '/').TrimEnd('/').ToLowerInvariant()
+  return $DisabledChildSkillFiles.ContainsKey($key)
 }
 
 function Get-PinnedSourceRevision([string]$RepositoryName) {

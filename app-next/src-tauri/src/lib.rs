@@ -14,6 +14,10 @@ mod prompt_launcher;
 mod prompt_library;
 mod security_scan;
 mod shared_skill_catalog;
+mod skill_delivery;
+mod skill_source;
+mod skillhub_error;
+mod delivery_queue;
 mod source_governance;
 mod source_identity;
 mod sparse_scope;
@@ -30,7 +34,8 @@ unsafe extern "C" {}
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use security_scan::SourceSecurityFinding;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use skillhub_error::SkillHubError;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, HashMap, HashSet};
@@ -69,7 +74,7 @@ const GITHUB_FALLBACK_MAX_BYTES: u64 = 80 * 1024 * 1024;
 const GITHUB_FALLBACK_MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MANAGED_SOURCE_METADATA_FILE: &str = ".skillhub-source.json";
 const AGENT_DELIVERY_FINGERPRINT_KEY: &str = "agent_delivery_fingerprint_v1";
-const AGENT_DELIVERY_POLICY_VERSION: &str = "parent-first-v3.3-real-shared";
+const AGENT_DELIVERY_POLICY_VERSION: &str = "parent-first-v3.3-targets";
 static SNAPSHOT_SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 // Heavy reconciliation jobs touch the same SQLite index, generated routers and
 // recipient links. Keep them single-flight so a user action cannot overlap a
@@ -129,6 +134,9 @@ struct LegacySnapshot {
     audit_events: Vec<AuditEventCard>,
     diagnostics: DiagnosticSummary,
     index: IndexReport,
+    /// v3.3: per pack x AI tool delivery state, from SQLite and the last
+    /// read-back only (no disk read-back while loading a snapshot).
+    skill_delivery: Option<skill_delivery::SkillDeliveryState>,
 }
 
 #[derive(Serialize)]
@@ -1214,10 +1222,34 @@ async fn hydrate_runtime_snapshot() -> Result<RuntimeSnapshotHydration, String> 
 }
 
 #[tauri::command]
-async fn run_skillhub_sync(continue_run: Option<bool>) -> Result<LegacySnapshot, String> {
+async fn run_skillhub_sync(
+    app: tauri::AppHandle,
+    continue_run: Option<bool>,
+) -> Result<LegacySnapshot, String> {
     let continue_run = continue_run.unwrap_or(false);
-    run_blocking_task(move || run_skillhub_sync_blocking(continue_run)).await
+    run_blocking_task(move || run_skillhub_sync_blocking(continue_run, Some(app))).await
 }
+
+/// `source-import-progress` with stage `wait` while a long command waits for
+/// the write guard (§3.8), so it never fails on a running delivery job.
+fn emit_wait_progress(app: Option<&tauri::AppHandle>, operation_id: &str, holder: &str) {
+    if let Some(app) = app {
+        let _ = app.emit(
+            SOURCE_IMPORT_PROGRESS_EVENT,
+            SourceImportProgressEvent {
+                operation_id: operation_id.to_string(),
+                stage: "wait".to_string(),
+                state: "waiting".to_string(),
+                message: format!("等待其他任务完成：{holder}"),
+                current: 0,
+                total: 0,
+            },
+        );
+    }
+}
+
+/// Long commands wait up to two minutes for the write guard (§3.8).
+const LONG_COMMAND_GUARD_WAIT: Duration = Duration::from_secs(120);
 
 #[tauri::command]
 async fn save_source_metadata(
@@ -1379,6 +1411,75 @@ struct BackgroundWriteGuard {
     _process: std::sync::MutexGuard<'static, ()>,
 }
 
+/// Plain label of the operation holding the write guard, shown while another
+/// job waits for it (`waitingFor`, §3.5).
+static BACKGROUND_WRITE_HOLDER: OnceLock<Mutex<String>> = OnceLock::new();
+
+fn set_background_write_holder(operation: &str) {
+    if let Ok(mut holder) = BACKGROUND_WRITE_HOLDER
+        .get_or_init(|| Mutex::new(String::new()))
+        .lock()
+    {
+        *holder = operation.to_string();
+    }
+}
+
+impl Drop for BackgroundWriteGuard {
+    fn drop(&mut self) {
+        set_background_write_holder("");
+    }
+}
+
+/// Plain-language label for the operation that currently holds the guard.
+fn background_write_holder_label() -> String {
+    let holder = BACKGROUND_WRITE_HOLDER
+        .get_or_init(|| Mutex::new(String::new()))
+        .lock()
+        .map(|holder| holder.clone())
+        .unwrap_or_default();
+    match holder.as_str() {
+        "完整同步" => "正在更新技能包",
+        "来源导入" | "安装技能包" => "正在安装技能包",
+        "纳入已有技能" => "正在纳入已有技能",
+        "本地索引刷新" => "正在刷新技能库",
+        "AI 工具检测刷新" | "连接本机 AI 工具" => "正在检测 AI 工具",
+        "同步到 AI 工具" | "Agent Skill 交付" => "正在同步到 AI 工具",
+        "来源版本回滚" => "正在回到上一版",
+        "" => "另一个 SkillHub 窗口或任务",
+        _ => "另一项任务",
+    }
+    .to_string()
+}
+
+fn is_write_busy_error(error: &str) -> bool {
+    error.contains("另一项刷新或写入任务正在运行") || error.contains("无法取得数据写入锁")
+}
+
+/// Waits for the guard instead of failing fast (§3.5, §3.8). `on_wait` gets
+/// the plain label of the holder whenever it changes. Retries every 250 ms.
+fn acquire_background_write_guard_waiting(
+    operation: &str,
+    timeout: Duration,
+    mut on_wait: impl FnMut(&str),
+) -> Result<BackgroundWriteGuard, String> {
+    let started = Instant::now();
+    let mut last_label = String::new();
+    loop {
+        match acquire_background_write_guard(operation) {
+            Ok(guard) => return Ok(guard),
+            Err(error) if is_write_busy_error(&error) && started.elapsed() < timeout => {
+                let label = background_write_holder_label();
+                if label != last_label {
+                    on_wait(&label);
+                    last_label = label;
+                }
+                thread::sleep(Duration::from_millis(250));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn acquire_background_file_lock(state_dir: &Path, operation: &str) -> Result<fs::File, String> {
     fs::create_dir_all(state_dir)
         .map_err(|error| format!("无法准备写入锁目录，未开始{operation}：{error}"))?;
@@ -1403,11 +1504,13 @@ fn acquire_background_write_guard(operation: &str) -> Result<BackgroundWriteGuar
     )?;
     let root = locate_legacy_root()?;
     let file = acquire_background_file_lock(&private_state_dir(&root), operation)?;
-    prepare_user_data(&root)?;
-    Ok(BackgroundWriteGuard {
+    let guard = BackgroundWriteGuard {
         _file: file,
         _process: process,
-    })
+    };
+    set_background_write_holder(operation);
+    prepare_user_data(&root)?;
+    Ok(guard)
 }
 
 fn try_acquire_background_write_guard<'a>(
@@ -1499,6 +1602,7 @@ fn scan_legacy_snapshot_under_write_guard() -> Result<LegacySnapshot, String> {
     let skill_conflicts = derive_skill_conflicts(&skills, &HashMap::new());
 
     let mut snapshot = LegacySnapshot {
+        skill_delivery: None,
         root: root.display().to_string(),
         skills_dir: skills_dir.display().to_string(),
         sources_dir: sources_dir.display().to_string(),
@@ -1834,26 +1938,37 @@ fn indexed_snapshot_needs_portable_source_refresh(root: &Path, snapshot: &Legacy
     })
 }
 
-fn run_skillhub_sync_blocking(continue_run: bool) -> Result<LegacySnapshot, String> {
-    let _write_guard = acquire_background_write_guard("完整同步")?;
+fn run_skillhub_sync_blocking(
+    continue_run: bool,
+    app: Option<tauri::AppHandle>,
+) -> Result<LegacySnapshot, String> {
+    let _write_guard =
+        acquire_background_write_guard_waiting("完整同步", LONG_COMMAND_GUARD_WAIT, |holder| {
+            emit_wait_progress(app.as_ref(), "skillhub-sync", holder)
+        })?;
     let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
+    let mut connection = open_index_database(&root)?;
+    ensure_v33_delivery_migration(&root, &mut connection)?;
 
     // Capture a verified revision ref before update and write the pin manifest
     // consumed by SkillHub.ps1. A pinned source is kept at its exact commit.
-    source_governance::prepare_sync_backups(&root, &connection)?;
+    // A source whose revision cannot be read is skipped and reported, never
+    // allowed to abort the whole update (bug: unresolvable HEAD).
+    let mut revision_warnings = source_governance::prepare_sync_backups(&root, &connection)?;
     // Machines without a usable Git hold ZIP snapshots that `git pull` cannot
     // reach. Refresh those from GitHub first, then let the script run its normal
     // Git pass over the real clones.
     let snapshot_refresh = refresh_snapshot_github_sources(&root, &connection);
     write_snapshot_refresh_report(&root, &snapshot_refresh)?;
+    write_disabled_child_skills(&root, &connection)?;
     run_skillhub_script(&root)?;
     // `git pull` advances HEAD but never widens a sparse cone. Compare every
     // sparse clone with its new HEAD and materialize added Skills before the
     // index is rebuilt; HEAD equality alone does not prove the files arrived.
     let scope_report = reconcile_sparse_source_scopes(&root);
     record_update_round(&root, &scope_report, continue_run);
-    source_governance::refresh_local_revisions(&root, &connection)?;
+    revision_warnings.extend(source_governance::refresh_local_revisions(&root, &connection)?);
+    record_revision_warnings(&root, &connection, &revision_warnings);
     if scope_report.changed_files() {
         // The script indexed and published before the new folders existed.
         // Rebuild parents, the active catalog and SQLite from the final tree.
@@ -1866,6 +1981,48 @@ fn run_skillhub_sync_blocking(continue_run: bool) -> Result<LegacySnapshot, Stri
     // Agent-page action and no longer blocks every Git refresh.
     sync_skill_conflict_dispatchers(&root, &connection)?;
     finalize_agent_skill_delivery(&root, false, false)
+}
+
+/// Shows unreadable Git revisions as failed rows of the update run and in the
+/// activity log, instead of failing the whole update. Status only.
+fn record_revision_warnings(
+    root: &Path,
+    connection: &Connection,
+    warnings: &[source_governance::RevisionWarning],
+) {
+    if warnings.is_empty() {
+        return;
+    }
+    let state_dir = private_state_dir(root).join("sync-state");
+    if let Some(mut run) = update_run::read_run(&state_dir) {
+        for warning in warnings {
+            match run
+                .sources
+                .iter_mut()
+                .find(|entry| entry.folder.eq_ignore_ascii_case(&warning.folder))
+            {
+                Some(entry) => {
+                    entry.outcome = "failed".to_string();
+                    entry.detail = warning.message.clone();
+                }
+                None => run.sources.push(update_run::SourceRunEntry {
+                    folder: warning.folder.clone(),
+                    outcome: "failed".to_string(),
+                    detail: warning.message.clone(),
+                    ..update_run::SourceRunEntry::default()
+                }),
+            }
+        }
+        let _ = update_run::write_run(&state_dir, &run);
+    }
+    let _ = write_audit_event(
+        connection,
+        "source_revision_unreadable",
+        &format!("{} 个技能包的 Git 版本无法读取，已跳过", warnings.len()),
+        serde_json::json!({
+            "sources": warnings.iter().map(|warning| warning.folder.clone()).collect::<Vec<_>>(),
+        }),
+    );
 }
 
 /// Time one sync may spend materializing newly added Skills. Anything left is
@@ -1925,13 +2082,19 @@ fn ensure_agent_skill_delivery_blocking() -> Result<LegacySnapshot, String> {
     if !database_file(&root).exists() {
         let _ = scan_legacy_snapshot_under_write_guard()?;
     }
-    let connection = open_index_database(&root)?;
+    let mut connection = open_index_database(&root)?;
+    ensure_v33_delivery_migration(&root, &mut connection)?;
     let skill_count = connection
         .query_row("SELECT COUNT(*) FROM skills", [], |row| {
             row.get::<_, i64>(0)
         })
         .map_err(|error| format!("Cannot count indexed Skills: {}", error))?;
-    if skill_count == 0 || agent_delivery_is_current(&root, &connection)? {
+    // I-1: while paused or before onboarding the startup verify never writes,
+    // never evaluates health and never writes the fingerprint (§2.5).
+    if skill_count == 0
+        || skill_delivery::delivery_writes_blocked(&connection)?
+        || agent_delivery_is_current(&root, &connection)?
+    {
         return read_startup_snapshot_from_database(&root, &connection);
     }
     reconcile_agent_skill_delivery(&root, &connection, false, true)
@@ -1995,6 +2158,7 @@ fn sync_local_sources_to_agents(root: &Path, connection: &Connection) -> Result<
     // Build every generated parent first, then publish one coherent active
     // catalog. Publishing before router generation can leave stale junctions
     // pointing at a router directory that was removed and recreated.
+    write_disabled_child_skills(root, connection)?;
     let report = plan_or_write_router_hubs(root, true, true)?;
     let _ = record_router_hub_audit(connection, &report);
     sync_skill_conflict_dispatchers(root, connection)?;
@@ -2009,17 +2173,35 @@ fn reconcile_agent_skill_delivery(
     refresh_diagnostics: bool,
     startup_fast_path: bool,
 ) -> Result<LegacySnapshot, String> {
+    let (connection, run) =
+        reconcile_agent_skill_delivery_run(root, audit_connection, refresh_diagnostics)?;
+    finish_external_delivery(root, &connection, &run, "reconcile");
+    if startup_fast_path {
+        read_startup_snapshot_from_database(root, &connection)
+    } else {
+        read_snapshot_from_database(root, &connection)
+    }
+}
+
+/// The `full` depth (§3.4): routers → dispatchers → `SkillHub.ps1 -NoPull` →
+/// scan → link step → health → fingerprint. Routers, the script and the scan
+/// only touch SkillHub-owned UserData, so they also run while blocked (§3.6).
+fn reconcile_agent_skill_delivery_run(
+    root: &Path,
+    audit_connection: &Connection,
+    refresh_diagnostics: bool,
+) -> Result<(Connection, DeliveryRun), String> {
     // Source updates can add or remove children. Finish every source/active
     // catalog write first, then rebuild SQLite from that final filesystem state
     // before deriving the allowlist. This prevents a fresh fingerprint from
     // ever being paired with stale dispatchers, active links, or an old
     // transaction snapshot.
+    write_disabled_child_skills(root, audit_connection)?;
     let report = plan_or_write_router_hubs(root, true, true)?;
     let _ = record_router_hub_audit(audit_connection, &report);
     sync_skill_conflict_dispatchers(root, audit_connection)?;
     run_skillhub_script_no_pull(root)?;
-
-    finalize_agent_skill_delivery(root, refresh_diagnostics, startup_fast_path)
+    finalize_agent_skill_delivery_run(root, refresh_diagnostics)
 }
 
 fn finalize_agent_skill_delivery(
@@ -2027,27 +2209,166 @@ fn finalize_agent_skill_delivery(
     refresh_diagnostics: bool,
     startup_fast_path: bool,
 ) -> Result<LegacySnapshot, String> {
+    let (connection, run) = finalize_agent_skill_delivery_run(root, refresh_diagnostics)?;
+    finish_external_delivery(root, &connection, &run, "finalize");
+    if startup_fast_path {
+        read_startup_snapshot_from_database(root, &connection)
+    } else {
+        read_snapshot_from_database(root, &connection)
+    }
+}
+
+fn finalize_agent_skill_delivery_run(
+    root: &Path,
+    refresh_diagnostics: bool,
+) -> Result<(Connection, DeliveryRun), String> {
     let _ = scan_legacy_snapshot_under_write_guard()?;
     let mut connection = open_index_database(root)?;
-    run_agent_link_script(root, &connection)?;
+    let run = run_agent_link_script(root, &connection)?;
 
     if refresh_diagnostics {
         run_diagnostics_export_script(root)?;
         let diagnostics_json = read_json(&diagnostics_file(root));
         persist_agent_detection_refresh(root, &mut connection, diagnostics_json.as_ref())?;
     }
-    let delivery_plan = build_agent_delivery_plan(root, &connection)?;
-    if !agent_delivery_links_are_healthy_for_plan(root, &delivery_plan)? {
-        return Err(
-            "AI 工具 Skill 交付后的完整性核对未通过；未记录完成标记，请点击同步重试。".to_string(),
-        );
+    verify_link_step(root, &connection, &run)?;
+    Ok((connection, run))
+}
+
+/// Read-back plus a finished `delivery-status` event for link steps that ran
+/// outside the queue (update, rollback, legacy commands). Status only: a
+/// failure here never fails the operation that already completed.
+fn finish_external_delivery(root: &Path, connection: &Connection, run: &DeliveryRun, reason: &str) {
+    let changed = read_back_delivery_targets(root, connection).unwrap_or_default();
+    delivery_queue::publish_finished(
+        delivery_queue::Depth::Full,
+        reason,
+        delivery_queue::JobOutcome {
+            phase: if matches!(run, DeliveryRun::Blocked) {
+                "paused"
+            } else {
+                "done"
+            },
+            agents: run.results(),
+            changed_targets: changed,
+            snapshot_stale: true,
+            error: None,
+        },
+    );
+}
+
+/// Fresh evidence, units and a read-back of every pair; returns the pairs
+/// whose status changed since the previous read-back.
+fn read_back_delivery_targets(
+    root: &Path,
+    connection: &Connection,
+) -> Result<Vec<skill_delivery::SkillTargetKey>, String> {
+    let before = skill_delivery::read_targets(connection)?;
+    let recipients = delivery_recipient_states(connection)?;
+    let allowlist = expected_agent_skill_allowlist(root, connection)?;
+    let units = skill_delivery::read_delivery_units(root, connection, &allowlist)?;
+    let evidence = skill_delivery::Evidence::from_recipients(&recipients);
+    skill_delivery::read_back(root, connection, &units, &evidence)?;
+    let after = skill_delivery::read_targets(connection)?;
+    Ok(after
+        .iter()
+        .filter(|(key, row)| {
+            before
+                .get(*key)
+                .is_none_or(|previous| previous.status != row.status)
+        })
+        .map(|((unit, agent), _)| skill_delivery::SkillTargetKey {
+            unit_id: unit.clone(),
+            agent_id: agent.clone(),
+        })
+        .collect())
+}
+
+/// One-time v3.3 migration (§2.3). Idempotent; run under the write guard.
+fn ensure_v33_delivery_migration(root: &Path, connection: &mut Connection) -> Result<(), String> {
+    if skill_delivery::read_pref(connection, skill_delivery::PREF_MIGRATION)?
+        .is_some_and(|value| value.starts_with("done:"))
+    {
+        return Ok(());
     }
-    write_agent_delivery_fingerprint_for_plan(root, &connection, &delivery_plan)?;
-    if startup_fast_path {
-        read_startup_snapshot_from_database(root, &connection)
-    } else {
-        read_snapshot_from_database(root, &connection)
+    let recipients = delivery_recipient_states(connection)?;
+    let has_entries =
+        skill_delivery::tools_with_skillhub_entries(&active_skills_dir(root), &recipients);
+    let fingerprint = read_agent_delivery_fingerprint(connection)?;
+    skill_delivery::migrate_v33_delivery_state(connection, &has_entries, &fingerprint)?;
+    Ok(())
+}
+
+fn disabled_child_skills_file(root: &Path) -> PathBuf {
+    private_state_dir(root).join("disabled-child-skills.json")
+}
+
+/// Bug #18 (§3.7): a disabled child must leave its parent's child list.
+/// Writes the absolute `SKILL.md` paths of every child whose own switch is
+/// off, in both canonical and plain form, for the Rust and the PowerShell
+/// router builders. SkillHub-owned UserData only.
+fn write_disabled_child_skills(root: &Path, connection: &Connection) -> Result<(), String> {
+    let mut statement = connection
+        .prepare(
+            "SELECT k.relative_path FROM skills k
+             JOIN sources s ON s.id = k.source_id
+             LEFT JOIN skill_overrides ko ON ko.skill_id = k.id
+             WHERE COALESCE(ko.enabled, k.enabled, 1) = 0",
+        )
+        .map_err(|error| format!("Cannot prepare disabled child query: {error}"))?;
+    let relative_paths = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("Cannot read disabled children: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Cannot decode disabled children: {error}"))?;
+    let sources_dir = managed_sources_dir(root);
+    let mut paths = BTreeSet::new();
+    for relative in relative_paths {
+        let normalized = relative.replace('/', "\\");
+        let Some(rest) = normalized.strip_prefix("github_sources\\") else {
+            continue;
+        };
+        let manifest = sources_dir.join(rest).join("SKILL.md");
+        paths.insert(normalize_router_child_path(
+            &manifest.to_string_lossy().replace('\\', "/"),
+        ));
+        paths.insert(normalize_router_child_path(&router_child_absolute_path(
+            &manifest,
+        )));
     }
+    let path = disabled_child_skills_file(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Cannot create state folder: {error}"))?;
+    }
+    let body = serde_json::to_string_pretty(&serde_json::json!({
+        "version": 1,
+        "skillFiles": paths,
+    }))
+    .map_err(|error| format!("Cannot serialize disabled children: {error}"))?;
+    fs::write(&path, format!("{body}\n"))
+        .map_err(|error| format!("Cannot write disabled children {}: {error}", path.display()))
+}
+
+fn normalize_router_child_path(value: &str) -> String {
+    strip_extended_length_prefix(value)
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_lowercase()
+}
+
+fn read_disabled_child_skills(root: &Path) -> HashSet<String> {
+    read_json(&disabled_child_skills_file(root))
+        .and_then(|value| value.get("skillFiles").cloned())
+        .and_then(|value| value.as_array().cloned())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(normalize_router_child_path)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn run_skillhub_script(root: &Path) -> Result<(), String> {
@@ -2057,6 +2378,8 @@ fn run_skillhub_script(root: &Path) -> Result<(), String> {
 fn run_skillhub_script_no_pull(root: &Path) -> Result<(), String> {
     run_skillhub_script_with_options(root, true)
 }
+
+const SKILLHUB_SCRIPT_FAILED_PREFIX: &str = "同步未完成，但本地来源和未提交内容均未删除。";
 
 fn run_skillhub_script_with_options(root: &Path, no_pull: bool) -> Result<(), String> {
     let script = skillhub_script_file(root);
@@ -2088,30 +2411,77 @@ fn run_skillhub_script_with_options(root: &Path, no_pull: bool) -> Result<(), St
             .trim();
         let detail = detail.chars().take(280).collect::<String>();
         return Err(format!(
-            "同步未完成，但本地来源和未提交内容均未删除。请打开“维护工具 → 导出排错包”查看详情。技术摘要：{detail}"
+            "{SKILLHUB_SCRIPT_FAILED_PREFIX}请到「设置 → 帮助与诊断 → 生成排错报告」查看详情。技术摘要：{detail}"
         ));
     }
 
     Ok(())
 }
 
-fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<(), String> {
+fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<DeliveryRun, String> {
+    if skill_delivery::delivery_writes_blocked(connection)? {
+        // I-1: paused or onboarding pending. Nothing under any client path is
+        // created, changed or removed; the targets file is written as a report
+        // of what the next unblocked job would do (SkillHub-owned UserData).
+        if let Ok(plan) = build_agent_delivery_plan(root, connection) {
+            let _ = skill_delivery::write_targets_file(
+                root,
+                &plan.targets,
+                AGENT_DELIVERY_POLICY_VERSION,
+            );
+        }
+        return Ok(DeliveryRun::Blocked);
+    }
     let script = agent_link_script_file(root);
     if !script.exists() {
         return Err(format!("找不到 AI 工具链接脚本：{}", script.display()));
     }
 
-    let names = expected_agent_skill_allowlist(root, connection)?;
-    let shared_entries = shared_skill_catalog_entries(root, &names);
-    let real_shared = delivery_recipient_states(connection)?
-        .into_iter()
-        .find(|recipient| recipient.id == "coze-shared" && recipient.detected);
-    if let Some(recipient) = &real_shared {
-        shared_skill_catalog::sync_shared(
-            &recipient.path,
-            &shared_entries,
-            &active_skills_dir(root),
-        )?;
+    skill_delivery::materialize_defaults(connection)?;
+    let plan = build_agent_delivery_plan(root, connection)?;
+    // Rule 1: an inconsistent plan fails closed before any recipient changes.
+    skill_delivery::validate_targets_plan(&plan.targets).map_err(|error| {
+        format!(
+            "Agent Skill allowlist contains an invalid recipient list ({}). Existing AI tool links were preserved.",
+            error.detail
+        )
+    })?;
+    let targets_file =
+        skill_delivery::write_targets_file(root, &plan.targets, AGENT_DELIVERY_POLICY_VERSION)?;
+    let report_path = skill_delivery::delivery_report_path(root);
+    let _ = fs::remove_file(&report_path);
+    let mut results = BTreeMap::new();
+
+    // The shared Coze/Codex folder stays in Rust (§3.3 rule 6). A same-name
+    // personal entry is a per-entry conflict and never blocks the others.
+    let mut real_shared_root = None;
+    if let Some(shared) = &plan.targets.shared {
+        let action = shared
+            .action
+            .unwrap_or(skill_delivery::RecipientAction::Skip);
+        let outcome = match action {
+            skill_delivery::RecipientAction::Deliver => Some(shared_skill_catalog::sync_shared(
+                &shared.path,
+                &shared_skill_catalog_entries(root, &shared.names),
+                &active_skills_dir(root),
+            )),
+            // Releasing never creates the folder (I-12).
+            skill_delivery::RecipientAction::Release if shared.path.is_dir() => Some(
+                shared_skill_catalog::sync_shared(&shared.path, &[], &active_skills_dir(root)),
+            ),
+            _ => None,
+        };
+        if let Some(outcome) = outcome {
+            for agent in ["codex", "coze"] {
+                results.insert(
+                    agent.to_string(),
+                    skill_delivery::result_from_shared(agent, action, &outcome),
+                );
+            }
+        }
+        if shared.path.is_dir() && !external_skills::is_link(&shared.path) {
+            real_shared_root = Some(shared.path.clone());
+        }
     }
 
     let mut command = Command::new("powershell.exe");
@@ -2120,8 +2490,8 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<(), Str
         .arg(&script)
         .arg("-Quiet");
     configure_user_data_command(&mut command, root);
-    if let Some(recipient) = &real_shared {
-        command.env("AI_SKILLHUB_REAL_SHARED_SKILLS", &recipient.path);
+    if let Some(path) = &real_shared_root {
+        command.env("AI_SKILLHUB_REAL_SHARED_SKILLS", path);
     }
     if std::env::var_os("AI_SKILLHUB_QA_ROOT").is_some() {
         command.arg("-HomePath").arg(delivery_home_dir());
@@ -2130,6 +2500,9 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<(), Str
         let allowlist = write_agent_skill_allowlist(root, connection)?;
         command.env("AI_SKILLHUB_AGENT_SKILL_ALLOWLIST", allowlist);
     }
+    command
+        .env("AI_SKILLHUB_AGENT_SKILL_TARGETS", &targets_file)
+        .env("AI_SKILLHUB_DELIVERY_REPORT", &report_path);
     let output = command_output_with_timeout(
         &mut command,
         Duration::from_secs(180),
@@ -2152,13 +2525,86 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<(), Str
         return Err(format!("AI 工具链接同步失败：{detail}"));
     }
 
-    if real_shared.is_some() {
-        // PowerShell retains any previously registered catalog paths as aliases
-        // so Coze does not scan the same Skill twice after default-root migration.
-        Ok(())
-    } else {
-        shared_skill_catalog::sync(&shared_skill_catalog_root(root), &shared_entries)
+    if let Some(report) = skill_delivery::read_delivery_report(&report_path) {
+        for (agent, result) in skill_delivery::results_from_report(&report) {
+            match results.get_mut(&agent) {
+                // Shared mode: Rust wrote the entries, PowerShell verified them
+                // and the legacy links; keep the more severe outcome.
+                Some(existing) => {
+                    if result.outcome == "failed" || result.outcome == "partial" {
+                        existing.outcome = result.outcome.clone();
+                        if existing.error.is_none() {
+                            existing.error = result.error.clone();
+                        }
+                    }
+                    existing.conflicts += result.conflicts;
+                    existing.errors += result.errors;
+                }
+                None => {
+                    results.insert(agent, result);
+                }
+            }
+        }
     }
+
+    if plan.targets.shared.is_none() {
+        // Without shared mode the UserData compatibility catalog mirrors the
+        // union (SkillHub-owned; older Coze setups registered it as a folder).
+        shared_skill_catalog::sync(
+            &shared_skill_catalog_root(root),
+            &shared_skill_catalog_entries(root, &plan.allowlist),
+        )?;
+    }
+    skill_delivery::record_agent_results(connection, &results)?;
+    Ok(DeliveryRun::Completed { results })
+}
+
+/// Outcome of one link step. `Blocked` means I-1 applied and nothing in any
+/// AI tool's folder was touched.
+enum DeliveryRun {
+    Blocked,
+    Completed {
+        results: BTreeMap<String, skill_delivery::AgentDeliveryResult>,
+    },
+}
+
+impl DeliveryRun {
+    fn failed_agents(&self) -> BTreeSet<String> {
+        match self {
+            Self::Blocked => BTreeSet::new(),
+            Self::Completed { results } => results
+                .iter()
+                .filter(|(_, result)| result.outcome == "failed")
+                .map(|(agent, _)| agent.clone())
+                .collect(),
+        }
+    }
+
+    fn results(&self) -> Vec<skill_delivery::AgentDeliveryResult> {
+        match self {
+            Self::Blocked => Vec::new(),
+            Self::Completed { results } => results.values().cloned().collect(),
+        }
+    }
+}
+
+/// After a completed link step: verify every recipient that did not fail and
+/// write the fingerprint only when no agent failed (§3.4 `links`).
+fn verify_link_step(root: &Path, connection: &Connection, run: &DeliveryRun) -> Result<(), String> {
+    if matches!(run, DeliveryRun::Blocked) {
+        return Ok(());
+    }
+    let failed = run.failed_agents();
+    let delivery_plan = build_agent_delivery_plan(root, connection)?;
+    if !agent_delivery_links_are_healthy_for_plan_excluding(root, &delivery_plan, &failed)? {
+        return Err(
+            "AI 工具 Skill 交付后的完整性核对未通过；未记录完成标记，请点击同步重试。".to_string(),
+        );
+    }
+    if failed.is_empty() {
+        write_agent_delivery_fingerprint_for_plan(root, connection, &delivery_plan)?;
+    }
+    Ok(())
 }
 
 fn shared_skill_catalog_root(root: &Path) -> PathBuf {
@@ -2455,6 +2901,10 @@ struct AgentDeliveryRecipientState {
 struct AgentDeliveryPlan {
     allowlist: Vec<String>,
     recipients: Vec<AgentDeliveryRecipientState>,
+    /// v3.3 per pack x AI tool plan; every recipient's names ⊆ allowlist.
+    targets: skill_delivery::TargetsPlan,
+    /// Pause, onboarding, takeover and per-recipient names (§2.5).
+    policy_lines: Vec<String>,
 }
 
 fn delivery_home_dir() -> PathBuf {
@@ -2594,9 +3044,10 @@ fn delivery_recipient_states(
     let workbuddy_detected =
         command_exists("workbuddy") || client_installation::workbuddy_executable().is_some();
     let codex_target = home.join(".agents").join("skills");
+    let coze_installed = client_installation::coze_executable().is_some();
     // Keep an already migrated shared catalog stable if Coze is later removed.
     // A personal folder alone never enables this delivery mode.
-    let real_shared = client_installation::coze_executable().is_some()
+    let real_shared = coze_installed
         || fs::read_dir(&codex_target).is_ok_and(|entries| {
             entries
                 .flatten()
@@ -2673,11 +3124,33 @@ fn delivery_recipient_states(
         }
     }
 
-    Ok(vec![
+    // v3.3 experimental plain-folder recipients. A pre-existing `~/.cursor` or
+    // `~/.gemini` folder alone never counts as install evidence (I-12).
+    let cursor_detected =
+        client_installation::cursor_executable().is_some() || command_exists("cursor");
+    let gemini_detected = command_exists("gemini")
+        || roaming_root.join("npm").join("gemini.cmd").is_file();
+
+    let recipients = vec![
         AgentDeliveryRecipientState {
             id: "coze-shared",
             path: codex_target.clone(),
             detected: real_shared,
+        },
+        AgentDeliveryRecipientState {
+            id: "coze",
+            path: codex_target.clone(),
+            detected: coze_installed,
+        },
+        AgentDeliveryRecipientState {
+            id: "cursor",
+            path: home.join(".cursor").join("skills"),
+            detected: cursor_detected,
+        },
+        AgentDeliveryRecipientState {
+            id: "gemini-cli",
+            path: home.join(".gemini").join("skills"),
+            detected: gemini_detected,
         },
         AgentDeliveryRecipientState {
             id: "workbuddy",
@@ -2704,16 +3177,52 @@ fn delivery_recipient_states(
             detected: codex_detected && legacy_codex.is_dir(),
             path: legacy_codex,
         },
-    ])
+    ];
+    if let Ok(mut cache) = RECIPIENT_CACHE.get_or_init(|| Mutex::new(None)).lock() {
+        *cache = Some((Instant::now(), recipients.clone()));
+    }
+    Ok(recipients)
 }
+
+/// Install evidence is probed through the registry and running processes,
+/// which costs hundreds of milliseconds. Mutations (< 300 ms, I-4) and state
+/// reads use the evidence of the last delivery job instead; it is refreshed by
+/// every job and expires after a few minutes. A few hundred bytes, no more.
+static RECIPIENT_CACHE: OnceLock<Mutex<Option<(Instant, Vec<AgentDeliveryRecipientState>)>>> =
+    OnceLock::new();
+const RECIPIENT_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
 fn build_agent_delivery_plan(
     root: &Path,
     connection: &Connection,
 ) -> Result<AgentDeliveryPlan, String> {
+    let recipients = delivery_recipient_states(connection)?;
+    build_agent_delivery_plan_with(root, connection, recipients)
+}
+
+fn build_agent_delivery_plan_with(
+    root: &Path,
+    connection: &Connection,
+    recipients: Vec<AgentDeliveryRecipientState>,
+) -> Result<AgentDeliveryPlan, String> {
+    let allowlist = expected_agent_skill_allowlist(root, connection)?;
+    let units = skill_delivery::read_delivery_units(root, connection, &allowlist)?;
+    let targets = skill_delivery::read_targets(connection)?;
+    let takeover = skill_delivery::read_takeover(connection)?;
+    let evidence = skill_delivery::Evidence::from_recipients(&recipients);
+    let targets_plan =
+        skill_delivery::compute_targets_plan(&allowlist, &units, &targets, &takeover, &evidence);
+    let policy_lines = skill_delivery::fingerprint_lines(
+        skill_delivery::is_paused(connection)?,
+        skill_delivery::onboarding_status(connection)?,
+        &takeover,
+        &targets_plan,
+    );
     Ok(AgentDeliveryPlan {
-        allowlist: expected_agent_skill_allowlist(root, connection)?,
-        recipients: delivery_recipient_states(connection)?,
+        allowlist,
+        recipients,
+        targets: targets_plan,
+        policy_lines,
     })
 }
 
@@ -2846,6 +3355,9 @@ fn agent_delivery_fingerprint_for_plan(
             u8::from(recipient.detected),
             u8::from(recipient.path.is_dir()),
         ]);
+    }
+    for line in &plan.policy_lines {
+        update_delivery_hash(&mut hasher, line);
     }
     Ok(format!("{:x}", hasher.finalize()))
 }
@@ -3156,47 +3668,92 @@ fn agent_delivery_links_are_healthy_for_plan(
     root: &Path,
     plan: &AgentDeliveryPlan,
 ) -> Result<bool, String> {
-    let shared = plan
-        .recipients
-        .iter()
-        .find(|recipient| recipient.id == "coze-shared" && recipient.detected);
-    let recipients = plan
-        .recipients
-        .iter()
-        .filter(|recipient| recipient.detected)
-        .filter(|recipient| {
-            shared.is_none() || !matches!(recipient.id, "coze-shared" | "codex" | "codex-legacy")
-        })
-        .map(|recipient| recipient.path.clone())
-        .collect::<Vec<_>>();
-    if !agent_delivery_links_are_healthy_for_entries_and_recipients(
-        root,
-        &plan.allowlist,
-        &recipients,
-    )? {
+    agent_delivery_links_are_healthy_for_plan_excluding(root, plan, &BTreeSet::new())
+}
+
+/// v3.3 per-recipient health. A recipient whose last job failed is excluded
+/// (its failure is reported separately and blocks the fingerprint). A desired
+/// name that is held by a personal entry is a recorded conflict, not damage.
+fn agent_delivery_links_are_healthy_for_plan_excluding(
+    root: &Path,
+    plan: &AgentDeliveryPlan,
+    failed_agents: &BTreeSet<String>,
+) -> Result<bool, String> {
+    // The stored union allowlist and every active manifest stay authoritative.
+    if !agent_delivery_links_are_healthy_for_entries_and_recipients(root, &plan.allowlist, &[])? {
         return Ok(false);
     }
-    if let Some(shared) = shared {
-        if !shared_skill_catalog::verify_shared(
-            &shared.path,
-            &shared_skill_catalog_entries(root, &plan.allowlist),
-            &active_skills_dir(root),
-        ) {
-            return Ok(false);
+    let active_root = active_skills_dir(root);
+    for recipient in &plan.targets.recipients {
+        if failed_agents.contains(recipient.agent_id) || recipient.shared {
+            continue;
         }
-        for legacy in plan
-            .recipients
-            .iter()
-            .filter(|recipient| recipient.id == "codex-legacy" && recipient.detected)
-        {
-            for name in &plan.allowlist {
-                let entry = legacy.path.join(name);
-                if !delivery_link_target(&entry)
-                    .is_some_and(|target| delivery_paths_equal(&target, &shared.path.join(name)))
-                    || !entry.join("SKILL.md").is_file()
+        let link_root = recipient
+            .link_root
+            .clone()
+            .unwrap_or_else(|| active_root.clone());
+        match recipient.action {
+            skill_delivery::RecipientAction::Skip => {}
+            skill_delivery::RecipientAction::Release => {
+                if recipient_holds_skillhub_links(&recipient.path, &[&active_root, &link_root], &[])
                 {
                     return Ok(false);
                 }
+            }
+            skill_delivery::RecipientAction::Deliver => {
+                if !recipient.path.is_dir() {
+                    return Ok(false);
+                }
+                for name in &recipient.names {
+                    let entry = recipient.path.join(name);
+                    if fs::symlink_metadata(&entry).is_err() {
+                        return Ok(false);
+                    }
+                    let ours = external_skills::is_link(&entry)
+                        && delivery_link_target(&entry).is_some_and(|target| {
+                            skill_delivery::path_is_under(&target, &link_root)
+                                || skill_delivery::path_is_under(&target, &active_root)
+                        });
+                    if !ours {
+                        // A personal folder or external link with this name is
+                        // a conflict that the read-back reports (I-2).
+                        continue;
+                    }
+                    if !delivery_link_target(&entry)
+                        .is_some_and(|target| delivery_paths_equal(&target, &link_root.join(name)))
+                        || !entry.join("SKILL.md").is_file()
+                    {
+                        return Ok(false);
+                    }
+                }
+                if recipient_holds_skillhub_links(
+                    &recipient.path,
+                    &[&active_root, &link_root],
+                    &recipient.names,
+                ) {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    if let Some(shared) = &plan.targets.shared {
+        let group_failed = failed_agents.contains("codex") || failed_agents.contains("coze");
+        if !group_failed {
+            let entries = shared_skill_catalog_entries(root, &shared.names);
+            let healthy = match shared.action {
+                Some(skill_delivery::RecipientAction::Deliver) => {
+                    shared_skill_catalog::verify_shared(&shared.path, &entries, &active_root)
+                }
+                Some(skill_delivery::RecipientAction::Release) => !fs::read_dir(&shared.path)
+                    .is_ok_and(|items| {
+                        items
+                            .flatten()
+                            .any(|item| shared_skill_catalog::is_managed_entry(&item.path()))
+                    }),
+                _ => true,
+            };
+            if !healthy {
+                return Ok(false);
             }
         }
         let legacy_catalog = shared_skill_catalog_root(root);
@@ -3210,8 +3767,8 @@ fn agent_delivery_links_are_healthy_for_plan(
                 let Some(name) = entry.file_name().and_then(|value| value.to_str()) else {
                     return Ok(false);
                 };
-                if !plan
-                    .allowlist
+                if !shared
+                    .names
                     .iter()
                     .any(|allowed| allowed.eq_ignore_ascii_case(name))
                 {
@@ -3231,6 +3788,25 @@ fn agent_delivery_links_are_healthy_for_plan(
         &shared_skill_catalog_root(root),
         &shared_skill_catalog_entries(root, &plan.allowlist),
     ))
+}
+
+/// True when `folder` still holds a SkillHub reparse point (target under one of
+/// `link_roots`) whose name is not in `keep`. Read only.
+fn recipient_holds_skillhub_links(folder: &Path, link_roots: &[&Path], keep: &[String]) -> bool {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        external_skills::is_link(&path)
+            && !keep.iter().any(|kept| kept.eq_ignore_ascii_case(&name))
+            && delivery_link_target(&path).is_some_and(|target| {
+                link_roots
+                    .iter()
+                    .any(|root| skill_delivery::path_is_under(&target, root))
+            })
+    })
 }
 
 fn agent_delivery_is_current(root: &Path, connection: &Connection) -> Result<bool, String> {
@@ -3294,7 +3870,12 @@ fn configure_user_data_command(command: &mut Command, root: &Path) {
         .env("AI_SKILLHUB_ACTIVE_SKILLS", active_skills_dir(root))
         .env("AI_SKILLHUB_SOURCES", managed_sources_dir(root))
         .env("AI_SKILLHUB_REPORTS", reports_dir(root))
-        .env("AI_SKILLHUB_STATE", private_state_dir(root));
+        .env("AI_SKILLHUB_STATE", private_state_dir(root))
+        // Bug #18: the PowerShell router builder leaves these children out.
+        .env(
+            "AI_SKILLHUB_DISABLED_CHILD_SKILLS",
+            disabled_child_skills_file(root),
+        );
 }
 
 fn command_output_with_timeout(
@@ -3439,22 +4020,24 @@ fn configure_background_command(command: &mut Command) {
 #[cfg(not(target_os = "windows"))]
 fn configure_background_command(_command: &mut Command) {}
 
+/// Deprecated alias of `set_agent_takeover` (§5.1): the per-tool takeover is
+/// the only switch, and it really changes what the next job delivers.
 #[tauri::command]
-fn set_agent_adapter_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
-    set_enabled_state("agent_adapters", &id, enabled)?;
-    load_indexed_snapshot_blocking()
-}
-
-#[tauri::command]
-fn set_workspace_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
-    set_enabled_state("workspaces", &id, enabled)?;
-    load_indexed_snapshot_blocking()
-}
-
-#[tauri::command]
-fn set_preset_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
-    set_enabled_state("presets", &id, enabled)?;
-    load_indexed_snapshot_blocking()
+async fn set_agent_adapter_enabled(id: String, enabled: bool) -> Result<LegacySnapshot, String> {
+    run_blocking_task(move || {
+        let root = resolve_legacy_root()?;
+        let mut connection = open_index_database(&root)?;
+        ensure_v33_migration_for_read(&root, &mut connection)?;
+        if enabled && skill_delivery::onboarding_status(&connection)? == "pending" {
+            return Err(SkillHubError::code("ONBOARDING_REQUIRED").to_string());
+        }
+        let evidence = delivery_evidence(&connection, false)?;
+        skill_delivery::apply_takeover(&mut connection, &id, enabled, true, "user", &evidence)
+            .map_err(|error| error.to_string())?;
+        delivery_queue::request(delivery_queue::Depth::Links, "takeover", false);
+        read_snapshot_from_database(&root, &connection)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -3463,37 +4046,52 @@ fn set_desktop_qa_check_status(id: String, status: String) -> Result<LegacySnaps
     load_indexed_snapshot_blocking()
 }
 
+// Bug #16: these used to be plain `fn` commands, which Tauri runs inline on
+// the WebView2 UI thread. Every command that can touch the filesystem or fall
+// back to a full scan runs on a blocking worker instead.
 #[tauri::command]
-fn set_skill_metadata(
+async fn set_skill_metadata(
     folder_name: String,
     name: String,
     category: String,
     description: String,
     note: String,
 ) -> Result<LegacySnapshot, String> {
-    set_skill_metadata_override(&folder_name, &name, &category, &description, &note)?;
-    load_indexed_snapshot_blocking()
+    run_blocking_task(move || {
+        set_skill_metadata_override(&folder_name, &name, &category, &description, &note)?;
+        load_indexed_snapshot_blocking()
+    })
+    .await
+}
+
+/// Kept for older UI code; implemented through `set_child_skill_enabled`: it
+/// writes the override, enqueues `full` and returns at once (§5.1).
+#[tauri::command]
+async fn set_skill_enabled(folder_name: String, enabled: bool) -> Result<LegacySnapshot, String> {
+    run_blocking_task(move || {
+        set_child_skill_enabled_blocking(&folder_name, enabled)
+            .map_err(|error| error.to_string())?;
+        load_indexed_snapshot_blocking()
+    })
+    .await
 }
 
 #[tauri::command]
-fn set_skill_enabled(folder_name: String, enabled: bool) -> Result<LegacySnapshot, String> {
-    let _write_guard = acquire_background_write_guard("Skill 启用状态切换")?;
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    set_skill_enabled_override_in_connection(&connection, &folder_name, enabled)?;
-    reconcile_agent_skill_delivery(&root, &connection, false, false)
+async fn set_skill_rating(folder_name: String, rating: u8) -> Result<LegacySnapshot, String> {
+    run_blocking_task(move || {
+        set_skill_rating_override(&folder_name, rating)?;
+        load_indexed_snapshot_blocking()
+    })
+    .await
 }
 
 #[tauri::command]
-fn set_skill_rating(folder_name: String, rating: u8) -> Result<LegacySnapshot, String> {
-    set_skill_rating_override(&folder_name, rating)?;
-    load_indexed_snapshot_blocking()
-}
-
-#[tauri::command]
-fn set_source_rating(source_id: String, rating: u8) -> Result<LegacySnapshot, String> {
-    set_source_rating_override(&source_id, rating)?;
-    load_indexed_snapshot_blocking()
+async fn set_source_rating(source_id: String, rating: u8) -> Result<LegacySnapshot, String> {
+    run_blocking_task(move || {
+        set_source_rating_override(&source_id, rating)?;
+        load_indexed_snapshot_blocking()
+    })
+    .await
 }
 
 const SKILL_FOLDER_COLORS: &[&str] = &[
@@ -4017,21 +4615,27 @@ where
 }
 
 #[tauri::command]
-fn set_skill_tags(folder_name: String, tags: Vec<String>) -> Result<LegacySnapshot, String> {
-    let _write_guard = acquire_background_write_guard("Skill 标签保存")?;
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    set_skill_tags_in_connection(&connection, &folder_name, &tags)?;
-    load_indexed_snapshot_under_write_guard()
+async fn set_skill_tags(folder_name: String, tags: Vec<String>) -> Result<LegacySnapshot, String> {
+    run_blocking_task(move || {
+        let _write_guard = acquire_background_write_guard("Skill 标签保存")?;
+        let root = resolve_legacy_root()?;
+        let connection = open_index_database(&root)?;
+        set_skill_tags_in_connection(&connection, &folder_name, &tags)?;
+        load_indexed_snapshot_under_write_guard()
+    })
+    .await
 }
 
 #[tauri::command]
-fn set_source_tags(source_id: String, tags: Vec<String>) -> Result<LegacySnapshot, String> {
-    let _write_guard = acquire_background_write_guard("来源标签保存")?;
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    set_source_tags_in_connection(&connection, &source_id, &tags)?;
-    load_indexed_snapshot_under_write_guard()
+async fn set_source_tags(source_id: String, tags: Vec<String>) -> Result<LegacySnapshot, String> {
+    run_blocking_task(move || {
+        let _write_guard = acquire_background_write_guard("来源标签保存")?;
+        let root = resolve_legacy_root()?;
+        let connection = open_index_database(&root)?;
+        set_source_tags_in_connection(&connection, &source_id, &tags)?;
+        load_indexed_snapshot_under_write_guard()
+    })
+    .await
 }
 
 /// Explicit maintenance action; every duplicate entry must survive in the primary.
@@ -4333,7 +4937,13 @@ pub fn run_source_consolidation() -> Result<(), String> {
 }
 
 #[tauri::command]
-fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
+async fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, String> {
+    run_blocking_task(move || delete_managed_source_blocking(source_id)).await
+}
+
+/// Deletion keeps its inline reconcile: a failed rebuild must restore the
+/// exact previous source tree, which needs the result before returning.
+fn delete_managed_source_blocking(source_id: String) -> Result<LegacySnapshot, String> {
     let _write_guard = acquire_background_write_guard("来源删除")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
@@ -4537,25 +5147,6 @@ fn recover_source_delete_failure(
     }
 }
 
-#[tauri::command]
-fn set_preset_workspace_enabled(
-    preset_id: String,
-    workspace_id: String,
-    enabled: bool,
-) -> Result<LegacySnapshot, String> {
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    set_preset_workspace_enabled_in_connection(&connection, &preset_id, &workspace_id, enabled)?;
-    load_indexed_snapshot_blocking()
-}
-
-#[tauri::command]
-fn set_real_write_authorization(enabled: bool) -> Result<LegacySnapshot, String> {
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    set_real_write_authorization_in_connection(&connection, enabled)?;
-    load_indexed_snapshot_blocking()
-}
 
 #[tauri::command]
 fn run_release_gate_runner(runner_id: String) -> Result<LegacySnapshot, String> {
@@ -5803,9 +6394,10 @@ fn ensure_persistent_runtime_config(root: &Path) -> Result<(), String> {
         "activeSkillsFolder".to_string(),
         Value::from(active_skills_dir(root).display().to_string()),
     );
-    object
-        .entry("manageAgentLinks".to_string())
-        .or_insert(Value::Bool(false));
+    // v3.3: Rust is the only caller of the link script (targets file, pause and
+    // onboarding gate). SkillHub.ps1 must never call it on its own, or it would
+    // bypass I-1 and I-2, so this is forced off rather than defaulted.
+    object.insert("manageAgentLinks".to_string(), Value::Bool(false));
     object
         .entry("autoDiscoverManualRepos".to_string())
         .or_insert(Value::Bool(true));
@@ -5847,6 +6439,14 @@ fn open_index_database(root: &Path) -> Result<Connection, String> {
             error
         )
     })?;
+    // v3.3: target and takeover mutations write without the background write
+    // guard, so they must wait for (not fail on) a concurrent IMMEDIATE rescan.
+    connection
+        .busy_timeout(Duration::from_millis(5000))
+        .map_err(|error| format!("Cannot configure v2 SQLite busy timeout: {}", error))?;
+    // Connections are short-lived (one per command); keep the page cache small
+    // so concurrent readers never pin several megabytes each.
+    let _ = connection.execute_batch("PRAGMA cache_size = -1024;");
     connection
         .execute_batch(include_str!("../migrations/001_initial.sql"))
         .map_err(|error| format!("Cannot apply v2 SQLite migration: {}", error))?;
@@ -6039,6 +6639,7 @@ fn ensure_runtime_schema(connection: &Connection) -> Result<(), String> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
     source_governance::ensure_schema(connection)?;
+    skill_delivery::ensure_schema(connection)?;
     ensure_column(
         connection,
         "workspaces",
@@ -6264,7 +6865,16 @@ fn read_snapshot_from_database_with_runtime(
         Vec::new()
     };
 
+    let skill_delivery = build_skill_delivery_state(
+        root,
+        connection,
+        &snapshot_delivery_evidence(connection),
+        hydrate_runtime_statuses.then_some(agent_doctors.as_slice()),
+    )
+    .ok();
+
     Ok(LegacySnapshot {
+        skill_delivery,
         root: root.display().to_string(),
         skills_dir: skills_dir.display().to_string(),
         sources_dir: sources_dir.display().to_string(),
@@ -6315,50 +6925,6 @@ fn read_snapshot_from_database_with_runtime(
     })
 }
 
-fn set_enabled_state(table_name: &str, id: &str, enabled: bool) -> Result<(), String> {
-    let root = resolve_legacy_root()?;
-    let connection = open_index_database(&root)?;
-    let statement = match table_name {
-        "agent_adapters" => "UPDATE agent_adapters SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
-        "workspaces" => "UPDATE workspaces SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
-        "presets" => "UPDATE presets SET enabled = ?1, updated_at = ?2 WHERE id = ?3",
-        _ => return Err("Unsupported enable state target.".to_string()),
-    };
-    let timestamp = unix_timestamp_string();
-    let changed = connection
-        .execute(
-            statement,
-            params![if enabled { 1 } else { 0 }, timestamp, id],
-        )
-        .map_err(|error| format!("Cannot update enabled state for {}: {}", id, error))?;
-
-    if changed == 0 {
-        return Err(format!("Cannot find v2 state target {}.", id));
-    }
-
-    connection
-        .execute(
-            "INSERT INTO audit_events (
-                id, event_type, summary, detail_json, created_at
-            ) VALUES (?1, 'state_updated', ?2, ?3, ?4)",
-            params![
-                format!("audit-state-{}-{}", timestamp, stable_id("target", id)),
-                format!("Updated {} enabled state", table_name),
-                serde_json::to_string(&serde_json::json!({
-                    "table": table_name,
-                    "id": id,
-                    "enabled": enabled,
-                    "scope": "v2-sqlite-only"
-                }))
-                .unwrap_or_else(|_| "{}".to_string()),
-                timestamp
-            ],
-        )
-        .map_err(|error| format!("Cannot write v2 state audit event: {}", error))?;
-
-    Ok(())
-}
-
 fn read_operator_consent(connection: &Connection) -> Result<OperatorConsentCard, String> {
     let enabled_row = connection
         .query_row(
@@ -6394,6 +6960,7 @@ fn read_operator_consent(connection: &Connection) -> Result<OperatorConsentCard,
     })
 }
 
+#[cfg(test)]
 fn set_real_write_authorization_in_connection(
     connection: &Connection,
     enabled: bool,
@@ -6795,6 +7362,7 @@ fn set_source_tags_in_connection(
     )
 }
 
+#[cfg(test)]
 fn set_preset_workspace_enabled_in_connection(
     connection: &Connection,
     preset_id: &str,
@@ -8735,6 +9303,7 @@ fn persist_agent_detection_refresh_with_runtime(
     };
     snapshot.agents = parse_agents(diagnostics_json);
     snapshot.agent_adapters = derive_agent_adapters(&snapshot.agents);
+    apply_takeover_to_adapters(&transaction, &mut snapshot.agent_adapters);
     snapshot.adapter_safety_checks = derive_adapter_safety_checks(&snapshot.agent_adapters);
     snapshot.adapter_capabilities = derive_adapter_capabilities(&snapshot.agent_adapters);
     snapshot.diagnostics = parse_diagnostic_summary(diagnostics_json);
@@ -10065,6 +10634,10 @@ fn stage_github_source_import_with_git_program_and_control(
             // can fetch deferred blobs without falling back to broken Schannel.
             command.args(["--config", "http.sslBackend=openssl"]);
         }
+        let (git_ref, _) = import_scope();
+        if !git_ref.is_empty() {
+            command.args(["--branch", &git_ref]);
+        }
         command
             .args([
                 "--depth",
@@ -10322,8 +10895,15 @@ fn complete_sparse_skill_checkout(
     // Import and every later sync share the scope rules in `sparse_scope`, so
     // an update can never install a different set than a fresh import would.
     let tree = sparse_scope::HeadTree::from_ls_tree_z(&tree_output.stdout);
-    let skill_roots = tree.skill_roots();
-    let root_skill = tree.has_root_skill();
+    let (_, scope_subpath) = import_scope();
+    let mut skill_roots = tree.skill_roots();
+    // A `/tree/<ref>/<path>` probe only materializes Skills under that path.
+    let root_skill = tree.has_root_skill() && scope_subpath.is_empty();
+    if !scope_subpath.is_empty() {
+        skill_roots.retain(|root| {
+            root == &scope_subpath || root.starts_with(&format!("{scope_subpath}/"))
+        });
+    }
     let skill_scope = skill_roots.iter().cloned().collect::<BTreeSet<_>>();
     if !root_skill {
         if skill_roots.is_empty() {
@@ -11056,7 +11636,21 @@ fn stage_github_source_import_via_codeload_with_control(
     control.ensure_active()?;
     let (owner, repo) = parse_github_repo(&plan.normalized_target)
         .ok_or_else(|| "GitHub 地址无法解析。".to_string())?;
-    let url = format!("https://codeload.github.com/{}/{}/zip/HEAD", owner, repo);
+    let (git_ref, _) = import_scope();
+    let url = format!(
+        "https://codeload.github.com/{}/{}/zip/{}",
+        owner,
+        repo,
+        if git_ref.is_empty() {
+            "HEAD".to_string()
+        } else {
+            git_ref
+                .split('/')
+                .map(|part| part.replace('%', "%25").replace('#', "%23").replace('?', "%3F"))
+                .collect::<Vec<_>>()
+                .join("/")
+        }
+    );
     control.emit("zip", "started", "正在下载 GitHub ZIP 归档。", 0, 0);
     let agent = github_http_agent();
     let response = agent
@@ -14151,7 +14745,8 @@ fn read_indexed_agent_adapters(connection: &Connection) -> Result<Vec<AgentAdapt
                 status,
                 detected,
                 managed,
-                enabled
+                COALESCE((SELECT t.enabled FROM agent_takeover t
+                          WHERE t.agent_id = agent_adapters.id), 0)
             FROM agent_adapters
             ORDER BY
                 detected DESC,
@@ -15000,11 +15595,8 @@ fn apply_enabled_state(snapshot: &mut LegacySnapshot, enabled_state: &EnabledSta
             agent.enabled = *enabled;
         }
     }
-    for adapter in &mut snapshot.agent_adapters {
-        if let Some(enabled) = enabled_state.agent_adapters.get(&adapter.id) {
-            adapter.enabled = *enabled;
-        }
-    }
+    // Adapter `enabled` is `agent_takeover.enabled` (§5.1); the legacy column
+    // is not restored over it.
     for workspace in &mut snapshot.workspaces {
         if let Some(enabled) = enabled_state.workspaces.get(&workspace.id) {
             workspace.enabled = *enabled;
@@ -15560,7 +16152,10 @@ fn derive_agent_adapters(agents: &[AgentCard]) -> Vec<AgentAdapterCard> {
             {
                 adapter.detected = agent.detected;
                 adapter.managed = agent.managed;
-                adapter.enabled = agent.detected && agent.managed;
+                // v3.3 (S0-3): `enabled` mirrors `agent_takeover.enabled` and
+                // is applied by `apply_takeover_to_adapters`; detection alone
+                // must never turn a tool back on.
+                adapter.enabled = false;
                 adapter.status = if agent.detected && agent.managed {
                     "ready".to_string()
                 } else if agent.detected {
@@ -15581,6 +16176,14 @@ fn derive_agent_adapters(agents: &[AgentCard]) -> Vec<AgentAdapterCard> {
             adapter
         })
         .collect()
+}
+
+/// `AgentAdapterCard.enabled = agent_takeover.enabled` (§5.1).
+fn apply_takeover_to_adapters(connection: &Connection, adapters: &mut [AgentAdapterCard]) {
+    let takeover = skill_delivery::read_takeover(connection).unwrap_or_default();
+    for adapter in adapters {
+        adapter.enabled = skill_delivery::takeover_enabled(&takeover, &adapter.id);
+    }
 }
 
 fn derive_agent_doctors(
@@ -18838,6 +19441,9 @@ fn plan_or_write_router_hubs(
     let mut active_parent_names = HashSet::new();
 
     let allow_write = commit && real_writes_enabled;
+    // Bug #18 (§3.7): a child whose own switch is off leaves the parent's child
+    // list; a pack with no enabled children gets no parent at all.
+    let disabled_children = read_disabled_child_skills(legacy_root);
 
     if !sources_dir.exists() {
         return Ok(RouterHubReport {
@@ -18871,7 +19477,12 @@ fn plan_or_write_router_hubs(
             continue;
         }
         let collection_dir = entry.path();
-        let child_links = collect_child_skill_links_for_collection(&collection_dir);
+        let mut child_links = collect_child_skill_links_for_collection(&collection_dir);
+        if !disabled_children.is_empty() {
+            child_links.retain(|link| {
+                !disabled_children.contains(&normalize_router_child_path(&link.absolute_path))
+            });
+        }
         let children = child_links.iter().fold(BTreeMap::new(), |mut names, link| {
             names
                 .entry(normalize_skill_lookup(&link.name))
@@ -19111,7 +19722,13 @@ fn record_router_hub_audit(
 }
 
 #[tauri::command]
-fn regenerate_router_hubs(commit: bool) -> Result<RouterHubReport, String> {
+async fn regenerate_router_hubs(commit: bool) -> Result<RouterHubReport, String> {
+    run_blocking_task(move || regenerate_router_hubs_blocking(commit)).await
+}
+
+/// Developer-mode router preview. Commit stays gated by the legacy consent
+/// flag, so in practice this is a dry run (§2.2).
+fn regenerate_router_hubs_blocking(commit: bool) -> Result<RouterHubReport, String> {
     let _write_guard = acquire_background_write_guard("父 Skill 路由重建")?;
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
@@ -19128,7 +19745,18 @@ fn regenerate_router_hubs(commit: bool) -> Result<RouterHubReport, String> {
 }
 
 #[tauri::command]
-fn set_skill_conflict_choice(
+async fn set_skill_conflict_choice(
+    conflict_key: String,
+    default_skill_id: String,
+    status: String,
+) -> Result<LegacySnapshot, String> {
+    run_blocking_task(move || {
+        set_skill_conflict_choice_blocking(conflict_key, default_skill_id, status)
+    })
+    .await
+}
+
+fn set_skill_conflict_choice_blocking(
     conflict_key: String,
     default_skill_id: String,
     status: String,
@@ -19203,7 +19831,9 @@ fn set_skill_conflict_choice(
         }),
     )?;
 
-    reconcile_agent_skill_delivery(&root, &connection, false, false)
+    // The delivery change happens in the queue (I-4), never inline.
+    delivery_queue::request(delivery_queue::Depth::Full, "conflict-choice", false);
+    read_snapshot_from_database(&root, &connection)
 }
 
 fn normalize_source_type(value: &str) -> String {
@@ -19238,11 +19868,1912 @@ fn json_u64(value: &Value, key: &str) -> u64 {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+// ---------------------------------------------------------------------------
+// v3.3 Skills delivery: job runner and commands (skills contract §4.2)
+// ---------------------------------------------------------------------------
+
+/// Runs one delivery batch on the queue's worker thread (§3.4, §3.5).
+fn run_delivery_job(reporter: &delivery_queue::Reporter<'_>) -> delivery_queue::JobOutcome {
+    match run_delivery_job_inner(reporter) {
+        Ok(outcome) => outcome,
+        Err(error) => delivery_queue::JobOutcome {
+            phase: "failed",
+            error: Some(error),
+            ..delivery_queue::JobOutcome::default()
+        },
+    }
+}
+
+fn run_delivery_job_inner(
+    reporter: &delivery_queue::Reporter<'_>,
+) -> Result<delivery_queue::JobOutcome, SkillHubError> {
+    use delivery_queue::Depth;
+    let batch = reporter.batch().clone();
+    // Wait for (never fail on) another operation holding the guard.
+    let _guard = acquire_background_write_guard_waiting(
+        "同步到 AI 工具",
+        Duration::from_secs(15 * 60),
+        |holder| reporter.waiting(holder),
+    )?;
+    reporter.running();
+    let root = resolve_legacy_root()?;
+    if !database_file(&root).exists() {
+        let _ = scan_legacy_snapshot_under_write_guard()?;
+    }
+    let mut connection = open_index_database(&root)?;
+    ensure_v33_delivery_migration(&root, &mut connection)?;
+    skill_delivery::materialize_defaults(&connection)?;
+
+    let blocked = skill_delivery::delivery_writes_blocked(&connection)?;
+    let mut depth = batch.depth;
+    let mut phase = "done";
+    let mut agents = Vec::new();
+    let mut snapshot_stale = false;
+    let mut connection = connection;
+    if depth == Depth::Verify {
+        if blocked {
+            phase = "paused";
+        } else if !agent_delivery_is_current(&root, &connection)? {
+            depth = Depth::Full;
+        }
+    }
+    if depth == Depth::Links {
+        if blocked {
+            phase = "paused";
+        } else {
+            let run = run_agent_link_script(&root, &connection)?;
+            verify_link_step(&root, &connection, &run)?;
+            if matches!(run, DeliveryRun::Blocked) {
+                phase = "paused";
+            }
+            agents = run.results();
+        }
+    }
+    if depth == Depth::Full {
+        let (next, run) =
+            reconcile_agent_skill_delivery_run(&root, &connection, batch.refresh_detection)?;
+        connection = next;
+        snapshot_stale = true;
+        if matches!(run, DeliveryRun::Blocked) {
+            phase = "paused";
+        }
+        agents = run.results();
+    }
+    let changed_targets = read_back_delivery_targets(&root, &connection)?;
+    Ok(delivery_queue::JobOutcome {
+        phase,
+        agents,
+        changed_targets,
+        snapshot_stale,
+        error: None,
+    })
+}
+
+/// Evidence for reads and mutations. Mutations accept cached evidence of any
+/// age so they stay under 300 ms (I-4); state reads refresh it after the TTL.
+fn delivery_evidence(
+    connection: &Connection,
+    refresh_if_stale: bool,
+) -> Result<skill_delivery::Evidence, String> {
+    let cached = RECIPIENT_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|cache| cache.clone());
+    let recipients = match cached {
+        Some((at, recipients)) if !refresh_if_stale || at.elapsed() < RECIPIENT_CACHE_TTL => {
+            recipients
+        }
+        _ => delivery_recipient_states(connection)?,
+    };
+    Ok(skill_delivery::Evidence::from_recipients(&recipients))
+}
+
+/// Cheap evidence for snapshot loads before any probe ran: cached detection
+/// rows and default paths only, no registry or process probing.
+fn snapshot_delivery_evidence(connection: &Connection) -> skill_delivery::Evidence {
+    if let Some((_, recipients)) = RECIPIENT_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|cache| cache.clone())
+    {
+        return skill_delivery::Evidence::from_recipients(&recipients);
+    }
+    let home = delivery_home_dir();
+    let detected = |id: &str| -> bool {
+        connection
+            .query_row(
+                "SELECT detected FROM agent_adapters WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|value| value != 0)
+            .unwrap_or(false)
+    };
+    let codex_target = home.join(".agents").join("skills");
+    let real_shared = detected("coze")
+        || fs::read_dir(&codex_target).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|entry| shared_skill_catalog::is_managed_entry(&entry.path()))
+        });
+    let claude_root = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| expand_delivery_environment_path(&value))
+        .unwrap_or_else(|| home.join(".claude"));
+    let legacy = home.join(".codex").join("skills");
+    let state = |id: &'static str, path: PathBuf, detected: bool| AgentDeliveryRecipientState {
+        id,
+        path,
+        detected,
+    };
+    skill_delivery::Evidence::from_recipients(&[
+        state("coze-shared", codex_target.clone(), real_shared),
+        state("coze", codex_target.clone(), detected("coze")),
+        state("cursor", home.join(".cursor").join("skills"), detected("cursor")),
+        state("gemini-cli", home.join(".gemini").join("skills"), detected("gemini-cli")),
+        state("workbuddy", home.join(".workbuddy").join("skills"), detected("workbuddy")),
+        state("claude", claude_root.join("skills"), detected("claude")),
+        state(
+            "antigravity",
+            home.join(".gemini").join("antigravity").join("skills"),
+            detected("antigravity"),
+        ),
+        state("codex", codex_target, detected("codex")),
+        state(
+            "codex-legacy",
+            legacy.clone(),
+            detected("codex") && legacy.is_dir(),
+        ),
+    ])
+}
+
+fn build_skill_delivery_state(
+    root: &Path,
+    connection: &Connection,
+    evidence: &skill_delivery::Evidence,
+    doctors: Option<&[adapter_doctor::AgentDoctorCard]>,
+) -> Result<skill_delivery::SkillDeliveryState, String> {
+    let allowlist = expected_agent_skill_allowlist(root, connection)?;
+    let units = skill_delivery::read_delivery_units(root, connection, &allowlist)?;
+    let detected_unsupported = {
+        let mut statement = connection
+            .prepare("SELECT id FROM agent_adapters WHERE detected = 1")
+            .map_err(|error| format!("Cannot read adapter detection: {error}"))?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("Cannot read adapter detection: {error}"))?;
+        rows.filter_map(Result::ok).collect::<BTreeSet<_>>()
+    };
+    let doctor_verdicts = doctors
+        .map(|doctors| {
+            doctors
+                .iter()
+                .map(|doctor| (doctor.adapter_id.clone(), doctor.verdict.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let personal_counts = skill_delivery::personal_counts();
+    let job = delivery_queue::current_status();
+    let job_active = delivery_queue::is_active();
+    let job_agents = BTreeSet::new();
+    skill_delivery::build_state(
+        connection,
+        &skill_delivery::StateInputs {
+            units: &units,
+            evidence,
+            detected_unsupported: &detected_unsupported,
+            doctor_verdicts: &doctor_verdicts,
+            personal_counts: &personal_counts,
+            job_active,
+            job_agents: &job_agents,
+        },
+        job,
+    )
+}
+
+/// Runs the one-time migration before the first state read of a fresh
+/// install, so the onboarding gate is decided before the UI asks.
+fn ensure_v33_migration_for_read(root: &Path, connection: &mut Connection) -> Result<(), String> {
+    if skill_delivery::read_pref(connection, skill_delivery::PREF_MIGRATION)?
+        .is_some_and(|value| value.starts_with("done:"))
+    {
+        return Ok(());
+    }
+    let _guard = acquire_background_write_guard_waiting(
+        "同步到 AI 工具",
+        Duration::from_secs(10),
+        |_| {},
+    )?;
+    ensure_v33_delivery_migration(root, connection)
+}
+
+fn open_delivery_database() -> Result<(PathBuf, Connection), SkillHubError> {
+    let root = resolve_legacy_root()?;
+    let mut connection = open_index_database(&root)
+        .map_err(|error| SkillHubError::from(error).with_action("export-report", &[]))?;
+    ensure_v33_migration_for_read(&root, &mut connection)?;
+    Ok((root, connection))
+}
+
+async fn run_skillhub_task<T, F>(task: F) -> Result<T, SkillHubError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, SkillHubError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(task)
+        .await
+        .map_err(|_| SkillHubError::code("INTERNAL").with_detail("后台任务意外停止"))?
+}
+
+#[tauri::command]
+async fn get_skill_delivery_state() -> Result<skill_delivery::SkillDeliveryState, SkillHubError> {
+    run_skillhub_task(|| {
+        let (root, connection) = open_delivery_database()?;
+        let evidence = delivery_evidence(&connection, true)?;
+        let adapters = read_indexed_agent_adapters(&connection)?;
+        let doctors =
+            derive_agent_doctors(read_json(&diagnostics_file(&root)).as_ref(), &adapters);
+        Ok(build_skill_delivery_state(
+            &root,
+            &connection,
+            &evidence,
+            Some(&doctors),
+        )?)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_skill_agents() -> Result<skill_delivery::SkillAgentList, SkillHubError> {
+    run_skillhub_task(|| {
+        let (root, connection) = open_delivery_database()?;
+        let evidence = delivery_evidence(&connection, true)?;
+        let state = build_skill_delivery_state(&root, &connection, &evidence, None)?;
+        Ok(skill_delivery::SkillAgentList {
+            agents: state.agents,
+            paused: state.paused,
+            onboarding: state.onboarding,
+            generated_at: state.generated_at,
+        })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TakeoverResult {
+    agents: Vec<skill_delivery::SkillAgent>,
+    linked_agent_ids: Vec<String>,
+    targets_created: usize,
+    job_id: Option<u64>,
+}
+
+#[tauri::command]
+async fn set_agent_takeover(
+    agent_id: String,
+    enabled: bool,
+    fill_targets: Option<bool>,
+) -> Result<TakeoverResult, SkillHubError> {
+    run_skillhub_task(move || {
+        let (root, mut connection) = open_delivery_database()?;
+        if enabled && skill_delivery::onboarding_status(&connection)? == "pending" {
+            return Err(SkillHubError::code("ONBOARDING_REQUIRED").with_agent(&agent_id));
+        }
+        let evidence = delivery_evidence(&connection, false)?;
+        let (group, created) = skill_delivery::apply_takeover(
+            &mut connection,
+            &agent_id,
+            enabled,
+            fill_targets.unwrap_or(true),
+            "user",
+            &evidence,
+        )?;
+        let ticket = delivery_queue::request(delivery_queue::Depth::Links, "takeover", false);
+        let state = build_skill_delivery_state(&root, &connection, &evidence, None)?;
+        Ok(TakeoverResult {
+            agents: state.agents,
+            linked_agent_ids: group
+                .iter()
+                .filter(|agent| **agent != agent_id)
+                .map(|agent| agent.to_string())
+                .collect(),
+            targets_created: created,
+            job_id: Some(ticket.job_id),
+        })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeliveryControlState {
+    paused: bool,
+    onboarding: String,
+    job_id: Option<u64>,
+}
+
+#[tauri::command]
+async fn set_skill_delivery_paused(paused: bool) -> Result<DeliveryControlState, SkillHubError> {
+    run_skillhub_task(move || {
+        let (_root, connection) = open_delivery_database()?;
+        let was_paused = skill_delivery::is_paused(&connection)?;
+        skill_delivery::set_paused(&connection, paused)?;
+        let _ = write_audit_event(
+            &connection,
+            "skill_delivery_paused",
+            if paused {
+                "已暂停同步到 AI 工具"
+            } else {
+                "已恢复同步到 AI 工具"
+            },
+            serde_json::json!({ "paused": paused }),
+        );
+        // Unpausing always reconciles: the fingerprint was never written while
+        // paused (§2.5).
+        let job_id = (was_paused && !paused).then(|| {
+            delivery_queue::request(delivery_queue::Depth::Full, "unpause", false).job_id
+        });
+        Ok(DeliveryControlState {
+            paused,
+            onboarding: skill_delivery::onboarding_status(&connection)?.to_string(),
+            job_id,
+        })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetMutationResult {
+    targets: Vec<skill_delivery::SkillTarget>,
+    changed: usize,
+    unchanged: usize,
+    rejected: Vec<skill_delivery::TargetRejection>,
+    job_id: Option<u64>,
+}
+
+fn apply_target_changes(
+    changes: Vec<skill_delivery::TargetChangeInput>,
+    single: bool,
+) -> Result<TargetMutationResult, SkillHubError> {
+    if changes.len() > skill_delivery::MAX_BATCH_CHANGES {
+        return Err(SkillHubError::code("INPUT_TOO_LONG")
+            .with_detail(format!("最多 {} 项", skill_delivery::MAX_BATCH_CHANGES)));
+    }
+    let (root, mut connection) = open_delivery_database()?;
+    let evidence = delivery_evidence(&connection, false)?;
+    let takeover = skill_delivery::read_takeover(&connection)?;
+    let mut mutation = skill_delivery::TargetMutation::default();
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| SkillHubError::from(format!("Cannot start target change: {error}")))?;
+    for change in &changes {
+        skill_delivery::apply_target_change(
+            &transaction,
+            change,
+            &evidence,
+            &takeover,
+            &mut mutation,
+        )?;
+    }
+    transaction
+        .commit()
+        .map_err(|error| SkillHubError::from(format!("Cannot commit target change: {error}")))?;
+    if single {
+        if let Some(rejection) = mutation.rejected.first() {
+            return Err(rejection.error.clone());
+        }
+    }
+    let job_id = (mutation.changed > 0).then(|| {
+        delivery_queue::request(delivery_queue::Depth::Links, "target", false).job_id
+    });
+    let state = build_skill_delivery_state(&root, &connection, &evidence, None)?;
+    Ok(TargetMutationResult {
+        targets: skill_delivery::pick_targets(&state, &mutation.keys),
+        changed: mutation.changed,
+        unchanged: mutation.unchanged,
+        rejected: mutation.rejected,
+        job_id,
+    })
+}
+
+#[tauri::command]
+async fn set_skill_target(
+    unit_id: String,
+    agent_id: String,
+    enabled: bool,
+) -> Result<TargetMutationResult, SkillHubError> {
+    run_skillhub_task(move || {
+        apply_target_changes(
+            vec![skill_delivery::TargetChangeInput {
+                unit_id,
+                agent_id,
+                enabled,
+            }],
+            true,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+async fn set_skill_targets_batch(
+    changes: Vec<skill_delivery::TargetChangeInput>,
+) -> Result<TargetMutationResult, SkillHubError> {
+    run_skillhub_task(move || apply_target_changes(changes, false)).await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChildSkillToggleResult {
+    skill: SkillCard,
+    unit: Option<skill_delivery::DeliveryUnitDto>,
+    job_id: Option<u64>,
+}
+
+/// Global child switch (I-7): writes the override and enqueues `full`, which
+/// regenerates the parent without the disabled child (bug #18).
+fn set_child_skill_enabled_blocking(
+    folder_name: &str,
+    enabled: bool,
+) -> Result<(PathBuf, Connection, u64), SkillHubError> {
+    let (root, connection) = open_delivery_database()?;
+    set_skill_enabled_override_in_connection(&connection, folder_name, enabled).map_err(
+        |error| {
+            if error.starts_with("Cannot find indexed skill") {
+                SkillHubError::code("UNIT_NOT_FOUND").with_detail(error)
+            } else {
+                SkillHubError::from(error)
+            }
+        },
+    )?;
+    let ticket = delivery_queue::request(delivery_queue::Depth::Full, "child-skill", false);
+    Ok((root, connection, ticket.job_id))
+}
+
+#[tauri::command]
+async fn set_child_skill_enabled(
+    folder_name: String,
+    enabled: bool,
+) -> Result<ChildSkillToggleResult, SkillHubError> {
+    run_skillhub_task(move || {
+        let (root, connection, job_id) = set_child_skill_enabled_blocking(&folder_name, enabled)?;
+        let skill = read_indexed_skills(&connection)?
+            .into_iter()
+            .find(|skill| skill.folder_name == compact_note(&folder_name))
+            .ok_or_else(|| SkillHubError::code("UNIT_NOT_FOUND"))?;
+        let allowlist = expected_agent_skill_allowlist(&root, &connection)?;
+        let unit_id = if skill.source_id.is_empty() {
+            format!("{}{}", skill_delivery::STANDALONE_PREFIX, skill.id)
+        } else {
+            skill.source_id.clone()
+        };
+        let unit = skill_delivery::read_delivery_units(&root, &connection, &allowlist)?
+            .iter()
+            .find(|unit| unit.unit_id == unit_id)
+            .map(skill_delivery::DeliveryUnitDto::from);
+        Ok(ChildSkillToggleResult {
+            skill,
+            unit,
+            job_id: Some(job_id),
+        })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SourceLibraryResult {
+    source: SourceCard,
+    unit: skill_delivery::DeliveryUnitDto,
+    targets: Vec<skill_delivery::SkillTarget>,
+    job_id: Option<u64>,
+}
+
+/// I-5: enabling a flagged pack needs `security_review_confirmed`.
+fn check_security_review(
+    connection: &Connection,
+    source_id: &str,
+    confirmed: bool,
+) -> Result<(), SkillHubError> {
+    if let Some((status, summary)) = skill_delivery::pending_security_review(connection, source_id)?
+    {
+        if !confirmed {
+            let _ = status;
+            return Err(SkillHubError::code("SECURITY_REVIEW_REQUIRED")
+                .with_source(source_id)
+                .with_detail(summary)
+                .with_action("review-security", &[("sourceId", source_id)]));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_source_library_enabled(
+    source_id: String,
+    enabled: bool,
+    security_review_confirmed: bool,
+) -> Result<SourceLibraryResult, SkillHubError> {
+    run_skillhub_task(move || {
+        let (root, connection) = open_delivery_database()?;
+        if !skill_delivery::unit_exists(&connection, &source_id)?
+            || source_id.starts_with(skill_delivery::STANDALONE_PREFIX)
+        {
+            return Err(SkillHubError::code("UNIT_NOT_FOUND").with_source(&source_id));
+        }
+        if enabled {
+            check_security_review(&connection, &source_id, security_review_confirmed)?;
+        }
+        skill_delivery::set_source_library_enabled_rows(
+            &connection,
+            &source_id,
+            enabled,
+            security_review_confirmed,
+        )?;
+        let _ = write_audit_event(
+            &connection,
+            "source_library_enabled",
+            if enabled {
+                "已在技能库中启用技能包"
+            } else {
+                "已在所有 AI 工具中停用技能包"
+            },
+            serde_json::json!({
+                "sourceId": source_id,
+                "enabled": enabled,
+                "securityReviewConfirmed": security_review_confirmed,
+            }),
+        );
+        if enabled {
+            skill_delivery::materialize_defaults(&connection)?;
+        }
+        let ticket = delivery_queue::request(delivery_queue::Depth::Full, "library", false);
+        let evidence = delivery_evidence(&connection, false)?;
+        let state = build_skill_delivery_state(&root, &connection, &evidence, None)?;
+        let source = read_indexed_sources(&connection)?
+            .into_iter()
+            .find(|source| source.id == source_id)
+            .ok_or_else(|| SkillHubError::code("UNIT_NOT_FOUND").with_source(&source_id))?;
+        let unit = state
+            .units
+            .iter()
+            .find(|unit| unit.unit_id == source_id)
+            .cloned()
+            .ok_or_else(|| SkillHubError::code("UNIT_NOT_FOUND").with_source(&source_id))?;
+        let targets = state
+            .targets
+            .iter()
+            .filter(|target| target.unit_id == source_id)
+            .cloned()
+            .collect();
+        Ok(SourceLibraryResult {
+            source,
+            unit,
+            targets,
+            job_id: Some(ticket.job_id),
+        })
+    })
+    .await
+}
+
+#[tauri::command]
+async fn request_skill_delivery(
+    reason: String,
+    depth: String,
+    refresh_detection: Option<bool>,
+) -> Result<delivery_queue::DeliveryJobTicket, SkillHubError> {
+    let depth = delivery_queue::Depth::parse(&depth)
+        .ok_or_else(|| SkillHubError::code("INTERNAL").with_detail("depth must be verify, links or full"))?;
+    let reason = compact_note(&reason).chars().take(40).collect::<String>();
+    Ok(delivery_queue::request(
+        depth,
+        if reason.is_empty() { "user" } else { &reason },
+        refresh_detection.unwrap_or(false),
+    ))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnboardingAgent {
+    agent_id: String,
+    name: String,
+    status_word: String,
+    can_deliver: bool,
+    experimental: bool,
+    preselected: bool,
+    reason: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnboardingExistingSkills {
+    importable: usize,
+    already_managed: usize,
+    duplicates: usize,
+    by_agent: Vec<OnboardingAgentCount>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnboardingAgentCount {
+    agent_id: String,
+    count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnboardingState {
+    status: String,
+    agents: Vec<OnboardingAgent>,
+    existing_skills: Option<OnboardingExistingSkills>,
+}
+
+fn onboarding_agents(agents: &[skill_delivery::SkillAgent]) -> Vec<OnboardingAgent> {
+    agents
+        .iter()
+        .map(|agent| OnboardingAgent {
+            agent_id: agent.id.clone(),
+            name: agent.name.clone(),
+            status_word: agent.status_word.clone(),
+            can_deliver: agent.can_deliver,
+            experimental: agent.experimental,
+            preselected: agent.installed && agent.can_deliver && !agent.experimental,
+            reason: if !agent.can_deliver {
+                agent.unsupported_reason.clone()
+            } else if !agent.installed {
+                "没找到安装证据".to_string()
+            } else if agent.experimental {
+                "实验性".to_string()
+            } else {
+                String::new()
+            },
+        })
+        .collect()
+}
+
+#[tauri::command]
+async fn get_onboarding_state() -> Result<OnboardingState, SkillHubError> {
+    run_skillhub_task(|| {
+        let (root, connection) = open_delivery_database()?;
+        let evidence = delivery_evidence(&connection, true)?;
+        let state = build_skill_delivery_state(&root, &connection, &evidence, None)?;
+        let existing_skills = skill_source::adopt_preview(&root, &connection, None)
+            .ok()
+            .map(|preview| {
+                let mut by_agent = BTreeMap::<String, usize>::new();
+                for candidate in preview
+                    .candidates
+                    .iter()
+                    .filter(|candidate| candidate.state == "new")
+                {
+                    for agent in &candidate.agent_ids {
+                        *by_agent.entry(agent.clone()).or_default() += 1;
+                    }
+                }
+                OnboardingExistingSkills {
+                    importable: preview.importable,
+                    already_managed: preview.already_managed,
+                    duplicates: preview.duplicates,
+                    by_agent: by_agent
+                        .into_iter()
+                        .map(|(agent_id, count)| OnboardingAgentCount { agent_id, count })
+                        .collect(),
+                }
+            });
+        Ok(OnboardingState {
+            status: state.onboarding.clone(),
+            agents: onboarding_agents(&state.agents),
+            existing_skills,
+        })
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnboardingResult {
+    status: String,
+    agents: Vec<skill_delivery::SkillAgent>,
+    adopt: Option<skill_source::AdoptReport>,
+    job_id: Option<u64>,
+}
+
+#[tauri::command]
+async fn complete_onboarding(
+    app: tauri::AppHandle,
+    agent_ids: Vec<String>,
+    adopt_existing_skills: bool,
+) -> Result<OnboardingResult, SkillHubError> {
+    run_skillhub_task(move || {
+        let (root, mut connection) = open_delivery_database()?;
+        let evidence = delivery_evidence(&connection, false)?;
+        // Validate every tool before anything is written.
+        for agent_id in &agent_ids {
+            let spec = skill_delivery::agent_spec(agent_id)
+                .ok_or_else(|| SkillHubError::code("AGENT_UNKNOWN").with_agent(agent_id))?;
+            if !spec.deliverable || !evidence.can_deliver(spec.id) {
+                return Err(SkillHubError::code("AGENT_UNSUPPORTED").with_agent(spec.id));
+            }
+            if !skill_delivery::agent_group(spec.id, evidence.real_shared)
+                .iter()
+                .any(|agent| evidence.installed(agent))
+            {
+                return Err(SkillHubError::code("AGENT_NOT_INSTALLED").with_agent(spec.id));
+            }
+        }
+        for agent_id in &agent_ids {
+            skill_delivery::apply_takeover(
+                &mut connection,
+                agent_id,
+                true,
+                true,
+                "onboarding",
+                &evidence,
+            )?;
+        }
+        skill_delivery::complete_onboarding_state(&connection)?;
+        let _ = write_audit_event(
+            &connection,
+            "onboarding_completed",
+            &format!("首次设置完成，接管了 {} 个 AI 工具", agent_ids.len()),
+            serde_json::json!({ "agents": agent_ids, "adopt": adopt_existing_skills }),
+        );
+        drop(connection);
+        let adopt = if adopt_existing_skills {
+            let preview = skill_source::adopt_preview_blocking(None)?;
+            let ids = preview
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.selected_by_default)
+                .map(|candidate| candidate.id.clone())
+                .collect::<Vec<_>>();
+            if ids.is_empty() {
+                None
+            } else {
+                Some(skill_source::adopt_blocking(
+                    Some(app.clone()),
+                    ids,
+                    "onboarding-adopt".to_string(),
+                    false,
+                )?)
+            }
+        } else {
+            None
+        };
+        let ticket = delivery_queue::request(delivery_queue::Depth::Full, "onboarding", false);
+        let connection = open_index_database(&root)?;
+        let state = build_skill_delivery_state(&root, &connection, &evidence, None)?;
+        Ok(OnboardingResult {
+            status: state.onboarding.clone(),
+            agents: state.agents,
+            adopt,
+            job_id: Some(ticket.job_id),
+        })
+    })
+    .await
+}
+
+/// Pure and cheap: at most one `fs::metadata` call (§4.1 exception).
+#[tauri::command]
+fn parse_skill_source_input(input: String) -> skill_source::ParsedSkillSource {
+    skill_source::parse_skill_source_input(&input)
+}
+
+#[tauri::command]
+async fn pick_skill_source_path(
+    app: tauri::AppHandle,
+    kind: String,
+) -> Result<Option<String>, SkillHubError> {
+    use tauri_plugin_dialog::DialogExt;
+    run_skillhub_task(move || {
+        let dialog = app.dialog().file();
+        let picked = match kind.as_str() {
+            "zip" => dialog
+                .add_filter("技能包", &["zip", "skill"])
+                .blocking_pick_file(),
+            _ => dialog.blocking_pick_folder(),
+        };
+        Ok(picked
+            .and_then(|path| path.into_path().ok())
+            .map(|path| path.display().to_string()))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_agent_skills(
+    agent_id: String,
+) -> Result<skill_source::AgentSkillInventory, SkillHubError> {
+    run_skillhub_task(move || {
+        let (root, connection) = open_delivery_database()?;
+        let evidence = delivery_evidence(&connection, false)?;
+        skill_source::list_agent_skills(&root, &connection, &evidence, &agent_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn open_agent_skills_folder(agent_id: String) -> Result<(), SkillHubError> {
+    run_skillhub_task(move || {
+        let (_root, connection) = open_delivery_database()?;
+        let evidence = delivery_evidence(&connection, false)?;
+        if skill_delivery::agent_spec(&agent_id).is_none() {
+            return Err(SkillHubError::code("AGENT_UNKNOWN").with_agent(&agent_id));
+        }
+        let path = evidence
+            .path(&agent_id)
+            .cloned()
+            .filter(|path| path.is_dir())
+            .ok_or_else(|| SkillHubError::code("PATH_NOT_FOUND").with_agent(&agent_id))?;
+        open_path_with_system(&path).map_err(SkillHubError::from)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn read_library_skill_document(
+    skill_id: String,
+) -> Result<skill_source::LibrarySkillDocument, SkillHubError> {
+    run_skillhub_task(move || {
+        let (root, connection) = open_delivery_database()?;
+        skill_source::read_library_skill_document(&root, &connection, &skill_id)
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TroubleshootingReport {
+    report_path: String,
+    folder_path: String,
+    generated_at: String,
+}
+
+#[tauri::command]
+async fn export_troubleshooting_report() -> Result<TroubleshootingReport, SkillHubError> {
+    run_skillhub_task(|| {
+        let (root, connection) = open_delivery_database()?;
+        run_release_gate_runner_in_connection(&root, &connection, "diagnostics-export")
+            .map_err(|error| SkillHubError::code("SCRIPT_FAILED").with_detail(error))?;
+        let folder = private_state_dir(&root)
+            .join("reports")
+            .join(runner_report_folder("diagnostics-export"));
+        Ok(TroubleshootingReport {
+            report_path: folder
+                .join("latest-diagnostics-export.md")
+                .display()
+                .to_string(),
+            folder_path: folder.display().to_string(),
+            generated_at: skill_delivery::iso_now(),
+        })
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// v3.3 one-box add: probe, install, adopt (skills contract §4.2 #13-#19)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Ref and subpath of the GitHub probe running on this worker thread. The
+    /// staging pipeline reads it so `--branch` and the sparse cone follow a
+    /// `/tree/<ref>/<path>` input without widening every staging signature.
+    static IMPORT_SCOPE: std::cell::RefCell<(String, String)> =
+        const { std::cell::RefCell::new((String::new(), String::new())) };
+}
+
+struct ImportScopeGuard;
+
+impl ImportScopeGuard {
+    fn set(git_ref: &str, subpath: &str) -> Self {
+        IMPORT_SCOPE.with(|scope| {
+            *scope.borrow_mut() = (git_ref.to_string(), subpath.to_string());
+        });
+        Self
+    }
+}
+
+impl Drop for ImportScopeGuard {
+    fn drop(&mut self) {
+        IMPORT_SCOPE.with(|scope| *scope.borrow_mut() = (String::new(), String::new()));
+    }
+}
+
+fn import_scope() -> (String, String) {
+    IMPORT_SCOPE.with(|scope| scope.borrow().clone())
+}
+
+fn register_import_cancellation(operation_id: &str) -> Result<Arc<AtomicBool>, SkillHubError> {
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let mut cancellations = SOURCE_IMPORT_CANCELLATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| SkillHubError::code("INTERNAL"))?;
+    if cancellations.contains_key(operation_id) {
+        return Err(SkillHubError::code("WRITE_BUSY").with_detail("同一个任务仍在运行"));
+    }
+    cancellations.insert(operation_id.to_string(), Arc::clone(&cancellation));
+    Ok(cancellation)
+}
+
+fn unregister_import_cancellation(operation_id: &str) {
+    if let Ok(mut cancellations) = SOURCE_IMPORT_CANCELLATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        cancellations.remove(operation_id);
+    }
+}
+
+/// Plain error for a failed staging step (download, Git, ZIP).
+fn classify_stage_error(error: &str) -> SkillHubError {
+    let lower = error.to_ascii_lowercase();
+    if error == SOURCE_IMPORT_CANCELLED_MESSAGE || error.contains("导入已取消") {
+        return SkillHubError::code("CANCELLED").without_action();
+    }
+    if lower.contains("repository not found") || lower.contains("status 404") || lower.contains(" 404") {
+        return SkillHubError::code("GITHUB_NOT_FOUND").with_detail(error);
+    }
+    if lower.contains("remote branch") && lower.contains("not found") {
+        return SkillHubError::code("GITHUB_REF_NOT_FOUND").with_detail(error);
+    }
+    if error.contains("超过 120 秒") || lower.contains("timed out") {
+        return SkillHubError::code("DOWNLOAD_TIMEOUT").with_detail(error);
+    }
+    if lower.contains("could not resolve host")
+        || lower.contains("failed to connect")
+        || lower.contains("connection")
+        || error.contains("请求失败")
+        || error.contains("下载失败")
+    {
+        return SkillHubError::code("NETWORK_FAILED").with_detail(error);
+    }
+    if error.contains("压缩包") || lower.contains("zip") {
+        return SkillHubError::code("ZIP_INVALID").with_detail(error);
+    }
+    SkillHubError::from(error.to_string())
+}
+
+/// Resolves `/tree/<a>/<b>/...` when the branch name itself has slashes:
+/// one `git ls-remote` call, the longest joined prefix that names a ref wins.
+fn resolve_github_ref(clone_url: &str, git_ref: &str, subpath: &str) -> (String, String) {
+    if git_ref.is_empty() || subpath.is_empty() {
+        return (git_ref.to_string(), subpath.to_string());
+    }
+    let mut command = Command::new("git");
+    command.args(["ls-remote", "--heads", "--tags", clone_url]);
+    let Ok(output) = command_output_with_timeout(
+        &mut command,
+        Duration::from_secs(20),
+        "读取 GitHub 分支列表超过 20 秒。",
+    ) else {
+        return (git_ref.to_string(), subpath.to_string());
+    };
+    if !output.status.success() {
+        return (git_ref.to_string(), subpath.to_string());
+    }
+    let refs = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split('\t').nth(1))
+        .map(|name| {
+            name.trim_start_matches("refs/heads/")
+                .trim_start_matches("refs/tags/")
+                .trim_end_matches("^{}")
+                .to_string()
+        })
+        .collect::<HashSet<_>>();
+    let segments = subpath.split('/').collect::<Vec<_>>();
+    for take in (1..=segments.len().min(3)).rev() {
+        let candidate = format!("{git_ref}/{}", segments[..take].join("/"));
+        if refs.contains(&candidate) {
+            return (candidate, segments[take..].join("/"));
+        }
+    }
+    (git_ref.to_string(), subpath.to_string())
+}
+
+/// Existing library source for a parsed input, used for the no-download
+/// duplicate fast path.
+fn find_duplicate_source(
+    root: &Path,
+    connection: &Connection,
+    parsed: &skill_source::ParsedSkillSource,
+) -> Result<Option<SourceCard>, String> {
+    let sources = read_indexed_sources(connection)?;
+    if let Some(github) = &parsed.github {
+        if !github.subpath.is_empty() {
+            return Ok(None);
+        }
+        return Ok(sources.into_iter().find(|source| {
+            parse_github_repo(&source.url).is_some_and(|(owner, repo)| {
+                owner.eq_ignore_ascii_case(&github.owner) && repo.eq_ignore_ascii_case(&github.repo)
+            })
+        }));
+    }
+    if parsed.kind == "local-folder" {
+        let path = PathBuf::from(&parsed.local_path);
+        if skill_source::path_is_inside(&path, &managed_sources_dir(root)) {
+            return Ok(sources.into_iter().find(|source| {
+                normalize_path_for_compare(&source.local_path)
+                    == normalize_path_for_compare(&parsed.local_path)
+            }));
+        }
+    }
+    Ok(None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_probe(
+    root: &Path,
+    connection: &Connection,
+    parsed: skill_source::ParsedSkillSource,
+    operation_id: &str,
+    import_kind: &str,
+    staged_path: Option<PathBuf>,
+    scope_root: String,
+    display_name: String,
+    owner: String,
+    security: skill_source::ProbeSecurity,
+    duplicate: Option<skill_source::ProbeDuplicate>,
+    download_method: &str,
+    skill_paths: Vec<String>,
+    warnings: Vec<String>,
+) -> Result<skill_source::SkillSourceProbe, SkillHubError> {
+    let library = skill_source::library_skill_hashes(root, connection);
+    let scope = staged_path
+        .as_ref()
+        .map(|path| {
+            if scope_root.is_empty() {
+                path.clone()
+            } else {
+                path.join(&scope_root)
+            }
+        })
+        .unwrap_or_default();
+    let skill_groups = if staged_path.is_some() {
+        skill_source::build_skill_groups(&scope, &skill_paths, &library, &display_name)
+    } else {
+        Vec::new()
+    };
+    let skill_count = skill_paths.len();
+    let prompt_docs = if skill_count == 0 && staged_path.is_some() {
+        skill_source::detect_prompt_docs(&scope)
+    } else {
+        Vec::new()
+    };
+    let mcp_configs = if staged_path.is_some() {
+        skill_source::detect_mcp_configs(&scope)
+    } else {
+        Vec::new()
+    };
+    if skill_count == 0 && prompt_docs.is_empty() && mcp_configs.is_empty() && duplicate.is_none() {
+        if let Some(path) = &staged_path {
+            let _ = fs::remove_dir_all(path);
+        }
+        return Err(SkillHubError::code("NO_SKILLS_FOUND"));
+    }
+    let evidence = delivery_evidence(connection, false)?;
+    let takeover = skill_delivery::read_takeover(connection)?;
+    let agent_chips =
+        skill_source::agent_chips(&evidence, &takeover, security.can_sync_to_agents);
+    let source_type = if skill_count > 0 && !prompt_docs.is_empty() {
+        "mixed"
+    } else if skill_count > 0 || duplicate.is_some() {
+        "skill"
+    } else {
+        "prompt"
+    };
+    let probe = skill_source::SkillSourceProbe {
+        probe_id: format!("probe-{}", uuid::Uuid::new_v4().simple()),
+        operation_id: operation_id.to_string(),
+        parsed,
+        display_name,
+        owner,
+        source_type: source_type.to_string(),
+        skill_groups,
+        skill_count,
+        prompt_docs,
+        mcp_configs,
+        security,
+        agent_chips,
+        duplicate,
+        download_method: download_method.to_string(),
+        expires_at: skill_source::probe_expiry_label(),
+        warnings,
+    };
+    skill_source::store_probe(skill_source::ProbeRecord {
+        probe: probe.clone(),
+        import_kind: import_kind.to_string(),
+        staged_path,
+        scope_root,
+        created: Instant::now(),
+    });
+    Ok(probe)
+}
+
+fn probe_skill_source_blocking(
+    control: &SourceImportControl,
+    input: &str,
+) -> Result<skill_source::SkillSourceProbe, SkillHubError> {
+    control.emit("inspect", "started", "正在识别地址", 0, 0);
+    let mut parsed = skill_source::parse_skill_source_input(input);
+    if let Some(error) = parsed.error.clone() {
+        return Err(error);
+    }
+    if parsed.route_to == "mcp" {
+        return Err(SkillHubError::code("INPUT_IS_MCP_CONFIG"));
+    }
+    let root = resolve_legacy_root()?;
+    let connection = open_index_database(&root)?;
+
+    if let Some(source) = find_duplicate_source(&root, &connection, &parsed)? {
+        // Already in the library: list from the index, download nothing.
+        let skills = read_indexed_skills(&connection)?
+            .into_iter()
+            .filter(|skill| skill.source_id == source.id)
+            .collect::<Vec<_>>();
+        let library = skill_source::library_skill_hashes(&root, &connection);
+        let children = skills
+            .iter()
+            .filter(|skill| skill_delivery::is_callable_skill(skill.is_router_hub, skills.len()))
+            .map(|skill| skill_source::ProbeSkillNode {
+                path: skill.relative_path.replace('\\', "/"),
+                name: skill.name.clone(),
+                description: skill.description.chars().take(240).collect(),
+                valid: true,
+                invalid_reason: String::new(),
+                in_library: library.contains_key(&normalize_skill_lookup(&skill.name)),
+            })
+            .collect::<Vec<_>>();
+        let security_state = skill_delivery::pending_security_review(&connection, &source.id)?;
+        let security = skill_source::probe_security(
+            if security_state.is_some() { "review" } else { "passed" },
+            0,
+            &[],
+            &[],
+        );
+        let count = children.len();
+        let probe = finish_probe(
+            &root,
+            &connection,
+            parsed,
+            &control.operation_id,
+            "index",
+            None,
+            String::new(),
+            source.name.clone(),
+            parsed_owner(&source.url),
+            security,
+            Some(skill_source::ProbeDuplicate {
+                source_id: source.id.clone(),
+                name: source.name.clone(),
+                relation: "same".to_string(),
+            }),
+            "index",
+            Vec::new(),
+            Vec::new(),
+        )?;
+        let mut probe = probe;
+        probe.skill_count = count;
+        probe.skill_groups = vec![skill_source::ProbeSkillGroup {
+            group_id: ".".to_string(),
+            title: source.name.clone(),
+            parent: None,
+            children,
+        }];
+        // Keep the stored record in step with what the UI received.
+        if let Some(mut record) = skill_source::peek_probe(&probe.probe_id) {
+            record.probe = probe.clone();
+            skill_source::store_probe(record);
+        }
+        return Ok(probe);
+    }
+
+    let (import_kind, stage_input, git_ref, subpath, owner) = match parsed.kind.as_str() {
+        "github" => {
+            let github = parsed.github.clone().expect("github parse");
+            control.emit("inspect", "progress", "正在确认分支", 0, 0);
+            let (git_ref, subpath) =
+                resolve_github_ref(&github.clone_url, &github.git_ref, &github.subpath);
+            if let Some(github) = parsed.github.as_mut() {
+                github.git_ref = git_ref.clone();
+                github.subpath = subpath.clone();
+            }
+            (
+                "github",
+                github.clone_url.clone(),
+                git_ref,
+                subpath,
+                github.owner.clone(),
+            )
+        }
+        "zip" => ("zip", parsed.local_path.clone(), String::new(), String::new(), String::new()),
+        _ => ("local", parsed.local_path.clone(), String::new(), String::new(), String::new()),
+    };
+    let execution = {
+        let _scope = ImportScopeGuard::set(&git_ref, &subpath);
+        stage_source_import_candidate_in_connection_with_control(
+            &root,
+            &connection,
+            import_kind,
+            &stage_input,
+            control,
+        )
+        .map_err(|error| classify_stage_error(&error))?
+    };
+    let staged = PathBuf::from(&execution.staged_path);
+    if !staged.is_dir() {
+        let detail = execution
+            .blocking_checks
+            .first()
+            .cloned()
+            .unwrap_or_else(|| execution.summary.clone());
+        return Err(if execution.download_method.is_empty() && import_kind == "github" {
+            classify_stage_error(&detail)
+        } else {
+            SkillHubError::from(detail)
+        });
+    }
+    if !subpath.is_empty() {
+        let scoped = staged.join(&subpath);
+        if !scoped.is_dir() || !skill_source::path_is_inside(&scoped, &staged) {
+            let _ = fs::remove_dir_all(&staged);
+            return Err(SkillHubError::code("GITHUB_SUBPATH_NOT_FOUND").with_detail(subpath));
+        }
+    }
+    control.emit("enumerate", "started", "正在列出技能", 0, 0);
+    let scope = if subpath.is_empty() {
+        staged.clone()
+    } else {
+        staged.join(&subpath)
+    };
+    let skill_paths = skill_source::enumerate_skill_dirs(&scope);
+    let security = skill_source::probe_security(
+        &execution.security_status,
+        execution.security_scanned_files,
+        &execution.security_findings,
+        &execution.blocking_checks,
+    );
+    let display_name = if let Some(github) = &parsed.github {
+        if subpath.is_empty() {
+            github.repo.clone()
+        } else {
+            subpath.rsplit('/').next().unwrap_or(&github.repo).to_string()
+        }
+    } else {
+        Path::new(&parsed.local_path)
+            .file_stem()
+            .map(|name| name.to_string_lossy().trim_end_matches(".skill").to_string())
+            .unwrap_or_else(|| "local-source".to_string())
+    };
+    let download_method = match (import_kind, execution.download_method.as_str()) {
+        ("github", method) if method.contains("codeload") || method.contains("api") => "zip",
+        ("github", _) => "git",
+        ("zip", _) => "zip",
+        _ => "copy",
+    };
+    let probe = finish_probe(
+        &root,
+        &connection,
+        parsed,
+        &control.operation_id,
+        import_kind,
+        Some(staged),
+        subpath,
+        display_name,
+        owner,
+        security,
+        None,
+        download_method,
+        skill_paths,
+        Vec::new(),
+    )?;
+    control.emit("enumerate", "completed", "技能清单已就绪", 1, 1);
+    Ok(probe)
+}
+
+fn parsed_owner(url: &str) -> String {
+    parse_github_repo(url).map(|(owner, _)| owner).unwrap_or_default()
+}
+
+#[tauri::command]
+async fn probe_skill_source(
+    app: tauri::AppHandle,
+    operation_id: Option<String>,
+    input: String,
+) -> Result<skill_source::SkillSourceProbe, SkillHubError> {
+    let operation_id = normalize_source_import_operation_id(operation_id.as_deref())
+        .map_err(|error| SkillHubError::code("INTERNAL").with_detail(error))?;
+    let cancellation = register_import_cancellation(&operation_id)?;
+    let worker_operation = operation_id.clone();
+    let result = run_skillhub_task(move || {
+        let control = SourceImportControl::with_app(worker_operation, cancellation, app);
+        probe_skill_source_blocking(&control, &input)
+    })
+    .await;
+    unregister_import_cancellation(&operation_id);
+    result
+}
+
+#[tauri::command]
+async fn discard_skill_source_probe(probe_id: String) -> Result<bool, SkillHubError> {
+    run_skillhub_task(move || Ok(skill_source::discard_probe(&probe_id))).await
+}
+
+#[tauri::command]
+async fn read_skill_source_probe_file(
+    probe_id: String,
+    relative_path: String,
+) -> Result<skill_source::ProbeFileText, SkillHubError> {
+    run_skillhub_task(move || skill_source::read_probe_file(&probe_id, &relative_path)).await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallSkillSourceRequest {
+    probe_id: String,
+    #[serde(default)]
+    selected_skill_paths: Vec<String>,
+    #[serde(default)]
+    agent_ids: Vec<String>,
+    #[serde(default)]
+    security_review_confirmed: bool,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    folder_id: Option<String>,
+    #[serde(default)]
+    new_folder_name: Option<String>,
+    #[serde(default)]
+    category_id: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallSkillSourceResult {
+    outcome: String,
+    source: SourceCard,
+    unit: Option<skill_delivery::DeliveryUnitDto>,
+    targets: Vec<skill_delivery::SkillTarget>,
+    disabled_skills: Vec<String>,
+    job_id: Option<u64>,
+    snapshot_stale: bool,
+    summary: String,
+}
+
+/// Writes the install / adopt targets for one pack: `enabled = 1` for the
+/// chosen tools (default: every taken-over, auto-adding tool) and an explicit
+/// off for the other taken-over tools, so materialization never overrides the
+/// chips the user chose (§2.4).
+fn write_install_targets(
+    connection: &Connection,
+    unit_id: &str,
+    agents: Option<&[String]>,
+    origin: &str,
+) -> Result<usize, String> {
+    let takeover = skill_delivery::read_takeover(connection)?;
+    let evidence = snapshot_delivery_evidence(connection);
+    let mut written = 0;
+    for agent in skill_delivery::DELIVERABLE_AGENTS {
+        if !skill_delivery::takeover_enabled(&takeover, agent) {
+            continue;
+        }
+        let wanted = match agents {
+            Some(chosen) => skill_delivery::agent_group(agent, evidence.real_shared)
+                .iter()
+                .any(|member| chosen.iter().any(|id| id == member)),
+            None => takeover.get(*agent).is_some_and(|row| row.auto_add_new),
+        };
+        if skill_delivery::upsert_target(connection, unit_id, agent, wanted, origin)? {
+            written += 1;
+        }
+    }
+    Ok(written)
+}
+
+fn install_skill_source_blocking(
+    app: Option<tauri::AppHandle>,
+    request: InstallSkillSourceRequest,
+) -> Result<InstallSkillSourceResult, SkillHubError> {
+    let record = skill_source::peek_probe(&request.probe_id)
+        .ok_or_else(|| SkillHubError::code("PROBE_EXPIRED"))?;
+    let probe = record.probe.clone();
+    let security = &probe.security;
+    if security.status == "blocked" {
+        return Err(SkillHubError::code("SECURITY_BLOCKED").with_detail(&security.plain_summary));
+    }
+    let flagged = security.status != "passed";
+    if flagged && !request.security_review_confirmed {
+        return Err(SkillHubError::code("SECURITY_REVIEW_REQUIRED")
+            .with_detail(&security.plain_summary)
+            .with_action("review-security", &[("probeId", &request.probe_id)]));
+    }
+    // I-5: a flagged pack is library-only, whatever chips were sent.
+    let agent_ids = if flagged {
+        Vec::new()
+    } else {
+        request.agent_ids.clone()
+    };
+    let operation_id = probe.operation_id.clone();
+    let _guard = acquire_background_write_guard_waiting(
+        "安装技能包",
+        LONG_COMMAND_GUARD_WAIT,
+        |holder| emit_wait_progress(app.as_ref(), &operation_id, holder),
+    )
+    .map_err(|error| {
+        if is_write_busy_error(&error) {
+            SkillHubError::code("WRITE_BUSY").with_detail(error)
+        } else {
+            SkillHubError::from(error)
+        }
+    })?;
+    let control = match app.clone() {
+        Some(app) => SourceImportControl::with_app(
+            operation_id.clone(),
+            Arc::new(AtomicBool::new(false)),
+            app,
+        ),
+        None => SourceImportControl::detached(operation_id.clone()),
+    };
+    let root = resolve_legacy_root()?;
+    let mut connection = open_index_database(&root)?;
+    ensure_v33_delivery_migration(&root, &mut connection)?;
+
+    // Duplicate fast path: only (re)target the existing pack.
+    if let Some(duplicate) = &probe.duplicate {
+        if agent_ids.is_empty() {
+            return Err(SkillHubError::code("DUPLICATE_SOURCE")
+                .with_source(&duplicate.source_id)
+                .with_action("open-existing", &[("sourceId", &duplicate.source_id)]));
+        }
+        write_install_targets(&connection, &duplicate.source_id, Some(&agent_ids), "install")?;
+        skill_source::discard_probe(&request.probe_id);
+        let ticket = delivery_queue::request(delivery_queue::Depth::Links, "install", false);
+        return install_result(
+            &root,
+            &connection,
+            &duplicate.source_id,
+            "updated-existing",
+            Vec::new(),
+            Some(ticket.job_id),
+            false,
+        );
+    }
+
+    let staged = record
+        .staged_path
+        .clone()
+        .ok_or_else(|| SkillHubError::code("PROBE_EXPIRED"))?;
+    if !staged.is_dir() {
+        return Err(SkillHubError::code("PROBE_EXPIRED"));
+    }
+    control.emit("install", "started", "正在安装…", 0, 1);
+    let source_name = request
+        .display_name
+        .as_deref()
+        .map(compact_note)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| probe.display_name.clone());
+    let promotion = promote_staged_source_import_in_connection(
+        &root,
+        &connection,
+        &record.import_kind,
+        &staged.display().to_string(),
+        &source_name,
+        flagged,
+    )?;
+    if promotion.status != "promoted" && promotion.status != "already-managed" {
+        let detail = promotion
+            .blocking_checks
+            .first()
+            .cloned()
+            .unwrap_or_else(|| promotion.summary.clone());
+        return Err(SkillHubError::code("SECURITY_BLOCKED").with_detail(detail));
+    }
+    // A /tree/ subpath install keeps its scope on every later update.
+    if !record.scope_root.is_empty() {
+        let skill_paths = probe
+            .skill_groups
+            .iter()
+            .flat_map(|group| group.parent.iter().chain(group.children.iter()))
+            .map(|node| {
+                if node.path.is_empty() {
+                    record.scope_root.clone()
+                } else {
+                    format!("{}/{}", record.scope_root, node.path)
+                }
+            })
+            .collect::<Vec<_>>();
+        record_explicit_skill_scope(&root, &promotion.target_path, &probe, &skill_paths)?;
+    }
+    control.emit("index", "started", "正在刷新技能库", 0, 1);
+    let indexed = scan_legacy_snapshot_under_write_guard()?;
+    let source = indexed
+        .sources
+        .iter()
+        .find(|source| {
+            normalize_path_for_compare(&source.local_path)
+                == normalize_path_for_compare(&promotion.target_path)
+        })
+        .cloned()
+        .ok_or_else(|| SkillHubError::code("INDEX_FAILED").with_detail("新技能包没有出现在索引里"))?;
+    let connection = open_index_database(&root)?;
+
+    // Unselected valid children are imported but child-disabled (§4.7).
+    let mut disabled_skills = Vec::new();
+    if !request.selected_skill_paths.is_empty() {
+        let source_root = PathBuf::from(&source.local_path);
+        let scope_root = if record.scope_root.is_empty() {
+            source_root.clone()
+        } else {
+            source_root.join(&record.scope_root)
+        };
+        let selected = request
+            .selected_skill_paths
+            .iter()
+            .map(|path| normalize_path_for_compare(&scope_root.join(path).display().to_string()))
+            .collect::<HashSet<_>>();
+        for skill in indexed.skills.iter().filter(|skill| skill.source_id == source.id) {
+            let Some(dir) =
+                skill_source::library_skill_dir(&root, &skill.folder_name, &skill.relative_path)
+            else {
+                continue;
+            };
+            if !selected.contains(&normalize_path_for_compare(&dir.display().to_string())) {
+                set_skill_enabled_override_in_connection(&connection, &skill.folder_name, false)?;
+                disabled_skills.push(skill.folder_name.clone());
+            }
+        }
+    }
+    apply_install_metadata(&connection, &source, &request)?;
+    let outcome = if flagged {
+        skill_delivery::set_source_library_enabled_rows(&connection, &source.id, false, false)?;
+        "library-only"
+    } else if probe.skill_count == 0 {
+        "prompt-library"
+    } else {
+        write_install_targets(&connection, &source.id, Some(&agent_ids), "install")?;
+        "installed"
+    };
+    let _ = write_audit_event(
+        &connection,
+        "skill_source_installed",
+        &format!("已加入技能包 {}", source.name),
+        serde_json::json!({
+            "sourceId": source.id,
+            "outcome": outcome,
+            "agents": agent_ids,
+            "disabledSkills": disabled_skills.len(),
+            "securityStatus": probe.security.status,
+        }),
+    );
+    skill_source::discard_probe(&request.probe_id);
+    control.emit("index", "completed", "技能库已刷新", 1, 1);
+    let ticket = delivery_queue::request(delivery_queue::Depth::Full, "install", false);
+    install_result(
+        &root,
+        &connection,
+        &source.id,
+        outcome,
+        disabled_skills,
+        Some(ticket.job_id),
+        true,
+    )
+}
+
+fn install_result(
+    root: &Path,
+    connection: &Connection,
+    source_id: &str,
+    outcome: &str,
+    disabled_skills: Vec<String>,
+    job_id: Option<u64>,
+    snapshot_stale: bool,
+) -> Result<InstallSkillSourceResult, SkillHubError> {
+    let source = read_indexed_sources(connection)?
+        .into_iter()
+        .find(|source| source.id == source_id)
+        .ok_or_else(|| SkillHubError::code("UNIT_NOT_FOUND").with_source(source_id))?;
+    let evidence = delivery_evidence(connection, false)?;
+    let state = build_skill_delivery_state(root, connection, &evidence, None)?;
+    let unit = state
+        .units
+        .iter()
+        .find(|unit| unit.unit_id == source_id)
+        .cloned();
+    let targets = state
+        .targets
+        .iter()
+        .filter(|target| target.unit_id == source_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let synced_to = targets.iter().filter(|target| target.desired).count();
+    let summary = match outcome {
+        "library-only" => "已加入技能库并保持停用 · 可在这一行「查看风险并启用」".to_string(),
+        "prompt-library" => "已加入资料库".to_string(),
+        _ if synced_to > 0 => format!("已加入技能库 · 正在同步到 {synced_to} 个 AI 工具"),
+        _ => "已加入技能库".to_string(),
+    };
+    Ok(InstallSkillSourceResult {
+        outcome: outcome.to_string(),
+        source,
+        unit,
+        targets,
+        disabled_skills,
+        job_id,
+        snapshot_stale,
+        summary,
+    })
+}
+
+/// Records `mode: explicit` with the probed skill folders so updates keep the
+/// `/tree/` scope (`ScopePolicy`, sparse_scope.rs).
+fn record_explicit_skill_scope(
+    root: &Path,
+    target_path: &str,
+    probe: &skill_source::SkillSourceProbe,
+    skill_paths: &[String],
+) -> Result<(), String> {
+    let folder = Path::new(target_path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default();
+    if folder.is_empty() {
+        return Ok(());
+    }
+    let config_path = skillhub_config_file(root);
+    let mut config = read_json(&config_path)
+        .unwrap_or_else(|| serde_json::json!({ "version": 3, "repositories": [] }));
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| "AI SkillHub runtime config must be a JSON object.".to_string())?;
+    let repositories = object
+        .entry("repositories".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Some(list) = repositories.as_array_mut() else {
+        return Err("AI SkillHub runtime config repositories must be a list.".to_string());
+    };
+    let url = probe
+        .parsed
+        .github
+        .as_ref()
+        .map(|github| github.clone_url.clone())
+        .unwrap_or_default();
+    let entry = serde_json::json!({
+        "name": folder,
+        "url": url,
+        "mode": "explicit",
+        "skillPaths": skill_paths,
+    });
+    match list.iter_mut().find(|item| {
+        item.get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| name.eq_ignore_ascii_case(&folder))
+    }) {
+        Some(existing) => {
+            if let Some(map) = existing.as_object_mut() {
+                map.insert("mode".to_string(), Value::from("explicit"));
+                map.insert("skillPaths".to_string(), serde_json::json!(skill_paths));
+            }
+        }
+        None => list.push(entry),
+    }
+    let text = serde_json::to_string_pretty(&config)
+        .map_err(|error| format!("Cannot serialize runtime config: {error}"))?;
+    fs::write(&config_path, format!("{text}\n"))
+        .map_err(|error| format!("Cannot write runtime config {}: {error}", config_path.display()))
+}
+
+fn apply_install_metadata(
+    connection: &Connection,
+    source: &SourceCard,
+    request: &InstallSkillSourceRequest,
+) -> Result<(), String> {
+    let display_name = request
+        .display_name
+        .as_deref()
+        .map(compact_note)
+        .filter(|name| !name.is_empty());
+    let category = request
+        .category_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|category| !category.is_empty());
+    let note = request.note.as_deref().map(str::trim).filter(|note| !note.is_empty());
+    if display_name.is_some() || category.is_some() || note.is_some() {
+        set_source_metadata_override_in_connection(
+            connection,
+            &source.id,
+            display_name.as_deref().unwrap_or(&source.name),
+            &source.source_type,
+            category.unwrap_or(&source.category_id),
+            note.unwrap_or(&source.note),
+            source.enabled,
+        )?;
+    }
+    if !request.tags.is_empty() {
+        set_source_tags_in_connection(connection, &source.id, &request.tags)?;
+    }
+    let folder_id = match (&request.folder_id, &request.new_folder_name) {
+        (Some(folder_id), _) if !folder_id.trim().is_empty() => Some(folder_id.trim().to_string()),
+        (_, Some(name)) if !name.trim().is_empty() => {
+            let (name, note, color) = validate_skill_folder_fields(name, "", "cyan")?;
+            let existing = connection
+                .query_row(
+                    "SELECT id FROM skill_folders WHERE name = ?1 COLLATE NOCASE",
+                    params![name],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|error| format!("Cannot read folders: {error}"))?;
+            match existing {
+                Some(id) => Some(id),
+                None => {
+                    let id = stable_id("skill-folder", &format!("{name}-{}", unix_timestamp_string()));
+                    let now = unix_timestamp_string();
+                    connection
+                        .execute(
+                            "INSERT INTO skill_folders (id, name, note, color, sort_order, created_at, updated_at)
+                             VALUES (?1, ?2, ?3, ?4,
+                                (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM skill_folders), ?5, ?5)",
+                            params![id, name, note, color, now],
+                        )
+                        .map_err(|error| format!("Cannot create folder: {error}"))?;
+                    Some(id)
+                }
+            }
+        }
+        _ => None,
+    };
+    if let Some(folder_id) = folder_id {
+        connection
+            .execute(
+                "INSERT INTO source_folder_memberships (source_id, folder_id, sort_order, updated_at)
+                 SELECT ?1, id, 0, ?3 FROM skill_folders WHERE id = ?2
+                 ON CONFLICT(source_id) DO UPDATE SET folder_id = excluded.folder_id,
+                    updated_at = excluded.updated_at",
+                params![source.id, folder_id, unix_timestamp_string()],
+            )
+            .map_err(|error| format!("Cannot file the new pack: {error}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn install_skill_source(
+    app: tauri::AppHandle,
+    request: InstallSkillSourceRequest,
+) -> Result<InstallSkillSourceResult, SkillHubError> {
+    run_skillhub_task(move || install_skill_source_blocking(Some(app), request)).await
+}
+
+/// Stages one adopt candidate through the normal local import (security scan
+/// included) and copies it into the library. The original folder is never
+/// touched. Returns the promoted path and whether review flagged it.
+fn adopt_one_skill(
+    root: &Path,
+    connection: &Connection,
+    control: &SourceImportControl,
+    candidate: &skill_source::AdoptCandidate,
+) -> Result<(String, bool), SkillHubError> {
+    let execution = stage_source_import_candidate_in_connection_with_control(
+        root,
+        connection,
+        "local",
+        &candidate.canonical_path,
+        control,
+    )
+    .map_err(|error| classify_stage_error(&error))?;
+    let staged = PathBuf::from(&execution.staged_path);
+    if !staged.is_dir() {
+        return Err(SkillHubError::from(
+            execution
+                .blocking_checks
+                .first()
+                .cloned()
+                .unwrap_or(execution.summary),
+        ));
+    }
+    let security = skill_source::probe_security(
+        &execution.security_status,
+        execution.security_scanned_files,
+        &execution.security_findings,
+        &execution.blocking_checks,
+    );
+    if security.status == "blocked" {
+        let _ = fs::remove_dir_all(&staged);
+        return Err(SkillHubError::code("SECURITY_BLOCKED").with_detail(security.plain_summary));
+    }
+    let reviewed = security.status != "passed";
+    let name = sanitize_source_folder_name(&candidate.name);
+    let promotion = promote_staged_source_import_in_connection(
+        root,
+        connection,
+        "local",
+        &staged.display().to_string(),
+        &name,
+        reviewed,
+    );
+    let _ = fs::remove_dir_all(&staged);
+    let promotion = promotion?;
+    match promotion.status.as_str() {
+        "promoted" => Ok((promotion.target_path, reviewed)),
+        "already-managed" => Err(SkillHubError::code("DUPLICATE_SOURCE")
+            .with_path(promotion.target_path)),
+        _ => Err(SkillHubError::code("SECURITY_BLOCKED").with_detail(
+            promotion
+                .blocking_checks
+                .first()
+                .cloned()
+                .unwrap_or(promotion.summary),
+        )),
+    }
+}
+
+#[tauri::command]
+async fn preview_adopt_external_skills(
+    project_path: Option<String>,
+) -> Result<skill_source::AdoptPreview, SkillHubError> {
+    run_skillhub_task(move || skill_source::adopt_preview_blocking(project_path)).await
+}
+
+#[tauri::command]
+async fn adopt_external_skills(
+    app: tauri::AppHandle,
+    candidate_ids: Vec<String>,
+    operation_id: Option<String>,
+) -> Result<skill_source::AdoptReport, SkillHubError> {
+    let operation_id = normalize_source_import_operation_id(operation_id.as_deref())
+        .map_err(|error| SkillHubError::code("INTERNAL").with_detail(error))?;
+    run_skillhub_task(move || {
+        skill_source::adopt_blocking(Some(app), candidate_ids, operation_id, true)
+    })
+    .await
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SkillSourceDroppedEvent {
+    paths: Vec<String>,
+}
+
+const SKILL_SOURCE_DROPPED_EVENT: &str = "skill-source-dropped";
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Folder and .zip picker, called from Rust only: the webview gets no
+        // `dialog:*` permission (DECISIONS.md capability gate).
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            delivery_queue::start(app.handle().clone(), run_delivery_job);
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Native file drop (needs `dragDropEnabled: true`, §3.9). Only
+            // existing folders and .zip/.skill files, at most five.
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event
+            {
+                use tauri::Manager;
+                let accepted = skill_source::accepted_drop_paths(paths);
+                if !accepted.is_empty() {
+                    let _ = window.app_handle().emit(
+                        SKILL_SOURCE_DROPPED_EVENT,
+                        SkillSourceDroppedEvent { paths: accepted },
+                    );
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             load_indexed_snapshot,
             get_startup_load_path,
@@ -19259,8 +21790,6 @@ pub fn run() {
             scan_external_agent_skills,
             read_external_agent_skill,
             set_agent_adapter_enabled,
-            set_workspace_enabled,
-            set_preset_enabled,
             set_desktop_qa_check_status,
             set_skill_metadata,
             set_skill_enabled,
@@ -19283,8 +21812,6 @@ pub fn run() {
             verify_mcp_recipe,
             prepare_origin_bridge,
             apply_source_identity_migration,
-            set_preset_workspace_enabled,
-            set_real_write_authorization,
             run_release_gate_runner,
             open_release_gate_export_path,
             read_git_runtime,
@@ -19309,7 +21836,30 @@ pub fn run() {
             regenerate_router_hubs,
             set_skill_conflict_choice,
             preview_legacy_cleanup_candidates,
-            cleanup_legacy_candidate
+            cleanup_legacy_candidate,
+            get_skill_delivery_state,
+            list_skill_agents,
+            set_agent_takeover,
+            set_skill_delivery_paused,
+            set_skill_target,
+            set_skill_targets_batch,
+            set_child_skill_enabled,
+            set_source_library_enabled,
+            request_skill_delivery,
+            get_onboarding_state,
+            complete_onboarding,
+            parse_skill_source_input,
+            probe_skill_source,
+            install_skill_source,
+            discard_skill_source_probe,
+            read_skill_source_probe_file,
+            pick_skill_source_path,
+            preview_adopt_external_skills,
+            adopt_external_skills,
+            list_agent_skills,
+            open_agent_skills_folder,
+            read_library_skill_document,
+            export_troubleshooting_report
         ])
         .run(tauri::generate_context!())
         .expect("failed to run AI SkillHub app");
@@ -19868,6 +22418,7 @@ mod tests {
         };
 
         LegacySnapshot {
+            skill_delivery: None,
             root: root.display().to_string(),
             skills_dir: root.join("skills").display().to_string(),
             sources_dir: active_sources_dir(root).display().to_string(),
@@ -20162,9 +22713,15 @@ mod tests {
         let shared = root.join("profile").join(".agents").join("skills");
         let legacy = root.join("profile").join(".codex").join("skills");
         fs::create_dir_all(&legacy).unwrap();
-        let plan = AgentDeliveryPlan {
-            allowlist: names.clone(),
-            recipients: vec![
+        // v3.3: the shared Codex/Coze group is taken over and wants the pack.
+        for agent in ["codex", "coze"] {
+            skill_delivery::upsert_takeover(&connection, agent, true, "user").unwrap();
+        }
+        skill_delivery::materialize_defaults(&connection).unwrap();
+        let plan = build_agent_delivery_plan_with(
+            &root,
+            &connection,
+            vec![
                 AgentDeliveryRecipientState {
                     id: "coze-shared",
                     path: shared.clone(),
@@ -20181,7 +22738,9 @@ mod tests {
                     detected: true,
                 },
             ],
-        };
+        )
+        .unwrap();
+        assert_eq!(plan.targets.shared.as_ref().unwrap().names, names);
         assert!(!agent_delivery_links_are_healthy_for_plan(&root, &plan).unwrap());
         shared_skill_catalog::sync_shared(
             &shared,
@@ -20217,7 +22776,11 @@ mod tests {
         assert!(agent_delivery_links_are_healthy_for_plan(&root, &plan).unwrap());
         fs::remove_dir(old_alias).unwrap();
         fs::write(shared.join("paper-helper/SKILL.md"), "user edit").unwrap();
-        assert!(!agent_delivery_links_are_healthy_for_plan(&root, &plan).unwrap());
+        // v3.3 (I-2): an edited copy now belongs to the user. It is reported
+        // as a conflict by the read-back and never overwritten, so it must not
+        // make every later start reconcile again.
+        assert!(agent_delivery_links_are_healthy_for_plan(&root, &plan).unwrap());
+        assert!(!shared_skill_catalog::is_managed_entry(&shared.join("paper-helper")));
         fs::remove_dir(&delivered).unwrap();
         drop(connection);
         fs::remove_dir_all(root).unwrap();
