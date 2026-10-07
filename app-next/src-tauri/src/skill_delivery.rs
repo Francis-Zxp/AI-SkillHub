@@ -809,6 +809,10 @@ pub(crate) struct UnitInfo {
     pub callable_skills: usize,
     pub library_enabled: bool,
     pub library_only_reason: &'static str,
+    /// An entry the 3.2.18 allowlist publishes that maps to no indexed pack or
+    /// skill. It has no row the user could toggle, so it follows takeover:
+    /// delivered to every taken-over tool unless a row says otherwise.
+    pub implicit: bool,
 }
 
 impl UnitInfo {
@@ -1093,6 +1097,7 @@ pub(crate) fn read_delivery_units_at(
             callable_skills: callable,
             library_enabled: reason.is_empty(),
             library_only_reason: reason,
+            implicit: false,
         });
     }
 
@@ -1128,6 +1133,7 @@ pub(crate) fn read_delivery_units_at(
             callable_skills: 1,
             library_enabled: reason.is_empty(),
             library_only_reason: reason,
+            implicit: false,
         });
     }
 
@@ -1137,6 +1143,7 @@ pub(crate) fn read_delivery_units_at(
             continue;
         }
         let skill_id = stable_id("skill", name);
+        let deliverable = manifest_is_deliverable(&active_root.join(name));
         units.push(UnitInfo {
             unit_id: format!("{STANDALONE_PREFIX}{skill_id}"),
             kind: "standalone",
@@ -1144,12 +1151,9 @@ pub(crate) fn read_delivery_units_at(
             skill_id,
             entries: vec![name.clone()],
             callable_skills: 1,
-            library_enabled: manifest_is_deliverable(&active_root.join(name)),
-            library_only_reason: if manifest_is_deliverable(&active_root.join(name)) {
-                ""
-            } else {
-                "invalid-manifest"
-            },
+            library_enabled: deliverable,
+            library_only_reason: if deliverable { "" } else { "invalid-manifest" },
+            implicit: true,
         });
     }
     Ok(units)
@@ -1332,8 +1336,18 @@ impl Evidence {
     }
 }
 
+/// Desired state of one pair: the row when there is one; an implicit unit
+/// (allowlisted, with nothing the user could toggle) follows takeover.
+pub(crate) fn pair_desired(unit: &UnitInfo, row: Option<&TargetRow>) -> bool {
+    match row {
+        Some(row) => row.enabled,
+        None => unit.implicit,
+    }
+}
+
 /// Names this agent should hold: entries of every library-enabled unit with a
-/// desired row, restricted to the union allowlist.
+/// desired row, restricted to the union allowlist. Only called for an agent
+/// whose takeover is on.
 pub(crate) fn names_for_agent(
     agent_id: &str,
     units: &[UnitInfo],
@@ -1348,9 +1362,10 @@ pub(crate) fn names_for_agent(
         .iter()
         .filter(|unit| unit.library_enabled)
         .filter(|unit| {
-            targets
-                .get(&(unit.unit_id.clone(), agent_id.to_string()))
-                .is_some_and(|row| row.enabled)
+            pair_desired(
+                unit,
+                targets.get(&(unit.unit_id.clone(), agent_id.to_string())),
+            )
         })
         .flat_map(|unit| unit.entries.iter())
         .filter_map(|entry| union_keys.get(&entry.to_lowercase()).cloned())
@@ -2438,7 +2453,10 @@ pub(crate) fn build_state(
             if !takeover_on && !disk.is_ours() {
                 continue;
             }
-            let desired = row.is_some_and(|row| row.enabled);
+            let desired = match row {
+                Some(row) => row.enabled,
+                None => takeover_on && pair_desired(unit, None),
+            };
             let changed_at = nanos(row.map(|row| row.updated_at.as_str()).unwrap_or(""))
                 .max(nanos(takeover_changed));
             let verified_at = cached
@@ -3220,6 +3238,7 @@ mod tests {
             callable_skills: 2,
             library_enabled: enabled,
             library_only_reason: if enabled { "" } else { "disabled-by-user" },
+            implicit: false,
         }
     }
 
@@ -3249,6 +3268,45 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn implicit_allowlisted_entry_follows_takeover_until_a_row_says_otherwise() {
+        // An entry 3.2.18 published that maps to no indexed pack must not be
+        // silently released from every tool on upgrade.
+        let union = vec!["alpha".to_string(), "orphan-entry".to_string()];
+        let mut implicit = unit("standalone:x", "orphan-entry", true);
+        implicit.kind = "standalone";
+        implicit.implicit = true;
+        let units = vec![unit("pack-a", "alpha", true), implicit.clone()];
+        let mut targets = BTreeMap::new();
+        let (key, value) = row("pack-a", "claude", true);
+        targets.insert(key, value);
+        let plan = compute_targets_plan(
+            &union,
+            &units,
+            &targets,
+            &takeover_of(&["claude"]),
+            &evidence(false),
+        );
+        let claude = plan.recipients.iter().find(|r| r.id == "claude").unwrap();
+        assert_eq!(
+            claude.names,
+            vec!["alpha".to_string(), "orphan-entry".to_string()]
+        );
+        assert!(pair_desired(&implicit, None));
+        // An explicit off row still wins.
+        let (key, value) = row("standalone:x", "claude", false);
+        targets.insert(key, value);
+        let plan = compute_targets_plan(
+            &union,
+            &units,
+            &targets,
+            &takeover_of(&["claude"]),
+            &evidence(false),
+        );
+        let claude = plan.recipients.iter().find(|r| r.id == "claude").unwrap();
+        assert_eq!(claude.names, vec!["alpha".to_string()]);
     }
 
     #[test]
