@@ -839,6 +839,12 @@ export function App() {
       clearBanner("delivery");
       scheduleDeliveryRefresh(60);
     } catch (error) {
+      // Before the first-run choice, taking over a tool happens on the onboarding screen.
+      if (normalizeSkillHubError(error).code === "ONBOARDING_REQUIRED") {
+        setOnboardingDeferred(false);
+        navigate("dashboard");
+        return;
+      }
       showError(error, "delivery");
     }
   }
@@ -2179,6 +2185,9 @@ export function App() {
                 onOpenFolder={agentId => void openAgentFolder(agentId)}
                 onOpenLibraryRow={key => openDetail(key)}
                 onOpenMcp={() => navigate("connections")}
+                onRemoveLeftovers={agentId => void setTargetsBatch((delivery?.targets ?? [])
+                  .filter(target => target.agentId === agentId && target.status === "orphan")
+                  .map(target => ({ unitId: target.unitId, agentId: target.agentId, enabled: false })))}
                 onSyncNow={() => void requestDelivery("user", "full", true)}
                 onTakeover={(agent, enabled) => void setTakeover(agent, enabled)}
                 refreshing={agentsRefreshing}

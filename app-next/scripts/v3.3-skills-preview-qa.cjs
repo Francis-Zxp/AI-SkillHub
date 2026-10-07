@@ -54,12 +54,16 @@ function expect(condition, message) {
 }
 
 const preview = page => page.evaluate(() => window.__skillhubPreview ?? { jobs: [], clientWrites: [] });
+// Idle = no running job and the sync indicator is not busy (a queued batch is not in `jobs` yet).
 const waitForJobsIdle = async page => {
-  await page.waitForFunction(() => {
-    const jobs = window.__skillhubPreview?.jobs ?? [];
-    return jobs.every(job => job.phase !== "running");
-  }, null, { timeout: 8000 });
-  await page.waitForTimeout(900);
+  for (let round = 0; round < 2; round += 1) {
+    await page.waitForFunction(() => {
+      const jobs = window.__skillhubPreview?.jobs ?? [];
+      const indicator = document.querySelector('[data-testid="sync-indicator"]');
+      return jobs.every(job => job.phase !== "running") && indicator?.getAttribute("data-tone") !== "busy";
+    }, null, { timeout: 10000 });
+    await page.waitForTimeout(900);
+  }
 };
 
 async function openLibrary(page) {

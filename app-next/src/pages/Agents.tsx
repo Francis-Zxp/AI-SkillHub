@@ -46,6 +46,7 @@ export function Agents({
   onOpenFolder,
   onOpenLibraryRow,
   onOpenMcp,
+  onRemoveLeftovers,
   onSyncNow,
   onTakeover,
   refreshing,
@@ -60,6 +61,8 @@ export function Agents({
   onOpenFolder: (agentId: string) => void;
   onOpenLibraryRow: (key: string) => void;
   onOpenMcp: () => void;
+  /** Removes entries SkillHub left in a tool that is no longer installed (orphans). */
+  onRemoveLeftovers: (agentId: string) => void;
   onSyncNow: () => void;
   onTakeover: (agent: SkillAgent, enabled: boolean) => void;
   refreshing: boolean;
@@ -129,6 +132,14 @@ export function Agents({
                     <strong>{agent.name}</strong>
                     <span className="chip">{t(`v33.word.${agent.statusWord}`)}</span>
                     <small>{agent.statusWord === "unsupported" ? agent.unsupportedReason || t("v33.notSupportedReason") : t("v33.notInstalledReason")}</small>
+                    {(() => {
+                      const leftovers = delivery.targets.filter(target => target.agentId === agent.id && target.status === "orphan").length;
+                      return leftovers > 0 ? (
+                        <button className="ghost-action small" data-testid={`remove-leftovers-${agent.id}`} onClick={() => onRemoveLeftovers(agent.id)} type="button">
+                          {t("v33.removeLeftovers", { n: leftovers })}
+                        </button>
+                      ) : null;
+                    })()}
                   </li>
                 ))}
               </ul>
