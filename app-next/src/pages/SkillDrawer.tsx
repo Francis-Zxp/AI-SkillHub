@@ -37,6 +37,7 @@ import {
 } from "../appShared";
 import { Dialog, Drawer, StarRating, ToggleSwitch, useConfirm } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
+import "./library.css";
 
 type Tab = "overview" | "versions" | "settings";
 const CHILD_LIMIT = 60;

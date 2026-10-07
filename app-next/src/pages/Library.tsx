@@ -12,6 +12,7 @@ import type { AgentId, LegacySnapshot, SkillAgent, SkillCard, SkillFolderCard, S
 import { displayCategoryName, isRouterHubSkill, skillInvocationName, stableSkillClientId } from "../appShared";
 import { Dialog, MoreMenu, StarRating, ToggleSwitch } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
+import "./library.css";
 
 export type LibraryFilter = "all" | "synced" | "unsynced" | "update" | "problem";
 const FILTERS: LibraryFilter[] = ["all", "synced", "unsynced", "update", "problem"];
@@ -550,10 +551,11 @@ function stripRouterMarker(text: string) {
 export function rowSummary(row: LibraryRow) {
   const lang = getLang();
   if (row.skill) return stripRouterMarker(localizedSkillDescription(row.skill, lang) || row.skill.description) || displayCategoryName(row.skill.category);
+  if (row.source?.usageGuide) return row.source.usageGuide;
+  // A generated parent entry only describes routing; an upstream umbrella SKILL.md is real content.
   const parent = row.ownedSkills.find(skill => isRouterHubSkill(skill) && row.ownedSkills.length > 1);
   const parentText = parent ? stripRouterMarker(localizedSkillDescription(parent, lang) || parent.description) : "";
-  if (parentText) return parentText;
-  if (row.source?.usageGuide) return row.source.usageGuide;
+  if (parentText && !/路由|router|入口集合|parent entry/i.test(parentText)) return parentText;
   const first = row.skills[0];
   const firstText = first ? stripRouterMarker(localizedSkillDescription(first, lang) || first.description) : "";
   return firstText || (row.source ? displayCategoryName(row.source.categoryId) : "");

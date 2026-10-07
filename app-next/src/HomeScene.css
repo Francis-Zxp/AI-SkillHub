@@ -39,3 +39,15 @@
   .theme-family-atlas.page-dashboard { --home-rail: 0px; }
   .dashboard-immersive.theme-family-atlas.page-dashboard .home-visual-switch { top: 18px; left: 14px; }
 }
+
+/* v3.3: the home block (numbers · card · 添加) sits under the top bar, so the scene's own
+   heading and controls start below it. Immersive mode hides the block again. */
+.v33.theme-family-atlas.page-dashboard .sky-heading,
+.v33.theme-family-atlas.page-dashboard .sky-controls { top: 250px; }
+.v33.theme-family-atlas.page-dashboard .sky-navigation { top: 296px; }
+.v33.dashboard-immersive.page-dashboard .home-top { display: none; }
+.v33.dashboard-immersive.theme-family-atlas.page-dashboard .sky-heading,
+.v33.dashboard-immersive.theme-family-atlas.page-dashboard .sky-controls { top: 64px; }
+@media (max-height: 750px) {
+  .v33.theme-family-atlas.page-dashboard .sky-heading { display: none; }
+}

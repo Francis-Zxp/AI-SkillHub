@@ -66,24 +66,23 @@ export function Sidebar({
   const managed = sidebarAgents(delivery);
   const discovered = availableAgents(delivery);
   return (
-    <aside className="sidebar">
-      <div className="brand">
-        <img alt="AI SkillHub" className="brand-logo" src="/ai-skillhub-logo.png" />
-        <div>
-          <strong>AI SkillHub</strong>
-        </div>
+    <aside className="side-rail" aria-label={t("v33.navLabel")}>
+      <div className="rail-brand">
+        <img alt="" src="/ai-skillhub-logo.png" />
+        <strong>AI SkillHub</strong>
       </div>
-      <button className="nav-add" data-testid="sidebar-add-button" onClick={onAdd} type="button">
-        <span className="nav-icon" aria-hidden="true"><Icon name="add" /></span>
-        <span className="nav-text"><strong>{t("v33.add")}</strong></span>
-        <span className="nav-tip" role="tooltip">{t("v33.add")}</span>
+      <button className="rail-item rail-add" data-testid="sidebar-add-button" onClick={onAdd} type="button">
+        <span className="rail-icon" aria-hidden="true"><Icon name="add" /></span>
+        <span className="rail-label">{t("v33.add")}</span>
+        <span className="rail-tip" aria-hidden="true">{t("v33.add")}</span>
       </button>
-      <nav className="nav" aria-label={t("v33.navLabel")}>
+      <nav className="rail-nav">
         {NAV.map(item => (
-          <div className="nav-group" key={item.key}>
+          <div className="rail-group" key={item.key}>
             <button
               aria-current={active === item.key && !(item.key === "agents" && agentDetailId) ? "page" : undefined}
-              className={active === item.key ? "nav-item active" : "nav-item"}
+              aria-label={t(item.label)}
+              className="rail-item"
               data-testid={`nav-${item.key}`}
               onClick={() => {
                 if (item.key === "agents") onOpenAgent(null);
@@ -91,47 +90,49 @@ export function Sidebar({
               }}
               type="button"
             >
-              <span className="nav-icon" aria-hidden="true"><Icon name={item.icon} /></span>
-              <span className="nav-text"><strong>{t(item.label)}</strong></span>
+              <span className="rail-icon" aria-hidden="true"><Icon name={item.icon} /></span>
+              <span className="rail-label">{t(item.label)}</span>
               {item.key === "library" && updateCount > 0 && (
-                <em className="nav-badge" title={t("v33.updatesBadge", { n: updateCount })}>{updateCount}</em>
+                <em className="rail-badge" title={t("v33.updatesBadge", { n: updateCount })}>{updateCount}</em>
               )}
-              <span className="nav-tip" role="tooltip">{t(item.label)}</span>
+              <span className="rail-tip" aria-hidden="true">{t(item.label)}</span>
             </button>
             {item.key === "agents" && (managed.length > 0 || discovered.length > 0) && (
-              <div className="nav-sub">
+              <div className="rail-sub">
                 {managed.map(agent => (
                   <button
                     aria-current={active === "agents" && agentDetailId === agent.id ? "page" : undefined}
-                    className={active === "agents" && agentDetailId === agent.id ? "nav-sub-item active" : "nav-sub-item"}
+                    aria-label={agent.name}
+                    className="rail-sub-item"
                     data-testid={`nav-agent-${agent.id}`}
                     key={agent.id}
                     onClick={() => {
                       onOpenAgent(agent.id);
                       onNavigate("agents");
                     }}
-                    title={agent.name}
                     type="button"
                   >
                     <AgentGlyph agentId={agent.id} name={agent.name} size="sm" />
-                    <span className="nav-text">{agent.name}</span>
-                    <em className="nav-sub-count">{agent.counts.skillsSynced}</em>
-                    <i className={`agent-dot tone-${agentDotTone(agent.health)}`} aria-label={t(`v33.health.${agentDotTone(agent.health)}`)} />
+                    <span className="rail-label">{agent.name}</span>
+                    <em className="rail-sub-count">{agent.counts.skillsSynced}</em>
+                    <i className={`agent-dot tone-${agentDotTone(agent.health)}`} title={t(`v33.health.${agentDotTone(agent.health)}`)} />
+                    <span className="rail-tip" aria-hidden="true">{agent.name} · {agent.counts.skillsSynced}</span>
                   </button>
                 ))}
                 {discovered.length > 0 && (
                   <button
-                    className="nav-sub-item discover"
+                    aria-label={t("v33.discoverTools", { n: discovered.length })}
+                    className="rail-sub-item discover"
                     data-testid="nav-discover-agents"
                     onClick={() => {
                       onOpenAgent(null);
                       onNavigate("agents");
                     }}
-                    title={t("v33.discoverTools", { n: discovered.length })}
                     type="button"
                   >
-                    <span className="nav-sub-plus" aria-hidden="true"><Icon name="add" /></span>
-                    <span className="nav-text">{t("v33.discoverTools", { n: discovered.length })}</span>
+                    <span className="rail-sub-plus" aria-hidden="true"><Icon name="add" /></span>
+                    <span className="rail-label">{t("v33.discoverTools", { n: discovered.length })}</span>
+                    <span className="rail-tip" aria-hidden="true">{t("v33.discoverTools", { n: discovered.length })}</span>
                   </button>
                 )}
               </div>
@@ -139,17 +140,18 @@ export function Sidebar({
           </div>
         ))}
       </nav>
-      <div className="sidebar-footer">
+      <div className="rail-footer">
         <button
           aria-current={active === "settings" ? "page" : undefined}
-          className={active === "settings" ? "nav-item active" : "nav-item"}
+          aria-label={t("nav.settings")}
+          className="rail-item"
           data-testid="nav-settings"
           onClick={() => onNavigate("settings")}
           type="button"
         >
-          <span className="nav-icon" aria-hidden="true"><Icon name="settings" /></span>
-          <span className="nav-text"><strong>{t("nav.settings")}</strong></span>
-          <span className="nav-tip" role="tooltip">{t("nav.settings")}</span>
+          <span className="rail-icon" aria-hidden="true"><Icon name="settings" /></span>
+          <span className="rail-label">{t("nav.settings")}</span>
+          <span className="rail-tip" aria-hidden="true">{t("nav.settings")}</span>
         </button>
       </div>
     </aside>

@@ -29,6 +29,7 @@ import {
 } from "../appShared";
 import { normalizeSkillHubError } from "../skillErrors";
 import { DeferredSurface, SegmentedToggle, ToggleSwitch } from "../components/ui";
+import "./settings.css";
 
 const DevTools = lazy(() => import("./DevTools").then(module => ({ default: module.DevTools })));
 

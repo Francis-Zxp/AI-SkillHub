@@ -32,6 +32,7 @@ import {
 } from "../appShared";
 import { SegmentedToggle, Metric } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
+import "./home.css";
 
 const SkillArchipelago = lazy(() => import("../SkillArchipelago").then(module => ({ default: module.SkillArchipelago })));
 const SkillUniverse = lazy(() => import("../SkillUniverse").then(module => ({ default: module.SkillUniverse })));
@@ -145,6 +146,7 @@ export function Dashboard({
 
   return (
     <div className="view dashboard-view home-v33">
+      <div className="home-top">
       <section className="home-metrics" aria-label={t("v33.homeMetrics")}>
         <Metric
           icon="agent"
@@ -182,6 +184,7 @@ export function Dashboard({
         />
       </section>
 
+      <div className="home-row">
       {onboardingPending ? (
         <section className="home-card first-run" data-testid="home-first-run-card">
           <Icon name="sparkle" />
@@ -227,6 +230,7 @@ export function Dashboard({
         />
         <button className="primary-action small" onClick={onAdd} type="button">{t("v33.add")}</button>
       </section>
+      </div>
 
       {emptyLibrary && (
         <section className="home-card empty" data-testid="home-empty-card">
@@ -238,6 +242,7 @@ export function Dashboard({
           <button className="primary-action small" onClick={onAdd} type="button">{t("v33.add")}</button>
         </section>
       )}
+      </div>
 
       <section className={`dashboard-hero glow-card${sceneVisual === "off" ? " scene-off" : ""}${atlasMode && (!atlasIntroVisible || sceneVisual === "islands") ? " intro-collapsed" : ""}${sceneVisual === "islands" ? " islands-home" : " universe-home"}`}>
         {sceneVisual === "islands" && (

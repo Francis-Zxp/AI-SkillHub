@@ -1,0 +1,73 @@
+/* v3.3 home (skills contract §6.2). The four numbers, the first-run / new-tool card and the
+   添加 box form one compact glass block; in the scene themes it floats over the islands. */
+.home-top { display: grid; gap: 10px; }
+.home-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.home-metrics .metric {
+  display: grid;
+  gap: 2px;
+  min-height: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
+  text-align: left;
+  backdrop-filter: blur(18px);
+}
+.home-metrics .metric > div { display: flex; align-items: center; justify-content: space-between; color: var(--text-soft); font-size: 12.5px; font-weight: 600; }
+.home-metrics .metric > div em { color: var(--text-muted); }
+.home-metrics .metric > div .ui-icon { width: 16px; height: 16px; }
+.home-metrics .metric strong { display: flex; align-items: baseline; gap: 2px; font-size: calc(22px * var(--ui-text-scale, 1)); font-variant-numeric: tabular-nums; line-height: 1.15; }
+.home-metrics .metric small { color: var(--text-muted); font-size: 12px; }
+.home-metrics .metric .metric-suffix { color: var(--text-muted); font-size: 15px; font-weight: 600; }
+.home-metrics .metric:hover { border-color: var(--border-strong); }
+.home-metrics .metric-alert strong { color: var(--danger); }
+.home-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.home-add {
+  display: flex;
+  flex: 1 1 420px;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 6px 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
+  backdrop-filter: blur(18px);
+  cursor: text;
+}
+.home-add:hover { border-color: var(--brand); }
+.home-add input { flex: 1 1 auto; padding: 6px 0; border: 0; outline: none; background: transparent; color: var(--text); cursor: text; }
+.home-add > .ui-icon { color: var(--brand-strong); }
+.home-card {
+  display: flex;
+  flex: 1 1 360px;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--brand) 40%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--brand) 12%, var(--surface-elevated));
+  backdrop-filter: blur(18px);
+}
+.home-card > div { display: grid; flex: 1 1 auto; min-width: 0; }
+.home-card strong { font-size: 14px; }
+.home-card span { overflow: hidden; color: var(--text-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.home-card.empty { border-color: var(--border); background: color-mix(in srgb, var(--surface-elevated) 84%, transparent); }
+.scene-off-note { position: absolute; bottom: 34px; left: 32px; z-index: 4; margin: 0; color: var(--text-muted); font-size: 13px; }
+.dashboard-hero.scene-off { min-height: 0; }
+.home-visual-switch .segmented { backdrop-filter: blur(16px); }
+
+/* Scene themes: the block floats over the islands just under the top bar. */
+.theme-family-atlas.page-dashboard .home-top {
+  position: absolute;
+  top: 82px;
+  right: var(--atlas-page-gutter, 24px);
+  left: calc(var(--home-rail, 0px) + var(--atlas-page-gutter, 24px));
+  z-index: 30;
+}
+.theme-family-atlas.page-dashboard .preview-panel { display: none; }
+.theme-family-atlas.page-dashboard .dashboard-hero.scene-off { min-height: 420px; }
+@media (max-width: 1100px) {
+  .home-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

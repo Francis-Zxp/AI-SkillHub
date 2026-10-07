@@ -25,6 +25,7 @@ import type {
 } from "../types";
 import { DeferredSurface, Dialog, MoreMenu, ToggleSwitch } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
+import "./agents.css";
 
 const CodexPluginDoctorPanel = lazy(() =>
   import("../CodexPluginDoctorPanel").then(module => ({ default: module.CodexPluginDoctorPanel }))

@@ -10,6 +10,7 @@ import { getMcpSummary } from "../mcpBridge";
 import type { AgentId, OnboardingResult, OnboardingState, SkillHubError } from "../types";
 import { DeferredSurface } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
+import "./agents.css";
 
 export function Onboarding({
   mcpEnabled,

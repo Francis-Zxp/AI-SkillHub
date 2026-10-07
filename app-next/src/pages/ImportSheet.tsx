@@ -32,6 +32,7 @@ import type {
 import { CATEGORY_IDS, displayCategoryName, inferCategoryIds, parseTagInput } from "../appShared";
 import { useFocusTrap } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
+import "./import.css";
 
 const DRAFT_KEY = "ai-skillhub-import-draft-v33";
 const NEW_FOLDER = "__new__";

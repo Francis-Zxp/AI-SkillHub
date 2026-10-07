@@ -78,6 +78,7 @@ import { normalizeSkillHubError } from "./skillErrors";
 import * as skillApi from "./skillApi";
 import { classifyAddInput, getMcpSummary, importMcpFromClients, requestOpenMcpAdd } from "./mcpBridge";
 import { setTelemetryEnabled, telemetryEnabled } from "./telemetry";
+import "./shell.css";
 
 // Every page is its own chunk: only the visible page's code, DOM and styles stay in memory.
 const Dashboard = lazy(() => import("./pages/Dashboard").then(module => ({ default: module.Dashboard })));
@@ -1940,7 +1941,7 @@ export function App() {
 
   return (
     <main
-      className={`${runtimeAvailable ? "shell" : "shell browser-preview-shell"} theme-${resolvedTheme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"}${resolvedTheme.startsWith("sky-") ? " theme-family-sky" : ""} page-${active} lang-${lang}${dashboardImmersive && active === "dashboard" ? " dashboard-immersive" : ""}`}
+      className={`${runtimeAvailable ? "shell v33" : "shell v33 browser-preview-shell"} theme-${resolvedTheme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"}${resolvedTheme.startsWith("sky-") ? " theme-family-sky" : ""} page-${active} lang-${lang}${dashboardImmersive && active === "dashboard" ? " dashboard-immersive" : ""}`}
       data-runtime-hydrated={runtimeHydrated ? "true" : "false"}
       style={{
         "--ui-icon-scale": UI_ICON_SCALES[iconScale],

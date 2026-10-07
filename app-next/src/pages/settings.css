@@ -1,0 +1,19 @@
+/* v3.3 设置 (skills contract §6.7). */
+.settings-v33 { gap: 14px; }
+.settings-v33 .settings-section { display: grid; gap: 10px; padding: 16px 18px; scroll-margin-top: 90px; transition: box-shadow 400ms var(--ease); }
+.settings-v33 .settings-section.flash { box-shadow: 0 0 0 2px var(--brand); }
+.settings-v33 .panel-head { margin: 0; }
+.settings-v33 .panel-head h3 { margin: 0; font-size: 16px; }
+.settings-v33 .settings-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.settings-v33 .toggle-row > span { display: grid; flex: 1 1 360px; gap: 2px; }
+.settings-v33 .toggle-row small { color: var(--text-muted); line-height: 1.55; }
+.settings-v33 .path-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.settings-v33 .path-row code { flex: 1 1 280px; min-width: 0; overflow-wrap: anywhere; color: var(--text-soft); }
+.settings-more-themes summary { color: var(--text-soft); font-weight: 600; cursor: pointer; }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; padding-top: 8px; }
+.theme-grid button { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-soft); text-align: left; }
+.theme-grid button.active { border-color: var(--brand); color: var(--brand-strong); }
+.settings-v33 .git-runtime-card { display: grid; gap: 8px; padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius-sm); }
+.settings-v33 .git-runtime-card.is-ready { border: 0; padding: 0; }
+.settings-v33 .git-runtime-card p { margin: 0; }
+.dev-tools { display: grid; gap: 12px; }

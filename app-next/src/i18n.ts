@@ -2,6 +2,8 @@
    Module-level t(): the whole tree re-renders on language change (state lives in App),
    so plain function reads stay in sync without prop threading. */
 
+import { v33en, v33ko, v33zh } from "./i18nV33";
+
 export type Lang = "en" | "zh" | "ko";
 
 const LANG_STORAGE_KEY = "ai-skillhub-lang";
@@ -3617,7 +3619,12 @@ const ko: Dict = {
   "governance.defaultBranchChanged": "GitHub 기본 브랜치가 {remote}(으)로 바뀌었습니다. 이 소스는 계속 {branch}을(를) 추적하며 자동으로 바꾸지 않습니다."
 };
 
-const dictionaries: Record<Lang, Dict> = { en, zh, ko };
+// v3.3 strings (i18nV33.ts) win over older keys with the same name.
+const dictionaries: Record<Lang, Dict> = {
+  en: { ...en, ...v33en },
+  zh: { ...zh, ...v33zh },
+  ko: { ...ko, ...v33ko }
+};
 
 let currentLang: Lang = "zh";
 
@@ -3644,7 +3651,7 @@ export function initialLang(): Lang {
 }
 
 export function t(key: string, vars?: Record<string, string | number>): string {
-  let text = dictionaries[currentLang][key] ?? en[key] ?? key;
+  let text = dictionaries[currentLang][key] ?? dictionaries.en[key] ?? key;
   if (vars) {
     for (const [name, value] of Object.entries(vars)) {
       text = text.split(`{${name}}`).join(String(value));
