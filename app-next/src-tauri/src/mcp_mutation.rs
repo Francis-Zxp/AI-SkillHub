@@ -9,8 +9,10 @@
 //! the current user's DPAPI key.
 
 use crate::mcp_center;
+use crate::mcp_json_doc::{JsonDoc, Node};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map as JsonMap, Value as JsonValue};
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -18,7 +20,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, Value as TomlValue};
+use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, TableLike, Value as TomlValue};
 use uuid::Uuid;
 
 const MAX_CONFIG_BYTES: u64 = 2 * 1024 * 1024;
@@ -26,13 +28,22 @@ const MAX_JOURNAL_BYTES: u64 = 1024 * 1024;
 const MAX_CACHED_PLANS: usize = 64;
 const MAX_PLAN_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const PLAN_CACHE_TTL_MS: u128 = 15 * 60 * 1000;
-const SNAPSHOT_TTL_MS: u128 = 7 * 24 * 60 * 60 * 1000;
-const MAX_ROLLBACK_SNAPSHOTS: usize = 16;
+pub(crate) const SNAPSHOT_TTL_MS: u128 = 7 * 24 * 60 * 60 * 1000;
+// v3.3: each library operation creates one snapshot per target file.
+const MAX_ROLLBACK_SNAPSHOTS: usize = 64;
 const MAX_SNAPSHOT_STORE_BYTES: u64 = 128 * 1024 * 1024;
 const PLAN_SCHEMA_VERSION: u8 = 3;
+/// Terminal state for an interrupted transaction whose target was changed
+/// externally afterwards. It never blocks reads or later writes (bug MCP#2).
+pub(crate) const ABANDONED_EXTERNAL_CHANGE: &str = "abandoned-external-change";
 
 pub const HOST_CODEX: &str = "host-codex";
 pub const HOST_CLAUDE_CODE: &str = "host-claude-code";
+pub const HOST_CLAUDE_DESKTOP: &str = "host-claude-desktop";
+pub const HOST_CURSOR: &str = "host-cursor";
+
+/// MSIX package folder of Claude Desktop (same package path as lib.rs).
+const CLAUDE_DESKTOP_PACKAGE_ROAMING: &str = "Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming";
 
 /// Trusted paths supplied by the Rust command wrapper, never by the webview.
 #[derive(Debug, Clone)]
@@ -40,6 +51,90 @@ pub struct McpMutationContext {
     pub home_dir: PathBuf,
     pub registered_workspaces: Vec<mcp_center::RegisteredWorkspace>,
     pub private_state_dir: PathBuf,
+    /// `CLAUDE_CONFIG_DIR` (process or HKCU) when set; `None` means `~`.
+    pub claude_config_dir: Option<PathBuf>,
+    /// `%APPDATA%` (Roaming) for Claude Desktop.
+    pub app_data_dir: Option<PathBuf>,
+    /// `%LOCALAPPDATA%` for the MSIX Claude Desktop package.
+    pub local_app_data_dir: Option<PathBuf>,
+}
+
+impl McpMutationContext {
+    /// A context with only the required paths; optional client locations are
+    /// derived from `home_dir` the way Windows lays them out.
+    #[allow(dead_code)]
+    pub fn basic(
+        home_dir: PathBuf,
+        registered_workspaces: Vec<mcp_center::RegisteredWorkspace>,
+        private_state_dir: PathBuf,
+    ) -> Self {
+        Self {
+            home_dir,
+            registered_workspaces,
+            private_state_dir,
+            claude_config_dir: None,
+            app_data_dir: None,
+            local_app_data_dir: None,
+        }
+    }
+
+    fn app_data(&self) -> PathBuf {
+        self.app_data_dir
+            .clone()
+            .unwrap_or_else(|| self.home_dir.join("AppData").join("Roaming"))
+    }
+
+    fn local_app_data(&self) -> PathBuf {
+        self.local_app_data_dir
+            .clone()
+            .unwrap_or_else(|| self.home_dir.join("AppData").join("Local"))
+    }
+
+    /// The Claude Code user config file and its display form.
+    pub(crate) fn claude_user_config(&self) -> (PathBuf, String) {
+        match &self.claude_config_dir {
+            Some(dir) => (
+                dir.join(".claude.json"),
+                redact_home_path(&dir.join(".claude.json"), &self.home_dir),
+            ),
+            None => (
+                self.home_dir.join(".claude.json"),
+                "~/.claude.json".to_string(),
+            ),
+        }
+    }
+
+    /// The Claude Desktop config directory: the MSIX LocalCache copy when that
+    /// directory exists, otherwise `%APPDATA%\Claude`.
+    pub(crate) fn claude_desktop_dir(&self) -> PathBuf {
+        let packaged = self
+            .local_app_data()
+            .join(CLAUDE_DESKTOP_PACKAGE_ROAMING)
+            .join("Claude");
+        if fs::symlink_metadata(&packaged).is_ok_and(|meta| meta.is_dir()) {
+            packaged
+        } else {
+            self.app_data().join("Claude")
+        }
+    }
+}
+
+/// `~`-relative display of a path; never a full path containing a user name.
+pub(crate) fn redact_home_path(path: &Path, home: &Path) -> String {
+    let normalize = |value: &Path| value.to_string_lossy().replace('\\', "/");
+    let path_text = normalize(path);
+    let home_text = normalize(home);
+    let home_text = home_text.trim_end_matches('/');
+    if !home_text.is_empty()
+        && path_text.len() >= home_text.len()
+        && path_text[..home_text.len()].eq_ignore_ascii_case(home_text)
+    {
+        let rest = &path_text[home_text.len()..];
+        return format!("~{rest}");
+    }
+    path.file_name()
+        .map(|name| format!("…/{}", name.to_string_lossy()))
+        .unwrap_or_else(|| "…".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -237,10 +332,13 @@ struct SnapshotManifest {
     state: String,
     rolled_back: bool,
     targets: Vec<SnapshotTarget>,
+    /// The user chose "keep the current files" for a stuck transaction.
+    #[serde(default)]
+    dismissed: bool,
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedTarget {
+pub(crate) struct ResolvedTarget {
     id: String,
     host_id: String,
     scope: String,
@@ -248,6 +346,16 @@ struct ResolvedTarget {
     workspace_path: Option<PathBuf>,
     path: PathBuf,
     path_display: String,
+}
+
+impl ResolvedTarget {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn path_display(&self) -> &str {
+        &self.path_display
+    }
 }
 
 #[derive(Debug)]
@@ -273,11 +381,29 @@ struct TargetGroup<'a> {
 struct PreparedWrite {
     target: ResolvedTarget,
     path_binding_sha256: String,
-    changes: Vec<McpBindingChange>,
+    verification: WriteVerification,
     original: Option<ConfigFile>,
     final_bytes: Vec<u8>,
     backup_path: Option<PathBuf>,
     applied_fingerprint: Option<FileFingerprint>,
+}
+
+/// Semantic read-back verification after the atomic write.
+enum WriteVerification {
+    Legacy(Vec<McpBindingChange>),
+    Entries(Vec<EntryChange>),
+}
+
+impl WriteVerification {
+    fn verify(&self, target: &ResolvedTarget, text: &str) -> Result<(), String> {
+        match self {
+            WriteVerification::Legacy(changes) => {
+                let refs = changes.iter().collect::<Vec<_>>();
+                verify_written_config(target, text, &refs)
+            }
+            WriteVerification::Entries(changes) => verify_entry_changes(target, text, changes),
+        }
+    }
 }
 
 struct RollbackPreparation {
