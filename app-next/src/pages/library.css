@@ -92,16 +92,6 @@
 .lib-chevron .ui-icon { transition: transform var(--duration) var(--ease); }
 .lib-chevron.open .ui-icon { transform: rotate(90deg); }
 .lib-main { display: grid; grid-template-columns: 34px minmax(120px, 230px) minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; height: 100%; text-align: left; }
-.lib-avatar {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  background: hsl(var(--avatar-hue, 210) 55% 46%);
-  color: #fff;
-  font-weight: 800;
-}
 .lib-title { display: grid; min-width: 0; }
 .lib-title strong, .lib-title small, .lib-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lib-title strong { font-size: 14px; }

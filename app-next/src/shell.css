@@ -238,6 +238,18 @@ main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
 .agent-glyph.size-lg { flex-basis: 40px; width: 40px; height: 40px; border-radius: 12px; font-size: 15px; }
 
 /* ---------- shared primitives ---------- */
+.lib-avatar {
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: hsl(var(--avatar-hue, 210) 55% 46%);
+  color: #fff;
+  font-weight: 800;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -284,7 +296,8 @@ main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
 .star-rating.compact button { font-size: 13px; }
 
 .dialog-layer { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: 24px; }
-.dialog-layer .drawer-backdrop { position: absolute; }
+.dialog-layer .drawer-backdrop,
+.sheet-layer .drawer-backdrop { position: absolute; z-index: 0; }
 .dialog {
   position: relative;
   z-index: 1;

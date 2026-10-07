@@ -1,6 +1,5 @@
 /* v3.3 "+ 添加" sheet (skills contract §6.4). */
 .sheet-layer { position: fixed; inset: 0; z-index: 110; display: flex; justify-content: center; align-items: flex-start; padding: 8vh 24px 24px; }
-.sheet-layer .drawer-backdrop { position: absolute; }
 .import-sheet {
   position: relative;
   z-index: 1;
@@ -30,7 +29,8 @@
   background: var(--surface-soft);
 }
 .import-input-row:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent); }
-.import-input-row input { height: 46px; border: 0; outline: none; background: transparent; color: var(--text); font-size: 15px; }
+.import-input-row input,
+.import-input-row input:focus { height: 46px; padding: 0; border: 0; outline: none; background: transparent; box-shadow: none; color: var(--text); font-size: 15px; }
 .import-input-row .ui-icon { color: var(--text-muted); }
 .import-pickers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .import-pickers .muted { font-size: 12px; }

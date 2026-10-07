@@ -2042,16 +2042,6 @@ export function App() {
             />
           )}
 
-          {!runtimeAvailable && (
-            <section className="preview-panel">
-              <Icon name="info" />
-              <div>
-                <strong>{t("preview.title")}</strong>
-                <span>{t("v33.previewBody")}</span>
-              </div>
-            </section>
-          )}
-
           {operation && (
             <section className="operation-banner" role="status" aria-live="polite">
               <div>

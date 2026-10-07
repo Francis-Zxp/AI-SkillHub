@@ -95,7 +95,7 @@ function createBasePreviewSnapshot(): LegacySnapshot {
         invocationName: "nature-paper-skills",
         folderName: "Nature-Paper-Skills",
         category: "academic-writing",
-        description: "[ROUTER-HUB] Nature 论文技能集合的路由入口。",
+        description: "[ROUTER-HUB] Nature 论文技能集合的入口。",
         note: "",
         source: "AI-SkillHub-local-routers",
         health: "ok",

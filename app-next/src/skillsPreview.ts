@@ -342,7 +342,9 @@ function readBack(current: PreviewEngine, unit: DeliveryUnit, seed: AgentSeed, r
   if (!unit.libraryEnabled && unit.libraryOnlyReason === "security-review") return "blocked";
   if (onDisk === "conflict") return "conflict";
   if (row?.error && desired) return "error";
-  if (!seed.installed && onDisk === "ours") return "orphan";
+  if (!seed.installed && onDisk === "ours") {
+    return row && row.updatedAt > row.verifiedAt && (current.pending || current.running) ? "removing" : "orphan";
+  }
   const wantOnDisk = desired && takeover && unit.libraryEnabled && seed.installed;
   const isOnDisk = onDisk === "ours";
   if (wantOnDisk === isOnDisk) {
@@ -557,7 +559,8 @@ function finishBatch(jobId: number, batch: QueueBatch, startedAt: string) {
           result.linked += 1;
           changed.push({ unitId: unit.unitId, agentId: seed.id });
           previewGlobals().clientWrites.push({ agentId: seed.id, unitId: unit.unitId, action: "link" });
-        } else if (!want && has && (seed.installed || !row.desired)) {
+        } else if (!want && has && (seed.installed || row.updatedAt > row.verifiedAt)) {
+          // An entry left behind by an uninstalled tool (orphan) is only removed after the user asks.
           if (!takeover || !row.desired || !unit.libraryEnabled) {
             row.onDisk = "none";
             result.removed += 1;
@@ -659,7 +662,8 @@ function setTargets(changes: TargetChange[]): TargetMutationResult {
     for (const agentId of groupOf(change.agentId)) {
       const rowKey = key(change.unitId, agentId);
       const row = current.targets.get(rowKey) ?? { desired: false, onDisk: "none" as const, error: null, conflictSame: false, updatedAt: "", verifiedAt: "" };
-      if (row.desired === change.enabled && row.onDisk !== "conflict") {
+      const orphanRemoval = !change.enabled && row.onDisk === "ours" && !(seedOf(agentId)?.installed ?? true);
+      if (row.desired === change.enabled && row.onDisk !== "conflict" && !orphanRemoval) {
         unchanged += agentId === change.agentId ? 1 : 0;
         continue;
       }
