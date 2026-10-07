@@ -160,22 +160,17 @@ async function probe(page, text) {
     const page = await open("?view=library");
     await waitForJobsIdle(page);
     await page.click('[data-testid="library-row-source-nature-paper-skills"] .lib-chevron');
-    await page.waitForSelector('[data-testid="child-switch-paper-workflow"]');
+    await page.click('[data-testid="library-row-source-writing-kit"] .lib-chevron');
+    await page.waitForSelector('[data-testid="child-switch-tone-checker"]');
     await shot(page, "06-library-expanded");
     const jobsBefore = (await preview(page)).jobs.length;
-    // Five toggles inside 2 s, issued from the page so a slow automation host cannot space them out.
+    // Five different child switches inside 2 s, clicked from the page so a slow automation host
+    // cannot space them out.
     await page.evaluate(async () => {
       const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-      for (const name of ["paper-workflow", "figure-planner", "nature-writing", "paper-workflow", "figure-planner"]) {
-        for (let tries = 0; tries < 20; tries += 1) {
-          const button = document.querySelector(`[data-testid="child-switch-${name}"]`);
-          if (button && !button.disabled) {
-            button.click();
-            break;
-          }
-          await wait(25);
-        }
-        await wait(160);
+      for (const name of ["paper-workflow", "figure-planner", "nature-writing", "outline-builder", "tone-checker"]) {
+        document.querySelector(`[data-testid="child-switch-${name}"]`)?.click();
+        await wait(80);
       }
     });
     await page.waitForFunction(count => (window.__skillhubPreview?.jobs ?? []).length > count, jobsBefore, { timeout: 5000 });

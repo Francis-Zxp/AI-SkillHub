@@ -143,8 +143,8 @@ function state(): PreviewEngine {
   if (engine) return engine;
   const takeover = new Map<AgentId, boolean>(AGENT_SEEDS.map(seed => [seed.id, seed.takeover]));
   engine = {
-    extraSources: [FLAGGED_SOURCE],
-    extraSkills: [...FLAGGED_SKILLS, STANDALONE_SKILL],
+    extraSources: [FLAGGED_SOURCE, WRITING_KIT_SOURCE],
+    extraSkills: [...FLAGGED_SKILLS, ...WRITING_KIT_SKILLS, STANDALONE_SKILL],
     childEnabled: new Map(),
     libraryEnabled: new Map([[FLAGGED_SOURCE.id, false]]),
     reviewConfirmed: new Set(),
@@ -179,7 +179,7 @@ function seedTargets(current: PreviewEngine) {
   const put = (unitId: string, agentId: AgentId, desired: boolean, onDisk: TargetRow["onDisk"], error: SkillHubError | null = null, conflictSame = false) => {
     current.targets.set(key(unitId, agentId), { desired, onDisk, error, conflictSame, updatedAt: stamp, verifiedAt: stamp });
   };
-  const packs = ["source-nature-paper-skills", "source-impeccable", "source-vibesec", "source-gstack", "source-karpathy", standaloneUnitId(STANDALONE_SKILL)];
+  const packs = ["source-nature-paper-skills", "source-impeccable", "source-vibesec", "source-gstack", "source-karpathy", WRITING_KIT_SOURCE.id, standaloneUnitId(STANDALONE_SKILL)];
   for (const unitId of packs) {
     put(unitId, "claude", unitId !== "source-gstack", unitId !== "source-gstack" ? "ours" : "none");
     const shared = unitId === "source-nature-paper-skills" || unitId === "source-impeccable";
@@ -232,6 +232,44 @@ const FLAGGED_SKILLS: SkillCard[] = ["shell-helper", "release-notes"].map(name =
   rating: 0,
   relativePath: `skills/${name}`,
   tags: []
+}));
+
+/** A second multi-skill pack, so several child switches can be exercised at once. */
+const WRITING_KIT_SOURCE: SourceCard = {
+  id: "source-writing-kit",
+  name: "writing-kit",
+  sourceType: "skill",
+  health: "ok",
+  url: "https://github.com/example/writing-kit.git",
+  skillCount: 3,
+  mode: "scan",
+  categoryId: "academic-writing",
+  note: "",
+  localPath: "../app-next/data/github_sources/writing-kit",
+  enabled: true,
+  rating: 4,
+  tags: ["GitHub"],
+  createdAt: "2026-09-20T00:00:00Z"
+};
+
+const WRITING_KIT_SKILLS: SkillCard[] = [
+  ["outline-builder", "把零散想法整理成文章提纲。"],
+  ["tone-checker", "检查语气是否和读者匹配。"],
+  ["citation-helper", "按目标期刊整理参考文献格式。"]
+].map(([name, description]) => ({
+  id: `preview-skill-${name}`,
+  sourceId: WRITING_KIT_SOURCE.id,
+  name,
+  folderName: name,
+  category: "academic-writing",
+  description,
+  note: "",
+  source: WRITING_KIT_SOURCE.name,
+  health: "ok",
+  enabled: true,
+  rating: 0,
+  relativePath: `skills/${name}`,
+  tags: ["写作"]
 }));
 
 const STANDALONE_SKILL: SkillCard = {
