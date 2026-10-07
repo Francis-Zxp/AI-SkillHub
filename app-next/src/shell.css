@@ -356,3 +356,7 @@ main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
 .page-head-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .page-head-row h2 { margin: 0; font-size: calc(24px * var(--ui-text-scale, 1)); }
 .page-head-actions { display: flex; gap: 8px; margin-left: auto; }
+.v33 .command-search input:focus,
+.v33 .command-search input:focus-visible { outline: none; box-shadow: none; }
+.ui-icon.rotate-90 { transform: rotate(90deg) scale(var(--ui-icon-scale, 1)); }
+.ui-icon.rotate-180 { transform: rotate(180deg) scale(var(--ui-icon-scale, 1)); }

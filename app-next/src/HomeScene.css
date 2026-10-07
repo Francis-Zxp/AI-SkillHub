@@ -51,3 +51,9 @@
 @media (max-height: 750px) {
   .v33.theme-family-atlas.page-dashboard .sky-heading { display: none; }
 }
+/* Simple category cards (3D off) start below the home block too. */
+.v33.theme-family-atlas.page-dashboard .sky-board { top: 330px; }
+/* Search results, banners and the first-run screen clear the floating rail on home. */
+.v33.theme-family-atlas.page-dashboard .global-search-results,
+.v33.theme-family-atlas.page-dashboard .status-banner { margin-left: calc(var(--home-rail) + 24px); }
+.v33.theme-family-atlas.page-dashboard .onboarding-screen { padding: 96px 24px 40px calc(var(--home-rail) + 24px); }

@@ -78,6 +78,7 @@ export function Dashboard({
   onTakeover,
   onToggleImmersive,
   popularityRefreshing,
+  sceneSuspended,
   snapshot,
   summary,
   theme
@@ -103,6 +104,8 @@ export function Dashboard({
   onTakeover: (agent: SkillAgent) => void;
   onToggleImmersive: () => void;
   popularityRefreshing: boolean;
+  /** The window has been hidden for a while: the 3D scene unmounts to release GPU memory. */
+  sceneSuspended: boolean;
   snapshot: LegacySnapshot | null;
   summary: LegacySummary;
   theme: ThemeName;
@@ -123,7 +126,7 @@ export function Dashboard({
   const onboardingPending = delivery?.onboarding === "pending";
   const atlasMode = isAtlasTheme(theme);
   const atlasVisual = atlasThemeVisual(theme);
-  const sceneVisual: HomeVisual = atlasMode ? homeVisual : "off";
+  const sceneVisual: HomeVisual = atlasMode && !sceneSuspended ? homeVisual : "off";
   const emptyLibrary = !loading && counts.rows === 0;
   const toggleAtlasIntro = () => {
     const next = !atlasIntroVisible;

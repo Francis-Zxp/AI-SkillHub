@@ -252,6 +252,7 @@ export function App() {
   const [appUpdate, setAppUpdate] = useState<AppUpdateState>(() => initialAppUpdateState());
   const [dashboardImmersive, setDashboardImmersive] = useState(false);
   const [confirmNode, askConfirm] = useConfirm();
+  const backgrounded = useBackgrounded();
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const updateRef = useRef<Update | null>(null);
   const updateCheckInFlightRef = useRef<Promise<void> | null>(null);
@@ -1948,7 +1949,7 @@ export function App() {
         "--ui-text-scale": UI_TEXT_SCALES[textScale]
       } as CSSProperties}
     >
-      {atlasMode && active !== "dashboard" && (
+      {atlasMode && active !== "dashboard" && !backgrounded && (
         <ParticleField
           accent={atlasVisual.accent}
           mode="backdrop"
@@ -2119,6 +2120,7 @@ export function App() {
                 onTakeover={agent => void setTakeover(agent, true)}
                 onToggleImmersive={() => setDashboardImmersive(value => !value)}
                 popularityRefreshing={popularityRefreshing}
+                sceneSuspended={backgrounded}
                 snapshot={snapshot}
                 summary={summary}
                 theme={resolvedTheme}
@@ -2326,6 +2328,31 @@ export function App() {
       <div id="app-overlay-root" />
     </main>
   );
+}
+
+/**
+ * True once the window has been hidden (minimized or in the tray) for a while. Heavy visuals
+ * (the home 3D scene, the page backdrop) unmount then, so their GPU and canvas memory is released;
+ * they come back as soon as the window is visible again.
+ */
+function useBackgrounded(delay = 20_000) {
+  const [backgrounded, setBackgrounded] = useState(false);
+  useEffect(() => {
+    let timer: number | null = null;
+    const update = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = null;
+      if (document.hidden) timer = window.setTimeout(() => setBackgrounded(true), delay);
+      else setBackgrounded(false);
+    };
+    document.addEventListener("visibilitychange", update);
+    update();
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [delay]);
+  return backgrounded;
 }
 
 function readFlag(key: string) {

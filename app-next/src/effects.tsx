@@ -187,7 +187,9 @@ export function ParticleField({
         : (canvas.parentElement?.getBoundingClientRect() ?? canvas.getBoundingClientRect());
       width = Math.max(1, Math.floor(rect.width));
       height = Math.max(1, Math.floor(rect.height));
-      const pixelBudgetScale = Math.sqrt(1_700_000 / Math.max(1, width * height));
+      // The page backdrop sits at half opacity behind content, so it renders at roughly half the
+      // pixels (v3.3 memory budget); the home field keeps the full budget.
+      const pixelBudgetScale = Math.sqrt(1_700_000 / Math.max(1, width * height)) * (mode === "backdrop" ? 0.72 : 1);
       dpr = Math.min(window.devicePixelRatio || 1, maxDpr, pixelBudgetScale);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
@@ -455,7 +457,14 @@ export function ParticleField({
     function onVisibilityChange() {
       pageVisible = !document.hidden;
       cancelScheduledDraw();
-      if (pageVisible) scheduleDraw(true);
+      if (pageVisible) {
+        resize();
+        scheduleDraw(true);
+      } else {
+        // A hidden or minimized window keeps no canvas backing store (v3.3 memory budget).
+        canvas.width = 1;
+        canvas.height = 1;
+      }
     }
 
     function onFocus() {
