@@ -338,6 +338,9 @@ fn worker_loop(runner: JobRunner) {
             core.finish(batch.job_id);
         }
         queue.wake.notify_all();
+        // The job's scan and reconcile buffers are gone; keep the idle
+        // process small (memory budget).
+        super::trim_process_working_set();
     }
 }
 
@@ -414,7 +417,12 @@ pub(crate) fn is_active() -> bool {
 mod tests {
     use super::*;
 
-    fn request(core: &mut DeliveryQueueCore, now: u64, depth: Depth, reason: &str) -> DeliveryJobTicket {
+    fn request(
+        core: &mut DeliveryQueueCore,
+        now: u64,
+        depth: Depth,
+        reason: &str,
+    ) -> DeliveryJobTicket {
         core.request(now, depth, reason, false, "t")
     }
 
@@ -428,7 +436,11 @@ mod tests {
             let ticket = request(
                 &mut core,
                 now,
-                if index == 2 { Depth::Full } else { Depth::Links },
+                if index == 2 {
+                    Depth::Full
+                } else {
+                    Depth::Links
+                },
                 "child-skill",
             );
             assert!(ticket.coalesced);
@@ -493,8 +505,18 @@ mod tests {
         };
         let value = serde_json::to_value(DeliveryJobStatus::from_batch(&batch, "queued")).unwrap();
         for key in [
-            "jobId", "phase", "depth", "reasons", "queuedAt", "startedAt", "finishedAt",
-            "waitingFor", "agents", "changedTargets", "snapshotStale", "error",
+            "jobId",
+            "phase",
+            "depth",
+            "reasons",
+            "queuedAt",
+            "startedAt",
+            "finishedAt",
+            "waitingFor",
+            "agents",
+            "changedTargets",
+            "snapshotStale",
+            "error",
         ] {
             assert!(value.get(key).is_some(), "{key}");
         }

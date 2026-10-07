@@ -1144,7 +1144,12 @@ mod tests {
                 [&old_id],
             )
             .unwrap();
-        apply(&library.root, &mut connection, std::slice::from_ref(&old_id)).unwrap();
+        apply(
+            &library.root,
+            &mut connection,
+            std::slice::from_ref(&old_id),
+        )
+        .unwrap();
         let new_id = stable_id("source", "gstack--garrytan");
         let rows: Vec<(String, String, i64)> = connection
             .prepare("SELECT source_id, agent_id, enabled FROM agent_skill_targets ORDER BY source_id, agent_id")
@@ -1186,8 +1191,12 @@ mod tests {
         let mut permissions = fs::metadata(&config).unwrap().permissions();
         permissions.set_readonly(true);
         fs::set_permissions(&config, permissions.clone()).unwrap();
-        let error = apply(&library.root, &mut connection, std::slice::from_ref(&old_id))
-            .unwrap_err();
+        let error = apply(
+            &library.root,
+            &mut connection,
+            std::slice::from_ref(&old_id),
+        )
+        .unwrap_err();
         #[allow(clippy::permissions_set_readonly_false)]
         permissions.set_readonly(false);
         fs::set_permissions(&config, permissions).unwrap();

@@ -10,8 +10,8 @@
 
 use super::{
     active_skills_dir, collect_active_agent_skill_entries, delivery_link_target, external_skills,
-    normalize_skill_lookup, private_state_dir, router_hub_skill_name, shared_skill_catalog, stable_id,
-    unix_timestamp_string, AgentDeliveryRecipientState, GeneratedAgentSkillDependency,
+    normalize_skill_lookup, private_state_dir, router_hub_skill_name, shared_skill_catalog,
+    stable_id, unix_timestamp_string, AgentDeliveryRecipientState, GeneratedAgentSkillDependency,
     ROUTER_HUB_FOLDER, ROUTER_HUB_MARKER,
 };
 use crate::skillhub_error::SkillHubError;
@@ -212,7 +212,9 @@ pub(crate) fn experimental_reason(spec: &AgentSpec) -> String {
 pub(crate) fn agent_group(agent_id: &str, real_shared: bool) -> Vec<&'static str> {
     match (agent_id, real_shared) {
         ("codex", true) | ("coze", true) => vec!["codex", "coze"],
-        _ => agent_spec(agent_id).map(|spec| vec![spec.id]).unwrap_or_default(),
+        _ => agent_spec(agent_id)
+            .map(|spec| vec![spec.id])
+            .unwrap_or_default(),
     }
 }
 
@@ -344,7 +346,9 @@ pub(crate) struct TakeoverRow {
     pub updated_at: String,
 }
 
-pub(crate) fn read_takeover(connection: &Connection) -> Result<BTreeMap<String, TakeoverRow>, String> {
+pub(crate) fn read_takeover(
+    connection: &Connection,
+) -> Result<BTreeMap<String, TakeoverRow>, String> {
     let mut statement = connection
         .prepare(
             "SELECT agent_id, enabled, auto_add_new, last_outcome, last_error_code,
@@ -519,7 +523,12 @@ pub(crate) fn upsert_takeover(
                               THEN agent_takeover.origin ELSE excluded.origin END,
                 updated_at = CASE WHEN agent_takeover.enabled = excluded.enabled
                                   THEN agent_takeover.updated_at ELSE excluded.updated_at END",
-            params![agent_id, i64::from(enabled), origin, unix_timestamp_string()],
+            params![
+                agent_id,
+                i64::from(enabled),
+                origin,
+                unix_timestamp_string()
+            ],
         )
         .map_err(|error| format!("Cannot save takeover for {agent_id}: {error}"))?;
     Ok(previous != Some(enabled))
@@ -554,7 +563,13 @@ pub(crate) fn upsert_target(
                 enabled = excluded.enabled,
                 origin = excluded.origin,
                 updated_at = excluded.updated_at",
-            params![unit_id, agent_id, i64::from(enabled), origin, unix_timestamp_string()],
+            params![
+                unit_id,
+                agent_id,
+                i64::from(enabled),
+                origin,
+                unix_timestamp_string()
+            ],
         )
         .map_err(|error| format!("Cannot save target: {error}"))?;
     // A brand-new row that is "off" is still a change of intent: it stops the
@@ -608,8 +623,7 @@ fn folder_has_skillhub_entry(folder: &Path, active_root: &Path) -> bool {
     entries.flatten().take(4096).any(|entry| {
         let path = entry.path();
         if external_skills::is_link(&path) {
-            delivery_link_target(&path)
-                .is_some_and(|target| path_is_under(&target, active_root))
+            delivery_link_target(&path).is_some_and(|target| path_is_under(&target, active_root))
         } else {
             shared_skill_catalog::is_managed_entry(&path)
         }
@@ -934,7 +948,10 @@ pub(crate) fn manifest_name_and_description(raw: &str) -> Option<(String, String
                 .join(" ");
         }
     }
-    Some((name, description.map(|(_, value)| value).unwrap_or_default()))
+    Some((
+        name,
+        description.map(|(_, value)| value).unwrap_or_default(),
+    ))
 }
 
 fn source_keys(name: &str, local_path: &str) -> Vec<String> {
@@ -1029,19 +1046,20 @@ pub(crate) fn read_delivery_units(
                 union_keys.contains(&entry.to_lowercase())
                     && manifest_is_deliverable(&active_root.join(entry))
             });
-        let reason = if count == 0 || source.source_type.eq_ignore_ascii_case("prompt") && callable == 0 {
-            "prompt-only"
-        } else if source.flagged {
-            "security-review"
-        } else if !source.enabled {
-            "disabled-by-user"
-        } else if enabled_children == 0 {
-            "no-enabled-skills"
-        } else if !entries_valid {
-            "invalid-manifest"
-        } else {
-            ""
-        };
+        let reason =
+            if count == 0 || source.source_type.eq_ignore_ascii_case("prompt") && callable == 0 {
+                "prompt-only"
+            } else if source.flagged {
+                "security-review"
+            } else if !source.enabled {
+                "disabled-by-user"
+            } else if enabled_children == 0 {
+                "no-enabled-skills"
+            } else if !entries_valid {
+                "invalid-manifest"
+            } else {
+                ""
+            };
         units.push(UnitInfo {
             unit_id: source.id.clone(),
             kind: "source",
@@ -1059,7 +1077,9 @@ pub(crate) fn read_delivery_units(
         .map(|source| source.id.as_str())
         .collect::<BTreeSet<_>>();
     for skill in &skills {
-        if !(skill.source_id.is_empty() || !source_ids.contains(skill.source_id.as_str()))
+        let owned_by_known_pack =
+            !skill.source_id.is_empty() && source_ids.contains(skill.source_id.as_str());
+        if owned_by_known_pack
             || skill.is_router_hub
             || assigned.contains(&skill.folder_name.to_lowercase())
         {
@@ -1114,8 +1134,14 @@ pub(crate) fn read_delivery_units(
 /// Unit existence check for mutations, SQL only.
 pub(crate) fn unit_exists(connection: &Connection, unit_id: &str) -> Result<bool, String> {
     let (sql, key) = match unit_id.strip_prefix(STANDALONE_PREFIX) {
-        Some(skill_id) => ("SELECT EXISTS(SELECT 1 FROM skills WHERE id = ?1)", skill_id),
-        None => ("SELECT EXISTS(SELECT 1 FROM sources WHERE id = ?1)", unit_id),
+        Some(skill_id) => (
+            "SELECT EXISTS(SELECT 1 FROM skills WHERE id = ?1)",
+            skill_id,
+        ),
+        None => (
+            "SELECT EXISTS(SELECT 1 FROM sources WHERE id = ?1)",
+            unit_id,
+        ),
     };
     connection
         .query_row(sql, params![key], |row| row.get::<_, i64>(0))
@@ -1124,7 +1150,10 @@ pub(crate) fn unit_exists(connection: &Connection, unit_id: &str) -> Result<bool
 }
 
 /// SQL-only library state for one unit, used by mutations (< 300 ms).
-pub(crate) fn unit_library_reason(connection: &Connection, unit_id: &str) -> Result<&'static str, String> {
+pub(crate) fn unit_library_reason(
+    connection: &Connection,
+    unit_id: &str,
+) -> Result<&'static str, String> {
     if let Some(skill_id) = unit_id.strip_prefix(STANDALONE_PREFIX) {
         let enabled = connection
             .query_row(
@@ -1447,10 +1476,12 @@ pub(crate) fn validate_targets_plan(plan: &TargetsPlan) -> Result<(), SkillHubEr
             .iter()
             .find(|name| !union_keys.contains(&name.to_lowercase()))
         {
-            return Err(SkillHubError::code("DELIVERY_POLICY_INVALID").with_detail(format!(
-                "{} lists {name}, which is outside the allowlist",
-                recipient.id
-            )));
+            return Err(
+                SkillHubError::code("DELIVERY_POLICY_INVALID").with_detail(format!(
+                    "{} lists {name}, which is outside the allowlist",
+                    recipient.id
+                )),
+            );
         }
     }
     if let Some(shared) = &plan.shared {
@@ -1501,7 +1532,10 @@ struct TargetsFileRecipient {
     names: Option<Vec<String>>,
 }
 
-pub(crate) fn targets_file_json(plan: &TargetsPlan, policy_version: &str) -> Result<String, String> {
+pub(crate) fn targets_file_json(
+    plan: &TargetsPlan,
+    policy_version: &str,
+) -> Result<String, String> {
     let recipients = plan
         .recipients
         .iter()
@@ -1681,7 +1715,9 @@ fn outcome_rank(outcome: &str) -> u8 {
 }
 
 /// Folds PowerShell recipients into per-agent results (codex + codex-legacy).
-pub(crate) fn results_from_report(report: &DeliveryReport) -> BTreeMap<String, AgentDeliveryResult> {
+pub(crate) fn results_from_report(
+    report: &DeliveryReport,
+) -> BTreeMap<String, AgentDeliveryResult> {
     let mut results: BTreeMap<String, AgentDeliveryResult> = BTreeMap::new();
     for recipient in &report.recipients {
         let agent = if recipient.id == "codex-legacy" {
@@ -1759,7 +1795,8 @@ pub(crate) fn result_from_shared(
         Err(error) => {
             let mut result = AgentDeliveryResult::new(agent_id, "failed");
             result.errors = 1;
-            result.error = Some(crate::skillhub_error::classify_legacy_error(error).with_agent(agent_id));
+            result.error =
+                Some(crate::skillhub_error::classify_legacy_error(error).with_agent(agent_id));
             result
         }
     }
@@ -1825,7 +1862,9 @@ impl DiskState {
     fn label(&self) -> &'static str {
         match self {
             Self::Absent => "off",
-            Self::Ours { manifest_ok: true, .. } => "synced",
+            Self::Ours {
+                manifest_ok: true, ..
+            } => "synced",
             Self::Ours { .. } => "error",
             Self::Conflict { .. } => "conflict",
         }
@@ -1925,7 +1964,13 @@ pub(crate) struct StatusInput<'a> {
 
 /// The single place that turns intent plus read-back into a target status.
 pub(crate) fn resolve_status(input: StatusInput<'_>) -> (&'static str, Option<&'static str>) {
-    let ours_ok = matches!(input.disk, DiskState::Ours { manifest_ok: true, .. });
+    let ours_ok = matches!(
+        input.disk,
+        DiskState::Ours {
+            manifest_ok: true,
+            ..
+        }
+    );
     let settling = input.job_active || !input.verified_after_change;
     if input.desired && !input.library_enabled && !input.disk.is_ours() {
         return ("blocked", None);
@@ -2036,7 +2081,11 @@ pub(crate) fn read_back(
             ),
             DiskState::Absent => (String::new(), String::new(), "", ""),
         };
-        let mode = if pair.disk.is_ours() { pair.mode } else { "none" };
+        let mode = if pair.disk.is_ours() {
+            pair.mode
+        } else {
+            "none"
+        };
         updated += connection
             .execute(
                 "UPDATE agent_skill_targets SET
@@ -2107,10 +2156,11 @@ pub(crate) fn personal_counts() -> BTreeMap<String, usize> {
 }
 
 pub(crate) fn cached_pair(unit_id: &str, agent_id: &str) -> Option<PairDisk> {
-    readback_cache()
-        .lock()
-        .ok()
-        .and_then(|cache| cache.get(&(unit_id.to_string(), agent_id.to_string())).cloned())
+    readback_cache().lock().ok().and_then(|cache| {
+        cache
+            .get(&(unit_id.to_string(), agent_id.to_string()))
+            .cloned()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -2284,7 +2334,12 @@ pub(crate) fn iso_now() -> String {
     iso_from_nanos(&unix_timestamp_string())
 }
 
-fn target_error(code: Option<&str>, agent_id: &str, unit_id: &str, path: &str) -> Option<SkillHubError> {
+fn target_error(
+    code: Option<&str>,
+    agent_id: &str,
+    unit_id: &str,
+    path: &str,
+) -> Option<SkillHubError> {
     let code = code?;
     let mut error = SkillHubError::code(code).with_agent(agent_id);
     if !unit_id.starts_with(STANDALONE_PREFIX) {
@@ -2297,7 +2352,10 @@ fn target_error(code: Option<&str>, agent_id: &str, unit_id: &str, path: &str) -
         error = error.with_action("retry", &[("agentId", agent_id), ("unitId", unit_id)]);
     }
     if code == "TARGET_CONFLICT" {
-        error = error.with_action("resolve-conflict", &[("agentId", agent_id), ("unitId", unit_id)]);
+        error = error.with_action(
+            "resolve-conflict",
+            &[("agentId", agent_id), ("unitId", unit_id)],
+        );
     }
     Some(error)
 }
@@ -2329,9 +2387,12 @@ pub(crate) fn build_state(
         }
         let agent_takeover = takeover.get(*agent);
         let takeover_on = agent_takeover.is_some_and(|row| row.enabled);
-        let takeover_changed = agent_takeover.map(|row| row.updated_at.as_str()).unwrap_or("");
+        let takeover_changed = agent_takeover
+            .map(|row| row.updated_at.as_str())
+            .unwrap_or("");
         let installed = evidence.installed(agent);
-        for unit in inputs.units {
+        // A prompt-only pack has no entry and therefore no icon row.
+        for unit in inputs.units.iter().filter(|unit| !unit.entries.is_empty()) {
             let key = (unit.unit_id.clone(), agent.to_string());
             let row = targets_db.get(&key);
             let cached = cached_pair(&unit.unit_id, agent);
@@ -2417,7 +2478,9 @@ pub(crate) fn build_state(
                 "AGENT_NOT_INSTALLED".to_string(),
                 format!(
                     "{} 已不在这台电脑上，但入口还在",
-                    agent_spec(&target.agent_id).map(|spec| spec.name).unwrap_or("AI 工具")
+                    agent_spec(&target.agent_id)
+                        .map(|spec| spec.name)
+                        .unwrap_or("AI 工具")
                 ),
                 None,
             ),
@@ -2426,7 +2489,11 @@ pub(crate) fn build_state(
                     .error
                     .clone()
                     .unwrap_or_else(|| SkillHubError::code("DELIVERY_VERIFY_FAILED"));
-                (error.code.clone(), error.message.clone(), error.action.clone())
+                (
+                    error.code.clone(),
+                    error.message.clone(),
+                    error.action.clone(),
+                )
             }
         };
         problems.push(DeliveryProblem {
@@ -2536,22 +2603,22 @@ pub(crate) fn build_agents(
                 .filter(|target| matches!(target.status.as_str(), "error" | "conflict" | "orphan"))
                 .count();
             let row = takeover.get(spec.id);
-            let last_result = row
-                .filter(|row| !row.last_outcome.is_empty())
-                .map(|row| AgentDeliveryResult {
-                    agent_id: spec.id.to_string(),
-                    outcome: row.last_outcome.clone(),
-                    linked: 0,
-                    removed: 0,
-                    unchanged: 0,
-                    conflicts: 0,
-                    errors: usize::from(row.last_outcome == "failed"),
-                    error: (!row.last_error_code.is_empty()).then(|| {
-                        SkillHubError::new(&row.last_error_code, row.last_error.clone())
-                            .with_agent(spec.id)
-                    }),
-                    finished_at: iso_from_nanos(&row.last_delivered_at),
-                });
+            let last_result =
+                row.filter(|row| !row.last_outcome.is_empty())
+                    .map(|row| AgentDeliveryResult {
+                        agent_id: spec.id.to_string(),
+                        outcome: row.last_outcome.clone(),
+                        linked: 0,
+                        removed: 0,
+                        unchanged: 0,
+                        conflicts: 0,
+                        errors: usize::from(row.last_outcome == "failed"),
+                        error: (!row.last_error_code.is_empty()).then(|| {
+                            SkillHubError::new(&row.last_error_code, row.last_error.clone())
+                                .with_agent(spec.id)
+                        }),
+                        finished_at: iso_from_nanos(&row.last_delivered_at),
+                    });
             let busy = inputs.job_active
                 && (inputs.job_agents.contains(spec.id)
                     || agent_targets
@@ -2652,7 +2719,10 @@ pub(crate) fn build_agents(
 }
 
 /// Targets of the given pairs from a freshly built state.
-pub(crate) fn pick_targets(state: &SkillDeliveryState, keys: &[(String, String)]) -> Vec<SkillTarget> {
+pub(crate) fn pick_targets(
+    state: &SkillDeliveryState,
+    keys: &[(String, String)],
+) -> Vec<SkillTarget> {
     state
         .targets
         .iter()
@@ -2709,11 +2779,17 @@ pub(crate) fn apply_target_change(
         });
     };
     let Some(spec) = agent_spec(&change.agent_id) else {
-        reject(mutation, SkillHubError::code("AGENT_UNKNOWN").with_agent(&change.agent_id));
+        reject(
+            mutation,
+            SkillHubError::code("AGENT_UNKNOWN").with_agent(&change.agent_id),
+        );
         return Ok(());
     };
     if !spec.deliverable || !evidence.can_deliver(spec.id) {
-        reject(mutation, SkillHubError::code("AGENT_UNSUPPORTED").with_agent(spec.id));
+        reject(
+            mutation,
+            SkillHubError::code("AGENT_UNSUPPORTED").with_agent(spec.id),
+        );
         return Ok(());
     }
     if !unit_exists(connection, &change.unit_id)? {
@@ -2790,7 +2866,9 @@ pub(crate) fn apply_takeover(
         .map_err(|error| SkillHubError::from(format!("Cannot start takeover change: {error}")))?;
     let mut switched_on = Vec::new();
     for agent in &group {
-        if upsert_takeover(&transaction, agent, enabled, origin).map_err(SkillHubError::from)? && enabled {
+        if upsert_takeover(&transaction, agent, enabled, origin).map_err(SkillHubError::from)?
+            && enabled
+        {
             switched_on.push(*agent);
         }
     }
@@ -2870,7 +2948,10 @@ pub(crate) fn pending_security_review(
             row.map(|(status, high, medium, scanned)| {
                 (
                     status,
-                    format!("检查了 {scanned} 个文件，发现 {} 处需要注意（不会被执行）", high + medium),
+                    format!(
+                        "检查了 {scanned} 个文件，发现 {} 处需要注意（不会被执行）",
+                        high + medium
+                    ),
                 )
             })
         })
@@ -2943,11 +3024,17 @@ mod tests {
             assert!(!takeover_enabled(&takeover, agent), "{agent}");
         }
         assert_eq!(
-            count(&connection, "SELECT COUNT(*) FROM agent_skill_targets WHERE source_id = 'pack-on'"),
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM agent_skill_targets WHERE source_id = 'pack-on'"
+            ),
             3
         );
         assert_eq!(
-            count(&connection, "SELECT COUNT(*) FROM agent_skill_targets WHERE source_id = 'pack-off'"),
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM agent_skill_targets WHERE source_id = 'pack-off'"
+            ),
             0
         );
         assert_eq!(
@@ -2959,7 +3046,10 @@ mod tests {
         );
         let second = migrate_v33_delivery_state(&mut connection, &BTreeSet::new(), "").unwrap();
         assert!(!second.ran);
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM agent_skill_targets"), 6);
+        assert_eq!(
+            count(&connection, "SELECT COUNT(*) FROM agent_skill_targets"),
+            6
+        );
         assert!(!delivery_writes_blocked(&connection).unwrap());
     }
 
@@ -2969,9 +3059,15 @@ mod tests {
         add_source(&connection, "pack-on", true);
         let report = migrate_v33_delivery_state(&mut connection, &BTreeSet::new(), "").unwrap();
         assert_eq!(report.onboarding, "pending");
-        assert_eq!(count(&connection, "SELECT COUNT(*) FROM agent_skill_targets"), 0);
         assert_eq!(
-            count(&connection, "SELECT COUNT(*) FROM agent_takeover WHERE enabled = 1"),
+            count(&connection, "SELECT COUNT(*) FROM agent_skill_targets"),
+            0
+        );
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM agent_takeover WHERE enabled = 1"
+            ),
             0
         );
         assert!(delivery_writes_blocked(&connection).unwrap());
@@ -2984,8 +3080,7 @@ mod tests {
     #[test]
     fn migration_with_stored_fingerprint_counts_as_existing_user() {
         let mut connection = memory_db();
-        let report =
-            migrate_v33_delivery_state(&mut connection, &BTreeSet::new(), "abc").unwrap();
+        let report = migrate_v33_delivery_state(&mut connection, &BTreeSet::new(), "abc").unwrap();
         assert_eq!(report.onboarding, "completed");
     }
 
@@ -2999,7 +3094,12 @@ mod tests {
         migrate_v33_delivery_state(&mut connection, &BTreeSet::from(["claude"]), "").unwrap();
         // The user explicitly turned pack-a off for Claude.
         upsert_target(&connection, "pack-a", "claude", false, "user").unwrap();
-        connection.execute("DELETE FROM agent_skill_targets WHERE source_id = 'pack-b'", []).unwrap();
+        connection
+            .execute(
+                "DELETE FROM agent_skill_targets WHERE source_id = 'pack-b'",
+                [],
+            )
+            .unwrap();
         add_source(&connection, "pack-c", true);
         add_skill(&connection, "c1", "pack-c");
         add_source(&connection, "pack-flagged", true);
@@ -3016,9 +3116,15 @@ mod tests {
         assert!(!targets[&("pack-a".to_string(), "claude".to_string())].enabled);
         assert!(targets[&("pack-c".to_string(), "claude".to_string())].enabled);
         assert!(!targets.contains_key(&("pack-flagged".to_string(), "claude".to_string())));
-        assert_eq!(unit_library_reason(&connection, "pack-flagged").unwrap(), "security-review");
+        assert_eq!(
+            unit_library_reason(&connection, "pack-flagged").unwrap(),
+            "security-review"
+        );
         set_source_library_enabled_rows(&connection, "pack-flagged", true, true).unwrap();
-        assert_eq!(unit_library_reason(&connection, "pack-flagged").unwrap(), "");
+        assert_eq!(
+            unit_library_reason(&connection, "pack-flagged").unwrap(),
+            ""
+        );
     }
 
     fn evidence(real_shared: bool) -> Evidence {
@@ -3032,8 +3138,12 @@ mod tests {
                 .paths
                 .insert(agent, PathBuf::from(format!("C:/home/{agent}")));
         }
-        evidence.paths.insert("coze", PathBuf::from("C:/home/.agents/skills"));
-        evidence.paths.insert("codex", PathBuf::from("C:/home/.agents/skills"));
+        evidence
+            .paths
+            .insert("coze", PathBuf::from("C:/home/.agents/skills"));
+        evidence
+            .paths
+            .insert("codex", PathBuf::from("C:/home/.agents/skills"));
         evidence
     }
 
@@ -3105,9 +3215,20 @@ mod tests {
         validate_targets_plan(&plan).unwrap();
         let claude = plan.recipients.iter().find(|r| r.id == "claude").unwrap();
         assert_eq!(claude.names, vec!["alpha".to_string()]);
-        let workbuddy = plan.recipients.iter().find(|r| r.id == "workbuddy").unwrap();
-        assert_eq!(workbuddy.names, vec!["alpha".to_string(), "beta".to_string()]);
-        let gemini = plan.recipients.iter().find(|r| r.id == "gemini-cli").unwrap();
+        let workbuddy = plan
+            .recipients
+            .iter()
+            .find(|r| r.id == "workbuddy")
+            .unwrap();
+        assert_eq!(
+            workbuddy.names,
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+        let gemini = plan
+            .recipients
+            .iter()
+            .find(|r| r.id == "gemini-cli")
+            .unwrap();
         assert_eq!(gemini.action, RecipientAction::Skip, "not installed");
         for recipient in &plan.recipients {
             assert!(recipient.names.iter().all(|name| union.contains(name)));
@@ -3118,7 +3239,11 @@ mod tests {
         let mut takeover = takeover_of(DELIVERABLE_AGENTS);
         takeover.get_mut("workbuddy").unwrap().enabled = false;
         let plan = compute_targets_plan(&union, &units, &targets, &takeover, &evidence(false));
-        let workbuddy = plan.recipients.iter().find(|r| r.id == "workbuddy").unwrap();
+        let workbuddy = plan
+            .recipients
+            .iter()
+            .find(|r| r.id == "workbuddy")
+            .unwrap();
         assert_eq!(workbuddy.action, RecipientAction::Release);
         assert!(workbuddy.names.is_empty());
 
@@ -3190,8 +3315,15 @@ mod tests {
         add_source(&connection, "pack-a", true);
         add_skill(&connection, "a1", "pack-a");
         let shared_evidence = evidence(true);
-        let (group, _) =
-            apply_takeover(&mut connection, "coze", true, true, "user", &shared_evidence).unwrap();
+        let (group, _) = apply_takeover(
+            &mut connection,
+            "coze",
+            true,
+            true,
+            "user",
+            &shared_evidence,
+        )
+        .unwrap();
         assert_eq!(group, vec!["codex", "coze"]);
         let takeover = read_takeover(&connection).unwrap();
         assert!(takeover_enabled(&takeover, "codex") && takeover_enabled(&takeover, "coze"));
@@ -3211,7 +3343,15 @@ mod tests {
         let targets = read_targets(&connection).unwrap();
         assert!(!targets[&("pack-a".to_string(), "codex".to_string())].enabled);
         assert!(!targets[&("pack-a".to_string(), "coze".to_string())].enabled);
-        apply_takeover(&mut connection, "coze", false, true, "user", &shared_evidence).unwrap();
+        apply_takeover(
+            &mut connection,
+            "coze",
+            false,
+            true,
+            "user",
+            &shared_evidence,
+        )
+        .unwrap();
         let takeover = read_takeover(&connection).unwrap();
         assert!(!takeover_enabled(&takeover, "codex") && !takeover_enabled(&takeover, "coze"));
 
@@ -3296,9 +3436,16 @@ mod tests {
             ..evidence.clone()
         };
         assert_eq!(
-            apply_takeover(&mut connection, "claude", true, true, "user", &not_installed)
-                .unwrap_err()
-                .code,
+            apply_takeover(
+                &mut connection,
+                "claude",
+                true,
+                true,
+                "user",
+                &not_installed
+            )
+            .unwrap_err()
+            .code,
             "AGENT_NOT_INSTALLED"
         );
     }
@@ -3331,55 +3478,134 @@ mod tests {
             verified_after_change: true,
         };
         let status = |input: StatusInput<'_>| resolve_status(input);
-        assert_eq!(status(StatusInput { disk: &ours, ..base }).0, "synced");
-        assert_eq!(status(StatusInput { desired: false, ..base }).0, "off");
-        assert_eq!(status(StatusInput { job_active: true, ..base }).0, "pending");
         assert_eq!(
-            status(StatusInput { verified_after_change: false, ..base }).0,
-            "pending"
-        );
-        assert_eq!(
-            status(base),
-            ("error", Some("DELIVERY_VERIFY_FAILED"))
-        );
-        assert_eq!(
-            status(StatusInput { desired: false, disk: &ours, job_active: true, ..base }).0,
-            "removing"
-        );
-        assert_eq!(
-            status(StatusInput { disk: &conflict, ..base }),
-            ("conflict", Some("TARGET_CONFLICT"))
-        );
-        assert_eq!(
-            status(StatusInput { desired: false, disk: &conflict, ..base }).0,
-            "off"
-        );
-        assert_eq!(
-            status(StatusInput { disk: &broken, ..base }),
-            ("error", Some("MANIFEST_INVALID"))
-        );
-        assert_eq!(
-            status(StatusInput { disk: &ours, installed: false, ..base }).0,
-            "orphan"
-        );
-        assert_eq!(
-            status(StatusInput { library_enabled: false, ..base }).0,
-            "blocked"
-        );
-        assert_eq!(status(StatusInput { writes_blocked: true, ..base }).0, "paused");
-        assert_eq!(
-            status(StatusInput { writes_blocked: true, disk: &ours, ..base }).0,
+            status(StatusInput {
+                disk: &ours,
+                ..base
+            })
+            .0,
             "synced"
         );
         assert_eq!(
-            status(StatusInput { takeover: false, disk: &ours, job_active: true, ..base }).0,
+            status(StatusInput {
+                desired: false,
+                ..base
+            })
+            .0,
+            "off"
+        );
+        assert_eq!(
+            status(StatusInput {
+                job_active: true,
+                ..base
+            })
+            .0,
+            "pending"
+        );
+        assert_eq!(
+            status(StatusInput {
+                verified_after_change: false,
+                ..base
+            })
+            .0,
+            "pending"
+        );
+        assert_eq!(status(base), ("error", Some("DELIVERY_VERIFY_FAILED")));
+        assert_eq!(
+            status(StatusInput {
+                desired: false,
+                disk: &ours,
+                job_active: true,
+                ..base
+            })
+            .0,
             "removing"
         );
         assert_eq!(
-            status(StatusInput { takeover: false, disk: &ours, writes_blocked: true, ..base }).0,
+            status(StatusInput {
+                disk: &conflict,
+                ..base
+            }),
+            ("conflict", Some("TARGET_CONFLICT"))
+        );
+        assert_eq!(
+            status(StatusInput {
+                desired: false,
+                disk: &conflict,
+                ..base
+            })
+            .0,
+            "off"
+        );
+        assert_eq!(
+            status(StatusInput {
+                disk: &broken,
+                ..base
+            }),
+            ("error", Some("MANIFEST_INVALID"))
+        );
+        assert_eq!(
+            status(StatusInput {
+                disk: &ours,
+                installed: false,
+                ..base
+            })
+            .0,
+            "orphan"
+        );
+        assert_eq!(
+            status(StatusInput {
+                library_enabled: false,
+                ..base
+            })
+            .0,
+            "blocked"
+        );
+        assert_eq!(
+            status(StatusInput {
+                writes_blocked: true,
+                ..base
+            })
+            .0,
             "paused"
         );
-        assert_eq!(status(StatusInput { takeover: false, ..base }).0, "takeover-off");
+        assert_eq!(
+            status(StatusInput {
+                writes_blocked: true,
+                disk: &ours,
+                ..base
+            })
+            .0,
+            "synced"
+        );
+        assert_eq!(
+            status(StatusInput {
+                takeover: false,
+                disk: &ours,
+                job_active: true,
+                ..base
+            })
+            .0,
+            "removing"
+        );
+        assert_eq!(
+            status(StatusInput {
+                takeover: false,
+                disk: &ours,
+                writes_blocked: true,
+                ..base
+            })
+            .0,
+            "paused"
+        );
+        assert_eq!(
+            status(StatusInput {
+                takeover: false,
+                ..base
+            })
+            .0,
+            "takeover-off"
+        );
     }
 
     #[test]
@@ -3402,7 +3628,9 @@ mod tests {
         fs::write(recipient.join("file-entry"), "x").unwrap();
         let roots = vec![active.clone()];
         match inspect_entry(&recipient, "alpha", &roots, false, &active.join("alpha")) {
-            DiskState::Conflict { kind, same_content, .. } => {
+            DiskState::Conflict {
+                kind, same_content, ..
+            } => {
                 assert_eq!(kind, "personal-folder");
                 assert!(same_content);
             }
@@ -3410,13 +3638,19 @@ mod tests {
         }
         assert!(matches!(
             inspect_entry(&recipient, "file-entry", &roots, false, &active.join("x")),
-            DiskState::Conflict { kind: "not-a-folder", .. }
+            DiskState::Conflict {
+                kind: "not-a-folder",
+                ..
+            }
         ));
         assert_eq!(
             inspect_entry(&recipient, "missing", &roots, false, &active.join("x")),
             DiskState::Absent
         );
-        assert_eq!(fs::read_to_string(recipient.join("file-entry")).unwrap(), "x");
+        assert_eq!(
+            fs::read_to_string(recipient.join("file-entry")).unwrap(),
+            "x"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -3453,13 +3687,19 @@ mod tests {
         );
         let mut other = plan.clone();
         other.recipients[0].names.clear();
-        assert_ne!(base, fingerprint_lines(false, "completed", &takeover, &other));
+        assert_ne!(
+            base,
+            fingerprint_lines(false, "completed", &takeover, &other)
+        );
     }
 
     #[test]
     fn iso_times_are_rfc3339_utc() {
         assert_eq!(iso_from_seconds(0), "1970-01-01T00:00:00Z");
-        assert_eq!(iso_from_nanos("1791369720000000000"), "2026-10-07T10:42:00Z");
+        assert_eq!(
+            iso_from_nanos("1791369720000000000"),
+            "2026-10-07T10:42:00Z"
+        );
         assert_eq!(iso_from_nanos(""), "");
     }
 }

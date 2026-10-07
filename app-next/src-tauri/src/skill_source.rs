@@ -137,14 +137,22 @@ fn github_result(
 ) -> ParsedSkillSource {
     let repo = repo.strip_suffix(".git").unwrap_or(repo);
     if !valid_owner(owner) || !valid_repo(repo) {
-        return ParsedSkillSource::invalid(input, "unknown", SkillHubError::code("INPUT_UNRECOGNIZED"));
+        return ParsedSkillSource::invalid(
+            input,
+            "unknown",
+            SkillHubError::code("INPUT_UNRECOGNIZED"),
+        );
     }
     let subpath = match safe_subpath(subpath) {
         Ok(subpath) => subpath,
         Err(error) => return ParsedSkillSource::invalid(input, "github", error),
     };
     let git_ref = crate::sparse_scope::percent_decode(git_ref);
-    if git_ref.contains("..") || git_ref.chars().any(|c| c.is_control() || c == ' ' || c == '\\') {
+    if git_ref.contains("..")
+        || git_ref
+            .chars()
+            .any(|c| c.is_control() || c == ' ' || c == '\\')
+    {
         return ParsedSkillSource::invalid(
             input,
             "github",
@@ -190,7 +198,11 @@ fn github_segments(rest: &str) -> Vec<&str> {
 fn parse_github_url(input: &str, rest: &str) -> ParsedSkillSource {
     let segments = github_segments(rest);
     if segments.len() < 2 {
-        return ParsedSkillSource::invalid(input, "unknown", SkillHubError::code("INPUT_UNRECOGNIZED"));
+        return ParsedSkillSource::invalid(
+            input,
+            "unknown",
+            SkillHubError::code("INPUT_UNRECOGNIZED"),
+        );
     }
     let (owner, repo) = (segments[0], segments[1]);
     match segments.get(2).copied() {
@@ -248,7 +260,11 @@ fn local_candidate(text: &str) -> Option<PathBuf> {
 pub(crate) fn parse_skill_source_input(raw: &str) -> ParsedSkillSource {
     let input = raw.to_string();
     if raw.chars().count() > MAX_INPUT_CHARS {
-        return ParsedSkillSource::invalid(&input, "unknown", SkillHubError::code("INPUT_TOO_LONG"));
+        return ParsedSkillSource::invalid(
+            &input,
+            "unknown",
+            SkillHubError::code("INPUT_TOO_LONG"),
+        );
     }
     let text = strip_quotes(raw);
     if text.is_empty() {
@@ -291,8 +307,12 @@ pub(crate) fn parse_skill_source_input(raw: &str) -> ParsedSkillSource {
             Ok(_) => ParsedSkillSource::invalid(
                 &input,
                 if is_package { "zip" } else { "local-folder" },
-                SkillHubError::code(if is_package { "ZIP_INVALID" } else { "PATH_NOT_FOUND" })
-                    .with_path(display),
+                SkillHubError::code(if is_package {
+                    "ZIP_INVALID"
+                } else {
+                    "PATH_NOT_FOUND"
+                })
+                .with_path(display),
             ),
             Err(_) => ParsedSkillSource::invalid(
                 &input,
@@ -319,10 +339,17 @@ pub(crate) fn parse_skill_source_input(raw: &str) -> ParsedSkillSource {
     if let Some(rest) = text.strip_prefix("git@github.com:") {
         return parse_github_url(&input, rest);
     }
-    if lower.starts_with("http://") || lower.starts_with("https://") || lower.contains("gitlab")
-        || lower.contains("gitee") || lower.contains("bitbucket")
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.contains("gitlab")
+        || lower.contains("gitee")
+        || lower.contains("bitbucket")
     {
-        return ParsedSkillSource::invalid(&input, "unknown", SkillHubError::code("INPUT_UNRECOGNIZED"));
+        return ParsedSkillSource::invalid(
+            &input,
+            "unknown",
+            SkillHubError::code("INPUT_UNRECOGNIZED"),
+        );
     }
     let segments = text.split('/').collect::<Vec<_>>();
     if segments.len() == 2
@@ -339,7 +366,11 @@ pub(crate) fn parse_skill_source_input(raw: &str) -> ParsedSkillSource {
         || text.contains('\\')
         || segments.len() >= 3
     {
-        return ParsedSkillSource::invalid(&input, "unknown", SkillHubError::code("PATH_NOT_ABSOLUTE"));
+        return ParsedSkillSource::invalid(
+            &input,
+            "unknown",
+            SkillHubError::code("PATH_NOT_ABSOLUTE"),
+        );
     }
     ParsedSkillSource::invalid(&input, "unknown", SkillHubError::code("INPUT_UNRECOGNIZED"))
 }
@@ -543,7 +574,10 @@ pub(crate) fn store_probe(record: ProbeRecord) {
 }
 
 pub(crate) fn take_probe(probe_id: &str) -> Option<ProbeRecord> {
-    probes().lock().ok().and_then(|mut map| map.remove(probe_id))
+    probes()
+        .lock()
+        .ok()
+        .and_then(|mut map| map.remove(probe_id))
 }
 
 pub(crate) fn peek_probe(probe_id: &str) -> Option<ProbeRecord> {
@@ -593,9 +627,9 @@ pub(crate) fn probe_security(
     let finding_count = findings.len();
     let plain_summary = match status {
         "passed" => format!("检查了 {scanned_files} 个文件，没有发现需要注意的内容"),
-        "review" => format!(
-            "检查了 {scanned_files} 个文件，发现 {finding_count} 处需要注意（不会被执行）"
-        ),
+        "review" => {
+            format!("检查了 {scanned_files} 个文件，发现 {finding_count} 处需要注意（不会被执行）")
+        }
         _ => "超出安全检查的范围（文件太多、太大或含有链接），不能添加".to_string(),
     };
     ProbeSecurity {
@@ -610,9 +644,13 @@ pub(crate) fn probe_security(
 }
 
 /// Library skills by normalized name → set of SKILL.md content hashes.
-pub(crate) fn library_skill_hashes(root: &Path, connection: &Connection) -> HashMap<String, BTreeSet<String>> {
+pub(crate) fn library_skill_hashes(
+    root: &Path,
+    connection: &Connection,
+) -> HashMap<String, BTreeSet<String>> {
     let mut map: HashMap<String, BTreeSet<String>> = HashMap::new();
-    let Ok(mut statement) = connection.prepare("SELECT name, folder_name, relative_path FROM skills")
+    let Ok(mut statement) =
+        connection.prepare("SELECT name, folder_name, relative_path FROM skills")
     else {
         return map;
     };
@@ -634,7 +672,10 @@ pub(crate) fn library_skill_hashes(root: &Path, connection: &Connection) -> Hash
         if hash.is_empty() {
             continue;
         }
-        for key in [crate::normalize_skill_lookup(&name), crate::normalize_skill_lookup(&folder)] {
+        for key in [
+            crate::normalize_skill_lookup(&name),
+            crate::normalize_skill_lookup(&folder),
+        ] {
             if !key.is_empty() {
                 map.entry(key).or_default().insert(hash.clone());
             }
@@ -756,21 +797,33 @@ pub(crate) fn build_skill_groups(
             .any(|other| other != relative && other.starts_with(&format!("{relative}/")))
             || (relative.is_empty() && paths.len() > 1)
         {
-            let group = groups.entry(relative.clone()).or_insert_with(|| ProbeSkillGroup {
-                group_id: if relative.is_empty() { ".".to_string() } else { relative.clone() },
+            let group = groups
+                .entry(relative.clone())
+                .or_insert_with(|| ProbeSkillGroup {
+                    group_id: if relative.is_empty() {
+                        ".".to_string()
+                    } else {
+                        relative.clone()
+                    },
+                    title: String::new(),
+                    parent: None,
+                    children: Vec::new(),
+                });
+            group.parent = Some(node(relative));
+            continue;
+        }
+        let group = groups
+            .entry(parent.clone())
+            .or_insert_with(|| ProbeSkillGroup {
+                group_id: if parent.is_empty() {
+                    ".".to_string()
+                } else {
+                    parent.clone()
+                },
                 title: String::new(),
                 parent: None,
                 children: Vec::new(),
             });
-            group.parent = Some(node(relative));
-            continue;
-        }
-        let group = groups.entry(parent.clone()).or_insert_with(|| ProbeSkillGroup {
-            group_id: if parent.is_empty() { ".".to_string() } else { parent.clone() },
-            title: String::new(),
-            parent: None,
-            children: Vec::new(),
-        });
         if path_set.contains(&parent) && group.parent.is_none() {
             group.parent = Some(node(&parent));
         }
@@ -811,7 +864,11 @@ pub(crate) fn detect_mcp_configs(scope: &Path) -> Vec<ProbeMcpConfig> {
         if !(is_json || is_toml) || !path.is_file() {
             continue;
         }
-        if fs::metadata(&path).map(|meta| meta.len()).unwrap_or(u64::MAX) > MAX_PROBE_FILE_BYTES {
+        if fs::metadata(&path)
+            .map(|meta| meta.len())
+            .unwrap_or(u64::MAX)
+            > MAX_PROBE_FILE_BYTES
+        {
             continue;
         }
         let Ok(text) = fs::read_to_string(&path) else {
@@ -944,7 +1001,10 @@ pub(crate) struct ProbeFileText {
 }
 
 /// Only files the probe itself listed (MCP configs and prompt docs).
-pub(crate) fn read_probe_file(probe_id: &str, relative_path: &str) -> Result<ProbeFileText, SkillHubError> {
+pub(crate) fn read_probe_file(
+    probe_id: &str,
+    relative_path: &str,
+) -> Result<ProbeFileText, SkillHubError> {
     let record = peek_probe(probe_id).ok_or_else(|| SkillHubError::code("PROBE_EXPIRED"))?;
     let listed = record
         .probe
@@ -1144,10 +1204,9 @@ pub(crate) fn adopt_preview(
         .map(|skill| {
             let raw = fs::read_to_string(Path::new(&skill.canonical_path).join("SKILL.md"))
                 .unwrap_or_default();
-            let valid = skill_delivery::manifest_name_and_description(&raw)
-                .is_some_and(|(name, description)| {
-                    !name.trim().is_empty() && !description.trim().is_empty()
-                });
+            let valid = skill_delivery::manifest_name_and_description(&raw).is_some_and(
+                |(name, description)| !name.trim().is_empty() && !description.trim().is_empty(),
+            );
             (
                 skill.agent_id.clone(),
                 skill.path.clone(),
@@ -1176,7 +1235,9 @@ pub(crate) fn adopt_preview(
     })
 }
 
-pub(crate) fn adopt_preview_blocking(project: Option<String>) -> Result<AdoptPreview, SkillHubError> {
+pub(crate) fn adopt_preview_blocking(
+    project: Option<String>,
+) -> Result<AdoptPreview, SkillHubError> {
     let root = crate::resolve_legacy_root()?;
     let connection = crate::open_index_database(&root)?;
     adopt_preview(
@@ -1206,11 +1267,9 @@ pub(crate) fn adopt_blocking(
         .collect::<Vec<_>>();
     let cancellation = crate::register_import_cancellation(&operation_id)?;
     let control = match app.clone() {
-        Some(app) => crate::SourceImportControl::with_app(
-            operation_id.clone(),
-            cancellation.clone(),
-            app,
-        ),
+        Some(app) => {
+            crate::SourceImportControl::with_app(operation_id.clone(), cancellation.clone(), app)
+        }
         None => crate::SourceImportControl::detached(operation_id.clone()),
     };
     let result = adopt_selected(&control, app.as_ref(), selected, enqueue);
@@ -1264,8 +1323,10 @@ fn adopt_selected(
                 name: candidate.name.clone(),
                 outcome: skip.to_string(),
                 source_id: String::new(),
-                error: (skip == "failed")
-                    .then(|| SkillHubError::code("MANIFEST_INVALID").with_path(candidate.canonical_path.clone())),
+                error: (skip == "failed").then(|| {
+                    SkillHubError::code("MANIFEST_INVALID")
+                        .with_path(candidate.canonical_path.clone())
+                }),
             });
             continue;
         }
@@ -1413,15 +1474,19 @@ pub(crate) fn list_agent_skills(
                         .map(|(_, description)| description.chars().take(240).collect())
                         .unwrap_or_default();
                     let ours = if is_link {
-                        crate::delivery_link_target(&path)
-                            .is_some_and(|target| skill_delivery::path_is_under(&target, &active_root))
+                        crate::delivery_link_target(&path).is_some_and(|target| {
+                            skill_delivery::path_is_under(&target, &active_root)
+                        })
                     } else {
                         crate::shared_skill_catalog::is_managed_entry(&path)
                     };
-                    let unit_id = entry_units.get(&name.to_lowercase()).cloned().unwrap_or_default();
-                    let manifest_ok = parsed.as_ref().is_some_and(|(n, d)| {
-                        !n.trim().is_empty() && !d.trim().is_empty()
-                    });
+                    let unit_id = entry_units
+                        .get(&name.to_lowercase())
+                        .cloned()
+                        .unwrap_or_default();
+                    let manifest_ok = parsed
+                        .as_ref()
+                        .is_some_and(|(n, d)| !n.trim().is_empty() && !d.trim().is_empty());
                     let state = if ours {
                         if !path.join("SKILL.md").is_file() || unit_id.is_empty() {
                             "stale"
@@ -1455,7 +1520,11 @@ pub(crate) fn list_agent_skills(
                         path: path.display().to_string(),
                         storage_kind: if is_link { "link" } else { "directory" }.to_string(),
                         state: state.to_string(),
-                        unit_id: if ours || state == "conflict" { unit_id } else { String::new() },
+                        unit_id: if ours || state == "conflict" {
+                            unit_id
+                        } else {
+                            String::new()
+                        },
                         adopt_candidate_id: if matches!(state, "personal" | "conflict") {
                             crate::stable_id("adopt", &canonical.to_lowercase())
                         } else {
@@ -1468,10 +1537,13 @@ pub(crate) fn list_agent_skills(
             Err(_) => {}
         }
     }
-    entries.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    entries.sort_by_key(|entry| entry.name.to_lowercase());
     skill_delivery::set_personal_count(
         agent_id,
-        entries.iter().filter(|entry| entry.state == "personal").count(),
+        entries
+            .iter()
+            .filter(|entry| entry.state == "personal")
+            .count(),
     );
     Ok(AgentSkillInventory {
         agent_id: agent_id.to_string(),
@@ -1526,8 +1598,8 @@ pub(crate) fn read_library_skill_document(
     let manifest = canonical.join("SKILL.md");
     let bytes = fs::read(&manifest).map_err(|_| SkillHubError::code("UNIT_NOT_FOUND"))?;
     let truncated = bytes.len() as u64 > MAX_DOCUMENT_BYTES;
-    let content = String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_DOCUMENT_BYTES as usize)])
-        .to_string();
+    let content =
+        String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_DOCUMENT_BYTES as usize)]).to_string();
     let mut files = Vec::new();
     let mut stack = vec![canonical.clone()];
     while let Some(current) = stack.pop() {
@@ -1546,7 +1618,9 @@ pub(crate) fn read_library_skill_document(
             if name == ".git" || name == "node_modules" {
                 continue;
             }
-            if item.file_type().is_ok_and(|kind| kind.is_dir()) && !crate::external_skills::is_link(&path) {
+            if item.file_type().is_ok_and(|kind| kind.is_dir())
+                && !crate::external_skills::is_link(&path)
+            {
                 stack.push(path);
             } else {
                 files.push(
@@ -1561,7 +1635,11 @@ pub(crate) fn read_library_skill_document(
     files.sort();
     Ok(LibrarySkillDocument {
         skill_id: skill_id.to_string(),
-        path: manifest.display().to_string().trim_start_matches(r"\\?\").to_string(),
+        path: manifest
+            .display()
+            .to_string()
+            .trim_start_matches(r"\\?\")
+            .to_string(),
         content,
         truncated,
         files,
@@ -1600,21 +1678,35 @@ mod tests {
             "https://github.com/anthropics/skills?tab=readme-ov-file#top",
         ] {
             let parsed = github(input);
-            assert_eq!((parsed.owner.as_str(), parsed.repo.as_str()), ("anthropics", "skills"), "{input}");
+            assert_eq!(
+                (parsed.owner.as_str(), parsed.repo.as_str()),
+                ("anthropics", "skills"),
+                "{input}"
+            );
             assert_eq!(parsed.git_ref, "");
             assert_eq!(parsed.subpath, "");
             assert_eq!(parsed.clone_url, "https://github.com/anthropics/skills.git");
         }
         let tree = github("https://github.com/anthropics/skills/tree/main/skills/pdf");
-        assert_eq!((tree.git_ref.as_str(), tree.subpath.as_str()), ("main", "skills/pdf"));
         assert_eq!(
-            parse_skill_source_input("https://github.com/anthropics/skills/tree/main/skills/pdf").display,
+            (tree.git_ref.as_str(), tree.subpath.as_str()),
+            ("main", "skills/pdf")
+        );
+        assert_eq!(
+            parse_skill_source_input("https://github.com/anthropics/skills/tree/main/skills/pdf")
+                .display,
             "anthropics/skills · skills/pdf"
         );
         let tree_only = github("https://github.com/anthropics/skills/tree/v1.2");
-        assert_eq!((tree_only.git_ref.as_str(), tree_only.subpath.as_str()), ("v1.2", ""));
+        assert_eq!(
+            (tree_only.git_ref.as_str(), tree_only.subpath.as_str()),
+            ("v1.2", "")
+        );
         let blob = github("https://github.com/anthropics/skills/blob/main/skills/pdf/SKILL.md");
-        assert_eq!((blob.git_ref.as_str(), blob.subpath.as_str()), ("main", "skills/pdf"));
+        assert_eq!(
+            (blob.git_ref.as_str(), blob.subpath.as_str()),
+            ("main", "skills/pdf")
+        );
         let root_blob = github("https://github.com/o/r/blob/main/SKILL.md");
         assert_eq!(root_blob.subpath, "");
 
@@ -1625,8 +1717,14 @@ mod tests {
             code("https://github.com/o/r/tree/main/a/../../etc"),
             "GITHUB_SUBPATH_NOT_FOUND"
         );
-        assert_eq!(code("https://github.com/o/r/tree/main/a/%2e%2e/b"), "GITHUB_SUBPATH_NOT_FOUND");
-        assert_eq!(code("https://github.com/o/r/tree/main/C:/x"), "GITHUB_SUBPATH_NOT_FOUND");
+        assert_eq!(
+            code("https://github.com/o/r/tree/main/a/%2e%2e/b"),
+            "GITHUB_SUBPATH_NOT_FOUND"
+        );
+        assert_eq!(
+            code("https://github.com/o/r/tree/main/C:/x"),
+            "GITHUB_SUBPATH_NOT_FOUND"
+        );
 
         assert_eq!(code(""), "INPUT_EMPTY");
         assert_eq!(code("   \"\"  "), "INPUT_EMPTY");
@@ -1658,7 +1756,10 @@ mod tests {
         std::fs::write(root.join("demo.skill.zip"), b"PK").unwrap();
         std::fs::write(root.join("notes.txt"), b"x").unwrap();
         let folder = parse_skill_source_input(&root.join("folder").display().to_string());
-        assert_eq!((folder.kind.as_str(), folder.route_to.as_str()), ("local-folder", "skills"));
+        assert_eq!(
+            (folder.kind.as_str(), folder.route_to.as_str()),
+            ("local-folder", "skills")
+        );
         let forward = root.join("folder").display().to_string().replace('\\', "/");
         assert_eq!(parse_skill_source_input(&forward).kind, "local-folder");
         let zip = parse_skill_source_input(&root.join("demo.skill.zip").display().to_string());
@@ -1667,8 +1768,14 @@ mod tests {
             code(&root.join("missing").display().to_string()),
             "PATH_NOT_FOUND"
         );
-        assert_eq!(code(&root.join("notes.txt").display().to_string()), "PATH_NOT_FOUND");
-        let file_url = format!("file:///{}", root.join("folder").display().to_string().replace('\\', "/"));
+        assert_eq!(
+            code(&root.join("notes.txt").display().to_string()),
+            "PATH_NOT_FOUND"
+        );
+        let file_url = format!(
+            "file:///{}",
+            root.join("folder").display().to_string().replace('\\', "/")
+        );
         assert_eq!(parse_skill_source_input(&file_url).kind, "local-folder");
         let dropped = accepted_drop_paths(&[
             root.join("folder"),

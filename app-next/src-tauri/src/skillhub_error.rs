@@ -111,28 +111,46 @@ impl From<&str> for SkillHubError {
 
 /// The §4.5 pattern table, shared with `normalizeSkillHubError` in the UI.
 const LEGACY_PATTERNS: &[(&[&str], &str)] = &[
-    (&["另一项刷新或写入任务正在运行", "无法取得数据写入锁"], "WRITE_BUSY"),
+    (
+        &["另一项刷新或写入任务正在运行", "无法取得数据写入锁"],
+        "WRITE_BUSY",
+    ),
     (&["GitHub API", "rate limit"], "NETWORK_FAILED"),
     (&["超过 240 秒", "超过 180 秒"], "SCRIPT_TIMEOUT"),
     (&["超过 120 秒"], "DOWNLOAD_TIMEOUT"),
     (&["Source metadata is too long"], "INPUT_TOO_LONG"),
     (
-        &["Personal or external Skill entry preserved", "Personal Skill"],
+        &[
+            "Personal or external Skill entry preserved",
+            "Personal Skill",
+        ],
         "TARGET_CONFLICT",
     ),
     (
         &["Recipient Skills root is an external link"],
         "AGENT_DIR_EXTERNAL_LINK",
     ),
-    (&["完整性核对未通过", "交付验收失败"], "DELIVERY_VERIFY_FAILED"),
-    (&["找不到同步脚本", "找不到 AI 工具链接脚本"], "SCRIPT_MISSING"),
+    (
+        &["完整性核对未通过", "交付验收失败"],
+        "DELIVERY_VERIFY_FAILED",
+    ),
+    (
+        &["找不到同步脚本", "找不到 AI 工具链接脚本"],
+        "SCRIPT_MISSING",
+    ),
     (
         &["Cannot open v2 SQLite database", "Cannot commit v2 SQLite"],
         "INDEX_FAILED",
     ),
     (&["导入已取消"], "CANCELLED"),
-    (&["Agent Skill allowlist contains"], "DELIVERY_POLICY_INVALID"),
-    (&["name and description", "没有可读的 SKILL.md"], "MANIFEST_INVALID"),
+    (
+        &["Agent Skill allowlist contains"],
+        "DELIVERY_POLICY_INVALID",
+    ),
+    (
+        &["name and description", "没有可读的 SKILL.md"],
+        "MANIFEST_INVALID",
+    ),
 ];
 
 /// Classify a legacy string error. The original text becomes the redacted
@@ -148,7 +166,10 @@ pub(crate) fn classify_legacy_error(message: &str) -> SkillHubError {
     if code == "INTERNAL" && !message.trim().is_empty() {
         // Keep the backend's own plain sentence when it already is one.
         let first = message.lines().next().unwrap_or_default().trim();
-        if first.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)) {
+        if first
+            .chars()
+            .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+        {
             error.message = redact(first);
         }
     }
@@ -167,7 +188,10 @@ pub(crate) fn default_action(code: &str) -> Option<&'static str> {
     Some(match code {
         "WRITE_BUSY" => "wait",
         "NETWORK_FAILED" | "DOWNLOAD_TIMEOUT" | "DELIVERY_VERIFY_FAILED" => "retry",
-        "SCRIPT_TIMEOUT" | "INDEX_FAILED" | "DELIVERY_POLICY_INVALID" | "INTERNAL"
+        "SCRIPT_TIMEOUT"
+        | "INDEX_FAILED"
+        | "DELIVERY_POLICY_INVALID"
+        | "INTERNAL"
         | "SCRIPT_FAILED" => "export-report",
         "TARGET_CONFLICT" => "resolve-conflict",
         "AGENT_DIR_EXTERNAL_LINK" | "MANIFEST_INVALID" | "AGENT_DIR_NOT_WRITABLE" => "open-folder",
@@ -279,8 +303,16 @@ fn redact_word(word: &str) -> String {
     let lower = word.to_ascii_lowercase();
     // key=value pairs whose key names a secret.
     for marker in [
-        "token=", "password=", "passwd=", "secret=", "api_key=", "apikey=", "access_key=",
-        "authorization=", "auth=", "key=",
+        "token=",
+        "password=",
+        "passwd=",
+        "secret=",
+        "api_key=",
+        "apikey=",
+        "access_key=",
+        "authorization=",
+        "auth=",
+        "key=",
     ] {
         if let Some(position) = lower.find(marker) {
             return format!("{}[已隐藏]", &word[..position + marker.len()]);
@@ -297,7 +329,17 @@ fn redact_word(word: &str) -> String {
     }
     // Well-known token prefixes.
     let trimmed = word.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-');
-    for prefix in ["ghp_", "gho_", "ghu_", "ghs_", "github_pat_", "sk-", "xoxb-", "xoxp-", "AKIA"] {
+    for prefix in [
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "ghs_",
+        "github_pat_",
+        "sk-",
+        "xoxb-",
+        "xoxp-",
+        "AKIA",
+    ] {
         if trimmed.starts_with(prefix) && trimmed.len() >= prefix.len() + 12 {
             return word.replace(trimmed, "[已隐藏]");
         }
@@ -312,35 +354,103 @@ mod tests {
     #[test]
     fn error_classifier_table() {
         let cases = [
-            ("另一项刷新或写入任务正在运行；请等待", "WRITE_BUSY", Some("wait")),
+            (
+                "另一项刷新或写入任务正在运行；请等待",
+                "WRITE_BUSY",
+                Some("wait"),
+            ),
             ("无法取得数据写入锁，其他窗口", "WRITE_BUSY", Some("wait")),
-            ("GitHub API 403 for owner/repo", "NETWORK_FAILED", Some("retry")),
+            (
+                "GitHub API 403 for owner/repo",
+                "NETWORK_FAILED",
+                Some("retry"),
+            ),
             ("hit the rate limit", "NETWORK_FAILED", Some("retry")),
-            ("SkillHub 同步超过 240 秒，已自动停止。", "SCRIPT_TIMEOUT", Some("export-report")),
-            ("AI 工具链接同步超过 180 秒", "SCRIPT_TIMEOUT", Some("export-report")),
+            (
+                "SkillHub 同步超过 240 秒，已自动停止。",
+                "SCRIPT_TIMEOUT",
+                Some("export-report"),
+            ),
+            (
+                "AI 工具链接同步超过 180 秒",
+                "SCRIPT_TIMEOUT",
+                Some("export-report"),
+            ),
             ("下载超过 120 秒", "DOWNLOAD_TIMEOUT", Some("retry")),
             ("Source metadata is too long", "INPUT_TOO_LONG", None),
-            ("Personal Skill with the same name preserved: x", "TARGET_CONFLICT", Some("resolve-conflict")),
-            ("Personal or external Skill entry preserved: y", "TARGET_CONFLICT", Some("resolve-conflict")),
-            ("Recipient Skills root is an external link and was preserved", "AGENT_DIR_EXTERNAL_LINK", Some("open-folder")),
-            ("交付后的完整性核对未通过", "DELIVERY_VERIFY_FAILED", Some("retry")),
-            ("Agent Skill 交付验收失败；", "DELIVERY_VERIFY_FAILED", Some("retry")),
+            (
+                "Personal Skill with the same name preserved: x",
+                "TARGET_CONFLICT",
+                Some("resolve-conflict"),
+            ),
+            (
+                "Personal or external Skill entry preserved: y",
+                "TARGET_CONFLICT",
+                Some("resolve-conflict"),
+            ),
+            (
+                "Recipient Skills root is an external link and was preserved",
+                "AGENT_DIR_EXTERNAL_LINK",
+                Some("open-folder"),
+            ),
+            (
+                "交付后的完整性核对未通过",
+                "DELIVERY_VERIFY_FAILED",
+                Some("retry"),
+            ),
+            (
+                "Agent Skill 交付验收失败；",
+                "DELIVERY_VERIFY_FAILED",
+                Some("retry"),
+            ),
             ("找不到同步脚本：C:\\x", "SCRIPT_MISSING", Some("reinstall")),
-            ("找不到 AI 工具链接脚本：C:\\x", "SCRIPT_MISSING", Some("reinstall")),
-            ("Cannot open v2 SQLite database x", "INDEX_FAILED", Some("export-report")),
-            ("Cannot commit v2 SQLite transaction", "INDEX_FAILED", Some("export-report")),
+            (
+                "找不到 AI 工具链接脚本：C:\\x",
+                "SCRIPT_MISSING",
+                Some("reinstall"),
+            ),
+            (
+                "Cannot open v2 SQLite database x",
+                "INDEX_FAILED",
+                Some("export-report"),
+            ),
+            (
+                "Cannot commit v2 SQLite transaction",
+                "INDEX_FAILED",
+                Some("export-report"),
+            ),
             ("导入已取消；本次未完成", "CANCELLED", None),
-            ("Agent Skill allowlist contains 3 entries", "DELIVERY_POLICY_INVALID", Some("export-report")),
-            ("SKILL.md needs non-empty name and description", "MANIFEST_INVALID", Some("open-folder")),
-            ("入口没有可读的 SKILL.md：a", "MANIFEST_INVALID", Some("open-folder")),
+            (
+                "Agent Skill allowlist contains 3 entries",
+                "DELIVERY_POLICY_INVALID",
+                Some("export-report"),
+            ),
+            (
+                "SKILL.md needs non-empty name and description",
+                "MANIFEST_INVALID",
+                Some("open-folder"),
+            ),
+            (
+                "入口没有可读的 SKILL.md：a",
+                "MANIFEST_INVALID",
+                Some("open-folder"),
+            ),
             ("系统 Git 不可用", "GIT_MISSING", Some("install-git")),
-            ("git executable not found", "GIT_MISSING", Some("install-git")),
+            (
+                "git executable not found",
+                "GIT_MISSING",
+                Some("install-git"),
+            ),
             ("something unexpected", "INTERNAL", Some("export-report")),
         ];
         for (message, code, action) in cases {
             let error = SkillHubError::from(message.to_string());
             assert_eq!(error.code, code, "{message}");
-            assert_eq!(error.action.as_ref().map(|a| a.kind.as_str()), action, "{message}");
+            assert_eq!(
+                error.action.as_ref().map(|a| a.kind.as_str()),
+                action,
+                "{message}"
+            );
             assert!(!error.message.is_empty());
             assert!(error.detail.chars().count() <= DETAIL_LIMIT);
         }
@@ -356,14 +466,18 @@ mod tests {
         assert!(redacted.contains("github.com/o/r"));
         let long = "路".repeat(1000);
         assert_eq!(redact(&long).chars().count(), DETAIL_LIMIT);
-        assert!(!redact("github_pat_11ABCDEFGHIJKLMNOPQRST_secret").contains("github_pat_11ABCDEFGH"));
+        assert!(
+            !redact("github_pat_11ABCDEFGHIJKLMNOPQRST_secret").contains("github_pat_11ABCDEFGH")
+        );
     }
 
     #[test]
     fn serialization_matches_the_ts_contract() {
         let error = SkillHubError::code("TARGET_CONFLICT").with_agent("claude");
         let value = serde_json::to_value(&error).unwrap();
-        for key in ["code", "message", "detail", "action", "agentId", "sourceId", "path"] {
+        for key in [
+            "code", "message", "detail", "action", "agentId", "sourceId", "path",
+        ] {
             assert!(value.get(key).is_some(), "{key}");
         }
         assert!(value["sourceId"].is_null());

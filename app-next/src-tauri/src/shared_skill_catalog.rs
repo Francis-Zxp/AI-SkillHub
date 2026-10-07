@@ -132,9 +132,12 @@ pub fn sync_shared(
                 migrate_link(&path, &content, managed_source_root, |from, to| {
                     fs::rename(from, to)
                 })?;
-                report
-                    .written
-                    .push(path.file_name().unwrap_or_default().to_string_lossy().to_string());
+                report.written.push(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                );
             }
             SharedChange::RemoveLink(path) => {
                 if !managed_link(&path, managed_source_root) {
@@ -144,9 +147,12 @@ pub fn sync_shared(
                     ));
                 }
                 remove_directory_link(&path).map_err(|e| e.to_string())?;
-                report
-                    .removed
-                    .push(path.file_name().unwrap_or_default().to_string_lossy().to_string());
+                report.removed.push(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                );
             }
         }
     }
@@ -169,7 +175,9 @@ fn same_manifest_bytes(entry: &Path, original_manifest: &Path) -> bool {
         read_manifest(&entry.join("SKILL.md")),
         read_manifest(original_manifest),
     ) {
-        (Ok(left), Ok(right)) => Sha256::digest(left.as_bytes()) == Sha256::digest(right.as_bytes()),
+        (Ok(left), Ok(right)) => {
+            Sha256::digest(left.as_bytes()) == Sha256::digest(right.as_bytes())
+        }
         _ => false,
     }
 }
@@ -611,9 +619,7 @@ fn lenient_field(text: &str, key: &str) -> Option<String> {
     let indent = frontmatter[index].len() - frontmatter[index].trim_start().len();
     let continuation = frontmatter[index + 1..]
         .iter()
-        .take_while(|line| {
-            line.trim().is_empty() || line.len() - line.trim_start().len() > indent
-        })
+        .take_while(|line| line.trim().is_empty() || line.len() - line.trim_start().len() > indent)
         .map(|line| line.trim())
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
@@ -877,11 +883,31 @@ mod tests {
         // bug #15: descriptions the strict parser rejected blocked every client.
         let (base, root, source_root, _) = shared_fixture();
         let cases = [
-            ("beta", "---\nname: beta\ndescription: [Beta] Draws charts\n---\n", "[Beta] Draws charts"),
-            ("windows", "---\nname: windows\ndescription: \"Reads C:\\Users\\data\"\n---\n", "Reads C:\\Users\\data"),
-            ("multi", "---\nname: multi\ndescription: \"first line\n  second line\"\n---\n", "first line second line"),
-            ("comment", "---\nname: comment\ndescription: \"x\" # note\n---\n", "x"),
-            ("indented", "---\n  name: indented\n  description: plain text\n---\n", "plain text"),
+            (
+                "beta",
+                "---\nname: beta\ndescription: [Beta] Draws charts\n---\n",
+                "[Beta] Draws charts",
+            ),
+            (
+                "windows",
+                "---\nname: windows\ndescription: \"Reads C:\\Users\\data\"\n---\n",
+                "Reads C:\\Users\\data",
+            ),
+            (
+                "multi",
+                "---\nname: multi\ndescription: \"first line\n  second line\"\n---\n",
+                "first line second line",
+            ),
+            (
+                "comment",
+                "---\nname: comment\ndescription: \"x\" # note\n---\n",
+                "x",
+            ),
+            (
+                "indented",
+                "---\n  name: indented\n  description: plain text\n---\n",
+                "plain text",
+            ),
             ("empty", "---\nname: empty\n---\nBody\n", "Skill empty"),
         ];
         let mut entries = Vec::new();
