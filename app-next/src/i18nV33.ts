@@ -427,7 +427,7 @@ export const v33en: Dict = {
   "v33.expand": "Show skills",
   "v33.promptChip": "Notes",
   "v33.noSkillsChip": "No skills",
-  "v33.skillsInPack": "{n} skills",
+  "v33.skillsInPack": "Skills: {n}",
   "v33.updateChip": "Update",
   "v33.problemChip": "Problem",
   "v33.rating": "Rating",

@@ -360,3 +360,5 @@ main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
 .v33 .command-search input:focus-visible { outline: none; box-shadow: none; }
 .ui-icon.rotate-90 { transform: rotate(90deg) scale(var(--ui-icon-scale, 1)); }
 .ui-icon.rotate-180 { transform: rotate(180deg) scale(var(--ui-icon-scale, 1)); }
+/* The footer tape starts after the rail, whatever width the rail has. */
+.v33.theme-family-atlas .atlas-event-tape { left: calc(var(--rail-w) + 12px); }
