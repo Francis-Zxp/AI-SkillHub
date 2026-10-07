@@ -2055,7 +2055,17 @@ pub(crate) fn read_back(
     units: &[UnitInfo],
     evidence: &Evidence,
 ) -> Result<usize, String> {
-    let active_root = active_skills_dir(root);
+    read_back_at(&active_skills_dir(root), connection, units, evidence)
+}
+
+/// [`read_back`] for an explicit active catalog folder.
+pub(crate) fn read_back_at(
+    active_root: &Path,
+    connection: &Connection,
+    units: &[UnitInfo],
+    evidence: &Evidence,
+) -> Result<usize, String> {
+    let active_root = active_root.to_path_buf();
     let now = unix_timestamp_string();
     let mut pairs = HashMap::new();
     for agent in DELIVERABLE_AGENTS {
@@ -3845,5 +3855,15 @@ mod tests {
         if let Some(shared) = &plan.shared {
             println!("shared {:?} names={}", shared.action, shared.names.len());
         }
+        // Read back the real tool folders (read only) into the copy and show
+        // what the icon row would say right after the upgrade.
+        read_back_at(Path::new(&active), &connection, &units, &evidence).unwrap();
+        let mut statuses: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for row in read_targets(&connection).unwrap().values() {
+            *statuses
+                .entry((row.agent_id.clone(), row.status.clone()))
+                .or_default() += 1;
+        }
+        println!("read-back statuses: {statuses:?}");
     }
 }
