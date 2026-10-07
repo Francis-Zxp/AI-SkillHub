@@ -662,7 +662,7 @@ function ProbePreview({
         <summary>{t("v33.moreOptions")}</summary>
         <div className="import-more-grid">
           <label className="field">
-            <span>{t("srcEditor.name")}</span>
+            <span>{t("v33.fieldName")}</span>
             <input maxLength={120} onChange={event => onName(event.target.value)} value={name} />
           </label>
           <label className="field">
@@ -680,17 +680,17 @@ function ProbePreview({
             </label>
           )}
           <label className="field">
-            <span>{t("srcEditor.category")}</span>
+            <span>{t("v33.fieldCategory")}</span>
             <select onChange={event => onCategory(event.target.value)} value={category}>
               {categories.map(id => <option key={id} value={id}>{displayCategoryName(id)}</option>)}
             </select>
           </label>
           <label className="field">
-            <span>{t("srcEditor.tags")}</span>
+            <span>{t("v33.fieldTags")}</span>
             <input onChange={event => onTags(event.target.value)} placeholder={t("srcEditor.tagsPlaceholder")} value={tags} />
           </label>
           <label className="field wide">
-            <span>{t("srcEditor.note")}</span>
+            <span>{t("v33.fieldNote")}</span>
             <textarea onChange={event => onNote(event.target.value)} rows={2} value={note} />
           </label>
         </div>

@@ -617,11 +617,11 @@ function SettingsTab({
       }}
     >
       <label className="field">
-        <span>{t("srcEditor.name")}</span>
+        <span>{t("v33.fieldName")}</span>
         <input disabled={disabled} maxLength={120} onChange={event => update({ name: event.target.value })} value={draft.name} />
       </label>
       <label className="field">
-        <span>{t("srcEditor.category")}</span>
+        <span>{t("v33.fieldCategory")}</span>
         <select disabled={disabled} onChange={event => update({ category: event.target.value })} value={draft.category}>
           {categories.map(id => <option key={id} value={id}>{displayCategoryName(id)}</option>)}
         </select>
@@ -633,7 +633,7 @@ function SettingsTab({
         </label>
       )}
       <label className="field">
-        <span>{t("srcEditor.tags")}</span>
+        <span>{t("v33.fieldTags")}</span>
         <input disabled={disabled} onChange={event => update({ tags: event.target.value })} placeholder={t("srcEditor.tagsPlaceholder")} value={draft.tags} />
       </label>
       <div className="field">
@@ -641,7 +641,7 @@ function SettingsTab({
         <StarRating disabled={disabled} label={t("v33.rating")} onChange={rating => update({ rating })} value={draft.rating} />
       </div>
       <label className="field">
-        <span>{t("srcEditor.note")}</span>
+        <span>{t("v33.fieldNote")}</span>
         <textarea disabled={disabled} onChange={event => update({ note: event.target.value })} placeholder={t("srcEditor.notePlaceholder")} rows={3} value={draft.note} />
       </label>
       <label className="field">
@@ -660,7 +660,7 @@ function SettingsTab({
       <footer>
         {row.source && (
           <button className="danger-action" disabled={disabled} onClick={() => void onDelete()} type="button">
-            <Icon name="trash" /> {t("srcEditor.delete")}
+            <Icon name="trash" /> {t("v33.deletePack")}
           </button>
         )}
         <span className="footer-spacer" />

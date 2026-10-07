@@ -186,3 +186,8 @@
 .drawer-form footer { display: flex; align-items: center; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
 .drawer-form .footer-spacer { flex: 1; }
 .drawer > header .ghost-action { margin-left: auto; }
+
+/* The drawer's base label/input styles stack fields; a checkbox row stays on one line. */
+.drawer .drawer-form .field.check { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; text-align: left; }
+.drawer .drawer-form .field.check input { flex: 0 0 auto; width: 18px; height: 18px; padding: 0; accent-color: var(--brand); }
+.drawer .drawer-form .field.check span { color: var(--text); font-weight: 600; }
