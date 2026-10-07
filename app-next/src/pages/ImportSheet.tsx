@@ -17,7 +17,7 @@ import {
   readSkillSourceProbeFile,
   type ImportProgress
 } from "../skillApi";
-import { normalizeSkillHubError, skillHubErrorText } from "../skillErrors";
+import { normalizeSkillHubError, redactSecrets, skillHubErrorText } from "../skillErrors";
 import type { LibraryRow } from "../skillCounts";
 import type {
   AgentId,
@@ -57,9 +57,14 @@ function readDraft(): string {
   }
 }
 
+/** A draft that carries a credential (a token, or a URL with user:password@) is never stored. */
+function draftLooksSecret(value: string) {
+  return redactSecrets(value) !== value || /\/\/[^/\s@]+@/.test(value);
+}
+
 function writeDraft(value: string) {
   try {
-    if (value.trim()) window.localStorage.setItem(DRAFT_KEY, value.slice(0, 2048));
+    if (value.trim() && !draftLooksSecret(value)) window.localStorage.setItem(DRAFT_KEY, value.slice(0, 2048));
     else window.localStorage.removeItem(DRAFT_KEY);
   } catch {
     // The draft is a convenience only.
@@ -137,6 +142,9 @@ export function ImportSheet({
   }
 
   function close() {
+    // A started install is not cancellable: closing now would discard the staged copy it is
+    // promoting and unlock 更新 while it still runs. The sheet closes itself when it is done.
+    if (phase.kind === "installing") return;
     if (!installedRef.current && phase.kind !== "done") writeDraft(input);
     else writeDraft("");
     cleanupProbe();
@@ -157,7 +165,10 @@ export function ImportSheet({
   }, [phase.kind]);
 
   useEffect(() => {
-    if (initialText.trim()) scheduleCheck(initialText, autoProbe ? 0 : 300, autoProbe);
+    if (!initialText.trim()) return;
+    // Text typed on the home box continues here: put the caret after it.
+    inputRef.current?.setSelectionRange(initialText.length, initialText.length);
+    scheduleCheck(initialText, autoProbe ? 0 : 300, autoProbe);
   }, []);
 
   // After a successful install the sheet closes by itself unless the user touched it.
@@ -256,7 +267,8 @@ export function ImportSheet({
     setInstallStage("install");
     setPhase({ kind: "installing", probe });
     const operationId = probe.operationId || createOperationId("install");
-    const agentIds = review || !probe.security.canSyncToAgents ? [] : [...chips];
+    const promptOnly = probe.skillCount === 0 && probe.promptDocs.length > 0;
+    const agentIds = review || promptOnly || !probe.security.canSyncToAgents ? [] : [...chips];
     const valid = probe.skillGroups.flatMap(group => [...(group.parent ? [group.parent] : []), ...group.children]).filter(node => node.valid);
     const allSelected = valid.every(node => selectedPaths.has(node.path));
     try {
@@ -290,6 +302,7 @@ export function ImportSheet({
 
   const progressStage = phase.kind === "probing" ? phase.stage : phase.kind === "parsing" ? "inspect" : phase.kind === "installing" ? installStage : "";
   const empty = !input.trim();
+  const installing = phase.kind === "installing";
 
   return createPortal(
     <div className="sheet-layer">
@@ -308,7 +321,15 @@ export function ImportSheet({
       >
         <header className="import-head">
           <strong>{t("v33.addTitle")}</strong>
-          <button aria-label={t("common.close")} className="icon-action" data-testid="import-close" onClick={close} title={t("common.close")} type="button">
+          <button
+            aria-label={t("common.close")}
+            className="icon-action"
+            data-testid="import-close"
+            disabled={installing}
+            onClick={close}
+            title={installing ? t("v33.installingLabel") : t("common.close")}
+            type="button"
+          >
             <Icon name="close" />
           </button>
         </header>
@@ -320,12 +341,13 @@ export function ImportSheet({
               aria-label={t("v33.addPlaceholder")}
               data-autofocus=""
               data-testid="import-input"
+              readOnly={installing}
               onChange={event => {
                 setInput(event.target.value);
                 scheduleCheck(event.target.value, 300, false);
               }}
               onKeyDown={event => {
-                if (event.key === "Enter" && input.trim()) {
+                if (event.key === "Enter" && input.trim() && !installing) {
                   event.preventDefault();
                   scheduleCheck(input, 0, true);
                 }
@@ -337,10 +359,10 @@ export function ImportSheet({
             />
           </div>
           <div className="import-pickers">
-            <button className="ghost-action small" data-testid="import-pick-folder" onClick={() => void pick("folder")} type="button">
+            <button className="ghost-action small" data-testid="import-pick-folder" disabled={installing} onClick={() => void pick("folder")} type="button">
               <Icon name="folder" /> {t("v33.pickFolder")}
             </button>
-            <button className="ghost-action small" data-testid="import-pick-zip" onClick={() => void pick("zip")} type="button">
+            <button className="ghost-action small" data-testid="import-pick-zip" disabled={installing} onClick={() => void pick("zip")} type="button">
               <Icon name="download" /> {t("v33.pickZip")}
             </button>
             <span className="muted">{t("v33.dropHint")}</span>
@@ -539,12 +561,17 @@ function ProbePreview({
   const chosen = chipsLocked ? 0 : chips.size;
   const categories = CATEGORY_IDS.includes(category as (typeof CATEGORY_IDS)[number]) || !category ? CATEGORY_IDS : [...CATEGORY_IDS, category];
   const nothingSelected = probe.skillCount > 0 && selectedPaths.size === 0;
+  // The same pack is already in the library: the button only adds AI tools, so with no tool
+  // chosen there is nothing to do (the backend would answer DUPLICATE_SOURCE).
+  const sameAsExisting = duplicate?.relation === "same";
+  const nothingToDo = sameAsExisting && chosen === 0;
 
   let submitLabel: string;
   if (blocked) submitLabel = t("v33.submitBlocked");
+  else if (nothingToDo) submitLabel = t("v33.inLibrary");
   else if (review) submitLabel = t("v33.submitLibraryOnly");
   else if (promptOnly) submitLabel = t("v33.submitPrompt");
-  else if (duplicate) submitLabel = t("v33.submitSyncExisting", { n: chosen });
+  else if (sameAsExisting) submitLabel = t("v33.submitSyncExisting", { n: chosen });
   else if (managedCount === 0 || chosen === 0) submitLabel = t("v33.submitLibrary");
   else submitLabel = t("v33.submitInstall", { n: chosen });
 
@@ -700,7 +727,7 @@ function ProbePreview({
         <button
           className="primary-action"
           data-testid="import-submit"
-          disabled={blocked || installing || nothingSelected}
+          disabled={blocked || installing || nothingSelected || nothingToDo}
           onClick={onSubmit}
           type="button"
         >

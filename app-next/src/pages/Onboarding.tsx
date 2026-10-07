@@ -35,7 +35,13 @@ export function Onboarding({
       .then(next => {
         if (cancelled) return;
         setState(next);
-        setChecked(new Set(next.agents.filter(agent => agent.preselected).map(agent => agent.agentId)));
+        const initial = new Set(next.agents.filter(agent => agent.preselected).map(agent => agent.agentId));
+        const pairPresent = ["codex", "coze"].every(id => next.agents.some(agent => agent.agentId === id && agent.canDeliver && agent.statusWord !== "not-installed"));
+        if (pairPresent && (initial.has("codex") || initial.has("coze"))) {
+          initial.add("codex");
+          initial.add("coze");
+        }
+        setChecked(initial);
       })
       .catch(reason => {
         if (!cancelled) setError(normalizeSkillHubError(reason));
@@ -69,6 +75,19 @@ export function Onboarding({
   const others = agents.filter(agent => !selectable.includes(agent));
   const existing = state?.existingSkills ?? null;
   const count = checked.size;
+  // Codex and 扣子 share ~/.agents/skills when both are present: one takeover covers both (I-9),
+  // so their boxes move together instead of pretending to be independent.
+  const sharedPair = ["codex", "coze"].every(id => selectable.some(agent => agent.agentId === id));
+  const toggle = (agentId: string) => setChecked(current => {
+    const next = new Set(current);
+    const group = sharedPair && (agentId === "codex" || agentId === "coze") ? ["codex", "coze"] : [agentId];
+    const turnOn = !next.has(agentId);
+    for (const id of group) {
+      if (turnOn) next.add(id);
+      else next.delete(id);
+    }
+    return next;
+  });
 
   return (
     <section className="view onboarding-screen" data-testid="onboarding-screen">
@@ -91,19 +110,14 @@ export function Onboarding({
                   checked={checked.has(agent.agentId)}
                   data-testid={`onboarding-agent-${agent.agentId}`}
                   disabled={busy !== ""}
-                  onChange={() => setChecked(current => {
-                    const next = new Set(current);
-                    if (next.has(agent.agentId)) next.delete(agent.agentId);
-                    else next.add(agent.agentId);
-                    return next;
-                  })}
+                  onChange={() => toggle(agent.agentId)}
                   type="checkbox"
                 />
                 <AgentGlyph agentId={agent.agentId} name={agent.name} />
                 <strong>{agent.name}</strong>
                 {agent.experimental && <em className="chip chip-experimental">{t("v33.experimental")}</em>}
                 {agent.reason && !agent.experimental && <small className="muted">{agent.reason}</small>}
-                {(agent.agentId === "codex" || agent.agentId === "coze") && agents.some(item => item.agentId === (agent.agentId === "codex" ? "coze" : "codex") && item.canDeliver && item.statusWord !== "not-installed") && (
+                {sharedPair && (agent.agentId === "codex" || agent.agentId === "coze") && (
                   <small className="chip chip-linked"><Icon name="link" /> {t(agent.agentId === "codex" ? "v33.sharedWithCoze" : "v33.sharedWithCodex")}</small>
                 )}
               </label>

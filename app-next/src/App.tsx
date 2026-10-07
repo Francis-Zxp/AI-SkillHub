@@ -281,6 +281,8 @@ export function App() {
   // index/popularity refreshes, the 更新 run and an import that is downloading or installing.
   const mutationBusy = loading || indexRefreshing || popularityRefreshing || Boolean(operation) || importInFlight;
   mutationBusyRef.current = mutationBusy;
+  const importInFlightRef = useRef(false);
+  importInFlightRef.current = importInFlight;
 
   useCardGlow();
 
@@ -1280,10 +1282,12 @@ export function App() {
     try {
       const result = await invoke<LegacySnapshot>("reanalyze_library_metadata");
       applySnapshot(result);
+      // Same counting rule as every other number on screen (I-11): routers are not skills.
+      const analyzed = countSkills(result);
       toastMessage(
         t("metadata.doneToast", {
-          skills: result.skills.length,
-          sources: result.sources.length
+          skills: analyzed.skills,
+          sources: analyzed.packs
         }),
         "ok"
       );
@@ -1726,7 +1730,13 @@ export function App() {
     let disposed = false;
     void skillApi.listenSkillSourceDropped(event => {
       const path = event.paths[0];
-      if (path) openImport(path, true);
+      if (!path) return;
+      // A drop must not replace a sheet that is downloading or installing (it would lose that work).
+      if (importInFlightRef.current) {
+        toastMessage(t("v33.importBusy"), "warn");
+        return;
+      }
+      openImport(path, true);
     }).then(unlisten => {
       if (disposed) unlisten();
       else stop = unlisten;
@@ -2105,7 +2115,15 @@ export function App() {
                 immersive={dashboardImmersive}
                 loading={loading}
                 mcpCount={mcpCount}
-                onAdd={() => openImport()}
+                onAdd={text => {
+                  if (text && classifyAddInput(text) === "mcp-config") {
+                    requestOpenMcpAdd(text);
+                    navigate("connections");
+                    return;
+                  }
+                  // Pasted text is checked at once; a first typed character waits for more typing.
+                  openImport(text ?? "", Boolean(text && text.length > 1));
+                }}
                 onChangeHomeVisual={changeHomeVisual}
                 onOpenAgents={() => { openAgent(null); navigate("agents"); }}
                 onOpenFolder={folderId => {
@@ -2245,7 +2263,8 @@ export function App() {
         <footer className="atlas-event-tape" aria-label={t("atlas.eventTape")}>
           <span><i /> {t("atlas.liveIndex")}</span>
           <span>{t("v33.tapeSkills")} <strong data-testid="tape-skill-count">{counts.skills.toLocaleString()}</strong></span>
-          <span>{t("v33.tapePacks")} <strong>{(counts.packs + counts.promptPacks).toLocaleString()}</strong></span>
+          {/* Same pack number as the library header ("N 个技能 · M 个技能包"); 资料 are not packs. */}
+          <span>{t("v33.tapePacks")} <strong data-testid="tape-pack-count">{counts.packs.toLocaleString()}</strong></span>
           <span className="atlas-event-mode">{runtimeAvailable ? t("atlas.desktopMode") : t("atlas.previewMode")}</span>
         </footer>
 

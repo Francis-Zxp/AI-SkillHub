@@ -10,7 +10,7 @@ import { countSkills, rowFilterState, rowInFolder, type LibraryRow, type SkillCo
 import { orderTargetsForRow, targetIconView } from "../deliveryView";
 import type { AgentId, LegacySnapshot, SkillAgent, SkillCard, SkillFolderCard, SkillTarget, TargetChange, TargetMutationResult } from "../types";
 import { copyTextToClipboard, displayCategoryName, isRouterHubSkill, skillInvocationName, stableSkillClientId } from "../appShared";
-import { Dialog, MoreMenu, StarRating, ToggleSwitch } from "../components/ui";
+import { Dialog, MoreMenu, StarRating, ToggleSwitch, useConfirm } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
 import "./library.css";
 
@@ -101,6 +101,7 @@ export function Library({
   const [anchor, setAnchor] = useState<string | null>(null);
   const [folderDialog, setFolderDialog] = useState<{ mode: "create" } | { mode: "move"; row: LibraryRow } | { mode: "rename"; id: string } | null>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [confirmNode, askConfirm] = useConfirm();
   const folders = library?.skillFolders ?? [];
   const managedAgents = agents.filter(agent => agent.takeover && agent.canDeliver);
   const scope = folderId === "all" ? "all" : folderId;
@@ -322,9 +323,18 @@ export function Library({
                     label: t("v33.folderDelete"),
                     danger: true,
                     onSelect: () => {
-                      if (window.confirm(t("v33.folderDeleteConfirm", { name: folder.name }))) {
-                        void onDeleteFolder(folder.id).then(() => onSelectFolder("all"));
-                      }
+                      void askConfirm({
+                        title: t("v33.folderDelete"),
+                        body: t("v33.folderDeleteConfirm", { name: folder.name }),
+                        confirmLabel: t("v33.folderDelete"),
+                        danger: true,
+                        testId: "folder-delete-dialog"
+                      }).then(ok => {
+                        if (!ok) return;
+                        void onDeleteFolder(folder.id).then(result => {
+                          if (result) onSelectFolder("all");
+                        });
+                      });
                     }
                   }
                 ]}
@@ -463,6 +473,7 @@ export function Library({
           }}
         />
       )}
+      {confirmNode}
     </div>
   );
 }

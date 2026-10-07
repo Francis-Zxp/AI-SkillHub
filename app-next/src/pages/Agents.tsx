@@ -4,7 +4,7 @@
 // App owns the state; never import from App.tsx here.
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { Icon } from "../icons";
-import { t } from "../i18n";
+import { getLang, t } from "../i18n";
 import {
   adoptExternalSkills,
   createOperationId,
@@ -407,6 +407,7 @@ function AgentSkillsTab({
       )}
       {adopt && (
         <AdoptSheet
+          agents={delivery.agents}
           candidates={adopt.candidates}
           only={adopt.only}
           onClose={() => setAdopt(null)}
@@ -421,11 +422,13 @@ function AgentSkillsTab({
 }
 
 function AdoptSheet({
+  agents,
   candidates,
   only,
   onClose,
   onDone
 }: {
+  agents: SkillAgent[];
   candidates: AdoptCandidate[];
   only: string[] | null;
   onClose: () => void;
@@ -439,6 +442,11 @@ function AdoptSheet({
   const [report, setReport] = useState<AdoptReport | null>(null);
   const [error, setError] = useState<SkillHubError | null>(null);
   const running = progress !== null && !report;
+  // Plain tool names ("Codex"), never internal ids such as "codex-legacy"; one name per tool.
+  const toolNames = (ids: string[]) => Array.from(new Set(ids.map(id => {
+    const base = id.endsWith("-legacy") ? id.slice(0, -"-legacy".length) : id;
+    return agents.find(agent => agent.id === id || agent.id === base)?.name ?? base;
+  }))).join(getLang() === "zh" ? "、" : ", ");
 
   async function run() {
     const ids = [...checked];
@@ -507,7 +515,7 @@ function AdoptSheet({
                     />
                     <span>
                       <strong>{candidate.name}</strong>
-                      <small>{t("v33.adoptFrom", { tools: candidate.agentIds.join("、") || "—" })}</small>
+                      <small>{t("v33.adoptFrom", { tools: toolNames(candidate.agentIds) || "—" })}</small>
                     </span>
                     {candidate.state !== "new" && <em className="chip">{t(`v33.adoptState.${candidate.state}`)}</em>}
                   </label>

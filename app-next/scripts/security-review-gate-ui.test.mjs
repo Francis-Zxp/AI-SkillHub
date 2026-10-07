@@ -15,7 +15,9 @@ const sheet = app.slice(app.indexOf("export function ImportSheet"), app.indexOf(
 test("review findings keep an added source library-only and never sync it (I-5)", () => {
   // v3.3 §6.4: a flagged probe can only be "仅加入技能库（保持停用）"; agent chips are locked.
   assert.ok(sheet.includes('const review = probe.security.status === "review";'));
-  assert.ok(sheet.includes("const agentIds = review || !probe.security.canSyncToAgents ? [] : [...chips];"));
+  assert.ok(sheet.includes("const agentIds = review || promptOnly || !probe.security.canSyncToAgents ? [] : [...chips];"));
+  // A started install cannot be cancelled by closing the sheet (it would discard the staged copy).
+  assert.ok(sheet.includes('if (phase.kind === "installing") return;'));
   assert.ok(sheet.includes("securityReviewConfirmed: review,"));
   assert.ok(sheet.includes("security.findings.slice(0, 8)"));
   assert.ok(sheet.includes('else if (review) submitLabel = t("v33.submitLibraryOnly");'));

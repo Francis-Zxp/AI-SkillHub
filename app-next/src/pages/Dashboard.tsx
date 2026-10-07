@@ -89,7 +89,8 @@ export function Dashboard({
   immersive: boolean;
   loading: boolean;
   mcpCount: number | null;
-  onAdd: () => void;
+  /** Opens the + 添加 sheet, pre-filled with text typed or pasted into the home box. */
+  onAdd: (text?: string) => void;
   onChangeHomeVisual: (value: HomeVisual) => void;
   onCopySkill: (skill: SkillCard) => void;
   onOpenAgents: () => void;
@@ -219,19 +220,35 @@ export function Dashboard({
 
       <section className="home-add" aria-label={t("v33.add")}>
         <Icon name="add" />
+        {/* A click opens the sheet; typing or pasting here opens it with that text. Keyboard
+            focus alone opens nothing, so Tab can pass through the page. */}
         <input
           aria-label={t("v33.addPlaceholder")}
           data-testid="home-add-input"
-          onClick={onAdd}
-          onFocus={event => {
-            event.currentTarget.blur();
-            onAdd();
+          onChange={event => {
+            const text = event.currentTarget.value;
+            if (text.trim()) onAdd(text);
+          }}
+          onClick={() => onAdd()}
+          // Load the sheet's code before the first keystroke lands, so no typed character is lost.
+          onFocus={() => void import("./ImportSheet")}
+          onKeyDown={event => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              onAdd();
+            }
+          }}
+          onPaste={event => {
+            const text = event.clipboardData.getData("text/plain").trim();
+            if (!text) return;
+            event.preventDefault();
+            onAdd(text);
           }}
           placeholder={t("v33.addPlaceholder")}
-          readOnly
+          spellCheck={false}
           value=""
         />
-        <button className="primary-action small" onClick={onAdd} type="button">{t("v33.add")}</button>
+        <button className="primary-action small" onClick={() => onAdd()} type="button">{t("v33.add")}</button>
       </section>
       </div>
 
@@ -242,7 +259,7 @@ export function Dashboard({
             <strong>{t("v33.emptyLibraryTitle")}</strong>
             <span>{t("v33.emptyLibraryBody")}</span>
           </div>
-          <button className="primary-action small" onClick={onAdd} type="button">{t("v33.add")}</button>
+          <button className="primary-action small" onClick={() => onAdd()} type="button">{t("v33.add")}</button>
         </section>
       )}
       </div>
