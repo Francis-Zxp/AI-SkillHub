@@ -63,7 +63,7 @@ async function receivesPointer(locator) {
             const response = await route.fetch();
             await route.fulfill({ response, body: (await response.text()).replaceAll("await invoke(", "await window.__integrationInvoke("), contentType: "application/javascript" });
           });
-          await page.route("**/src/App.tsx*", async route => {
+          await page.route("**/src/pages/Library.tsx*", async route => {
             const response = await route.fetch();
             let body = await response.text();
             const start = body.indexOf("async function preparePromptInvocation(");

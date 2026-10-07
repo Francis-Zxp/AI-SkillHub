@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readAppSource } from "./app-source.mjs";
 
-const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const app = await readAppSource();
 const backend = await readFile(new URL("../src-tauri/src/metadata.rs", import.meta.url), "utf8");
 const indexer = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 const i18n = await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8");

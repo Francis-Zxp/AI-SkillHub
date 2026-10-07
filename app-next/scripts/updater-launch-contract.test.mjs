@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
+import { readAppSourceSync } from "./app-source.mjs";
 
 const read = p => fs.readFileSync(new URL(p, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
@@ -20,7 +21,7 @@ test("webview check cannot opt into downgrades", () => {
 });
 
 test("installer failure message is not a network failure", () => {
-  assert.match(read("../src/App.tsx"), /stage === "install" \? "update.failure.install" : "update.errorToast"/);
+  assert.match(readAppSourceSync().replace(/\r\n/g, "\n"), /stage === "install" \? "update.failure.install" : "update.errorToast"/);
 });
 
 test("unsigned public release is explicit and retains update signatures", () => {

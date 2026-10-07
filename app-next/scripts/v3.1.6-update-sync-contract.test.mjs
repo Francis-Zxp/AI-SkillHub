@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readAppSource } from "./app-source.mjs";
 
-const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const app = await readAppSource();
 const backend = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 const governance = await readFile(new URL("../src-tauri/src/source_governance.rs", import.meta.url), "utf8");
 const runtime = await readFile(new URL("../runtime/SkillHub.ps1", import.meta.url), "utf8");

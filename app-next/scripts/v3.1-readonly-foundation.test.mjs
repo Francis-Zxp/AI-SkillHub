@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readAppSource } from "./app-source.mjs";
 
 const files = {
-  app: await readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+  app: await readAppSource(),
   mcpUi: await readFile(new URL("../src/McpCenter.tsx", import.meta.url), "utf8"),
   i18n: await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8"),
   styles: await readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
@@ -143,7 +144,8 @@ test("Codex doctor copy exports every bounded, redacted diagnostic section", () 
 
 test("new capability surfaces are lazy-loaded instead of expanding the initial bundle", () => {
   assert.match(files.app, /lazy\(\(\) => import\("\.\/McpCenter"\)/);
-  assert.match(files.app, /import\("\.\/CodexPluginDoctorPanel"\)/);
+  assert.match(files.app, /lazy\(\(\) =>\s*import\("\.\.?\/CodexPluginDoctorPanel"\)/);
+  assert.doesNotMatch(files.app, /from "\.\.?\/(McpCenter|CodexPluginDoctorPanel)"/);
 });
 
 test("source import drafts survive navigation without persisting transient execution state", () => {

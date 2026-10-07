@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readAppSource } from "./app-source.mjs";
 
 const [app, i18n, localized, links, rust, styles, sync] = await Promise.all([
-  readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+  readAppSource(),
   readFile(new URL("../src/i18n.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/localizedDescriptions.ts", import.meta.url), "utf8"),
   readFile(new URL("../runtime/Manage-AgentSkillLinks.ps1", import.meta.url), "utf8"),

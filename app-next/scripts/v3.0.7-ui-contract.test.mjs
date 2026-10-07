@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { readAppSourceSync } from "./app-source.mjs";
 
-const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const app = readAppSourceSync();
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
 const universe = readFileSync(new URL("../src/SkillUniverse.tsx", import.meta.url), "utf8");
 const translations = readFileSync(new URL("../src/i18n.ts", import.meta.url), "utf8");

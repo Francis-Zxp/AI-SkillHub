@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readAppSource } from "./app-source.mjs";
 
 // git may check these sources out with CRLF, which would break every regex
 // that matches across a line break. Normalise once, at read time.
 const readText = async (relativePath) =>
   (await readFile(new URL(relativePath, import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 
-const app = await readText("../src/App.tsx");
+const app = (await readAppSource()).replace(/\r\n/g, "\n");
 const backend = await readText("../src-tauri/src/lib.rs");
 const runtime = await readText("../runtime/SkillHub.ps1");
 const styles = await readText("../src/styles.css");

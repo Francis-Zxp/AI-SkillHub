@@ -3,9 +3,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readAppSource } from "./app-source.mjs";
 
 const read = file => readFile(new URL(`../src/${file}`, import.meta.url), "utf8");
-const app = await read("App.tsx");
+const app = await readAppSource();
 const theme = await read("sky-theme.css");
 const archipelago = await read("SkillArchipelago.tsx");
 const scene = await read("skyScene.ts");

@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
+import { readAppSource } from "./app-source.mjs";
 
-const text = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const text = await readAppSource();
 const ast = ts.createSourceFile("App.tsx", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 function find(predicate) {
   let found;
@@ -21,7 +22,8 @@ function run(code, bindings = {}) {
   return Function(...Object.keys(bindings), javascript)(...Object.values(bindings));
 }
 function declaration(name) {
-  return find(node => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(ast);
+  // Shared helpers are exported from their module now; evaluate the declaration itself.
+  return find(node => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(ast).replace(/^export\s+/, "");
 }
 function initializer(name, bindings) {
   const node = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === name);

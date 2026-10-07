@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readAppSource } from "./app-source.mjs";
 
 const [app, diagnostics, i18n, rust, links, discovery] = await Promise.all([
-  readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+  readAppSource(),
   readFile(new URL("../runtime/Export-SkillHubDiagnostics.ps1", import.meta.url), "utf8"),
   readFile(new URL("../src/i18n.ts", import.meta.url), "utf8"),
   readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8"),

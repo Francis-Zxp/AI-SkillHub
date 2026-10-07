@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { readAppSource } from "./app-source.mjs";
 
-const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const app = await readAppSource();
 const backend = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 const effects = await readFile(new URL("../src/effects.tsx", import.meta.url), "utf8");
 const i18n = await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8");
@@ -154,7 +155,8 @@ test("source metadata and tags save through one compact background mutation", ()
   assert.doesNotMatch(mutation, /"set_source_metadata"|"set_source_tags"/);
   assert.equal((mutation.match(/await invoke</g) ?? []).length, 1);
   const editorStart = app.indexOf("function SourceEditPanel");
-  const editorEnd = app.indexOf("function Drawer", editorStart);
+  const editorEnd = app.indexOf("function RouterHubPanel", editorStart);
+  assert.ok(editorStart >= 0 && editorEnd > editorStart);
   const editor = app.slice(editorStart, editorEnd);
   assert.match(editor, /const \[saving, setSaving\] = useState\(false\)/);
   assert.match(editor, /if \(formDisabled\) return/);
