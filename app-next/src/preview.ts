@@ -20,6 +20,40 @@ export function refreshPreviewSnapshot(current: LegacySnapshot | null): LegacySn
 setPreviewBaseSnapshot(createBasePreviewSnapshot);
 
 function createBasePreviewSnapshot(): LegacySnapshot {
+  return withLargePreviewLibrary(createFixtureSnapshot());
+}
+
+/**
+ * `?previewLarge=N` (QA only) adds N one-skill packs and one pack with 150 skills, so the
+ * windowed library list and its memory use can be checked in the browser preview.
+ */
+function withLargePreviewLibrary(snapshot: LegacySnapshot): LegacySnapshot {
+  let count = 0;
+  try {
+    count = Math.min(2000, Math.max(0, Number(new URLSearchParams(window.location.search).get("previewLarge") ?? 0) || 0));
+  } catch {
+    count = 0;
+  }
+  if (count === 0) return snapshot;
+  const sourceTemplate = snapshot.sources[0];
+  const skillTemplate = snapshot.skills[0];
+  const sources = [...snapshot.sources];
+  const skills = [...snapshot.skills];
+  const addPack = (index: number, size: number) => {
+    const id = `source-preview-large-${index}`;
+    const name = size > 1 ? "preview-big-pack" : `preview-pack-${index}`;
+    sources.push({ ...sourceTemplate, id, name, url: `https://github.com/preview/${name}.git`, skillCount: size, userFolderId: "", userFolderName: "", userFolderColor: "", tags: [], note: "" });
+    for (let child = 0; child < size; child += 1) {
+      const folderName = size > 1 ? `big-skill-${child}` : `preview-skill-${index}`;
+      skills.push({ ...skillTemplate, id: `preview-large-${index}-${child}`, sourceId: id, source: name, name: folderName, folderName, description: `Preview skill ${child + 1}`, relativePath: `skills/${folderName}`, userFolderId: "", userFolderName: "", userFolderColor: "", isRouterHub: false, rating: 0, tags: [] });
+    }
+  };
+  addPack(0, 150);
+  for (let index = 1; index <= count; index += 1) addPack(index, 1);
+  return { ...snapshot, sources, skills };
+}
+
+function createFixtureSnapshot(): LegacySnapshot {
   return {
     root: "浏览器预览模式",
     skillsDir: "../skills",

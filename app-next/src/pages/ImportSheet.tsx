@@ -631,7 +631,10 @@ function ProbePreview({
         <div>
           <strong>
             {security.status === "passed"
-              ? t("v33.securityPassed", { n: security.scannedFiles })
+              ? probe.downloadMethod === "index" && security.scannedFiles === 0
+                // Duplicate fast path: nothing was downloaded now, so "0 files checked" would mislead.
+                ? t("v33.securityCheckedBefore")
+                : t("v33.securityPassed", { n: security.scannedFiles })
               : security.status === "review"
                 ? t("v33.securityReview", { n: security.findingCount })
                 : t("v33.securityBlocked", { summary: security.plainSummary })}
