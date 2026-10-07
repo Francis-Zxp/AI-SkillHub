@@ -1,13 +1,20 @@
 // The sky world: one cartoon island per category. Terrain, plants, rocks,
 // water and clouds are built in code and toon shaded; houses, props, the
 // villager and the animals are bundled CC0 models (gulls CC-BY), recoloured
-// flat. The React layer owns labels, navigation and fallbacks; this module
-// owns WebGL and must release every GPU resource, listener and frame.
+// flat. Each island has a climate (snowy peak, desert mesa, volcano, rice
+// terraces…) chosen from the world seed, and the whole sky has weather.
+// The React layer owns labels, navigation and fallbacks; this module owns
+// WebGL and must release every GPU resource, listener and frame.
 import * as THREE from "three";
+import type { SkyWeatherKind, SkyWeatherSetting } from "../skyScene";
 import { loadSkyLibrary } from "./assets";
 import type { ModelTemplate, SkyLibrary } from "./assets";
 import { assignThemes, planIsland, themeTone } from "./biomes";
 import type { IslandPlan, Placement } from "./biomes";
+import { CLIMATES, assignClimates, layoutNeighbours } from "./climates";
+import type { ClimateId, ClimateSpec } from "./climates";
+import { createSmoke, setPointScale } from "./effects";
+import type { Smoke } from "./effects";
 import { createAnimal, createFlocks, createWalker } from "./fauna";
 import type { Flock, Walker } from "./fauna";
 import { buildKit, cloudGeometry, disposeKit } from "./kit";
@@ -15,12 +22,31 @@ import { spillwayGeometry } from "./water";
 import type { KitModel } from "./kit";
 import { layoutIslands } from "./layout";
 import type { LayoutIsland } from "./layout";
-import { SHARED_UNIFORMS, addSway, cloudMaterial, skyDomeMaterial, terrainMaterial, toneColor, toonMaterial, waterMaterial, waterfallMaterial } from "./materials";
+import {
+  SHARED_UNIFORMS, cloudMaterial, kitShader, lavaMaterial, paletteGround, phaseFilter, resetSharedUniforms, setSkyDomePalette,
+  setTerrainGround, setWaterColors, setWaterfallColor, skyDomeMaterial, terrainMaterial, toonMaterial, waterColors,
+  waterMaterial, waterfallMaterial
+} from "./materials";
+import type { GroundLook, GroundTone, SkyPalette } from "./materials";
 import { hashString, seededRandom } from "./noise";
 import { SKY_DIRECTIONS } from "./palettes";
 import { IslandShape } from "./terrain";
+import { createWeather } from "./weather";
+import type { Weather } from "./weather";
+import { resolveWeather } from "./weatherPlan";
+import type { SkyPhaseName } from "./weatherPlan";
 
 export type SkyWorldIsland = { id: string; name: string; weight: number };
+
+/** Where the camera looks: kept across a world re-roll. */
+export type SkyWorldView = { target: [number, number, number]; distance: number; focusId: string | null };
+
+export type SkyWorldInfo = {
+  seed: number;
+  climates: Record<string, ClimateId>;
+  setting: SkyWeatherSetting;
+  weather: SkyWeatherKind;
+};
 
 export type SkyWorldOptions = {
   host: HTMLElement;
@@ -31,9 +57,16 @@ export type SkyWorldOptions = {
   paused: boolean;
   lowPower: boolean;
   visible?: boolean;
+  /** World seed: climates and auto weather (default: a fixed seed). */
+  seed?: number;
+  weather?: SkyWeatherSetting;
+  initialView?: SkyWorldView | null;
+  /** Clock for the auto weather's date (tests pin it). */
+  now?: () => Date;
   onOpen: (id: string) => void;
   onHover: (id: string | null) => void;
   onFailure: (reason: string) => void;
+  onInfo?: (info: SkyWorldInfo) => void;
 };
 
 export type SkyWorld = {
@@ -41,14 +74,21 @@ export type SkyWorld = {
   setPaused: (paused: boolean) => void;
   setLowPower: (lowPower: boolean) => void;
   setVisible: (visible: boolean) => void;
+  /** Another time of day in place: no rebuild, the view stays. */
+  setDirection: (direction: string) => void;
+  setWeather: (setting: SkyWeatherSetting) => void;
   focus: (id: string | null) => void;
   reset: () => void;
+  view: () => SkyWorldView;
+  info: () => SkyWorldInfo;
   stats: () => Record<string, number | string>;
 };
 
 type BuiltIsland = {
   layout: LayoutIsland;
   plan: IslandPlan;
+  climate: ClimateSpec;
+  tone: GroundTone;
   terrain: THREE.Mesh;
   material: THREE.MeshLambertMaterial;
   pick: THREE.Mesh;
@@ -63,10 +103,74 @@ type BuiltIsland = {
 };
 
 const UP = new THREE.Vector3(0, 1, 0);
+const NOON = SKY_DIRECTIONS.noon.palette;
+const PHASES: SkyPhaseName[] = ["dawn", "noon", "golden", "night"];
+/** Above this many islands, small ones skip villagers and animals. */
+const CROWDED = 30;
+
+/** The ground of an island for a palette: temperate keeps the palette's own
+ * colours; other climates filter their noon colours by the time of day. */
+function groundLook(palette: SkyPalette, tone: GroundTone, climate: ClimateSpec, shape: IslandShape): GroundLook {
+  const look = paletteGround(palette, tone);
+  const ground = phaseFilter(palette.grassLight, NOON.grassLight);
+  const earth = phaseFilter(palette.earthA, NOON.earthA);
+  const tint = (value: string, filter: THREE.Color) => new THREE.Color(value).multiply(filter);
+  if (climate.ground) {
+    look.grassLight = tint(climate.ground.light, ground);
+    look.grassDark = tint(climate.ground.dark, ground);
+    look.grassAlt = tint(climate.ground.alt, ground);
+    look.altMix = climate.ground.altMix;
+    look.path = tint(climate.ground.path, ground);
+  }
+  if (climate.cliff) {
+    look.soil = tint(climate.cliff.soil, earth);
+    look.earthA = tint(climate.cliff.earthA, earth);
+    look.earthB = tint(climate.cliff.earthB, earth);
+    look.rockDeep = tint(climate.cliff.rockDeep, earth);
+  }
+  if (climate.cap) {
+    look.cap = tint(climate.cap.color, ground);
+    look.capRim = climate.cap.rim;
+    look.capAbove = shape.coverLine(climate.cap.cover);
+  }
+  if (climate.slope) {
+    look.slope = tint(climate.slope.color, earth);
+    look.slopeBelow = climate.slope.below;
+  }
+  if (climate.beach) {
+    look.beach = tint(climate.beach.color, ground);
+    look.beachFrom = climate.beach.from;
+  }
+  if (climate.strata) {
+    look.strata = tint(climate.strata.color, earth);
+    look.strataStrength = climate.strata.strength;
+  }
+  if (climate.vein) {
+    look.vein = new THREE.Color(climate.vein.color);
+    look.veinStrength = 1;
+    look.veinGlow = climate.vein.glow;
+  }
+  if (climate.flecks) {
+    look.fleckA = tint(climate.flecks.a, ground);
+    look.fleckB = tint(climate.flecks.b, ground);
+    look.fleck = climate.flecks.density;
+  }
+  if (climate.film) {
+    look.film = tint(climate.film.color, phaseFilter(palette.water, NOON.water));
+    look.filmStrength = climate.film.strength;
+  }
+  look.dunes = climate.dunes;
+  return look;
+}
 
 export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld> {
-  const direction = SKY_DIRECTIONS[options.direction] ?? SKY_DIRECTIONS.noon;
-  const palette = direction.palette;
+  let direction = SKY_DIRECTIONS[options.direction] ?? SKY_DIRECTIONS.noon;
+  let phase: SkyPhaseName = PHASES.includes(options.direction as SkyPhaseName) ? options.direction as SkyPhaseName : "noon";
+  let palette = direction.palette;
+  const seed = (options.seed ?? 1) >>> 0;
+  let weatherSetting: SkyWeatherSetting = options.weather ?? "auto";
+  const now = options.now ?? (() => new Date());
+  resetSharedUniforms();
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", alpha: false });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.NoToneMapping;
@@ -86,20 +190,17 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   options.host.prepend(canvas);
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(palette.fog, palette.fogNear, palette.fogFar);
+  const fog = new THREE.Fog(palette.fog, palette.fogNear, palette.fogFar);
+  scene.fog = fog;
   const disposables: Array<{ dispose: () => void }> = [];
   const track = <T extends { dispose: () => void }>(item: T) => (disposables.push(item), item);
   const kit = buildKit();
   track({ dispose: () => disposeKit(kit) });
 
   // Light: a soft sky/ground fill and one sun; toon steps do the rest.
-  const sunDirection = new THREE.Vector3().setFromSphericalCoords(
-    1,
-    THREE.MathUtils.degToRad(90 - palette.sunElevation),
-    THREE.MathUtils.degToRad(palette.sunAzimuth)
-  );
-  SHARED_UNIFORMS.uSunDirection.value.copy(sunDirection);
-  scene.add(new THREE.HemisphereLight(palette.ambientSky, palette.ambientGround, palette.ambientIntensity));
+  const sunDirection = new THREE.Vector3();
+  const hemisphere = new THREE.HemisphereLight(palette.ambientSky, palette.ambientGround, palette.ambientIntensity);
+  scene.add(hemisphere);
   const sun = new THREE.DirectionalLight(palette.sunColor, palette.sunIntensity);
   sun.castShadow = !options.lowPower;
   sun.shadow.mapSize.set(1024, 1024);
@@ -109,40 +210,53 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   scene.add(sun, sun.target);
 
   const skyGeometry = track(new THREE.SphereGeometry(900, 32, 16));
-  const sky = new THREE.Mesh(skyGeometry, track(skyDomeMaterial(palette)));
+  const skyMaterial = track(skyDomeMaterial(palette));
+  const sky = new THREE.Mesh(skyGeometry, skyMaterial);
   sky.frustumCulled = false;
   sky.renderOrder = -10;
   scene.add(sky);
 
-  // Kit materials: one per part kind; leaves and grass sway in the wind.
+  // Kit materials: one per part kind; leaves and grass sway in the wind,
+  // crystals glow, floating shards bob.
   const kitMaterials = new Map<string, THREE.Material>();
   const kitMaterial = (model: KitModel, partIndex: number) => {
     const part = model.parts[partIndex];
     const key = `${model.name}:${partIndex}`;
     if (!kitMaterials.has(key)) {
       const material = toonMaterial();
-      const sway = model.name.startsWith("grass") ? 0.08 : part.role === "tint" && !model.name.startsWith("rock") && model.name !== "mushroom" ? 0.05 : 0;
-      if (sway > 0) addSway(material, model.height, sway * model.height);
+      const legacy = model.name.startsWith("grass") ? 0.08 : part.role === "tint" && !model.name.startsWith("rock") && model.name !== "mushroom" ? 0.05 : 0;
+      const swayFraction = model.sway === undefined ? legacy : part.role === "tint" || model.swayAll ? model.sway : 0;
+      kitShader(material, { height: model.height, sway: swayFraction * model.height, bob: model.bob, glow: model.glow && part.role === "tint" });
       kitMaterials.set(key, track(material));
     }
     return kitMaterials.get(key)!;
   };
 
-  // Islands.
+  // Islands and their climates: neighbours avoid sharing one.
   const layout = layoutIslands(
     options.islands.map(item => ({ id: item.id, weight: item.weight })),
     { pitch: direction.pitch, heightSpread: direction.heightSpread, aspect: direction.aspect }
   );
+  const climates = assignClimates(options.islands, seed, layoutNeighbours(layout));
+  const crowded = options.islands.length > CROWDED;
   const quality = options.lowPower ? 0.7 : 1;
   const built: BuiltIsland[] = [];
   const pickGeometry = track(new THREE.CylinderGeometry(1, 0.55, 1, 20));
   const pickMaterial = track(new THREE.MeshBasicMaterial({ visible: false }));
   const waterGeometryCache: THREE.BufferGeometry[] = [];
+  const waterFilter = () => phaseFilter(palette.water, NOON.water);
   const water = track(waterMaterial(palette));
+  const lagoon = track(waterMaterial(palette, false, "lagoon", waterFilter()));
+  const ice = track(waterMaterial(palette, false, "ice", phaseFilter(palette.grassLight, NOON.grassLight)));
+  const lava = track(lavaMaterial());
   const falls = track(waterfallMaterial(palette));
-  type Bucket = { parts: Array<{ geometry: THREE.BufferGeometry; material: THREE.Material; matrix: THREE.Matrix4; tinted: boolean }>; matrices: THREE.Matrix4[]; tints: THREE.Color[]; small: boolean };
+  const lavaFalls = track(waterfallMaterial(palette, true));
+  const pondMaterial = (kind: IslandPlan["water"]) => kind === "lagoon" ? lagoon : kind === "ice" ? ice : kind === "lava" ? lava : water;
+  type Tint = THREE.Color | (() => THREE.Color);
+  type Bucket = { parts: Array<{ geometry: THREE.BufferGeometry; material: THREE.Material; matrix: THREE.Matrix4; tinted: boolean }>; matrices: THREE.Matrix4[]; tints: Tint[]; small: boolean; floating: boolean };
   const instanceBuckets = new Map<string, Bucket>();
   const walkers: Walker[] = [];
+  const vents: THREE.Vector3[] = [];
   const bounds = new THREE.Box3();
   const identity = new THREE.Matrix4();
 
@@ -155,7 +269,8 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
         parts: model.parts.map((part, index) => ({ geometry: part.geometry, material: kitMaterial(model, index), matrix: identity, tinted: part.role === "tint" })),
         matrices: [],
         tints: [],
-        small: /^(grass|flower|mushroom)/.test(model.name)
+        small: model.small || /^(grass|flower|mushroom)/.test(model.name),
+        floating: Boolean(model.bob)
       };
       instanceBuckets.set(key, bucket);
       return { bucket, height: model.height, footprint: model.footprint };
@@ -166,7 +281,8 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       parts: template.parts.map(part => ({ geometry: part.geometry, material: part.material, matrix: part.matrix, tinted: false })),
       matrices: [],
       tints: [],
-      small: false
+      small: false,
+      floating: false
     };
     instanceBuckets.set(key, bucket);
     return { bucket, height: template.height, footprint: template.footprint };
@@ -176,12 +292,12 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   options.islands.forEach((item, index) => {
     const position = layout[index];
     const theme = themes.get(item.id) ?? "meadow";
-    const plan = planIsland(position.radius, position.seed, theme);
+    const climateId = climates.get(item.id) ?? "temperate";
+    const climate = CLIMATES[climateId];
+    const plan = planIsland(position.radius, position.seed, theme, climate);
     const origin = new THREE.Vector3(position.x, position.y, position.z);
     const tone = themeTone(theme);
-    const material = track(terrainMaterial(palette, tone, plan.shape.paths));
-    // Tufts a shade deeper than the ground they grow from.
-    const tuft = toneColor(palette.grassDark, tone).multiplyScalar(0.92);
+    const material = track(terrainMaterial(palette, tone, plan.shape.paths, groundLook(palette, tone, climate, plan.shape)));
     const geometry = track(plan.shape.buildGeometry(quality));
     const terrain = new THREE.Mesh(geometry, material);
     terrain.position.copy(origin);
@@ -204,13 +320,14 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       const pondGeometry = new THREE.CircleGeometry(pond.radius * 1.04, 40);
       pondGeometry.rotateX(-Math.PI / 2);
       waterGeometryCache.push(pondGeometry);
-      const surface = new THREE.Mesh(pondGeometry, water);
+      const surface = new THREE.Mesh(pondGeometry, pondMaterial(plan.water));
       surface.position.set(origin.x + pond.x, origin.y + plan.shape.pondLevel(pond), origin.z + pond.z);
-      surface.receiveShadow = true;
+      surface.receiveShadow = plan.water !== "lava";
       scene.add(surface);
     }
 
-    // The pond spills over the rim: a ribbon of falling water down the cliff.
+    // The pond spills over the rim: a ribbon of falling water (or lava)
+    // down the cliff.
     if (plan.waterfall && plan.shape.ponds.length) {
       const fall = plan.waterfall;
       const pond = plan.shape.ponds[0];
@@ -220,13 +337,24 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       const lipX = fall.x + outward.x * 0.12, lipZ = fall.z + outward.z * 0.12;
       const channelStartX = pond.x + outward.x * pond.radius * 0.85;
       const channelStartZ = pond.z + outward.z * pond.radius * 0.85;
-      const geometry = spillwayGeometry(new THREE.Vector3(channelStartX, 0, channelStartZ), new THREE.Vector3(lipX, 0, lipZ), fall.width, drop);
+      const geometry = spillwayGeometry(new THREE.Vector3(channelStartX, 0, channelStartZ), new THREE.Vector3(lipX, 0, lipZ), fall.width, plan.water === "lava" ? drop * 0.55 : drop);
       waterGeometryCache.push(geometry);
-      const sheet = new THREE.Mesh(geometry, falls);
+      const sheet = new THREE.Mesh(geometry, plan.water === "lava" ? lavaFalls : falls);
       sheet.position.set(origin.x, top + 0.006, origin.z);
       sheet.renderOrder = 2;
       scene.add(sheet);
     }
+
+    // A volcano's lava lake and the smoke above it.
+    if (plan.crater) {
+      const lakeGeometry = new THREE.CircleGeometry(plan.crater.radius, 28);
+      lakeGeometry.rotateX(-Math.PI / 2);
+      waterGeometryCache.push(lakeGeometry);
+      const lake = new THREE.Mesh(lakeGeometry, lava);
+      lake.position.set(origin.x + plan.crater.x, origin.y + plan.crater.y, origin.z + plan.crater.z);
+      scene.add(lake);
+    }
+    for (const [x, y, z] of plan.vents) vents.push(new THREE.Vector3(origin.x + x, origin.y + y, origin.z + z));
 
     for (const building of plan.buildings) {
       const template = library.buildings.get(building.model);
@@ -246,8 +374,13 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       scene.add(group);
     }
 
+    // Tufts a shade deeper than the ground they grow from, in this light.
+    const tuft = () => {
+      const look = material.userData.uniforms.uGrassDark.value as THREE.Color;
+      return look.clone().multiplyScalar(0.92);
+    };
     for (const placement of plan.placements) {
-      if (options.lowPower && placement.model.startsWith("grass") && placement.x * 7 % 2 > 1) continue;
+      if (options.lowPower && /^(grass|rice)/.test(placement.model) && placement.x * 7 % 2 > 1) continue;
       const entry = bucketFor(placement);
       if (!entry) continue;
       const scale = placement.height ? placement.height / entry.height : placement.scale;
@@ -260,7 +393,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
         plan.shape.heightAt(placement.x, placement.z + reach),
         plan.shape.heightAt(placement.x, placement.z - reach)
       );
-      const y = ground - placement.sink * entry.height * scale;
+      const y = ground - placement.sink * entry.height * scale + (placement.lift ?? 0);
       entry.bucket.matrices.push(new THREE.Matrix4().compose(
         new THREE.Vector3(origin.x + placement.x, origin.y + y, origin.z + placement.z),
         new THREE.Quaternion().setFromAxisAngle(UP, placement.yaw),
@@ -269,17 +402,21 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       entry.bucket.tints.push(placement.tint === "grass" ? tuft : new THREE.Color(placement.tint ?? "#ffffff"));
     }
 
-    for (const [walkerIndex, route] of plan.walkers.entries()) {
-      const walker = createWalker(library.villager, plan.shape, origin, route, plan.buildingScale * 2.05, position.seed + walkerIndex);
-      if (walker) {
-        scene.add(walker.object);
-        walkers.push(walker);
+    const lively = !crowded || position.radius >= 5;
+    if (lively) {
+      for (const [walkerIndex, route] of plan.walkers.entries()) {
+        const walker = createWalker(library.villager, plan.shape, origin, route, plan.buildingScale * 2.05, position.seed + walkerIndex);
+        if (walker) {
+          scene.add(walker.object);
+          walkers.push(walker);
+        }
       }
     }
     const openGround = (x: number, z: number) =>
       plan.shape.normalizedDistance(x, z) < 0.78 && !plan.shape.isInsidePond(x, z, 0.5) && plan.shape.pathWeight(x, z) < 0.2 &&
+      plan.shape.featureWeight(x, z) < 0.3 &&
       plan.shape.pads.every(pad => Math.hypot(x - pad.x, z - pad.z) > pad.radius + 0.6);
-    for (const animal of plan.animals) {
+    for (const animal of lively ? plan.animals : []) {
       const gltf = library.animals.get(animal.name);
       if (!gltf) continue;
       const length = (animal.name === "Pug" ? 0.75 : animal.name === "Horse" || animal.name === "Cow" ? 1.7 : 1.15) * plan.buildingScale / 0.45;
@@ -290,17 +427,22 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
 
     const cliff = plan.shape.cliff;
     const frontRim = plan.shape.rimRadius(Math.PI / 2);
+    const surfaceY = origin.y + plan.shape.heightAt(0, 0);
+    const buildingCrown = plan.buildings.length ? Math.max(...plan.buildings.map(building => (building.model === "Tower" ? 13 : 9) * building.scale)) : 3.2 * plan.buildingScale / 0.45;
     built.push({
       layout: position,
       plan,
+      climate,
+      tone,
       terrain,
       material,
       pick,
       highlight: 0,
       topY: box.max.y,
       tipAnchor: new THREE.Vector3(origin.x, box.min.y + (box.max.y - box.min.y) * 0.04, origin.z),
-      surfaceY: origin.y + plan.shape.heightAt(0, 0),
-      crown: plan.buildings.length ? Math.max(...plan.buildings.map(building => (building.model === "Tower" ? 13 : 9) * building.scale)) : 3.2 * plan.buildingScale / 0.45,
+      surfaceY,
+      // A mountain or volcano is the island's crown too.
+      crown: Math.max(buildingCrown, origin.y + plan.shape.summit() - surfaceY + 0.6),
       // Just under the grass lip of the edge facing the camera.
       labelAnchor: new THREE.Vector3(origin.x, origin.y + plan.shape.heightAt(0, frontRim * 0.95) - cliff * 0.3, origin.z + frontRim * 1.02)
     });
@@ -312,9 +454,10 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   // back in the upper haze and never pass for an unlabeled category.
   type FarIsland = { group: THREE.Group; shape: IslandShape; depth: number; lane: number; rise: number };
   const farIslands: FarIsland[] = [];
+  let farMaterial: THREE.MeshLambertMaterial | null = null;
   if (!options.lowPower && built.length) {
     const random = seededRandom(hashString(`far:${built.length}`));
-    const farMaterial = track(terrainMaterial(palette, themeTone("meadow")));
+    farMaterial = track(terrainMaterial(palette, themeTone("meadow")));
     const tree = kit.get("round-23")!;
     for (let index = 0; index < 6; index++) {
       const radius = 5 + random() * 6;
@@ -354,30 +497,42 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   };
 
   // One instanced mesh per model part across the whole archipelago.
-  const instanced: THREE.InstancedMesh[] = [];
+  const instanced: Array<{ mesh: THREE.InstancedMesh; bucket: Bucket; tinted: boolean }> = [];
+  const resolveTint = (tint: Tint) => (typeof tint === "function" ? tint() : tint);
   for (const bucket of instanceBuckets.values()) {
     for (const part of bucket.parts) {
       const mesh = new THREE.InstancedMesh(part.geometry, part.material, bucket.matrices.length);
       bucket.matrices.forEach((matrix, index) => {
         mesh.setMatrixAt(index, matrix.clone().multiply(part.matrix));
-        if (part.tinted) mesh.setColorAt(index, bucket.tints[index]);
+        if (part.tinted) mesh.setColorAt(index, resolveTint(bucket.tints[index]));
       });
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.castShadow = !options.lowPower && !bucket.small;
-      mesh.receiveShadow = !bucket.small;
+      mesh.receiveShadow = !bucket.small && !bucket.floating;
       mesh.computeBoundingSphere();
+      // Floating shards bob in the shader beyond their static bounds.
+      if (bucket.floating && mesh.boundingSphere) mesh.boundingSphere.radius += 2;
       scene.add(mesh);
-      instanced.push(mesh);
+      instanced.push({ mesh, bucket, tinted: part.tinted });
     }
   }
+  const retint = () => {
+    for (const { mesh, bucket, tinted } of instanced) {
+      if (!tinted || !bucket.tints.some(tint => typeof tint === "function")) continue;
+      bucket.tints.forEach((tint, index) => {
+        if (typeof tint === "function") mesh.setColorAt(index, tint());
+      });
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
+  };
 
   // Cartoon clouds: big soft banks below the islands and a few small ones
   // drifting at island height between them.
   const size = bounds.getSize(new THREE.Vector3());
   const center = bounds.getCenter(new THREE.Vector3());
   const cloudMat = track(cloudMaterial(palette));
-  const cloudShapes = [1, 2, 3, 4].map(seed => track(cloudGeometry(seed)));
+  const cloudShapes = [1, 2, 3, 4].map(cloudSeed => track(cloudGeometry(cloudSeed)));
   const clouds: Array<{ mesh: THREE.Mesh; baseX: number; speed: number; span: number }> = [];
   {
     const random = seededRandom(77);
@@ -403,17 +558,61 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     for (const cloud of clouds) cloud.mesh.position.x = cloud.baseX + Math.sin(time * 0.02 * cloud.speed) * cloud.span;
   };
 
+  // Smoke from every volcano: one point cloud.
+  const smoke: Smoke | null = vents.length ? createSmoke(vents, Math.max(0.6, Math.min(1.4, size.x / 90)), palette, options.lowPower) : null;
+  if (smoke) {
+    scene.add(smoke.object);
+    track(smoke);
+  }
+
   const flock: Flock | null = library.gull && built.length
     ? createFlocks(library.gull, bounds, options.lowPower ? 5 : 9, 7, 1.5)
     : null;
   if (flock) scene.add(flock.mesh);
 
+  // Weather: petals take the garden blossom, or autumn leaves where the
+  // world has autumn woods.
+  const climateList = built.map(island => island.climate.id);
+  const hasAutumn = climateList.includes("autumn");
+  const weather: Weather = createWeather(scene, bounds, palette, resolveWeather(weatherSetting, seed, now(), phase, climateList), {
+    targets: { sun, hemisphere, fog, sky: skyMaterial, clouds: cloudMat },
+    seed,
+    lowPower: options.lowPower,
+    reducedMotion: () => reduced.matches,
+    petals: hasAutumn ? ["#f2a03c", "#f4a6c0", "#e8743a"] : ["#f4a6c0", "#ffffff", "#f7c3d4"]
+  });
+  track(weather);
+
   // Shadow camera tightly around the islands.
-  const radius = Math.max(size.x, size.z) * 0.62 + 6;
-  sun.position.copy(center).addScaledVector(sunDirection, radius * 2.2);
-  sun.target.position.copy(center);
-  Object.assign(sun.shadow.camera, { left: -radius, right: radius, top: radius, bottom: -radius, near: 1, far: radius * 4.5 });
+  const shadowRadius = Math.max(size.x, size.z) * 0.62 + 6;
+  Object.assign(sun.shadow.camera, { left: -shadowRadius, right: shadowRadius, top: shadowRadius, bottom: -shadowRadius, near: 1, far: shadowRadius * 4.5 });
   sun.shadow.camera.updateProjectionMatrix();
+
+  /** Everything that follows the time of day, applied in place. */
+  const applyPalette = (next: SkyPalette) => {
+    palette = next;
+    sunDirection.setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - next.sunElevation), THREE.MathUtils.degToRad(next.sunAzimuth));
+    SHARED_UNIFORMS.uSunDirection.value.copy(sunDirection);
+    SHARED_UNIFORMS.uGlow.value = 0.3 + next.night * 0.7;
+    sun.color.set(next.sunColor);
+    sun.position.copy(center).addScaledVector(sunDirection, shadowRadius * 2.2);
+    sun.target.position.copy(center);
+    sun.target.updateMatrixWorld();
+    hemisphere.color.set(next.ambientSky);
+    hemisphere.groundColor.set(next.ambientGround);
+    setSkyDomePalette(skyMaterial, next);
+    for (const island of built) setTerrainGround(island.material, groundLook(next, island.tone, island.climate, island.plan.shape));
+    if (farMaterial) setTerrainGround(farMaterial, paletteGround(next, themeTone("meadow")));
+    setWaterColors(water, waterColors(next, "water"));
+    setWaterColors(lagoon, waterColors(next, "lagoon", phaseFilter(next.water, NOON.water)));
+    setWaterColors(ice, waterColors(next, "ice", phaseFilter(next.grassLight, NOON.grassLight)));
+    setWaterfallColor(falls, next);
+    library.setPalette(next);
+    smoke?.setPalette(next);
+    retint();
+    weather.setPalette(next);
+  };
+  applyPalette(palette);
 
   // Camera: framed on the archipelago, pitched down; pan and zoom only.
   const camera = new THREE.PerspectiveCamera(direction.fov, 1, 0.5, 2000);
@@ -473,6 +672,11 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     placeFarIslands(home.target.clone().addScaledVector(viewDirection, high));
     minDistance = Math.max(10, Math.min(...built.map(island => island.layout.radius)) * 2.6);
     maxDistance = home.distance * 1.6;
+    // Fog is in world units: a big archipelago framed from far away would
+    // otherwise disappear into the haze. Start it past the framed islands.
+    const near = Math.max(palette.fogNear, high + size.z * 0.5);
+    weather.setFogRange(near, Math.max(palette.fogFar, near + size.z * 1.5 + 200));
+    weather.setFrame(center, size, high);
   };
 
   const resize = () => {
@@ -490,11 +694,12 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     // the floating navigation rail, which is not usable scene space.
     camera.setViewOffset(width, height, -safeLeft / 2, 0, width, height);
     camera.updateProjectionMatrix();
+    updatePointScale();
     // Stay on the overview if the user has not moved away from it.
     const atHome = !initialized || (goal.target.distanceTo(home.target) < 0.01 && Math.abs(goal.distance - home.distance) < 0.01);
     measureLabels();
     fitHome();
-    if (atHome) {
+    if (atHome && !pendingView) {
       goal.target.copy(home.target);
       goal.distance = home.distance;
     }
@@ -503,12 +708,17 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     applyCamera();
     requestDraw();
   };
+  const updatePointScale = () => {
+    const pixels = height * renderer.getPixelRatio();
+    weather.setViewport(pixels, direction.fov);
+    if (smoke) setPointScale(smoke.object.material as THREE.ShaderMaterial, pixels, direction.fov);
+  };
 
   // Resolution: native up to a 4K pixel budget, scaled down adaptively when
   // this device cannot hold the target frame rate.
   let resolutionScale = 1;
   const pixelRatio = () => {
-    const native = Math.min(window.devicePixelRatio || 1, options.lowPower ? 1 : 2);
+    const native = Math.min(window.devicePixelRatio || 1, lowPower ? 1 : 2);
     const budget = Math.sqrt(8_300_000 / Math.max(1, width * height));
     return Math.max(0.6, Math.min(native, budget) * resolutionScale);
   };
@@ -524,6 +734,8 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   const animating = () => !paused && !reduced.matches;
   let hovered: string | null = null, focusId: string | null = null;
   let pointerDown = false, moved = false, downX = 0, downY = 0, lastX = 0, lastY = 0, lastInteraction = 0;
+  // A re-rolled world opens where the old one was looking.
+  let pendingView = options.initialView ?? null;
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
   const projected = new THREE.Vector3();
@@ -583,12 +795,13 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     for (const island of labelOrder) {
       const label = options.labels.get(island.layout.id);
       if (!label) continue;
-      let size = labelSizes.get(island.layout.id);
-      if (!size || !size.width) {
+      let labelSize = labelSizes.get(island.layout.id);
+      if (!labelSize || !labelSize.width) {
         // Labels are hidden until the scene is ready; measure once they show.
-        size = { width: label.offsetWidth, height: label.offsetHeight };
-        labelSizes.set(island.layout.id, size);
+        labelSize = { width: label.offsetWidth, height: label.offsetHeight };
+        labelSizes.set(island.layout.id, labelSize);
       }
+      const measured = labelSize;
       // Front edge first; then below the rock tip; then above the crown.
       const o = island.terrain.position;
       const candidates = [
@@ -596,25 +809,25 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
         toScreen(island.tipAnchor),
         (() => {
           const above = toScreen(scratch.set(o.x, island.surfaceY + island.crown, o.z));
-          return { ...above, y: above.y - size.height - 6 };
+          return { ...above, y: above.y - measured.height - 6 };
         })()
       ];
-      const fitsChrome = (candidate: typeof candidates[number]) => candidate.x - size!.width / 2 > safeLeft + 8 && candidate.x + size!.width / 2 < width - 8 && candidate.y > safeTop && candidate.y + size!.height < height - 8;
-      const anchor = candidates.find(candidate => fitsChrome(candidate) && !blocksIsland(shapes, island.layout.id, candidate.x - size!.width / 2, candidate.y, size!.width, size!.height)) ?? candidates[0];
-      let visible = anchor.z < 1 && fitsChrome(anchor);
+      const fitsChrome = (candidate: typeof candidates[number]) => candidate.x - measured.width / 2 > safeLeft + 8 && candidate.x + measured.width / 2 < width - 8 && candidate.y > safeTop && candidate.y + measured.height < height - 8;
+      const anchor = candidates.find(candidate => fitsChrome(candidate) && !blocksIsland(shapes, island.layout.id, candidate.x - measured.width / 2, candidate.y, measured.width, measured.height)) ?? candidates[0];
+      let shown = anchor.z < 1 && fitsChrome(anchor);
       const x = anchor.x;
       let y = anchor.y;
-      const rect = () => ({ left: x - size!.width / 2 - 4, right: x + size!.width / 2 + 4, top: y - 3, bottom: y + size!.height + 3 });
-      for (let attempt = 0; visible && attempt < 3; attempt++) {
+      const rect = () => ({ left: x - measured.width / 2 - 4, right: x + measured.width / 2 + 4, top: y - 3, bottom: y + measured.height + 3 });
+      for (let attempt = 0; shown && attempt < 3; attempt++) {
         const box = rect();
         const blocker = placedRects.find(other => box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top);
         if (!blocker) break;
-        if (attempt === 2 || blocker.bottom - box.top > size.height * 1.6) visible = false;
+        if (attempt === 2 || blocker.bottom - box.top > measured.height * 1.6) shown = false;
         else y = blocker.bottom + 3;
       }
-      if (visible) placedRects.push(rect());
+      if (shown) placedRects.push(rect());
       label.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, 0)`;
-      label.style.visibility = visible ? "visible" : "hidden";
+      label.style.visibility = shown ? "visible" : "hidden";
     }
   }
 
@@ -645,6 +858,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       driftClouds(clock);
       for (const walker of walkers) walker.update(delta);
     }
+    const weatherBusy = weather.update(clock, delta, view.target, animating());
     let highlighting = false;
     for (const island of built) {
       const target = island.layout.id === (hovered ?? focusId) ? 1 : 0;
@@ -661,8 +875,11 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     host.dataset.drawCalls = String(renderer.info.render.calls);
     host.dataset.triangles = String(renderer.info.render.triangles);
     host.dataset.pixelRatio = renderer.getPixelRatio().toFixed(2);
+    host.dataset.weather = weather.kind();
+    host.dataset.weatherCalls = String(weather.drawCalls());
+    host.dataset.flash = weather.flash().toFixed(2);
     initialized = true;
-    if (animating() || moving || highlighting) raf = requestAnimationFrame(draw);
+    if (animating() || moving || highlighting || (weatherBusy && !reduced.matches)) raf = requestAnimationFrame(draw);
   }
 
   function adaptResolution() {
@@ -674,6 +891,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       resolutionScale = Math.max(0.62, resolutionScale * 0.85);
       renderer.setPixelRatio(pixelRatio());
       renderer.setSize(width, height, false);
+      updatePointScale();
       frameTimes = [];
     }
   }
@@ -697,6 +915,9 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     const scale = (2 * goal.distance * Math.tan(THREE.MathUtils.degToRad(direction.fov / 2))) / height;
     goal.target.x -= dx * scale;
     goal.target.z -= dy * scale / Math.sin(pitch) * 0.9;
+    clampGoal();
+  };
+  const clampGoal = () => {
     const limitX = size.x * 0.6 + 6, limitZ = size.z * 0.6 + 6;
     goal.target.x = THREE.MathUtils.clamp(goal.target.x, center.x - limitX, center.x + limitX);
     goal.target.z = THREE.MathUtils.clamp(goal.target.z, center.z - limitZ, center.z + limitZ);
@@ -805,8 +1026,32 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   intersection.observe(options.host);
   resize();
   goal.distance = view.distance = home.distance;
+  if (pendingView) {
+    const [x, y, z] = pendingView.target;
+    if ([x, y, z, pendingView.distance].every(Number.isFinite)) {
+      goal.target.set(x, y, z);
+      goal.distance = THREE.MathUtils.clamp(pendingView.distance, minDistance, maxDistance);
+      clampGoal();
+      focusId = pendingView.focusId && built.some(island => island.layout.id === pendingView!.focusId) ? pendingView.focusId : null;
+      view.target.copy(goal.target);
+      view.distance = goal.distance;
+    }
+    pendingView = null;
+  }
   applyCamera();
   requestDraw();
+
+  const climateRecord = () => Object.fromEntries(built.map(island => [island.layout.id, island.climate.id])) as Record<string, ClimateId>;
+  const info = (): SkyWorldInfo => ({ seed, climates: climateRecord(), setting: weatherSetting, weather: weather.kind() });
+  options.host.dataset.climates = built.map(island => island.climate.id).join(",");
+  const resolveAndApplyWeather = (instant: boolean) => {
+    const kind = resolveWeather(weatherSetting, seed, now(), phase, climateList);
+    if (kind !== weather.kind()) weather.setKind(kind, instant || !animating());
+    options.onInfo?.(info());
+  };
+  queueMicrotask(() => {
+    if (!disposed) options.onInfo?.(info());
+  });
 
   return {
     setVisible(value) {
@@ -828,10 +1073,29 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     },
     setLowPower(value) {
       lowPower = value;
+      resolutionScale = 1;
       renderer.shadowMap.enabled = !value;
       sun.castShadow = !value;
+      weather.setLowPower(value);
+      smoke?.setLowPower(value);
       renderer.setPixelRatio(pixelRatio());
       renderer.setSize(width, height, false);
+      updatePointScale();
+      requestDraw();
+    },
+    setDirection(next) {
+      const resolved = SKY_DIRECTIONS[next];
+      if (!resolved || resolved === direction) return;
+      direction = resolved;
+      phase = PHASES.includes(next as SkyPhaseName) ? next as SkyPhaseName : phase;
+      applyPalette(resolved.palette);
+      fitHome();
+      resolveAndApplyWeather(false);
+      requestDraw();
+    },
+    setWeather(setting) {
+      weatherSetting = setting;
+      resolveAndApplyWeather(false);
       requestDraw();
     },
     focus(id) {
@@ -851,10 +1115,17 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       lastInteraction = performance.now();
       requestDraw();
     },
+    view() {
+      return { target: [goal.target.x, goal.target.y, goal.target.z], distance: goal.distance, focusId };
+    },
+    info,
     stats() {
       const sorted = [...frameTimes].sort((a, b) => a - b);
       return {
         islands: built.length,
+        climates: built.map(island => island.climate.id).join(","),
+        weather: weather.kind(),
+        weatherDrawCalls: weather.drawCalls(),
         drawCalls: renderer.info.render.calls,
         triangles: renderer.info.render.triangles,
         geometries: renderer.info.memory.geometries,
@@ -863,11 +1134,12 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
         medianFrameMs: sorted.length ? Number(sorted[Math.floor(sorted.length / 2)].toFixed(1)) : 0,
         frames,
         ...(() => {
-          const counts = { meshes: 0, instanced: 0, skinned: 0, groups: 0 };
+          const counts = { meshes: 0, instanced: 0, skinned: 0, groups: 0, points: 0 };
           scene.traverse(object => {
             if ((object as THREE.InstancedMesh).isInstancedMesh) counts.instanced++;
             else if ((object as THREE.SkinnedMesh).isSkinnedMesh) counts.skinned++;
             else if ((object as THREE.Mesh).isMesh) counts.meshes++;
+            else if ((object as THREE.Points).isPoints) counts.points++;
             const material = (object as THREE.Mesh).material;
             if (Array.isArray(material)) counts.groups += material.length;
           });
@@ -893,7 +1165,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       reduced.removeEventListener("change", requestDraw);
       for (const walker of walkers) walker.dispose();
       flock?.dispose();
-      for (const mesh of instanced) mesh.dispose();
+      for (const { mesh } of instanced) mesh.dispose();
       for (const geometry of waterGeometryCache) geometry.dispose();
       for (const item of disposables) item.dispose();
       library.dispose();
@@ -902,6 +1174,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       renderer.dispose();
       renderer.forceContextLoss();
       canvas.remove();
+      resetSharedUniforms();
     }
   };
 }

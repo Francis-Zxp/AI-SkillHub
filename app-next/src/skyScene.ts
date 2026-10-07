@@ -1,7 +1,15 @@
 // Whether the home page shows the 3D sky islands. Shared by Settings and the
 // archipelago without pulling the scene code into the main bundle.
 const SCENE_SETTING = "skillhub-sky-scene";
+const WORLD_SEED_SETTING = "skillhub-sky-world-seed";
+const WEATHER_SETTING = "skillhub-sky-weather";
 export const SKY_SCENE_EVENT = "skillhub-sky-scene-change";
+
+/** Archipelago-wide weather. "auto" picks one from the world seed, the date
+ * and the time of day; anything else pins that weather. */
+export const SKY_WEATHER_KINDS = ["clear", "cloudy", "rain", "storm", "snow", "fog", "rainbow", "petals", "aurora"] as const;
+export type SkyWeatherKind = (typeof SKY_WEATHER_KINDS)[number];
+export type SkyWeatherSetting = "auto" | SkyWeatherKind;
 
 type Graphics = { webgl: boolean; weak: boolean };
 let graphicsProbe: Graphics | null = null;
@@ -39,4 +47,54 @@ export function skySceneEnabled() {
 export function setSkySceneEnabled(enabled: boolean) {
   writeSetting(SCENE_SETTING, enabled ? "1" : "0");
   window.dispatchEvent(new CustomEvent(SKY_SCENE_EVENT, { detail: enabled }));
+}
+
+/** FNV-1a, the same hash the sky modules use for stable seeds. */
+function hashText(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  return hash >>> 0;
+}
+
+/** ISO-8601 week of a local date, e.g. "2026-W41". */
+export function isoWeekKey(date: Date): string {
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const weekday = (day.getDay() + 6) % 7;
+  day.setDate(day.getDate() - weekday + 3);
+  const firstThursday = new Date(day.getFullYear(), 0, 4);
+  const week = 1 + Math.round(((day.getTime() - firstThursday.getTime()) / 86_400_000 - 3 + ((firstThursday.getDay() + 6) % 7)) / 7);
+  return `${day.getFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+/** The archipelago's world seed: a re-rolled one when saved, otherwise one
+ * per ISO week, so the world changes weekly by itself but never flickers. */
+export function worldSeed(date: Date = new Date()): number {
+  const saved = readSetting(WORLD_SEED_SETTING);
+  if (saved && /^\d{1,10}$/.test(saved)) return Number(saved) >>> 0;
+  return hashText(`sky-world:${isoWeekKey(date)}`);
+}
+
+/** A new random world. Tells the scene through the existing scene event. */
+export function rerollWorld(): number {
+  const current = worldSeed();
+  let next = current;
+  for (let attempt = 0; attempt < 8 && next === current; attempt++) {
+    try {
+      next = crypto.getRandomValues(new Uint32Array(1))[0] >>> 0;
+    } catch {
+      next = Math.floor(Math.random() * 4294967296) >>> 0;
+    }
+  }
+  writeSetting(WORLD_SEED_SETTING, String(next));
+  window.dispatchEvent(new CustomEvent(SKY_SCENE_EVENT, { detail: skySceneEnabled() }));
+  return next;
+}
+
+export function skyWeatherSetting(): SkyWeatherSetting {
+  const saved = readSetting(WEATHER_SETTING);
+  return saved && (SKY_WEATHER_KINDS as readonly string[]).includes(saved) ? (saved as SkyWeatherKind) : "auto";
+}
+
+export function setSkyWeatherSetting(value: SkyWeatherSetting) {
+  writeSetting(WEATHER_SETTING, value);
 }

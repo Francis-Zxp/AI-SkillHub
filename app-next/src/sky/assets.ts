@@ -25,6 +25,8 @@ export type SkyLibrary = {
   gull: ModelTemplate;
   /** A building material set for a roof colour (shared per colour). */
   roofMaterial: (color: string) => THREE.Material;
+  /** Lit windows follow the time of day without rebuilding the scene. */
+  setPalette: (palette: SkyPalette) => void;
   dispose: () => void;
 };
 
@@ -182,11 +184,12 @@ export async function loadSkyLibrary(palette: SkyPalette): Promise<SkyLibrary> {
     }
     return shared.get(key)!;
   };
+  const glass = keep(toonMaterial({ vertexColors: false, color: palette.night ? "#e8bb74" : "#a9d6ec", emissive: "#ffb24d", emissiveIntensity: palette.night * 0.65 }));
   const buildings = templatesFrom(
     raw.buildings,
     source => {
       if (/RoundTiles/i.test(source.name)) return flat("roof", "#d4643c");
-      if (/Glass/i.test(source.name)) return flat("glass", palette.night ? "#e8bb74" : "#a9d6ec", "#ffb24d", palette.night * 0.65);
+      if (/Glass/i.test(source.name)) return glass;
       const match = BUILDING_COLORS.find(([pattern]) => pattern.test(source.name));
       return flat(source.name, match ? match[1] : "#e8dccb");
     },
@@ -205,6 +208,10 @@ export async function loadSkyLibrary(palette: SkyPalette): Promise<SkyLibrary> {
     animals: raw.animals,
     gull,
     roofMaterial: colour => flat("roof", colour),
+    setPalette(next) {
+      glass.color.set(next.night ? "#e8bb74" : "#a9d6ec");
+      glass.emissiveIntensity = next.night * 0.65;
+    },
     dispose() {
       // Materials made for this palette; raw geometry and textures stay cached.
       for (const material of owned) material.dispose();

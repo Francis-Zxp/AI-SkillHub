@@ -178,6 +178,9 @@ export function SkillUniverse({
   const atmosphereRef = useRef<HTMLCanvasElement | null>(null);
   const labelsRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<UniverseRuntime | null>(null);
+  // The view survives a rebuilt runtime (snapshot updates, theme changes):
+  // the cleanup nulls runtimeRef before the next run, so keep it here.
+  const viewRef = useRef<{ rotationX: number; rotationY: number; zoom: number; targetZoom: number; selectedId: string } | null>(null);
   const hoverRef = useRef("");
   const cachedModelRef = useRef<UniverseModel | null>(readUniverseModelCache());
   const [promotingCache, setPromotingCache] = useState(false);
@@ -233,7 +236,7 @@ export function SkillUniverse({
       drawnEdges: 0,
       drawMs: 0,
       hoverId: "",
-      selectedId: "",
+      selectedId: model.nodes.some(node => node.id === viewRef.current?.selectedId) ? viewRef.current!.selectedId : "",
       obstacles: [],
       refreshObstacles: () => undefined,
       labelStates: new Map(),
@@ -258,15 +261,16 @@ export function SkillUniverse({
       quality: 1,
       renderedNodes: 0,
       requestDraw: () => undefined,
-      rotationX: -0.12,
-      rotationY: 0.42,
-      targetZoom: 1,
+      rotationX: viewRef.current?.rotationX ?? -0.12,
+      rotationY: viewRef.current?.rotationY ?? 0.42,
+      targetZoom: viewRef.current?.targetZoom ?? 1,
       velocityX: 0,
       velocityY: 0,
-      zoom: 1
+      zoom: viewRef.current?.zoom ?? 1
     };
     runtimeRef.current = runtime;
-    setSelected(null);
+    // Keep the selection when its node still exists in the new model.
+    setSelected(model.nodes.find(node => node.id === runtime.selectedId) ?? null);
 
     let frame = 0;
     let lastDrawAt = 0;
@@ -311,8 +315,11 @@ export function SkillUniverse({
     };
 
     const scheduleDraw = (urgent = false) => {
-      if (!canRender() || !focused || frame) return;
+      if (!canRender() || frame) return;
       if (reducedMotion && !urgent) return;
+      // Unfocused windows still repaint a still frame when something urgent
+      // (a resize, new content) cleared the canvas; only the ambient loop waits.
+      if (!focused && !urgent) return;
       // RAF owns cadence. A timer followed by RAF missed every other refresh
       // on 60Hz displays. Slow rotation needs the same cadence as dragging.
       if (urgent) lastDrawAt = 0;
@@ -488,6 +495,7 @@ export function SkillUniverse({
       canvas.removeEventListener("contextrestored", onContextRestored);
       cancelScheduledDraw();
       runtime.labelLayer.clear();
+      viewRef.current = { rotationX: runtime.rotationX, rotationY: runtime.rotationY, zoom: runtime.zoom, targetZoom: runtime.targetZoom, selectedId: runtime.selectedId };
       if (runtimeRef.current === runtime) runtimeRef.current = null;
     };
   }, [lightTheme, model, tone]);

@@ -1,7 +1,7 @@
 /* Library: align every label/value on one grid and reserve width for actual content. */
 .home-visual-switch { position: absolute; top: 100px; left: 24px; z-index: 5; display: flex; gap: 4px; padding: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .home-visual-switch button { padding: 7px 14px; color: var(--text-soft); border-radius: 8px; font: 600 13px var(--ui-font); background: transparent; }
-.home-visual-switch button[aria-pressed="true"] { background: var(--brand); color: var(--bg); }
+.home-visual-switch button[aria-pressed="true"] { background: var(--brand-fill, var(--brand)); color: var(--on-brand, var(--bg)); }
 .islands-home .dashboard-hero-inner { display: none; }
 .theme-family-atlas.page-dashboard:not(.dashboard-immersive) .islands-home .atlas-immersive-toggle { top: 100px; right: 24px; }
 .browser-preview-shell.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .islands-home .atlas-immersive-toggle { top: 166px; }

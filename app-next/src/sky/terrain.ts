@@ -4,8 +4,34 @@
 // ground — several rounded hanging rock masses of different depths.
 // Everything derives from a seed, and objects are placed with `heightAt`, the
 // same function that built the mesh, so nothing floats or sinks.
+// A climate profile reshapes the top: a snowy peak, a flat-topped mesa, a
+// gentle dome, a volcano with a crater, or stepped rice terraces.
 import * as THREE from "three";
+import type { TerrainProfile } from "./climates";
 import { fbm2, fbm3, noise2, seededRandom, smoothstep } from "./noise";
+
+/** A mountain or volcano cone on the island top (island-local units). */
+export type TerrainFeature = {
+  x: number;
+  z: number;
+  radius: number;
+  height: number;
+  /** Crater radius as a fraction of the cone radius (0: a peak). */
+  crater: number;
+  /** Crater depth as a fraction of the cone height. */
+  craterDepth: number;
+  shoulder: { x: number; z: number; radius: number; height: number } | null;
+};
+
+type ProfileShape = { dome: number; hills: number; lipStart: number; lip: number; cliff: number };
+const PROFILES: Record<TerrainProfile, ProfileShape> = {
+  rolling: { dome: 1, hills: 1, lipStart: 0.8, lip: 1, cliff: 1 },
+  peak: { dome: 0.8, hills: 0.75, lipStart: 0.8, lip: 1, cliff: 1 },
+  crater: { dome: 0.7, hills: 0.6, lipStart: 0.8, lip: 1, cliff: 1.05 },
+  mesa: { dome: 0.22, hills: 0.3, lipStart: 0.9, lip: 0.55, cliff: 1.45 },
+  dome: { dome: 1.7, hills: 0.45, lipStart: 0.76, lip: 1.15, cliff: 0.9 },
+  terraces: { dome: 0, hills: 0.5, lipStart: 0.86, lip: 0.6, cliff: 1 }
+};
 
 export type Pad = { x: number; z: number; radius: number; level?: number };
 export type Pond = { x: number; z: number; radius: number; depth: number; level?: number };
@@ -25,10 +51,16 @@ export class IslandShape {
   private elongAngle: number;
   private masses: Array<{ x: number; z: number; width: number; depth: number }>;
   readonly bottomDepth: number;
+  readonly profile: TerrainProfile;
+  readonly feature: TerrainFeature | null = null;
+  private shapeSpec: ProfileShape;
+  private terraceStep = 0;
 
-  constructor(radius: number, seed: number) {
+  constructor(radius: number, seed: number, profile: TerrainProfile = "rolling") {
     this.radius = radius;
     this.seed = seed;
+    this.profile = PROFILES[profile] ? profile : "rolling";
+    this.shapeSpec = PROFILES[this.profile];
     const random = seededRandom(seed);
     this.relief = THREE.MathUtils.clamp(radius * 0.055, 0.22, 0.85);
     this.harmonics = [2, 3, 4, 5, 7].map((k, index) => ({
@@ -52,6 +84,105 @@ export class IslandShape {
       };
     });
     this.bottomDepth = radius * (0.85 + random() * 0.3);
+    // Profile features draw from their own stream, so a rolling island keeps
+    // exactly the shape it always had.
+    const extra = seededRandom((seed ^ 0x5bd1e995) >>> 0);
+    if (this.profile === "peak" || this.profile === "crater") {
+      const peak = this.profile === "peak";
+      const side = extra() < 0.5 ? -1 : 1;
+      // Toward the back, off to one side: the house keeps the front.
+      const angle = -Math.PI / 2 + side * (0.4 + extra() * 0.5);
+      const distance = radius * (0.2 + extra() * 0.1);
+      const coneRadius = radius * (peak ? 0.5 : 0.52);
+      const height = this.relief * (peak ? 2.6 : 2.4) + radius * (peak ? 0.46 : 0.4);
+      // The shoulder sits further out on the same side, never on the house's.
+      const shoulderAngle = angle + side * (0.9 + extra() * 0.4);
+      this.feature = {
+        x: Math.cos(angle) * distance,
+        z: Math.sin(angle) * distance,
+        radius: coneRadius,
+        height,
+        crater: peak ? 0 : 0.3,
+        craterDepth: peak ? 0 : 0.4,
+        shoulder: peak ? {
+          x: Math.cos(angle) * distance + Math.cos(shoulderAngle) * coneRadius * 0.48,
+          z: Math.sin(angle) * distance + Math.sin(shoulderAngle) * coneRadius * 0.48,
+          radius: coneRadius * 0.58,
+          height: height * (0.42 + extra() * 0.12)
+        } : null
+      };
+    }
+    if (this.profile === "terraces") {
+      const levels = 3 + Math.floor(extra() * 3);
+      this.terraceStep = (radius * 0.4) / levels;
+    }
+  }
+
+  /** Height the cone adds at (x, z). */
+  private featureHeight(x: number, z: number): number {
+    const feature = this.feature;
+    if (!feature) return 0;
+    const dx = x - feature.x, dz = z - feature.z;
+    const distance = Math.hypot(dx, dz);
+    let height = 0;
+    if (distance < feature.radius * 1.3) {
+      // Ridges: the cone's reach varies a little with direction.
+      const angle = Math.atan2(dz, dx);
+      const ridge = 1 + 0.14 * noise2(Math.cos(angle) * 1.6 + 3.1, Math.sin(angle) * 1.6 - 2.3, this.seed + 23);
+      // A slightly rounded tip: a sharp cusp shows as a spike between vertices.
+      const t = Math.min(1, Math.hypot(distance / (feature.radius * ridge), 0.05));
+      if (feature.crater > 0) {
+        const cone = (u: number) => feature.height * (1 - u) ** 1.1;
+        if (t >= feature.crater) height = cone(t);
+        else {
+          const rim = cone(feature.crater);
+          const inner = t / feature.crater;
+          height = rim - feature.height * feature.craterDepth * (1 - inner * inner);
+        }
+      } else {
+        height = feature.height * (1 - t) ** 1.7;
+      }
+    }
+    const shoulder = feature.shoulder;
+    if (shoulder) {
+      const t = Math.min(1, Math.hypot(x - shoulder.x, z - shoulder.z) / shoulder.radius);
+      height = Math.max(height, shoulder.height * (1 - t) ** 1.6);
+    }
+    return height;
+  }
+
+  /** 0 outside the cone, 1 on its upper slopes: keep buildings off it. */
+  featureWeight(x: number, z: number): number {
+    const feature = this.feature;
+    if (!feature) return 0;
+    const near = 1 - smoothstep(feature.radius * 0.45, feature.radius * 0.95, Math.hypot(x - feature.x, z - feature.z));
+    const shoulder = feature.shoulder
+      ? 1 - smoothstep(feature.shoulder.radius * 0.4, feature.shoulder.radius * 0.9, Math.hypot(x - feature.shoulder.x, z - feature.shoulder.z))
+      : 0;
+    return Math.max(near, shoulder);
+  }
+
+  /** The lava lake inside a volcano's crater (island-local). */
+  craterLava(): { x: number; z: number; radius: number; y: number } | null {
+    const feature = this.feature;
+    if (!feature || feature.crater <= 0) return null;
+    const floor = this.baseHeight(feature.x, feature.z);
+    return { x: feature.x, z: feature.z, radius: feature.radius * feature.crater * 0.66, y: floor + feature.height * feature.craterDepth * 0.38 };
+  }
+
+  /** The height above which the top `cover` fraction of the cone lies. */
+  coverLine(cover: number): number {
+    const feature = this.feature;
+    if (!feature) return 1e6;
+    const rise = feature.crater > 0 ? feature.height * (1 - feature.crater) ** 1.1 : feature.height;
+    return this.summit() - cover * rise;
+  }
+
+  /** Highest point of the top surface (island-local), for framing. */
+  summit(): number {
+    if (!this.feature) return this.baseHeight(0, 0);
+    const feature = this.feature;
+    return this.baseHeight(feature.x, feature.z) + (feature.crater > 0 ? feature.height * feature.craterDepth : 0);
   }
 
   rimRadius(theta: number): number {
@@ -70,11 +201,21 @@ export class IslandShape {
   private baseHeight(x: number, z: number): number {
     const q = this.normalizedDistance(x, z);
     const scale = this.radius * 0.42;
-    const hills = fbm2(x / scale + 11.3, z / scale - 4.1, this.seed, 3) * this.relief;
-    const dome = (1 - Math.min(1, q) ** 2) * this.relief * 0.9;
+    const shape = this.shapeSpec;
+    const hills = fbm2(x / scale + 11.3, z / scale - 4.1, this.seed, 3) * this.relief * shape.hills;
+    const dome = (1 - Math.min(1, q) ** 2) * this.relief * 0.9 * shape.dome;
     // Rounded grass lip before the cliff, so the edge reads soft, not cut.
-    const lip = smoothstep(0.8, 1.0, q) ** 1.5 * Math.min(0.75, this.radius * 0.07);
-    return dome + hills - lip;
+    const lip = smoothstep(shape.lipStart, 1.0, q) ** 1.5 * Math.min(0.75, this.radius * 0.07) * shape.lip;
+    let height = dome + hills - lip;
+    if (this.feature) height += this.featureHeight(x, z);
+    if (this.terraceStep > 0) {
+      // Rice terraces: a tall dome cut into flat rings with short risers.
+      const tall = (1 - Math.min(1, q) ** 2) * this.radius * 0.4 + hills;
+      const level = tall / this.terraceStep;
+      const floor = Math.floor(level);
+      height = (floor + smoothstep(0.8, 1, level - floor)) * this.terraceStep - lip;
+    }
+    return height;
   }
 
   heightAt(x: number, z: number): number {
@@ -142,7 +283,7 @@ export class IslandShape {
 
   /** Cliff height under the grass lip. */
   get cliff(): number {
-    return Math.min(this.radius * 0.34, 2.2);
+    return Math.min(this.radius * 0.34, 2.2) * this.shapeSpec.cliff;
   }
 
   /** Depth of the underside below the cliff foot at (x, z): zero on the rim,
@@ -170,12 +311,13 @@ export class IslandShape {
     const rock: number[] = [];
     const depth: number[] = [];
     const worn: number[] = [];
+    const rimDistance: number[] = [];
     const indices: number[] = [];
 
     // Top: a centre vertex plus concentric rings, denser near the rim.
     const rimCache: Array<{ r: number; y: number; theta: number }> = [];
     positions.push(0, this.heightAt(0, 0), 0);
-    rock.push(0); depth.push(0); worn.push(this.pathWeight(0, 0));
+    rock.push(0); depth.push(0); worn.push(this.pathWeight(0, 0)); rimDistance.push(0);
     for (let ring = 1; ring <= rings; ring++) {
       const q = 1 - (1 - ring / rings) ** 1.25;
       for (let segment = 0; segment < segments; segment++) {
@@ -184,7 +326,7 @@ export class IslandShape {
         const x = Math.cos(theta) * r, z = Math.sin(theta) * r;
         const y = this.heightAt(x, z);
         positions.push(x, y, z);
-        rock.push(0); depth.push(0); worn.push(this.pathWeight(x, z));
+        rock.push(0); depth.push(0); worn.push(this.pathWeight(x, z)); rimDistance.push(q);
         if (ring === rings) rimCache.push({ r, y, theta });
       }
     }
@@ -222,7 +364,7 @@ export class IslandShape {
         }
         if (ring === cliffRings) foot.push({ r: radius, y });
         positions.push(cos * radius, y, sin * radius);
-        rock.push(1); depth.push(THREE.MathUtils.clamp((rimLevel - y) / maxDepth, 0, 1)); worn.push(0);
+        rock.push(1); depth.push(THREE.MathUtils.clamp((rimLevel - y) / maxDepth, 0, 1)); worn.push(0); rimDistance.push(1);
       }
     }
     // Part 2: the underside, rings from the cliff foot in to the axis, each
@@ -241,7 +383,7 @@ export class IslandShape {
         const y = level - this.undersideDepth(x, z);
         radius += fbm3(x * 0.4, y * 0.35, z * 0.4, this.seed + 17, 3) * this.radius * 0.018 * q * (1 - q) * 4;
         positions.push(cos * Math.max(0, radius), y, sin * Math.max(0, radius));
-        rock.push(1); depth.push(THREE.MathUtils.clamp((rimLevel - y) / maxDepth, 0, 1)); worn.push(0);
+        rock.push(1); depth.push(THREE.MathUtils.clamp((rimLevel - y) / maxDepth, 0, 1)); worn.push(0); rimDistance.push(1);
       }
     }
     const skirtRings = cliffRings + underRings;
@@ -258,6 +400,7 @@ export class IslandShape {
     geometry.setAttribute("aRock", new THREE.Float32BufferAttribute(rock, 1));
     geometry.setAttribute("aDepth", new THREE.Float32BufferAttribute(depth, 1));
     geometry.setAttribute("aWorn", new THREE.Float32BufferAttribute(worn, 1));
+    geometry.setAttribute("aRim", new THREE.Float32BufferAttribute(rimDistance, 1));
     geometry.setIndex(indices);
     geometry.computeVertexNormals();
     geometry.computeBoundingSphere();
