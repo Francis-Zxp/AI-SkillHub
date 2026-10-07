@@ -496,7 +496,14 @@ function Sync-LegacySharedCatalog {
 # v3.3 targets mode. Links exactly $Names (plus personal entries already
 # there). A same-name entry that is not our reparse point is recorded as a
 # conflict and left untouched: never moved, never deleted (I-2).
-function Sync-TargetSkillDirectory([string]$RecipientSkillsRoot, [string]$LinkSourceRoot, [string[]]$Names, $Entries) {
+function Sync-TargetSkillDirectory(
+  [string]$RecipientSkillsRoot,
+  [string]$LinkSourceRoot,
+  [string[]]$Names,
+  $Entries,
+  # Only 'Skip' exists: a same-name entry that is not ours is never replaced.
+  [ValidateSet('Skip')][string]$ConflictPolicy = 'Skip'
+) {
   $rootItem = Get-PathItemNoFollow $RecipientSkillsRoot
   if ($null -ne $rootItem) {
     if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -827,7 +834,7 @@ if ($TargetsMode) {
           }
           $outcome = 'ok'
         } else {
-          Sync-TargetSkillDirectory $path $linkRoot @($recipient.names) $entries
+          Sync-TargetSkillDirectory $path $linkRoot @($recipient.names) $entries -ConflictPolicy Skip
           $outcome = 'ok'
         }
         if ($outcome -eq 'ok' -and @($entries | Where-Object { $_.state -in @('conflict', 'invalid-manifest') }).Count -gt 0) {

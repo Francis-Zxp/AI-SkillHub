@@ -94,6 +94,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-workbuddy-skill-delivery.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-agent-skill-targets.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Real Imbad0202 codeload recipient gate
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib tests::github_codeload_imports_real_academic_research_skills_codex_without_security_noise -- --ignored --exact

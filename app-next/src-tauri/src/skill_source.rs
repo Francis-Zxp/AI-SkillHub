@@ -1786,4 +1786,146 @@ mod tests {
         assert_eq!(dropped.len(), 2);
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn adopt_dedupes_by_canonical_path_and_hash() {
+        // (agent, path, canonical, name, description, storage, valid)
+        let item = |agent: &str, path: &str, canonical: &str, name: &str, valid: bool| {
+            (
+                agent.to_string(),
+                path.to_string(),
+                canonical.to_string(),
+                name.to_string(),
+                "d".to_string(),
+                "directory".to_string(),
+                valid,
+            )
+        };
+        let found = vec![
+            // One physical folder seen through Claude and the Codex legacy root.
+            item(
+                "claude",
+                "C:/h/.claude/skills/a",
+                "C:/real/a",
+                "alpha",
+                true,
+            ),
+            item(
+                "codex-legacy",
+                "C:/h/.codex/skills/a",
+                "C:/real/a",
+                "alpha",
+                true,
+            ),
+            // Same bytes at another path → duplicate of alpha.
+            item(
+                "cursor",
+                "C:/h/.cursor/skills/a2",
+                "C:/real/a2",
+                "alpha-copy",
+                true,
+            ),
+            // Same name and bytes as a library skill → already managed.
+            item(
+                "claude",
+                "C:/h/.claude/skills/m",
+                "C:/real/m",
+                "managed-one",
+                true,
+            ),
+            // Same name, other bytes → name clash, not preselected.
+            item(
+                "claude",
+                "C:/h/.claude/skills/c",
+                "C:/real/c",
+                "clash",
+                true,
+            ),
+            item(
+                "claude",
+                "C:/h/.claude/skills/bad",
+                "C:/real/bad",
+                "bad",
+                false,
+            ),
+        ];
+        let hashes = HashMap::from([
+            ("C:/real/a".to_string(), "h-alpha".to_string()),
+            ("C:/real/a2".to_string(), "h-alpha".to_string()),
+            ("C:/real/m".to_string(), "h-managed".to_string()),
+            ("C:/real/c".to_string(), "h-other".to_string()),
+            ("C:/real/bad".to_string(), "h-bad".to_string()),
+        ]);
+        let library = HashMap::from([
+            (
+                "managed-one".to_string(),
+                BTreeSet::from(["h-managed".to_string()]),
+            ),
+            (
+                "clash".to_string(),
+                BTreeSet::from(["h-library".to_string()]),
+            ),
+        ]);
+        let candidates = build_adopt_candidates(found, &library, &|canonical| {
+            hashes.get(canonical).cloned().unwrap_or_default()
+        });
+        assert_eq!(candidates.len(), 5, "one candidate per canonical path");
+        let by_name = |name: &str| candidates.iter().find(|c| c.name == name).unwrap();
+        let alpha = by_name("alpha");
+        assert_eq!(alpha.state, "new");
+        assert!(alpha.selected_by_default);
+        assert_eq!(
+            alpha.agent_ids,
+            vec!["claude".to_string(), "codex".to_string()]
+        );
+        assert_eq!(alpha.locations.len(), 2);
+        let copy = by_name("alpha-copy");
+        assert_eq!(copy.state, "duplicate");
+        assert_eq!(copy.duplicate_of, alpha.id);
+        assert_eq!(by_name("managed-one").state, "already-managed");
+        let clash = by_name("clash");
+        assert_eq!(clash.state, "name-clash");
+        assert!(!clash.selected_by_default);
+        assert_eq!(by_name("bad").state, "invalid-manifest");
+        assert_eq!(alpha.id, crate::stable_id("adopt", "c:/real/a"));
+    }
+
+    #[test]
+    fn skill_groups_put_umbrella_skills_above_their_children() {
+        let root = std::env::temp_dir().join(format!("skillhub-groups-{}", uuid::Uuid::new_v4()));
+        for (dir, name) in [
+            ("skills/pdf", "pdf"),
+            ("skills/docx", "docx"),
+            ("tools", "tools"),
+            ("tools/lint", "lint"),
+        ] {
+            let path = root.join(dir);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(
+                path.join("SKILL.md"),
+                format!("---\nname: {name}\ndescription: Fixture {name}.\n---\n"),
+            )
+            .unwrap();
+        }
+        let paths = enumerate_skill_dirs(&root);
+        assert_eq!(
+            paths,
+            vec!["skills/docx", "skills/pdf", "tools", "tools/lint"]
+        );
+        let groups = build_skill_groups(&root, &paths, &HashMap::new(), "repo");
+        let skills = groups
+            .iter()
+            .find(|group| group.group_id == "skills")
+            .unwrap();
+        assert_eq!(skills.children.len(), 2);
+        assert!(skills.parent.is_none());
+        let tools = groups
+            .iter()
+            .find(|group| group.group_id == "tools")
+            .unwrap();
+        assert_eq!(tools.parent.as_ref().unwrap().name, "tools");
+        assert_eq!(tools.children.len(), 1);
+        assert!(tools.children.iter().all(|child| child.valid));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -21467,8 +21467,12 @@ fn install_skill_source_blocking(
             .unwrap_or_else(|| promotion.summary.clone());
         return Err(SkillHubError::code("SECURITY_BLOCKED").with_detail(detail));
     }
+    // The same repository is already in the library (for example a `/tree/`
+    // probe of a pack that is installed in full): only its targets change.
+    // Its scope, child switches, metadata and review state stay the user's.
+    let existing = promotion.status == "already-managed";
     // A /tree/ subpath install keeps its scope on every later update.
-    if !record.scope_root.is_empty() {
+    if !record.scope_root.is_empty() && !existing {
         let skill_paths = probe
             .skill_groups
             .iter()
@@ -21500,7 +21504,7 @@ fn install_skill_source_blocking(
 
     // Unselected valid children are imported but child-disabled (§4.7).
     let mut disabled_skills = Vec::new();
-    if !request.selected_skill_paths.is_empty() {
+    if !existing && !request.selected_skill_paths.is_empty() {
         let source_root = PathBuf::from(&source.local_path);
         let scope_root = if record.scope_root.is_empty() {
             source_root.clone()
@@ -21528,24 +21532,31 @@ fn install_skill_source_blocking(
             }
         }
     }
-    apply_install_metadata(&connection, &source, &request)?;
-    // Record the probe's scan under the indexed id so a later enable of a
-    // flagged pack still asks for the review (I-5).
-    let high_findings = probe
-        .security
-        .findings
-        .iter()
-        .filter(|finding| finding.severity == "high")
-        .count();
-    source_governance::record_security_scan(
-        &connection,
-        &source.id,
-        &probe.security.status,
-        probe.security.scanned_files,
-        high_findings,
-        probe.security.finding_count.saturating_sub(high_findings),
-    )?;
-    let outcome = if flagged {
+    if !existing {
+        apply_install_metadata(&connection, &source, &request)?;
+        // Record the probe's scan under the indexed id so a later enable of a
+        // flagged pack still asks for the review (I-5).
+        let high_findings = probe
+            .security
+            .findings
+            .iter()
+            .filter(|finding| finding.severity == "high")
+            .count();
+        source_governance::record_security_scan(
+            &connection,
+            &source.id,
+            &probe.security.status,
+            probe.security.scanned_files,
+            high_findings,
+            probe.security.finding_count.saturating_sub(high_findings),
+        )?;
+    }
+    let outcome = if existing {
+        if !flagged && !agent_ids.is_empty() {
+            write_install_targets(&connection, &source.id, Some(&agent_ids), "install")?;
+        }
+        "updated-existing"
+    } else if flagged {
         skill_delivery::set_source_library_enabled_rows(&connection, &source.id, false, false)?;
         "library-only"
     } else if probe.skill_count == 0 {
@@ -28735,5 +28746,58 @@ mod tests {
         );
         skill_source::discard_probe(&review.probe_id);
         skill_source::discard_probe(&blocked.probe_id);
+    }
+
+    #[test]
+    fn subpath_install_records_explicit_scope() {
+        let root = v33_temp_root("explicit-scope");
+        let config = skillhub_config_file(&root);
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(
+            &config,
+            r#"{"version":3,"repositories":[{"name":"keep-me","url":"x"}]}"#,
+        )
+        .unwrap();
+        let probe = skill_source::SkillSourceProbe {
+            probe_id: "p".to_string(),
+            operation_id: "o".to_string(),
+            parsed: skill_source::parse_skill_source_input(
+                "https://github.com/anthropics/skills/tree/main/skills/pdf",
+            ),
+            display_name: "pdf".to_string(),
+            owner: "anthropics".to_string(),
+            source_type: "skill".to_string(),
+            skill_groups: Vec::new(),
+            skill_count: 1,
+            prompt_docs: Vec::new(),
+            mcp_configs: Vec::new(),
+            security: skill_source::probe_security("passed", 1, &[], &[]),
+            agent_chips: Vec::new(),
+            duplicate: None,
+            download_method: "git".to_string(),
+            expires_at: String::new(),
+            warnings: Vec::new(),
+        };
+        let target = managed_sources_dir(&root).join("skills--anthropics");
+        record_explicit_skill_scope(
+            &root,
+            &target.display().to_string(),
+            &probe,
+            &["skills/pdf".to_string()],
+        )
+        .unwrap();
+        let written = read_json(&config).unwrap();
+        let repositories = written["repositories"].as_array().unwrap();
+        assert_eq!(repositories.len(), 2, "existing entries are kept");
+        let entry = repositories
+            .iter()
+            .find(|item| item["name"] == "skills--anthropics")
+            .unwrap();
+        assert_eq!(entry["mode"], "explicit");
+        assert_eq!(entry["skillPaths"], serde_json::json!(["skills/pdf"]));
+        assert_eq!(entry["url"], "https://github.com/anthropics/skills.git");
+        let policy = sparse_scope::ScopePolicy::from_config(Some(&written), "skills--anthropics");
+        assert_eq!(policy.explicit_paths, Some(vec!["skills/pdf".to_string()]));
+        let _ = fs::remove_dir_all(root);
     }
 }
