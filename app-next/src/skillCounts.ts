@@ -141,9 +141,24 @@ function folderResolver(folders: readonly SkillFolderCard[] | undefined) {
   };
 }
 
+/**
+ * Rows are derived once per snapshot object: the folder chips, filter bar, header and pages all
+ * ask for the same snapshot, so they share one array. The WeakMap lets an old snapshot and its
+ * rows be collected together (no unbounded cache).
+ */
+const rowsBySnapshot = new WeakMap<object, LibraryRow[]>();
+
 /** Every library row under the 全部 filter, in source order then standalone skills. */
 export function buildLibraryRows(snapshot: SnapshotInput | null | undefined): LibraryRow[] {
   if (!snapshot) return [];
+  const cached = rowsBySnapshot.get(snapshot);
+  if (cached) return cached;
+  const rows = deriveLibraryRows(snapshot);
+  rowsBySnapshot.set(snapshot, rows);
+  return rows;
+}
+
+function deriveLibraryRows(snapshot: SnapshotInput): LibraryRow[] {
   const sources = snapshot.sources ?? [];
   const skills = snapshot.skills ?? [];
   const owners = resolveSkillOwners(skills, sources);

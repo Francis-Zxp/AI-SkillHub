@@ -581,25 +581,28 @@ function colorAlpha(color: string, alpha: number): string {
 /* Animated counter — eases to the target whenever it changes. */
 export function CountUp({ value }: { value: number }) {
   const [display, setDisplay] = useState(value);
-  const fromRef = useRef(value);
+  // The number currently on screen. A value change mid-animation continues from here,
+  // not from the previous target (bug #12).
+  const shownRef = useRef(value);
 
   useEffect(() => {
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduceMotion || fromRef.current === value) {
-      fromRef.current = value;
+    if (reduceMotion || shownRef.current === value) {
+      shownRef.current = value;
       setDisplay(value);
       return;
     }
-    const from = fromRef.current;
+    const from = shownRef.current;
     const start = performance.now();
     const duration = 850;
     let raf = 0;
     const tick = (now: number) => {
       const progress = Math.min(1, (now - start) / duration);
       const eased = 1 - Math.pow(1 - progress, 3);
-      setDisplay(Math.round(from + (value - from) * eased));
+      const next = Math.round(from + (value - from) * eased);
+      shownRef.current = next;
+      setDisplay(next);
       if (progress < 1) raf = window.requestAnimationFrame(tick);
-      else fromRef.current = value;
     };
     raf = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(raf);
