@@ -11942,8 +11942,20 @@ where
         fs::create_dir_all(parent)
             .map_err(|error| format!("无法创建目录 {}：{}", parent.display(), error))?;
     }
-    if rename(source, destination).is_ok() {
-        return Ok(());
+    match rename(source, destination) {
+        Ok(()) => return Ok(()),
+        // Only a real cross-volume move may fall back to copy + delete. A lock,
+        // sharing violation or permission error must leave the source intact:
+        // deleting after such an error used to empty a folder another process
+        // still held open (bug: locked folder left partly deleted).
+        Err(error) if !rename_error_is_cross_volume(&error) => {
+            return Err(format!(
+                "文件夹正在被其他程序使用或没有权限，未做任何改动：{}（{}）",
+                source.display(),
+                error
+            ));
+        }
+        Err(_) => {}
     }
     // Cross-volume moves must never copy directly into the final destination:
     // a failed copy would otherwise leave a mixed tree that later code could
@@ -11971,30 +11983,62 @@ where
             source.display()
         ));
     }
-    if let Err(error) = fs::rename(&staged, destination) {
+    // Retire the source with one same-volume rename before anything is deleted.
+    // If the source is locked this fails atomically and the original stays whole.
+    let source_parent = source.parent().unwrap_or(parent);
+    let source_name = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("source");
+    let tombstone = source_parent.join(format!(
+        ".{source_name}.skillhub-retired-{}",
+        unix_timestamp_string()
+    ));
+    if let Err(error) = fs::rename(source, &tombstone) {
         let _ = fs::remove_dir_all(&staged);
         return Err(format!(
-            "无法激活已校验的跨盘副本 {}: {error}",
-            destination.display()
+            "原目录正在被使用，未做任何改动：{}（{error}）",
+            source.display()
         ));
     }
-    fs::remove_dir_all(source).map_err(|error| {
+    if let Err(error) = fs::rename(&staged, destination) {
+        let restored = fs::rename(&tombstone, source);
+        let _ = fs::remove_dir_all(&staged);
+        return Err(match restored {
+            Ok(()) => format!(
+                "无法激活已校验的跨盘副本 {}，原目录已保持不变：{error}",
+                destination.display()
+            ),
+            Err(restore_error) => format!(
+                "无法激活已校验的跨盘副本 {}：{error}；原目录完整保留在 {}（{restore_error}）",
+                destination.display(),
+                tombstone.display()
+            ),
+        });
+    }
+    fs::remove_dir_all(&tombstone).map_err(|error| {
         format!(
-            "已创建经校验的副本 {}，但未能删除原目录 {}：{error}；两个目录均被保留。",
+            "已移动到 {}，但旧副本 {} 未能清理：{error}",
             destination.display(),
-            source.display()
+            tombstone.display()
         )
     })
+}
+
+/// `ERROR_NOT_SAME_DEVICE` (17) on Windows, `EXDEV` (18) on Unix.
+fn rename_error_is_cross_volume(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::CrossesDevices
+        || (cfg!(windows) && error.raw_os_error() == Some(17))
+        || (cfg!(unix) && error.raw_os_error() == Some(18))
 }
 
 fn prune_snapshot_refresh_backups(backup_root: &Path, prefix: &str) {
     let Ok(entries) = fs::read_dir(backup_root) else {
         return;
     };
-    let marker = format!("{prefix}-");
     let mut matches = entries
         .flatten()
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&marker))
+        .filter(|entry| is_snapshot_refresh_backup_of(&entry.file_name().to_string_lossy(), prefix))
         .map(|entry| entry.path())
         .collect::<Vec<_>>();
     if matches.len() <= SNAPSHOT_REFRESH_BACKUP_KEEP {
@@ -12005,6 +12049,14 @@ fn prune_snapshot_refresh_backups(backup_root: &Path, prefix: &str) {
     for path in matches.into_iter().take(drop_count) {
         let _ = fs::remove_dir_all(path);
     }
+}
+
+/// Backups are named `{prefix}-{all-digit nanos}`. A plain prefix match would
+/// also select `{prefix}--other-{nanos}` and delete another source's backups.
+fn is_snapshot_refresh_backup_of(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn write_snapshot_refresh_report(

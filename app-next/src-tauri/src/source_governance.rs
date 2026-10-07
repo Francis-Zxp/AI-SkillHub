@@ -795,11 +795,18 @@ pub(crate) fn refresh_status(
     )
 }
 
-pub(crate) fn prepare_sync_backups(root: &Path, connection: &Connection) -> Result<(), String> {
+/// Returns one plain warning per Git source whose revision could not be read
+/// (unborn HEAD after an interrupted clone, empty repository …). Such a source
+/// is skipped; it never aborts the whole sync (bug: unresolvable HEAD).
+pub(crate) fn prepare_sync_backups(
+    root: &Path,
+    connection: &Connection,
+) -> Result<Vec<String>, String> {
     ensure_schema(connection)?;
     write_pin_manifest(root, connection)?;
     let sources = read_sources(connection)?;
     let timestamp = super::unix_timestamp_string();
+    let mut warnings = Vec::new();
     for source in sources {
         let folder = source_folder_name(&source.local_path, &source.name);
         let Some(path) = resolve_source_path(root, &source.local_path, &folder) else {
@@ -818,7 +825,13 @@ pub(crate) fn prepare_sync_backups(root: &Path, connection: &Connection) -> Resu
             .map_err(|error| format!("Cannot read source pin before sync: {error}"))?
             .unwrap_or(0)
             != 0;
-        let revision = git_revision(&path)?;
+        let revision = match git_revision(&path) {
+            Ok(revision) => revision,
+            Err(error) => {
+                warnings.push(unreadable_revision_warning(&source.name, &error));
+                continue;
+            }
+        };
         if !pinned {
             create_version_backup(connection, &source, &folder, &path, &revision, &timestamp)?;
         }
@@ -830,11 +843,21 @@ pub(crate) fn prepare_sync_backups(root: &Path, connection: &Connection) -> Resu
             if pinned { "pinned" } else { "ready" },
         )?;
     }
-    Ok(())
+    Ok(warnings)
 }
 
-pub(crate) fn refresh_local_revisions(root: &Path, connection: &Connection) -> Result<(), String> {
+fn unreadable_revision_warning(source_name: &str, error: &str) -> String {
+    let detail = error.lines().next().unwrap_or_default().trim();
+    let detail = detail.chars().take(160).collect::<String>();
+    format!("{source_name}：无法读取当前 Git 版本，已跳过这个技能包（{detail}）")
+}
+
+pub(crate) fn refresh_local_revisions(
+    root: &Path,
+    connection: &Connection,
+) -> Result<Vec<String>, String> {
     ensure_schema(connection)?;
+    let mut warnings = Vec::new();
     for source in read_sources(connection)? {
         let folder = source_folder_name(&source.local_path, &source.name);
         let Some(path) = resolve_source_path(root, &source.local_path, &folder) else {
@@ -843,7 +866,13 @@ pub(crate) fn refresh_local_revisions(root: &Path, connection: &Connection) -> R
         if !is_git_repository(&path) {
             continue;
         }
-        let revision = git_revision(&path)?;
+        let revision = match git_revision(&path) {
+            Ok(revision) => revision,
+            Err(error) => {
+                warnings.push(unreadable_revision_warning(&source.name, &error));
+                continue;
+            }
+        };
         let pinned = connection
             .query_row(
                 "SELECT pinned FROM source_governance WHERE source_id = ?1",
@@ -862,7 +891,7 @@ pub(crate) fn refresh_local_revisions(root: &Path, connection: &Connection) -> R
             if pinned { "pinned" } else { "ready" },
         )?;
     }
-    Ok(())
+    Ok(warnings)
 }
 
 pub(crate) fn rollback_latest(

@@ -321,6 +321,9 @@ fn column_exists(connection: &Connection, table: &str, column: &str) -> bool {
 /// Every table keyed by a source id. User data wins over a fresh empty row a
 /// rescan may already have created under the new id (`OR REPLACE`).
 const SOURCE_KEYED_TABLES: &[&str] = &[
+    // v3.3: per pack × AI tool sync targets. `standalone:` keys never match a
+    // source id, so only real packs move.
+    "agent_skill_targets",
     "source_overrides",
     "source_folder_memberships",
     "source_governance",
@@ -536,7 +539,9 @@ pub(crate) fn apply(
         .entries
         .iter()
         .filter(|entry| entry.action == "rename")
-        .filter(|entry| source_ids.is_empty() || source_ids.contains(&entry.source_id))
+        // An empty selection selects nothing. Resuming an interrupted journal is
+        // handled above, so "empty means all" is never needed (bug #0).
+        .filter(|entry| source_ids.contains(&entry.source_id))
         .collect::<Vec<_>>();
     if selected.is_empty() {
         return Ok(Journal {
@@ -629,13 +634,23 @@ pub(crate) fn resume(
         transaction
             .commit()
             .map_err(|error| format!("无法提交迁移事务：{error}"))?;
+        // Record every committed key move before touching the config file, so a
+        // later failure makes rollback() invert the keys of every entry whose
+        // folder it renames back (bug #20).
         for entry in &mut journal.entries {
             if entry.state == "moved" {
-                rename_config_repository(root, entry)?;
                 entry.state = "remapped".to_string();
             }
         }
-        write_journal(root, &journal)
+        write_journal(root, &journal)?;
+        for entry in journal
+            .entries
+            .iter()
+            .filter(|entry| entry.state == "remapped")
+        {
+            rename_config_repository(root, entry)?;
+        }
+        Ok(())
     })();
     if let Err(failure) = outcome {
         rollback(root, connection, &journal);
@@ -1095,6 +1110,106 @@ mod tests {
         assert!(library.sources().join("alpha").is_dir());
         assert!(!library.sources().join("alpha--acme").exists());
         assert!(read_journal(&library.root).is_none());
+    }
+
+    #[test]
+    fn empty_selection_renames_nothing() {
+        // bug #0 backend half: [] must never mean "every eligible source".
+        let (library, mut connection) = Library::new("empty-selection");
+        library.add(
+            &connection,
+            "gstack",
+            Some("https://github.com/garrytan/gstack.git"),
+        );
+        let journal = apply(&library.root, &mut connection, &[]).unwrap();
+        assert!(journal.completed);
+        assert!(journal.entries.is_empty());
+        assert!(library.sources().join("gstack").is_dir());
+        assert!(!library.sources().join("gstack--garrytan").exists());
+    }
+
+    #[test]
+    fn identity_migration_remaps_agent_skill_targets() {
+        let (library, mut connection) = Library::new("targets");
+        let old_id = library.add(
+            &connection,
+            "gstack",
+            Some("https://github.com/garrytan/gstack.git"),
+        );
+        connection
+            .execute(
+                "INSERT INTO agent_skill_targets (source_id, agent_id, enabled, origin, updated_at)
+                 VALUES (?1, 'claude', 1, 'user', '1'), (?1, 'codex', 0, 'user', '1'),
+                        ('standalone:skill-x', 'claude', 1, 'user', '1')",
+                [&old_id],
+            )
+            .unwrap();
+        apply(&library.root, &mut connection, std::slice::from_ref(&old_id)).unwrap();
+        let new_id = stable_id("source", "gstack--garrytan");
+        let rows: Vec<(String, String, i64)> = connection
+            .prepare("SELECT source_id, agent_id, enabled FROM agent_skill_targets ORDER BY source_id, agent_id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(rows.iter().all(|(source, _, _)| source != &old_id));
+        assert!(rows.contains(&(new_id.clone(), "claude".into(), 1)));
+        assert!(rows.contains(&(new_id, "codex".into(), 0)));
+        assert!(rows.contains(&("standalone:skill-x".into(), "claude".into(), 1)));
+    }
+
+    #[test]
+    fn config_write_failure_rolls_back_every_committed_key() {
+        // bug #20: keys committed, config write fails → rollback must invert the
+        // keys of every entry whose folder it renames back.
+        let (library, mut connection) = Library::new("config-failure");
+        let old_id = library.add(
+            &connection,
+            "gstack",
+            Some("https://github.com/garrytan/gstack.git"),
+        );
+        connection
+            .execute(
+                "INSERT INTO source_overrides (source_id, display_name, note, updated_at)
+                 VALUES (?1, '我的 gstack', '常用', '1')",
+                [&old_id],
+            )
+            .unwrap();
+        let config = crate::skillhub_config_file(&library.root);
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(
+            &config,
+            r#"{"version":3,"repositories":[{"name":"gstack","url":"https://github.com/garrytan/gstack"}]}"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&config).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&config, permissions.clone()).unwrap();
+        let error = apply(&library.root, &mut connection, std::slice::from_ref(&old_id))
+            .unwrap_err();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&config, permissions).unwrap();
+        assert!(error.contains("已恢复"), "{error}");
+        assert!(library.sources().join("gstack").is_dir());
+        assert!(!library.sources().join("gstack--garrytan").exists());
+        let note: String = connection
+            .query_row(
+                "SELECT note FROM source_overrides WHERE source_id = ?1",
+                [&old_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(note, "常用");
+        let moved: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM source_overrides WHERE source_id = ?1",
+                [stable_id("source", "gstack--garrytan")],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(moved, 0);
     }
 
     /// Read-only audit of a real library: copy its SQLite file first, then
