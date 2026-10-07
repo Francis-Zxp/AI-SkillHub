@@ -1,3 +1,4 @@
+import { isCallableSkill } from "./skillCounts";
 import type { LegacySnapshot, SkillCard, SourceCard } from "./types";
 
 export type SkyIsland = {
@@ -71,10 +72,17 @@ export function buildSkyIslands(
     sourceSets.get(island.id)!.add(source.id);
     if (source.sourceType === "prompt" || source.sourceType === "mixed") island.promptCount++;
   }
+  const ownerOf = (skill: SkillCard) => skill.sourceId ? sourcesById.get(skill.sourceId)
+    : sourcesByName.get(normalizeSourceName(skill.source));
+  // v3.3 (bug #40): count with the shared callable rule, so a single-skill pack is one skill.
+  const packSizes = new Map<string, number>();
   for (const skill of snapshot.skills) {
-    if (isRouterHubSkill(skill)) continue;
-    const owner = skill.sourceId ? sourcesById.get(skill.sourceId)
-      : sourcesByName.get(normalizeSourceName(skill.source));
+    const owner = ownerOf(skill);
+    if (owner) packSizes.set(owner.id, (packSizes.get(owner.id) ?? 0) + 1);
+  }
+  for (const skill of snapshot.skills) {
+    const owner = ownerOf(skill);
+    if (!isCallableSkill(skill, owner ? packSizes.get(owner.id) ?? 0 : 0)) continue;
     const island = destination(skill.userFolderId || owner?.userFolderId);
     island.skillCount++;
     if (owner) sourceSets.get(island.id)!.add(owner.id);

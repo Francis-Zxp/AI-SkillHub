@@ -4,11 +4,21 @@ const path = require("node:path");
 const vm = require("node:vm");
 const test = require("node:test");
 const ts = require("typescript");
-const exportsObject = {};
-const compiled = ts.transpileModule(fs.readFileSync(path.join(__dirname, "../src/skyIslandModel.ts"), "utf8"), {
-  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 }
-}).outputText;
-vm.runInNewContext(compiled, { exports: exportsObject });
+// skyIslandModel imports the shared counting rule from src/skillCounts.ts (v3.3, I-11);
+// a tiny require shim transpiles that pure module the same way.
+const loadTs = file => {
+  const moduleExports = {};
+  const source = ts.transpileModule(fs.readFileSync(path.join(__dirname, "../src", file), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 }
+  }).outputText;
+  const requireShim = request => {
+    if (request === "./skillCounts") return loadTs("skillCounts.ts");
+    throw new Error(`Unexpected runtime import ${request} in ${file}`);
+  };
+  vm.runInNewContext(source, { exports: moduleExports, require: requireShim });
+  return moduleExports;
+};
+const exportsObject = loadTs("skyIslandModel.ts");
 const { buildSkyIslands } = exportsObject;
 const folder = (id, sortOrder = 0, name = id) => ({ id, sortOrder, name, skillCount: 999 });
 const source = (id, extra = {}) => ({ id, name: id, url: "", sourceType: "skill", ...extra });
@@ -87,4 +97,19 @@ test("seed and biome depend on identity, not translated names, counts or input o
   assert.equal(a.biome, b.biome);
   assert.equal(a.biome, a.seed % 6);
   assert.ok(a.seed >= 0 && Number.isInteger(a.seed));
+});
+
+test("single-skill repositories count as one skill on their island (bug #40)", () => {
+  // A one-skill repo whose only SKILL.md sits at the repository root looks like a router to the
+  // name rule (folderName equals the source). It is still the one callable skill of that pack.
+  const sources = [source("vibesec", { name: "VibeSec-Skill" }), source("nature", { name: "Nature" })];
+  const skills = [
+    skill("VibeSec-Skill", { sourceId: "vibesec", source: "VibeSec-Skill", folderName: "VibeSec-Skill" }),
+    skill("Nature", { sourceId: "nature", source: "Nature", folderName: "Nature", isRouterHub: true }),
+    skill("child-a", { sourceId: "nature", source: "Nature" }),
+    skill("child-b", { sourceId: "nature", source: "Nature" })
+  ];
+  const islands = buildSkyIslands(snapshot([], sources, skills), "Unfiled");
+  assert.equal(islands.length, 1);
+  assert.equal(islands[0].skillCount, 3);
 });
