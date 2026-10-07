@@ -1260,8 +1260,8 @@ async fn save_source_metadata(
     note: String,
     enabled: bool,
     tags: Vec<String>,
-) -> Result<SourceMutationResult, String> {
-    run_blocking_task(move || {
+) -> Result<SourceMutationResult, SkillHubError> {
+    run_skillhub_task(move || {
         save_source_metadata_blocking(source_id, name, source_type, category, note, enabled, tags)
     })
     .await
@@ -2152,19 +2152,6 @@ fn refresh_agent_detection_blocking() -> Result<LegacySnapshot, String> {
     let mut connection = open_index_database(&root)?;
     persist_agent_detection_refresh(&root, &mut connection, diagnostics_json.as_ref())?;
     read_snapshot_from_database(&root, &connection)
-}
-
-fn sync_local_sources_to_agents(root: &Path, connection: &Connection) -> Result<(), String> {
-    // Build every generated parent first, then publish one coherent active
-    // catalog. Publishing before router generation can leave stale junctions
-    // pointing at a router directory that was removed and recreated.
-    write_disabled_child_skills(root, connection)?;
-    let report = plan_or_write_router_hubs(root, true, true)?;
-    let _ = record_router_hub_audit(connection, &report);
-    sync_skill_conflict_dispatchers(root, connection)?;
-    run_skillhub_script_no_pull(root)?;
-    run_agent_link_script(root, connection)?;
-    Ok(())
 }
 
 fn reconcile_agent_skill_delivery(
@@ -4440,10 +4427,20 @@ fn save_source_metadata_blocking(
     note: String,
     enabled: bool,
     tags: Vec<String>,
-) -> Result<SourceMutationResult, String> {
+) -> Result<SourceMutationResult, SkillHubError> {
     let _write_guard = acquire_background_write_guard("来源保存")?;
     let root = resolve_legacy_root()?;
     let mut connection = open_index_database(&root)?;
+    // I-5: turning a flagged pack on needs the explicit review dialog
+    // (`set_source_library_enabled` with `securityReviewConfirmed`).
+    let previously_enabled = read_indexed_sources(&connection)?
+        .iter()
+        .find(|source| source.id == source_id)
+        .map(|source| source.enabled);
+    if enabled && previously_enabled == Some(false) {
+        check_security_review(&connection, &source_id, false)?;
+    }
+    // Delivery happens in the queue (I-4), never inside this save.
     let committed = save_source_metadata_and_tags_with_delivery(
         &mut connection,
         &source_id,
@@ -4453,26 +4450,26 @@ fn save_source_metadata_blocking(
         &note,
         enabled,
         &tags,
-        |transaction| sync_local_sources_to_agents(&root, transaction),
+        |_| Ok(()),
     )?;
-    let delivery_reconciled = committed.previous.enabled != committed.source.enabled;
-    let structural_snapshot_required = delivery_reconciled
+    let delivery_changed = committed.previous.enabled != committed.source.enabled;
+    if delivery_changed {
+        if enabled {
+            skill_delivery::materialize_defaults(&connection)?;
+        }
+        delivery_queue::request(delivery_queue::Depth::Full, "library", false);
+    }
+    let structural_snapshot_required = delivery_changed
         || committed.previous.name != committed.source.name
         || committed.previous.source_type != committed.source.source_type
         || committed.previous.category_id != committed.source.category_id;
     let source = committed.source;
-    source_mutation_result_after_commit(
+    Ok(source_mutation_result_after_commit(
         source,
-        delivery_reconciled,
+        false,
         structural_snapshot_required,
-        || {
-            if delivery_reconciled {
-                reconcile_agent_skill_delivery(&root, &connection, false, false)
-            } else {
-                load_indexed_snapshot_under_write_guard()
-            }
-        },
-    )
+        load_indexed_snapshot_under_write_guard,
+    )?)
 }
 
 fn source_mutation_result_after_commit<F>(
@@ -5716,31 +5713,28 @@ async fn promote_staged_source_import(
                     &unix_timestamp_string(),
                 );
             }
-            match reconcile_agent_skill_delivery(&root, &connection, false, false) {
+            // v3.3: the index is rebuilt now so the new pack is visible at once;
+            // delivery to the AI tools runs in the queue (I-4), never inline.
+            match scan_legacy_snapshot_under_write_guard() {
                 Ok(_) => {
-                    promotion.summary = format!(
-                        "{} 已刷新共享 Skills、父/子 Skill 路由和 Agent 托管链接。",
-                        promotion.summary
-                    );
+                    delivery_queue::request(delivery_queue::Depth::Full, "install", false);
+                    promotion.summary =
+                        format!("{} 已加入技能库，正在后台同步到 AI 工具。", promotion.summary);
                     promotion.real_write_scope =
-                        "app-next/data/github_sources + skills + agent-links".to_string();
+                        "app-next/data/github_sources + sqlite-index (delivery queued)".to_string();
                     promotion.blocking_checks.retain(|check| {
                         !check.contains("不写入 skills")
                             && !check.contains("如已开启真实写入授权")
                             && !check.contains("AI 工具链接")
                     });
-                    promotion.blocking_checks.push(
-                        "已执行本地扫描同步：共享 Skills、父子路由、Claude/Codex/Antigravity 链接已刷新。"
-                            .to_string(),
-                    );
                 }
                 Err(error) => {
                     promotion.summary = format!(
-                        "{} 来源已添加，但 Agent 链接同步未完成：{}",
+                        "{} 来源已添加，但技能库索引刷新未完成：{}",
                         promotion.summary, error
                     );
                     promotion.blocking_checks.push(format!(
-                        "Agent 链接同步未完成：{}。可稍后点击同步 / 刷新重试。",
+                        "技能库索引刷新未完成：{}。可稍后点击更新重试。",
                         error
                     ));
                 }
@@ -9650,9 +9644,26 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
         let (skill_id, mut skill) =
             row.map_err(|error| format!("Cannot decode indexed skill: {}", error))?;
         skill.tags = tag_map.remove(&skill_id).unwrap_or_default();
+        // Brief §7 #18: generator markers are machine data. `is_router_hub`
+        // comes from the scanned file, never from this editable text, so a
+        // user edit can no longer flip the parent detection.
+        skill.description = strip_generator_markers(&skill.description);
         skills.push(skill);
     }
     Ok(skills)
+}
+
+fn strip_generator_markers(description: &str) -> String {
+    if !description.contains(ROUTER_HUB_MARKER) && !description.contains(CONFLICT_DISPATCHER_MARKER)
+    {
+        return description.to_string();
+    }
+    description
+        .replace(ROUTER_HUB_MARKER, "")
+        .replace(CONFLICT_DISPATCHER_MARKER, "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn read_skill_conflict_choice_state(
@@ -28070,5 +28081,496 @@ mod tests {
         assert!(!diagnostics.contains_key("blank-target"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    // ---------------------------------------------------------------------
+    // v3.3 skills-backend regression and contract tests
+    // ---------------------------------------------------------------------
+
+    fn v33_temp_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("skillhub-v33-{label}-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn locked_folder_move_fails_without_touching_the_source() {
+        // rust-core bug: a sharing violation used to fall through to copy +
+        // delete and left the locked source folder partly deleted.
+        let root = v33_temp_root("locked-move");
+        let source = root.join("source");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        for index in 0..10 {
+            fs::write(source.join("nested").join(format!("file-{index}.md")), "keep").unwrap();
+        }
+        let destination = root.join("backup").join("source");
+        let error = move_directory_with_rename(&source, &destination, |_, _| {
+            Err(io::Error::from_raw_os_error(32))
+        })
+        .unwrap_err();
+        assert!(error.contains("未做任何改动"), "{error}");
+        assert_eq!(fs::read_dir(source.join("nested")).unwrap().count(), 10);
+        assert!(!destination.exists());
+        let error = move_directory_with_rename(&source, &destination, |_, _| {
+            Err(io::Error::from(io::ErrorKind::PermissionDenied))
+        })
+        .unwrap_err();
+        assert!(!error.contains("两个目录均被保留"), "{error}");
+        assert_eq!(fs::read_dir(source.join("nested")).unwrap().count(), 10);
+        assert!(rename_error_is_cross_volume(&io::Error::from(
+            io::ErrorKind::CrossesDevices
+        )));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn snapshot_backup_prune_matches_only_its_own_source() {
+        // rust-core bug: `skills-<ts>` pruning also matched `skills--anthropics-<ts>`.
+        assert!(is_snapshot_refresh_backup_of("skills-1791369720000000000", "skills"));
+        assert!(!is_snapshot_refresh_backup_of(
+            "skills--anthropics-1791369720000000000",
+            "skills"
+        ));
+        assert!(!is_snapshot_refresh_backup_of("foo--alice-lab-1", "foo--alice"));
+        assert!(!is_snapshot_refresh_backup_of("skills-", "skills"));
+        let root = v33_temp_root("prune");
+        fs::create_dir_all(&root).unwrap();
+        for name in [
+            "skills-100",
+            "skills-200",
+            "skills-300",
+            "skills-400",
+            "skills--anthropics-100",
+            "skills--anthropics-200",
+        ] {
+            fs::create_dir_all(root.join(name)).unwrap();
+        }
+        prune_snapshot_refresh_backups(&root, "skills");
+        let mut left = fs::read_dir(&root)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                "skills--anthropics-100",
+                "skills--anthropics-200",
+                "skills-200",
+                "skills-300",
+                "skills-400"
+            ]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn link_step_is_gated_before_any_client_access() {
+        // I-1: before onboarding and while paused the link step returns before
+        // it even looks for the link script, so nothing in any AI tool's
+        // folder can be created, changed or removed.
+        let root = v33_temp_root("gate");
+        let mut connection = open_index_database(&root).unwrap();
+        skill_delivery::migrate_v33_delivery_state(&mut connection, &BTreeSet::new(), "")
+            .unwrap();
+        assert_eq!(skill_delivery::onboarding_status(&connection).unwrap(), "pending");
+        assert!(matches!(
+            run_agent_link_script(&root, &connection).unwrap(),
+            DeliveryRun::Blocked
+        ));
+        // The UserData catalog is skipped too (§3.6).
+        assert!(!shared_skill_catalog_root(&root).exists());
+        skill_delivery::complete_onboarding_state(&connection).unwrap();
+        skill_delivery::set_paused(&connection, true).unwrap();
+        assert!(matches!(
+            run_agent_link_script(&root, &connection).unwrap(),
+            DeliveryRun::Blocked
+        ));
+        // A blocked run never writes the fingerprint and verify_link_step is a no-op.
+        verify_link_step(&root, &connection, &DeliveryRun::Blocked).unwrap();
+        assert!(read_agent_delivery_fingerprint(&connection).unwrap().is_empty());
+        skill_delivery::set_paused(&connection, false).unwrap();
+        let error = match run_agent_link_script(&root, &connection) {
+            Err(error) => error,
+            Ok(_) => panic!("unblocked run must reach the script check"),
+        };
+        assert!(error.contains("找不到 AI 工具链接脚本"), "{error}");
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn derive_agent_adapters_reports_takeover_not_detection() {
+        let root = v33_temp_root("adapters");
+        let agent = AgentCard {
+            id: "claude".to_string(),
+            name: "Claude Desktop / Claude Code".to_string(),
+            path: root.join("claude-skills").display().to_string(),
+            detected: true,
+            managed: true,
+            enabled: true,
+            skill_count: 0,
+        };
+        let snapshot = test_snapshot(&root, Vec::new(), Vec::new(), vec![agent]);
+        assert!(snapshot.agent_adapters.iter().all(|adapter| !adapter.enabled));
+        persist_snapshot(&root, &snapshot).unwrap();
+        let mut connection = open_index_database(&root).unwrap();
+        let diagnostics = serde_json::json!({
+            "appVersion": "test", "generatedAt": "now", "overallStatus": "ok",
+            "summary": { "ok": 1, "warn": 0, "error": 0, "info": 0 },
+            "agents": [{ "id": "claude", "name": "Claude Code", "command": "claude",
+                "detected": true, "managed": true,
+                "skillsDirs": [{ "path": root.join("claude-skills").display().to_string(),
+                    "exists": true, "isLink": false, "writable": true }] }]
+        });
+        persist_agent_detection_refresh(&root, &mut connection, Some(&diagnostics)).unwrap();
+        let claude = |connection: &Connection| {
+            read_indexed_agent_adapters(connection)
+                .unwrap()
+                .into_iter()
+                .find(|adapter| adapter.id == "claude")
+                .unwrap()
+        };
+        assert!(claude(&connection).detected);
+        assert!(!claude(&connection).enabled, "detection alone never turns a tool on");
+        skill_delivery::upsert_takeover(&connection, "claude", true, "user").unwrap();
+        assert!(claude(&connection).enabled);
+        persist_agent_detection_refresh(&root, &mut connection, Some(&diagnostics)).unwrap();
+        assert!(claude(&connection).enabled, "a detection refresh keeps the takeover");
+        skill_delivery::upsert_takeover(&connection, "claude", false, "user").unwrap();
+        persist_agent_detection_refresh(&root, &mut connection, Some(&diagnostics)).unwrap();
+        assert!(!claude(&connection).enabled, "and never re-enables it");
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn v33_recipients(home: &Path, shared: bool) -> Vec<AgentDeliveryRecipientState> {
+        let state = |id: &'static str, path: PathBuf, detected: bool| AgentDeliveryRecipientState {
+            id,
+            path,
+            detected,
+        };
+        vec![
+            state("coze-shared", home.join(".agents/skills"), shared),
+            state("coze", home.join(".agents/skills"), shared),
+            state("cursor", home.join(".cursor/skills"), false),
+            state("gemini-cli", home.join(".gemini/skills"), false),
+            state("workbuddy", home.join(".workbuddy/skills"), true),
+            state("claude", home.join(".claude/skills"), true),
+            state("antigravity", home.join(".gemini/antigravity/skills"), false),
+            state("codex", home.join(".agents/skills"), true),
+            state("codex-legacy", home.join(".codex/skills"), false),
+        ]
+    }
+
+    #[test]
+    fn fingerprint_changes_with_targets_takeover_pause() {
+        let root = v33_temp_root("fingerprint");
+        let connection = seed_agent_delivery_fixture(&root);
+        skill_delivery::complete_onboarding_state(&connection).unwrap();
+        let home = root.join("home");
+        let fingerprint = |connection: &Connection| {
+            let plan =
+                build_agent_delivery_plan_with(&root, connection, v33_recipients(&home, false))
+                    .unwrap();
+            agent_delivery_fingerprint_for_plan(&root, connection, &plan).unwrap()
+        };
+        let base = fingerprint(&connection);
+        skill_delivery::upsert_takeover(&connection, "claude", true, "user").unwrap();
+        let taken_over = fingerprint(&connection);
+        assert_ne!(base, taken_over);
+        skill_delivery::materialize_defaults(&connection).unwrap();
+        let with_target = fingerprint(&connection);
+        assert_ne!(taken_over, with_target);
+        skill_delivery::upsert_target(&connection, "source-paper-pack", "claude", false, "user")
+            .unwrap();
+        let target_off = fingerprint(&connection);
+        assert_ne!(with_target, target_off);
+        skill_delivery::set_paused(&connection, true).unwrap();
+        assert_ne!(target_off, fingerprint(&connection));
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn readback_reports_synced_conflict_and_orphan_from_disk() {
+        let root = v33_temp_root("readback");
+        let connection = seed_agent_delivery_fixture(&root);
+        let home = root.join("home");
+        let claude = home.join(".claude/skills");
+        let workbuddy = home.join(".workbuddy/skills");
+        fs::create_dir_all(&claude).unwrap();
+        fs::create_dir_all(workbuddy.join("paper-helper")).unwrap();
+        fs::write(
+            workbuddy.join("paper-helper/SKILL.md"),
+            "---\nname: paper-helper\ndescription: Review a paper.\n---\n",
+        )
+        .unwrap();
+        if !make_directory_junction(
+            &active_skills_dir(&root).join("paper-helper"),
+            &claude.join("paper-helper"),
+        ) {
+            drop(connection);
+            let _ = fs::remove_dir_all(root);
+            return;
+        }
+        for agent in ["claude", "workbuddy"] {
+            skill_delivery::upsert_takeover(&connection, agent, true, "user").unwrap();
+        }
+        skill_delivery::complete_onboarding_state(&connection).unwrap();
+        skill_delivery::materialize_defaults(&connection).unwrap();
+        write_agent_skill_allowlist(&root, &connection).unwrap();
+        let evidence = skill_delivery::Evidence::from_recipients(&v33_recipients(&home, false));
+        let allowlist = expected_agent_skill_allowlist(&root, &connection).unwrap();
+        let units = skill_delivery::read_delivery_units(&root, &connection, &allowlist).unwrap();
+        assert_eq!(units.len(), 1);
+        assert!(units[0].library_enabled, "{:?}", units[0]);
+        skill_delivery::read_back(&root, &connection, &units, &evidence).unwrap();
+        let state =
+            build_skill_delivery_state(&root, &connection, &evidence, None).unwrap();
+        let status = |agent: &str| {
+            state
+                .targets
+                .iter()
+                .find(|target| target.agent_id == agent)
+                .map(|target| (target.status.clone(), target.conflict.clone()))
+                .unwrap()
+        };
+        assert_eq!(status("claude").0, "synced");
+        let (workbuddy_status, conflict) = status("workbuddy");
+        assert_eq!(workbuddy_status, "conflict");
+        let conflict = conflict.unwrap();
+        assert_eq!(conflict.kind, "personal-folder");
+        assert!(conflict.same_content);
+        let claude_agent = state.agents.iter().find(|agent| agent.id == "claude").unwrap();
+        assert_eq!(claude_agent.counts.packs_synced, 1);
+        assert_eq!(claude_agent.status_word, "taken-over");
+        assert!(state.problems.iter().any(|problem| problem.code == "TARGET_CONFLICT"));
+        // Claude uninstalled while our entry is still there → orphan.
+        let mut gone = v33_recipients(&home, false);
+        gone.iter_mut()
+            .find(|recipient| recipient.id == "claude")
+            .unwrap()
+            .detected = false;
+        let evidence = skill_delivery::Evidence::from_recipients(&gone);
+        skill_delivery::read_back(&root, &connection, &units, &evidence).unwrap();
+        let state = build_skill_delivery_state(&root, &connection, &evidence, None).unwrap();
+        assert!(state
+            .targets
+            .iter()
+            .any(|target| target.agent_id == "claude" && target.status == "orphan"));
+        fs::remove_dir(claude.join("paper-helper")).unwrap();
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn disabled_children_leave_the_parent_router() {
+        // rust-core bug #18: a disabled child stayed reachable through its parent.
+        let root = v33_temp_root("router-children");
+        let connection = open_index_database(&root).unwrap();
+        let pack = active_sources_dir(&root).join("pack");
+        for child in ["child-a", "child-b"] {
+            fs::create_dir_all(pack.join(child)).unwrap();
+            fs::write(
+                pack.join(child).join("SKILL.md"),
+                format!("---\nname: {child}\ndescription: Child {child}.\n---\n"),
+            )
+            .unwrap();
+        }
+        let now = unix_timestamp_string();
+        connection
+            .execute(
+                "INSERT INTO sources (id, name, source_type, url, local_path, install_mode,
+                    category_id, note, enabled, created_at, updated_at)
+                 VALUES ('source-pack', 'pack', 'skill', '', ?1, 'scan', 'auto', '', 1, ?2, ?2)",
+                params![pack.display().to_string(), now],
+            )
+            .unwrap();
+        for child in ["child-a", "child-b"] {
+            connection
+                .execute(
+                    "INSERT INTO skills (id, source_id, name, folder_name, description, category_id,
+                        health_status, health_summary, enabled, relative_path, created_at, updated_at)
+                     VALUES (?1, 'source-pack', ?2, ?2, 'd', 'auto', 'ok', '', 1, ?3, ?4, ?4)",
+                    params![
+                        format!("skill-{child}"),
+                        child,
+                        format!("github_sources\\pack\\{child}"),
+                        now
+                    ],
+                )
+                .unwrap();
+        }
+        set_skill_enabled_override_in_connection(&connection, "child-b", false).unwrap();
+        write_disabled_child_skills(&root, &connection).unwrap();
+        let report = plan_or_write_router_hubs(&root, true, true).unwrap();
+        let plan = report
+            .plans
+            .iter()
+            .find(|plan| plan.collection_name == "pack")
+            .unwrap();
+        assert_eq!(plan.children, vec!["child-a".to_string()]);
+        let body = fs::read_to_string(&plan.router_skill_md_path).unwrap();
+        assert!(body.contains("child-a"));
+        assert!(!body.contains("child-b"), "{body}");
+        // With every child off the pack has no parent at all.
+        set_skill_enabled_override_in_connection(&connection, "child-a", false).unwrap();
+        write_disabled_child_skills(&root, &connection).unwrap();
+        let report = plan_or_write_router_hubs(&root, true, true).unwrap();
+        let plan = report
+            .plans
+            .iter()
+            .find(|plan| plan.collection_name == "pack")
+            .unwrap();
+        assert_eq!(plan.status, "skipped-empty");
+        assert!(!Path::new(&report.routers_root)
+            .join(router_hub_skill_name("pack"))
+            .join("SKILL.md")
+            .exists());
+        assert_eq!(
+            skill_delivery::unit_library_reason(&connection, "source-pack").unwrap(),
+            "no-enabled-skills"
+        );
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_skillhub_script_error_points_to_real_report_path() {
+        // Brief §7 #14: the error named a 维护工具 entry that does not exist.
+        let root = v33_temp_root("script-error");
+        let runtime = app_next_runtime_root(&root);
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(
+            runtime.join("SkillHub.ps1"),
+            "[Console]::Error.WriteLine('fixture failure'); exit 3",
+        )
+        .unwrap();
+        let error = run_skillhub_script_no_pull(&root).unwrap_err();
+        assert!(error.contains("设置 → 帮助与诊断 → 生成排错报告"), "{error}");
+        assert!(!error.contains("维护工具"), "{error}");
+        assert!(error.contains("fixture failure"), "{error}");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn generator_markers_never_reach_the_editable_description() {
+        assert_eq!(
+            strip_generator_markers("[ROUTER-HUB] Paper tools for review"),
+            "Paper tools for review"
+        );
+        assert_eq!(strip_generator_markers("plain text"), "plain text");
+    }
+
+    #[test]
+    fn probe_security_keeps_the_review_blocking() {
+        // I-5: content findings are library-only; structural blocks never add.
+        let finding = |category: &str| SourceSecurityFinding {
+            id: "f".to_string(),
+            severity: "high".to_string(),
+            category: category.to_string(),
+            relative_path: "run.sh".to_string(),
+            line: 1,
+            summary: "x".to_string(),
+            evidence: String::new(),
+        };
+        let passed = skill_source::probe_security("passed", 3, &[], &[]);
+        assert!(passed.can_add_to_library && passed.can_sync_to_agents);
+        let review = skill_source::probe_security("review", 3, &[finding("network")], &[]);
+        assert_eq!(review.status, "review");
+        assert!(review.can_add_to_library && !review.can_sync_to_agents);
+        let content_blocked = skill_source::probe_security(
+            "blocked",
+            3,
+            &[finding("credential")],
+            &["1 high-risk content finding(s) require review before promotion.".to_string()],
+        );
+        assert_eq!(content_blocked.status, "review");
+        assert!(!content_blocked.can_sync_to_agents);
+        let structural = skill_source::probe_security(
+            "blocked",
+            3,
+            &[],
+            &["Security scan file limit exceeded (>20000).".to_string()],
+        );
+        assert_eq!(structural.status, "blocked");
+        assert!(!structural.can_add_to_library);
+        let link = skill_source::probe_security("blocked", 3, &[finding("path-boundary")], &[]);
+        assert_eq!(link.status, "blocked");
+    }
+
+    #[test]
+    fn install_refuses_flagged_or_expired_probes_before_any_write() {
+        let probe = |status: &str| skill_source::SkillSourceProbe {
+            probe_id: format!("probe-test-{status}-{}", uuid::Uuid::new_v4().simple()),
+            operation_id: "op".to_string(),
+            parsed: skill_source::parse_skill_source_input("anthropics/skills"),
+            display_name: "skills".to_string(),
+            owner: "anthropics".to_string(),
+            source_type: "skill".to_string(),
+            skill_groups: Vec::new(),
+            skill_count: 1,
+            prompt_docs: Vec::new(),
+            mcp_configs: Vec::new(),
+            security: skill_source::probe_security(
+                status,
+                1,
+                &[],
+                &if status == "blocked" {
+                    vec!["Security scan byte limit exceeded".to_string()]
+                } else {
+                    Vec::new()
+                },
+            ),
+            agent_chips: Vec::new(),
+            duplicate: None,
+            download_method: "git".to_string(),
+            expires_at: String::new(),
+            warnings: Vec::new(),
+        };
+        let request = |probe_id: &str, confirmed: bool| InstallSkillSourceRequest {
+            probe_id: probe_id.to_string(),
+            selected_skill_paths: Vec::new(),
+            agent_ids: vec!["claude".to_string()],
+            security_review_confirmed: confirmed,
+            display_name: None,
+            folder_id: None,
+            new_folder_name: None,
+            category_id: None,
+            tags: Vec::new(),
+            note: None,
+        };
+        let store = |probe: &skill_source::SkillSourceProbe| {
+            skill_source::store_probe(skill_source::ProbeRecord {
+                probe: probe.clone(),
+                import_kind: "github".to_string(),
+                staged_path: None,
+                scope_root: String::new(),
+                created: Instant::now(),
+            })
+        };
+        let error = |result: Result<InstallSkillSourceResult, SkillHubError>| match result {
+            Err(error) => error.code,
+            Ok(_) => panic!("install must be refused"),
+        };
+        assert_eq!(
+            error(install_skill_source_blocking(None, request("probe-missing", false))),
+            "PROBE_EXPIRED"
+        );
+        let review = probe("review");
+        store(&review);
+        assert_eq!(
+            error(install_skill_source_blocking(None, request(&review.probe_id, false))),
+            "SECURITY_REVIEW_REQUIRED"
+        );
+        let blocked = probe("blocked");
+        store(&blocked);
+        assert_eq!(
+            error(install_skill_source_blocking(None, request(&blocked.probe_id, true))),
+            "SECURITY_BLOCKED"
+        );
+        skill_source::discard_probe(&review.probe_id);
+        skill_source::discard_probe(&blocked.probe_id);
     }
 }

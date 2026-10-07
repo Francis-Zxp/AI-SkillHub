@@ -1473,6 +1473,17 @@ struct TargetsFile<'a> {
     policy_version: &'a str,
     union: &'a [String],
     recipients: Vec<TargetsFileRecipient>,
+    /// Shared Coze/Codex folder written by Rust; PowerShell only uses the names
+    /// to keep the legacy UserData catalog aliases in step.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shared: Option<TargetsFileShared<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TargetsFileShared<'a> {
+    action: &'static str,
+    names: &'a [String],
 }
 
 #[derive(Serialize)]
@@ -1523,6 +1534,10 @@ pub(crate) fn targets_file_json(plan: &TargetsPlan, policy_version: &str) -> Res
         policy_version,
         union: &plan.union,
         recipients,
+        shared: plan.shared.as_ref().map(|shared| TargetsFileShared {
+            action: shared.action.map(RecipientAction::as_str).unwrap_or("skip"),
+            names: &shared.names,
+        }),
     })
     .map_err(|error| format!("Cannot serialize targets file: {error}"))
 }
