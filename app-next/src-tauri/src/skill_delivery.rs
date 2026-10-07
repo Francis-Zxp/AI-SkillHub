@@ -703,6 +703,21 @@ pub(crate) fn migrate_v33_delivery_state(
             params![now],
         )
         .map_err(|error| format!("Cannot migrate standalone targets: {error}"))?;
+    // A flagged pack the user already turned on in 3.2.18 stays delivered:
+    // that explicit enable counts as the confirmed review (I-5 applies to
+    // every enable from now on). Packs added "library only" stay off.
+    transaction
+        .execute(
+            "UPDATE source_security_state SET review_confirmed_at = ?1
+             WHERE scan_status IN ('review', 'blocked')
+               AND COALESCE(review_confirmed_at, '') = ''
+               AND source_id IN (
+                 SELECT s.id FROM sources s
+                 LEFT JOIN source_overrides so ON so.source_id = s.id
+                 WHERE COALESCE(so.enabled, s.enabled, 1) = 1)",
+            params![format!("migration:{now}")],
+        )
+        .map_err(|error| format!("Cannot migrate reviewed packs: {error}"))?;
     let any_takeover: bool = transaction
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_takeover WHERE enabled = 1)",
@@ -975,7 +990,16 @@ pub(crate) fn read_delivery_units(
     connection: &Connection,
     union: &[String],
 ) -> Result<Vec<UnitInfo>, String> {
-    let active_root = active_skills_dir(root);
+    read_delivery_units_at(&active_skills_dir(root), connection, union)
+}
+
+/// Same as [`read_delivery_units`] for an explicit active catalog folder.
+pub(crate) fn read_delivery_units_at(
+    active_root: &Path,
+    connection: &Connection,
+    union: &[String],
+) -> Result<Vec<UnitInfo>, String> {
+    let active_root = active_root.to_path_buf();
     let active_entries = collect_active_agent_skill_entries(&active_root).unwrap_or_default();
     let union_keys = union
         .iter()
@@ -3078,6 +3102,35 @@ mod tests {
     }
 
     #[test]
+    fn migration_keeps_flagged_packs_the_user_already_enabled() {
+        let mut connection = memory_db();
+        add_source(&connection, "pack-enabled-flagged", true);
+        add_skill(&connection, "e1", "pack-enabled-flagged");
+        add_source(&connection, "pack-library-only", true);
+        add_skill(&connection, "l1", "pack-library-only");
+        connection
+            .execute_batch(
+                "INSERT INTO source_overrides (source_id, enabled, updated_at)
+                    VALUES ('pack-library-only', 0, '1');
+                 INSERT INTO source_security_state (source_id, scan_status)
+                    VALUES ('pack-enabled-flagged', 'review'), ('pack-library-only', 'review');",
+            )
+            .unwrap();
+        migrate_v33_delivery_state(&mut connection, &BTreeSet::from(["claude"]), "").unwrap();
+        assert_eq!(
+            unit_library_reason(&connection, "pack-enabled-flagged").unwrap(),
+            ""
+        );
+        assert_eq!(
+            unit_library_reason(&connection, "pack-library-only").unwrap(),
+            "security-review"
+        );
+        assert!(pending_security_review(&connection, "pack-library-only")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
     fn migration_with_stored_fingerprint_counts_as_existing_user() {
         let mut connection = memory_db();
         let report = migrate_v33_delivery_state(&mut connection, &BTreeSet::new(), "abc").unwrap();
@@ -3701,5 +3754,96 @@ mod tests {
             "2026-10-07T10:42:00Z"
         );
         assert_eq!(iso_from_nanos(""), "");
+    }
+
+    /// Read-only audit of a real library: copy its SQLite file first, then
+    /// `AI_SKILLHUB_UNITS_AUDIT_DB=<copy> AI_SKILLHUB_UNITS_AUDIT_ACTIVE=<UserData\skills>
+    /// cargo test --lib units_audit -- --ignored --nocapture`.
+    /// Reads the active catalog (never writes it) and checks that every entry
+    /// the 3.2.18 allowlist would publish belongs to exactly one unit.
+    #[test]
+    #[ignore = "reads a real user library; run manually against a database copy"]
+    fn units_audit_of_real_library_maps_every_allowlisted_entry() {
+        let (Ok(db), Ok(active)) = (
+            std::env::var("AI_SKILLHUB_UNITS_AUDIT_DB"),
+            std::env::var("AI_SKILLHUB_UNITS_AUDIT_ACTIVE"),
+        ) else {
+            return;
+        };
+        let connection = Connection::open(&db).unwrap();
+        crate::source_governance::ensure_schema(&connection).unwrap();
+        ensure_schema(&connection).unwrap();
+        let rules = crate::read_agent_skill_allowlist_rules(&connection).unwrap();
+        let union =
+            crate::select_agent_skill_allowlist_entries(Path::new(&active), &rules).unwrap();
+        let units = read_delivery_units_at(Path::new(&active), &connection, &union).unwrap();
+        let mut owners: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for unit in &units {
+            for entry in &unit.entries {
+                owners
+                    .entry(entry.to_lowercase())
+                    .or_default()
+                    .push(unit.unit_id.clone());
+            }
+        }
+        for name in &union {
+            let owner = owners
+                .get(&name.to_lowercase())
+                .cloned()
+                .unwrap_or_default();
+            assert_eq!(owner.len(), 1, "{name} owned by {owner:?}");
+        }
+        let enabled = units.iter().filter(|unit| unit.library_enabled).count();
+        let mut reasons: BTreeMap<&str, usize> = BTreeMap::new();
+        for unit in &units {
+            *reasons.entry(unit.library_only_reason).or_default() += 1;
+        }
+        println!(
+            "units={} libraryEnabled={} union={} reasons={reasons:?}",
+            units.len(),
+            enabled,
+            union.len()
+        );
+        for unit in units.iter().filter(|unit| unit.library_enabled) {
+            assert!(
+                unit.entries
+                    .iter()
+                    .all(|entry| union.iter().any(|name| name.eq_ignore_ascii_case(entry))),
+                "{unit:?}"
+            );
+        }
+        // Simulate the upgrade on the copy: probes the machine read-only and
+        // writes only the copied database.
+        let recipients = crate::delivery_recipient_states(&connection).unwrap();
+        let has = tools_with_skillhub_entries(Path::new(&active), &recipients);
+        let fingerprint = crate::read_agent_delivery_fingerprint(&connection).unwrap();
+        let mut connection = connection;
+        let report = migrate_v33_delivery_state(&mut connection, &has, &fingerprint).unwrap();
+        materialize_defaults(&connection).unwrap();
+        println!("tools with entries: {has:?}; migration: {report:?}");
+        let units = read_delivery_units_at(Path::new(&active), &connection, &union).unwrap();
+        let evidence = Evidence::from_recipients(&recipients);
+        let plan = compute_targets_plan(
+            &union,
+            &units,
+            &read_targets(&connection).unwrap(),
+            &read_takeover(&connection).unwrap(),
+            &evidence,
+        );
+        validate_targets_plan(&plan).unwrap();
+        for recipient in &plan.recipients {
+            println!(
+                "recipient {} {:?} names={}",
+                recipient.id,
+                recipient.action,
+                recipient.names.len()
+            );
+            if recipient.action == RecipientAction::Deliver {
+                assert_eq!(recipient.names.len(), union.len(), "{}", recipient.id);
+            }
+        }
+        if let Some(shared) = &plan.shared {
+            println!("shared {:?} names={}", shared.action, shared.names.len());
+        }
     }
 }
