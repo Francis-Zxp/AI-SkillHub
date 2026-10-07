@@ -615,7 +615,10 @@ function Remove-TargetSkillLinks([string]$RecipientSkillsRoot, [string]$LinkSour
       $Entries.Add([PSCustomObject]@{ name = '(root)'; state = 'removed'; detail = '' }) | Out-Null
       return
     }
-    throw "Recipient Skills root is an external link and was preserved: $RecipientSkillsRoot"
+    # A root that links elsewhere was never written by SkillHub (deliver
+    # refuses it), so there is nothing of ours to release. Leave it alone and
+    # do not report a failure for a tool the user did not take over.
+    return
   }
   if (-not $rootItem.PSIsContainer) { return }
   foreach ($existing in @(Get-ChildItem -LiteralPath $RecipientSkillsRoot -Force -Directory -ErrorAction SilentlyContinue)) {

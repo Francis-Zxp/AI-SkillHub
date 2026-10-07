@@ -181,6 +181,16 @@ try {
   Assert-True ((Linked $claude) -join ',' -eq 'alpha,gamma') '(f) Claude is still delivered'
   Assert-True (@(Get-ChildItem -LiteralPath $elsewhere -Force).Count -eq 0) '(f) the external folder was not written'
 
+  # Releasing a tool whose root links elsewhere touches nothing and is not a
+  # failure (a tool that is not taken over must never report a problem).
+  [IO.File]::WriteAllText((Join-Path $elsewhere 'keep.txt'), 'external content')
+  $report = Invoke-Targets @('alpha') @(
+    [PSCustomObject]@{ id = 'antigravity'; action = 'release'; path = $antigravity; names = @() }
+  ) $presence
+  Assert-True ((Recipient $report 'antigravity').outcome -eq 'released') '(f) release of an external-link root is not a failure'
+  Assert-True (((Get-Item -LiteralPath $antigravity -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) '(f) the external root link is kept'
+  Assert-True ([IO.File]::ReadAllText((Join-Path $elsewhere 'keep.txt')) -eq 'external content') '(f) the external folder is untouched'
+
   # A path that is not the tool's real folder is refused per recipient.
   $report = Invoke-Targets @('alpha') @(
     [PSCustomObject]@{ id = 'claude'; action = 'deliver'; path = (Join-Path $testRoot 'not-claude'); names = @('alpha') }

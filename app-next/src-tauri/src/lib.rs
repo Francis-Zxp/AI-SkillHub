@@ -1500,6 +1500,14 @@ fn acquire_background_write_guard_waiting(
     }
 }
 
+/// User-initiated saves (metadata, tags, version pin, delete …). Since v3.3 a
+/// background delivery job may hold the guard after any toggle, so these wait
+/// for it (bounded) instead of failing with "busy". Every caller runs on a
+/// blocking worker, never on the window thread.
+fn acquire_user_write_guard(operation: &str) -> Result<BackgroundWriteGuard, String> {
+    acquire_background_write_guard_waiting(operation, LONG_COMMAND_GUARD_WAIT, |_| {})
+}
+
 fn acquire_background_file_lock(state_dir: &Path, operation: &str) -> Result<fs::File, String> {
     fs::create_dir_all(state_dir)
         .map_err(|error| format!("无法准备写入锁目录，未开始{operation}：{error}"))?;
@@ -2127,7 +2135,7 @@ fn set_source_version_pin_blocking(
     source_id: String,
     pinned: bool,
 ) -> Result<LegacySnapshot, String> {
-    let _write_guard = acquire_background_write_guard("来源版本固定")?;
+    let _write_guard = acquire_user_write_guard("来源版本固定")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
         let _ = scan_legacy_snapshot_under_write_guard()?;
@@ -2138,7 +2146,7 @@ fn set_source_version_pin_blocking(
 }
 
 fn refresh_source_version_status_blocking(source_id: String) -> Result<LegacySnapshot, String> {
-    let _write_guard = acquire_background_write_guard("来源版本检查")?;
+    let _write_guard = acquire_user_write_guard("来源版本检查")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
         let _ = scan_legacy_snapshot_under_write_guard()?;
@@ -2149,7 +2157,7 @@ fn refresh_source_version_status_blocking(source_id: String) -> Result<LegacySna
 }
 
 fn rollback_source_to_latest_backup_blocking(source_id: String) -> Result<LegacySnapshot, String> {
-    let _write_guard = acquire_background_write_guard("来源版本回滚")?;
+    let _write_guard = acquire_user_write_guard("来源版本回滚")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
         let _ = scan_legacy_snapshot_under_write_guard()?;
@@ -4451,7 +4459,7 @@ fn save_source_metadata_blocking(
     enabled: bool,
     tags: Vec<String>,
 ) -> Result<SourceMutationResult, SkillHubError> {
-    let _write_guard = acquire_background_write_guard("来源保存")?;
+    let _write_guard = acquire_user_write_guard("来源保存")?;
     let root = resolve_legacy_root()?;
     let mut connection = open_index_database(&root)?;
     // I-5: turning a flagged pack on needs the explicit review dialog
@@ -4637,7 +4645,7 @@ where
 #[tauri::command]
 async fn set_skill_tags(folder_name: String, tags: Vec<String>) -> Result<LegacySnapshot, String> {
     run_blocking_task(move || {
-        let _write_guard = acquire_background_write_guard("Skill 标签保存")?;
+        let _write_guard = acquire_user_write_guard("Skill 标签保存")?;
         let root = resolve_legacy_root()?;
         let connection = open_index_database(&root)?;
         set_skill_tags_in_connection(&connection, &folder_name, &tags)?;
@@ -4649,7 +4657,7 @@ async fn set_skill_tags(folder_name: String, tags: Vec<String>) -> Result<Legacy
 #[tauri::command]
 async fn set_source_tags(source_id: String, tags: Vec<String>) -> Result<LegacySnapshot, String> {
     run_blocking_task(move || {
-        let _write_guard = acquire_background_write_guard("来源标签保存")?;
+        let _write_guard = acquire_user_write_guard("来源标签保存")?;
         let root = resolve_legacy_root()?;
         let connection = open_index_database(&root)?;
         set_source_tags_in_connection(&connection, &source_id, &tags)?;
@@ -4964,7 +4972,7 @@ async fn delete_managed_source(source_id: String) -> Result<LegacySnapshot, Stri
 /// Deletion keeps its inline reconcile: a failed rebuild must restore the
 /// exact previous source tree, which needs the result before returning.
 fn delete_managed_source_blocking(source_id: String) -> Result<LegacySnapshot, String> {
-    let _write_guard = acquire_background_write_guard("来源删除")?;
+    let _write_guard = acquire_user_write_guard("来源删除")?;
     let root = resolve_legacy_root()?;
     if !database_file(&root).exists() {
         let _ = scan_legacy_snapshot_under_write_guard()?;
@@ -19820,7 +19828,7 @@ fn set_skill_conflict_choice_blocking(
         _ => return Err("Unsupported skill conflict status.".to_string()),
     };
 
-    let _write_guard = acquire_background_write_guard("Skill 冲突默认项保存")?;
+    let _write_guard = acquire_user_write_guard("Skill 冲突默认项保存")?;
     let root = resolve_legacy_root()?;
     let connection = open_index_database(&root)?;
     let skills = read_indexed_skills(&connection)?;

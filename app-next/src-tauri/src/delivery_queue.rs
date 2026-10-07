@@ -334,8 +334,22 @@ fn worker_loop(runner: JobRunner) {
         status.snapshot_stale = outcome.snapshot_stale;
         status.error = outcome.error;
         publish(status);
-        if let Ok(mut core) = queue.core.lock() {
+        let follow_up = {
+            // Never leave the queue "running" forever, even after a panic
+            // poisoned the lock elsewhere.
+            let mut core = queue
+                .core
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             core.finish(batch.job_id);
+            core.pending_job()
+                .map(|pending| DeliveryJobStatus::from_batch(pending, "queued"))
+        };
+        // A follow-up collected while this job ran must not stay hidden behind
+        // the finished status (`get_skill_delivery_state().job` would read
+        // "done" while work is still queued).
+        if let Some(follow_up) = follow_up {
+            publish(follow_up);
         }
         queue.wake.notify_all();
         // The job's scan and reconcile buffers are gone; keep the idle

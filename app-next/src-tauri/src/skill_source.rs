@@ -148,7 +148,10 @@ fn github_result(
         Err(error) => return ParsedSkillSource::invalid(input, "github", error),
     };
     let git_ref = crate::sparse_scope::percent_decode(git_ref);
-    if git_ref.contains("..")
+    // A ref is later passed to git; one that starts with '-' could read as an
+    // option, so it is refused like any other malformed ref.
+    if git_ref.starts_with('-')
+        || git_ref.contains("..")
         || git_ref
             .chars()
             .any(|c| c.is_control() || c == ' ' || c == '\\')
@@ -240,12 +243,15 @@ fn home_dir() -> PathBuf {
 }
 
 fn local_candidate(text: &str) -> Option<PathBuf> {
-    if let Some(rest) = text
-        .strip_prefix("file:///")
-        .or_else(|| text.strip_prefix("file://"))
-    {
+    if let Some(rest) = text.strip_prefix("file:///") {
         let decoded = crate::sparse_scope::percent_decode(rest);
         return Some(PathBuf::from(decoded.replace('/', "\\")));
+    }
+    if let Some(rest) = text.strip_prefix("file://") {
+        // `file://server/share/x` names a network share, never a path that is
+        // relative to SkillHub's own working folder.
+        let decoded = crate::sparse_scope::percent_decode(rest);
+        return Some(PathBuf::from(format!("\\\\{}", decoded.replace('/', "\\"))));
     }
     if let Some(rest) = text.strip_prefix("~\\").or_else(|| text.strip_prefix("~/")) {
         return Some(home_dir().join(rest));
@@ -1724,6 +1730,16 @@ mod tests {
         assert_eq!(
             code("https://github.com/o/r/tree/main/C:/x"),
             "GITHUB_SUBPATH_NOT_FOUND"
+        );
+        // A ref that would read as a git option is refused.
+        assert_eq!(
+            code("https://github.com/o/r/tree/--upload-pack=x/skills"),
+            "GITHUB_REF_NOT_FOUND"
+        );
+        // file://server/share is a network share, never a relative path.
+        assert_eq!(
+            local_candidate("file://server/share/skills"),
+            Some(PathBuf::from(r"\\server\share\skills"))
         );
 
         assert_eq!(code(""), "INPUT_EMPTY");

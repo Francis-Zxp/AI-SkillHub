@@ -178,6 +178,27 @@ pub(crate) fn ensure_schema(connection: &Connection) -> Result<(), String> {
             )
             .map_err(|error| format!("Cannot extend source governance schema: {error}"))?;
     }
+    // v3.3 (I-5): when the user confirmed the review of a flagged pack. Lives
+    // next to the scan it confirms; `record_security_scan` clears it whenever
+    // a new scan reports a different result.
+    let has_review_column = connection
+        .prepare("PRAGMA table_info(source_security_state)")
+        .and_then(|mut statement| {
+            let names = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(names.iter().any(|name| name == "review_confirmed_at"))
+        })
+        .map_err(|error| format!("Cannot inspect source security schema: {error}"))?;
+    if !has_review_column {
+        connection
+            .execute(
+                "ALTER TABLE source_security_state
+                 ADD COLUMN review_confirmed_at TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .map_err(|error| format!("Cannot add security review column: {error}"))?;
+    }
     Ok(())
 }
 
@@ -1110,6 +1131,21 @@ pub(crate) fn record_security_scan(
     } else {
         "unknown"
     };
+    let previous = connection
+        .query_row(
+            "SELECT scan_status, high_findings, medium_findings
+             FROM source_security_state WHERE source_id = ?1",
+            params![source_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read source security evidence: {error}"))?;
     connection
         .execute(
             "INSERT INTO source_security_state (
@@ -1134,6 +1170,20 @@ pub(crate) fn record_security_scan(
             ],
         )
         .map_err(|error| format!("Cannot persist source security evidence: {error}"))?;
+    // I-5: a confirmed review covers exactly the result the user saw. A scan
+    // with a different result needs a fresh confirmation before the pack can
+    // be enabled again.
+    let unchanged = previous.is_some_and(|(status, high, medium)| {
+        status == scan_status && high == high_findings as i64 && medium == medium_findings as i64
+    });
+    if !unchanged {
+        connection
+            .execute(
+                "UPDATE source_security_state SET review_confirmed_at = '' WHERE source_id = ?1",
+                params![source_id],
+            )
+            .map_err(|error| format!("Cannot reset security review: {error}"))?;
+    }
     Ok(())
 }
 
@@ -1725,6 +1775,34 @@ fn compact_error(value: impl AsRef<str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_scan_result_needs_a_fresh_security_review() {
+        // I-5: a confirmation covers only the result the user saw.
+        let connection = Connection::open_in_memory().expect("database should open");
+        let confirmed = |connection: &Connection| -> String {
+            connection
+                .query_row(
+                    "SELECT review_confirmed_at FROM source_security_state WHERE source_id = 'pack'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        record_security_scan(&connection, "pack", "review", 10, 0, 2).unwrap();
+        connection
+            .execute(
+                "UPDATE source_security_state SET review_confirmed_at = 'user:1' WHERE source_id = 'pack'",
+                [],
+            )
+            .unwrap();
+        // The same result again (an already-managed re-import) keeps it.
+        record_security_scan(&connection, "pack", "review", 12, 0, 2).unwrap();
+        assert_eq!(confirmed(&connection), "user:1");
+        // New findings clear it, so enabling asks again.
+        record_security_scan(&connection, "pack", "review", 12, 1, 2).unwrap();
+        assert_eq!(confirmed(&connection), "");
+    }
 
     #[test]
     fn symref_listing_yields_the_remote_default_branch() {
