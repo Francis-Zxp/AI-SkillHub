@@ -19920,20 +19920,16 @@ fn json_u64(value: &Value, key: &str) -> u64 {
 
 /// Runs one delivery batch on the queue's worker thread (§3.4, §3.5).
 fn run_delivery_job(reporter: &delivery_queue::Reporter<'_>) -> delivery_queue::JobOutcome {
-    match run_delivery_job_inner(reporter) {
-        Ok(outcome) => outcome,
-        Err(error) => delivery_queue::JobOutcome {
-            phase: "failed",
-            error: Some(error),
-            ..delivery_queue::JobOutcome::default()
-        },
-    }
+    run_delivery_job_inner(reporter).unwrap_or_else(|error| delivery_queue::JobOutcome {
+        phase: "failed",
+        error: Some(error),
+        ..delivery_queue::JobOutcome::default()
+    })
 }
 
 fn run_delivery_job_inner(
     reporter: &delivery_queue::Reporter<'_>,
 ) -> Result<delivery_queue::JobOutcome, SkillHubError> {
-    use delivery_queue::Depth;
     let batch = reporter.batch().clone();
     // Wait for (never fail on) another operation holding the guard.
     let _guard = acquire_background_write_guard_waiting(
@@ -19943,49 +19939,13 @@ fn run_delivery_job_inner(
     )?;
     reporter.running();
     let root = resolve_legacy_root()?;
-    if !database_file(&root).exists() {
-        let _ = scan_legacy_snapshot_under_write_guard()?;
-    }
-    let mut connection = open_index_database(&root)?;
-    ensure_v33_delivery_migration(&root, &mut connection)?;
-    skill_delivery::materialize_defaults(&connection)?;
-
-    let blocked = skill_delivery::delivery_writes_blocked(&connection)?;
-    let mut depth = batch.depth;
-    let mut phase = "done";
-    let mut agents = Vec::new();
-    let mut snapshot_stale = false;
-    let mut connection = connection;
-    if depth == Depth::Verify {
-        if blocked {
-            phase = "paused";
-        } else if !agent_delivery_is_current(&root, &connection)? {
-            depth = Depth::Full;
-        }
-    }
-    if depth == Depth::Links {
-        if blocked {
-            phase = "paused";
-        } else {
-            let run = run_agent_link_script(&root, &connection)?;
-            verify_link_step(&root, &connection, &run)?;
-            if matches!(run, DeliveryRun::Blocked) {
-                phase = "paused";
-            }
-            agents = run.results();
-        }
-    }
-    if depth == Depth::Full {
-        let (next, run) =
-            reconcile_agent_skill_delivery_run(&root, &connection, batch.refresh_detection)?;
-        connection = next;
-        snapshot_stale = true;
-        if matches!(run, DeliveryRun::Blocked) {
-            phase = "paused";
-        }
-        agents = run.results();
-    }
-    let changed_targets = read_back_delivery_targets(&root, &connection)?;
+    let steps = run_delivery_job_steps(&root, &batch);
+    // Read back even after a failure, so a target never stays "pending" for
+    // a job that has already ended (I-3).
+    let changed_targets = open_index_database(&root)
+        .and_then(|connection| read_back_delivery_targets(&root, &connection))
+        .unwrap_or_default();
+    let (phase, agents, snapshot_stale) = steps?;
     Ok(delivery_queue::JobOutcome {
         phase,
         agents,
@@ -19993,6 +19953,53 @@ fn run_delivery_job_inner(
         snapshot_stale,
         error: None,
     })
+}
+
+type DeliveryJobSteps = (&'static str, Vec<skill_delivery::AgentDeliveryResult>, bool);
+
+/// §3.4: migration → materialize → verify / links / full. Runs under the
+/// background write guard held by the caller.
+fn run_delivery_job_steps(
+    root: &Path,
+    batch: &delivery_queue::Batch,
+) -> Result<DeliveryJobSteps, SkillHubError> {
+    use delivery_queue::Depth;
+    if !database_file(root).exists() {
+        let _ = scan_legacy_snapshot_under_write_guard()?;
+    }
+    let mut connection = open_index_database(root)?;
+    ensure_v33_delivery_migration(root, &mut connection)?;
+    skill_delivery::materialize_defaults(&connection)?;
+
+    let blocked = skill_delivery::delivery_writes_blocked(&connection)?;
+    let mut depth = batch.depth;
+    if depth == Depth::Verify {
+        if blocked {
+            return Ok(("paused", Vec::new(), false));
+        }
+        if agent_delivery_is_current(root, &connection)? {
+            return Ok(("done", Vec::new(), false));
+        }
+        depth = Depth::Full;
+    }
+    let (run, snapshot_stale) = if depth == Depth::Links {
+        if blocked {
+            return Ok(("paused", Vec::new(), false));
+        }
+        let run = run_agent_link_script(root, &connection)?;
+        verify_link_step(root, &connection, &run)?;
+        (run, false)
+    } else {
+        let (_connection, run) =
+            reconcile_agent_skill_delivery_run(root, &connection, batch.refresh_detection)?;
+        (run, true)
+    };
+    let phase = if matches!(run, DeliveryRun::Blocked) {
+        "paused"
+    } else {
+        "done"
+    };
+    Ok((phase, run.results(), snapshot_stale))
 }
 
 /// Evidence for reads and mutations. Mutations accept cached evidence of any
