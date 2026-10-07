@@ -1,92 +1,70 @@
+// Folder navigation and library rows (v3.3). The library list, the folder chips and the
+// islands all derive from src/skillCounts.ts (invariant I-11), so these checks run the real
+// module instead of slices of a page component.
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import ts from "typescript";
 import { readAppSource } from "./app-source.mjs";
 
-const text = await readAppSource();
-const ast = ts.createSourceFile("App.tsx", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-function find(predicate) {
-  let found;
-  function visit(node) {
-    if (found) return;
-    if (predicate(node)) found = node;
-    else ts.forEachChild(node, visit);
-  }
-  visit(ast);
-  assert.ok(found, "Expected production declaration exists");
-  return found;
-}
-function run(code, bindings = {}) {
-  const javascript = ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  return Function(...Object.keys(bindings), javascript)(...Object.values(bindings));
-}
-function declaration(name) {
-  // Shared helpers are exported from their module now; evaluate the declaration itself.
-  return find(node => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(ast).replace(/^export\s+/, "");
-}
-function initializer(name, bindings) {
-  const node = find(node => ts.isVariableDeclaration(node) && node.name.getText(ast) === name);
-  return run(`return ${node.initializer.getText(ast)};`, { sourceTypeFilter: "all", ...bindings });
-}
-const modelText = await readFile(new URL("../src/skyIslandModel.ts", import.meta.url), "utf8");
-const model = await import(`data:text/javascript,${encodeURIComponent(ts.transpileModule(modelText, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText)}`);
-const helpers = ["normalizeLookup", "skillBelongsToSource", "resolveSkillSource", "isRouterHubSkill", "skillMatchesUserFolder", "sourceMatchesUserFolder"];
-const functions = run(`${helpers.map(declaration).join("\n")}\nreturn {${helpers.join(",")}};`, {
-  modelSkillBelongsToSource: model.skillBelongsToSource, modelIsRouterHubSkill: model.isRouterHubSkill
-});
-const source = { id: "repo", name: "owner-repo", url: "", userFolderId: "research" };
-const skills = [
-  { id: "inherited", sourceId: "repo", userFolderId: "", isRouterHub: false },
-  { id: "override", sourceId: "repo", userFolderId: "writing", isRouterHub: false },
-  { id: "router", sourceId: "repo", userFolderId: "writing", isRouterHub: true },
-  { id: "legacy", source: "owner_repo", userFolderId: "writing", isRouterHub: false },
-  { id: "local", source: "standalone", userFolderId: "", isRouterHub: false }
-];
-const bindings = {
-  ...functions, sources: [source], skills, skillFolders: [{ id: "research" }, { id: "writing" }],
-  skillsBySourceId: new Map([[source.id, skills.slice(0, 4)]]),
-  useMemo: callback => callback(), applySourceDraft: value => value,
-  applySkillDraft: value => value, sortSources: values => values, sortSkills: values => values,
-  sourceDrafts: {}, skillDrafts: {}, searchQuery: "", sortKey: "recent", popularityById: new Map()
-};
+const transpile = text => ts.transpileModule(text, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 }
+}).outputText;
+const asModuleUrl = javascript => `data:text/javascript,${encodeURIComponent(javascript)}`;
 
-test("source type selection distinguishes Skills, Prompts and other sources", () => {
-  const sources = [{...source, id: "skill", sourceType: "skill"}, {...source, id: "prompt", sourceType: "prompt"}, {...source, id: "other", sourceType: "mixed"}];
-  for (const type of ["skill", "prompt", "other"]) {
-    assert.deepEqual(initializer("visibleSources", {...bindings, sources, selectedFolderId: "all", sourceTypeFilter: type}).map(item => item.id), [type]);
-  }
-  assert.equal(initializer("visibleSources", {...bindings, sources, selectedFolderId: "all"}).length, 3);
-});
+const countsUrl = asModuleUrl(transpile(await readFile(new URL("../src/skillCounts.ts", import.meta.url), "utf8")));
+const counts = await import(countsUrl);
+const modelText = transpile(await readFile(new URL("../src/skyIslandModel.ts", import.meta.url), "utf8"))
+  .replace(/from\s+["']\.\/skillCounts["']/g, `from ${JSON.stringify(countsUrl)}`);
+const model = await import(asModuleUrl(modelText));
+const app = (await readAppSource()).replace(/\r\n/g, "\n");
+
+const source = { id: "repo", name: "owner-repo", url: "", userFolderId: "research", sourceType: "skill", enabled: true };
+const skill = (id, extra) => ({ id, name: id, folderName: id, description: "", relativePath: `skills/${id}`, enabled: true, tags: [], ...extra });
+const skills = [
+  skill("inherited", { sourceId: "repo", userFolderId: "", isRouterHub: false }),
+  skill("override", { sourceId: "repo", userFolderId: "writing", isRouterHub: false }),
+  skill("router", { sourceId: "repo", userFolderId: "writing", isRouterHub: true }),
+  skill("legacy", { source: "owner_repo", userFolderId: "writing", isRouterHub: false }),
+  skill("local", { source: "standalone", userFolderId: "", isRouterHub: false })
+];
+const skillFolders = [{ id: "research", name: "research", sortOrder: 0, skillCount: 999 }, { id: "writing", name: "writing", sortOrder: 1, skillCount: 999 }];
+const snapshot = { sources: [source], skills, skillFolders };
 
 test("folder filtering honors a child override before source inheritance", () => {
-  assert.equal(functions.skillMatchesUserFolder(skills[0], "research", source), true);
-  assert.equal(functions.skillMatchesUserFolder(skills[1], "research", source), false);
-  assert.equal(functions.skillMatchesUserFolder(skills[1], "writing", source), true);
-  assert.equal(functions.skillMatchesUserFolder(skills[4], "unfiled"), true);
-  assert.equal(functions.skillMatchesUserFolder(skills[1], "all", source), true);
-  const snapshot = { sources: [source], skills, skillFolders: bindings.skillFolders.map((folder, i) => ({ ...folder, name: folder.id, sortOrder: i, skillCount: 999 })) };
-  const counts = initializer("folderCounts", { snapshot, useMemo: callback => callback(), buildSkyIslands: model.buildSkyIslands });
-  assert.deepEqual([...counts], [["research", 1], ["writing", 2], ["unfiled", 1]], "Library shelf ignores stale stored counts and excludes parent routers");
+  const rows = counts.buildLibraryRows(snapshot);
+  const repo = rows.find(row => row.key === "repo");
+  assert.deepEqual(counts.rowSkillsInFolder(repo, "research").map(item => item.id), ["inherited"]);
+  assert.deepEqual(counts.rowSkillsInFolder(repo, "writing").map(item => item.id), ["override", "legacy"]);
+  assert.deepEqual(counts.rowSkillsInFolder(repo, "all").map(item => item.id), ["inherited", "override", "legacy"]);
+  // Stored folder counts are ignored and parent routers never count.
+  const perFolder = ["research", "writing", "unfiled"].map(folderId => [folderId, counts.countSkills(snapshot, { folderId }).skills]);
+  assert.deepEqual(perFolder, [["research", 1], ["writing", 2], ["unfiled", 1]]);
 });
 
-test("Library shows the source of a legacy child override and only matching children", () => {
-  const context = { ...bindings, selectedFolderId: "writing" };
-  assert.deepEqual(initializer("visibleSources", context).map(item => item.id), ["repo"]);
-  assert.deepEqual(initializer("sourceSkills", { ...context, source }).filter(item => !functions.isRouterHubSkill(item)).map(item => item.id), ["override", "legacy"]);
-  assert.deepEqual(initializer("sourceSkills", { ...context, source, selectedFolderId: "research" }).map(item => item.id), ["inherited"]);
+test("a folder shows the pack of a child override and only the matching children", () => {
+  const rows = counts.buildLibraryRows(snapshot).filter(row => counts.rowInFolder(row, "writing"));
+  assert.deepEqual(rows.map(row => row.key), ["repo"]);
+  assert.ok(counts.rowInFolder(counts.buildLibraryRows(snapshot).find(row => row.key === "repo"), "research"));
 });
 
-test("legacy named source children do not appear a second time as local Skills", () => {
-  assert.deepEqual(initializer("localSkills", { ...bindings, selectedFolderId: "writing" }), []);
-  assert.deepEqual(initializer("localSkills", { ...bindings, selectedFolderId: "unfiled" }).map(item => item.id), ["local"]);
+test("legacy named pack children do not appear a second time as standalone skills", () => {
+  const rows = counts.buildLibraryRows(snapshot);
+  const standalone = folderId => rows.filter(row => row.kind === "standalone" && counts.rowInFolder(row, folderId)).map(row => row.skill.id);
+  assert.deepEqual(standalone("writing"), []);
+  assert.deepEqual(standalone("unfiled"), ["local"]);
 });
 
-test("library entry defaults to all and translates legacy empty folder id", () => {
+test("library entry defaults to all and translates a legacy empty folder id", () => {
+  const start = app.indexOf("  function openLibrary(folderId = \"all\") {");
+  const end = app.indexOf("\n  }\n", start) + 4;
+  const declaration = app.slice(start, end);
+  assert.ok(declaration.includes('setLibraryFolderId(folderId || "unfiled");'));
   const states = [];
-  const openLibrary = run(`${declaration("openLibrary")}\nreturn openLibrary;`, {
-    setLibraryFolderId: id => states.push(["folder", id]), setActive: id => states.push(["view", id])
-  });
+  const openLibrary = Function("setLibraryFolderId", "navigate", `${ts.transpileModule(declaration, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText}\nreturn openLibrary;`)(
+    id => states.push(["folder", id]),
+    id => states.push(["view", id])
+  );
   openLibrary("writing");
   openLibrary();
   openLibrary("");
@@ -95,12 +73,22 @@ test("library entry defaults to all and translates legacy empty folder id", () =
 
 test("ambiguous legacy names and orphan source IDs stay visible in unfiled", () => {
   const sources = [{ ...source, id: "a" }, { ...source, id: "b" }];
-  const skills = [
-    { ...bindings.skills[3], id: "ambiguous", userFolderId: "" },
-    { ...bindings.skills[0], id: "orphan", sourceId: "missing", userFolderId: "deleted-folder" }
+  const orphanSkills = [
+    { ...skills[3], id: "ambiguous", userFolderId: "" },
+    { ...skills[0], id: "orphan", sourceId: "missing", userFolderId: "deleted-folder" }
   ];
-  const context = { ...bindings, sources, skills, selectedFolderId: "unfiled" };
-  assert.equal(initializer("skillsBySourceId", context).size, 0);
-  assert.deepEqual(initializer("localSkills", context).map(item => item.id), ["ambiguous", "orphan"]);
-  assert.equal(model.buildSkyIslands({ sources, skills, skillFolders: bindings.skillFolders.map((folder, i) => ({ ...folder, name: folder.id, sortOrder: i })) }, "Unfiled").find(island => island.id === "unfiled").skillCount, 2);
+  const rows = counts.buildLibraryRows({ sources, skills: orphanSkills, skillFolders });
+  const unfiled = rows.filter(row => row.kind === "standalone" && counts.rowInFolder(row, "unfiled"));
+  assert.deepEqual(unfiled.map(row => row.skill.id), ["ambiguous", "orphan"]);
+  assert.equal(model.buildSkyIslands({ sources, skills: orphanSkills, skillFolders }, "Unfiled").find(island => island.id === "unfiled").skillCount, 2);
+});
+
+test("the filter bar replaces the hidden source-type filter (bug #5)", () => {
+  assert.doesNotMatch(app, /sourceTypeFilter/);
+  const base = { unit: { unitId: "u", libraryOnlyReason: "" }, source: { health: "ok" }, governance: null };
+  assert.deepEqual(counts.rowFilterState({ ...base, targets: [{ status: "synced" }] }), { synced: true, unsynced: false, update: false, problem: false });
+  assert.deepEqual(counts.rowFilterState({ ...base, targets: [{ status: "off" }] }), { synced: false, unsynced: true, update: false, problem: false });
+  assert.equal(counts.rowFilterState({ ...base, targets: [{ status: "conflict" }] }).problem, true);
+  assert.equal(counts.rowFilterState({ ...base, targets: [], governance: { relation: "update-available", status: "ready" } }).update, true);
+  assert.equal(counts.rowFilterState({ ...base, unit: { unitId: "u", libraryOnlyReason: "prompt-only" }, targets: [] }).unsynced, false);
 });

@@ -4,6 +4,7 @@ import { getLang } from "./i18n";
 import type { Lang } from "./i18n";
 import { Icon } from "./icons";
 import type { LegacySnapshot } from "./types";
+import { normalizeSkillHubError } from "./skillErrors";
 import "./SourceIdentityPanel.css";
 
 export type IdentityPlanEntry = {
@@ -53,7 +54,7 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
       setPlan(next);
       setSelected(new Set(next.entries.filter(entry => entry.action === "rename").map(entry => entry.sourceId)));
     } catch (error) {
-      onError(String(error));
+      onError(normalizeSkillHubError(error).message);
     } finally {
       setLoading(false);
     }
@@ -81,7 +82,7 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
       setConfirming(false);
       await refresh();
     } catch (error) {
-      onError(String(error));
+      onError(normalizeSkillHubError(error).message);
       await refresh();
     } finally {
       setApplying(false);

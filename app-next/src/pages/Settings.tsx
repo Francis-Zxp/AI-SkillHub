@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { type CSSProperties, Suspense, lazy, useEffect, useState } from "react";
 import { Icon } from "../icons";
 import { LANG_OPTIONS, type Lang, t } from "../i18n";
+import { SKY_SCENE_EVENT, setSkySceneEnabled, skySceneEnabled } from "../skyScene";
 import { rt } from "../sourceUpdateRun";
 import type {
   GitInstallResultCard,
@@ -214,7 +215,7 @@ export function Settings({
             : "error"
       );
     } catch (error) {
-      showUiToast(normalizeSkillHubError(error).message || messageFromError(error), "error");
+      showUiToast(messageFromError(error), "error");
     } finally {
       setGitInstallBusy(false);
     }
@@ -306,6 +307,7 @@ export function Settings({
               onChange={onChangeHomeVisual}
             />
           </div>
+          {homeVisual === "islands" && <SkySceneSettingRow />}
           <details className="settings-more-themes" open={appearance === "custom"}>
             <summary>{t("v33.moreThemes")}</summary>
             <div className="theme-grid" role="radiogroup" aria-label={t("v33.moreThemes")}>
@@ -471,6 +473,7 @@ export function Settings({
           </Suspense>
         ) : sourceUpdateProblems.length > 0 && (
           <div className="source-update-problem-list" role="status">
+            <strong>{t("set.sourceUpdatesTitle")}</strong>
             {sourceUpdateProblems.map((item, index) => (
               <article className="source-update-problem-card" key={`${item.repository}-${item.status}-${index}`}>
                 <span className="source-update-problem-icon" aria-hidden="true"><Icon name="alert" /></span>
@@ -564,6 +567,27 @@ export function Settings({
           </Suspense>
         )}
       </section>
+    </div>
+  );
+}
+
+/** 群岛 style: 3D islands, or simple category cards that use no GPU (software renderers start here). */
+function SkySceneSettingRow() {
+  const [enabled, setEnabled] = useState(skySceneEnabled);
+  useEffect(() => {
+    const onChange = (event: Event) => setEnabled(Boolean((event as CustomEvent<boolean>).detail));
+    window.addEventListener(SKY_SCENE_EVENT, onChange);
+    return () => window.removeEventListener(SKY_SCENE_EVENT, onChange);
+  }, []);
+  return (
+    <div className="settings-row">
+      <strong>{t("set.skyScene")}</strong>
+      <SegmentedToggle
+        label={t("set.skyScene")}
+        value={enabled ? "on" : "off"}
+        options={[{ value: "on", label: t("set.skySceneOn") }, { value: "off", label: t("set.skySceneOff") }]}
+        onChange={value => setSkySceneEnabled(value === "on")}
+      />
     </div>
   );
 }

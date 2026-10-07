@@ -8,7 +8,7 @@ const skyModel = await readFile(new URL("../src/skyIslandModel.ts", import.meta.
 const backend = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 const universe = await readFile(new URL("../src/SkillUniverse.tsx", import.meta.url), "utf8");
 const i18n = await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8");
-const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
 const tauriConfig = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 
 test("Skill folders are SQLite metadata and never move or delete Skill files", () => {
@@ -21,61 +21,38 @@ test("Skill folders are SQLite metadata and never move or delete Skill files", (
   assert.doesNotMatch(folderCommands, /remove_dir|remove_file|rename\(|fs::copy/);
 });
 
-test("library keeps drag handles separate from the accessible folder select", () => {
-  assert.equal(tauriConfig.app.windows[0].dragDropEnabled, false, "Windows HTML drag/drop requires Tauri native file drop to be disabled");
-  assert.match(app, /application\/x-ai-skillhub-skill-id/);
-  assert.match(app, /application\/x-ai-skillhub-source-id/);
-  assert.match(app, /source-folder-drag-handle/);
-  assert.match(app, /<Icon name="grip"/);
-  assert.match(app, /folders\.dragShort/);
-  const sourceDragHandle = app.match(/<span\s+aria-label=\{t\("folders\.dragSource"[\s\S]*?className=\{`source-folder-drag-handle[\s\S]*?<\/span>/)?.[0] ?? "";
-  assert.match(sourceDragHandle, /draggable=\{!loading\}/);
-  assert.match(sourceDragHandle, /onDragStart=/);
-  assert.doesNotMatch(sourceDragHandle, /showPicker|onClick|onKeyDown|aria-haspopup|role="button"|tabIndex/);
-  assert.doesNotMatch(app, /getData\("text\/plain"/);
-  assert.equal((app.match(/setData\("text\/plain"/g) ?? []).length, 2);
-  assert.match(app, /if \(disabled \|\| !hasInternalSkillDrag\(event\.dataTransfer\)\) return/);
-  assert.equal((app.match(/if \(!hasInternalSkillDrag\(event\.dataTransfer\)\) return/g) ?? []).length, 2);
-  assert.match(app, /window\.addEventListener\("dragover", preventExternalDropNavigation\)/);
-  assert.match(app, /window\.addEventListener\("drop", preventExternalDropNavigation\)/);
-  assert.match(app, /type === "Files" \|\| type === "text\/plain" \|\| type === "text\/uri-list"/);
-  assert.match(app, /<select[\s\S]*folders\.choose/);
-  assert.equal((app.match(/event\.dataTransfer\.dropEffect = "move"/g) ?? []).length, 2);
-  assert.match(app, /skillMatchesUserFolder/);
-  assert.match(app, /delete_skill_folder/);
-  assert.match(i18n, /Skill 不会删除，只会回到/);
-  assert.match(app, /skill-folder-manage/);
-  assert.doesNotMatch(app, /skill-folder-item-actions/);
-  assert.match(app, /className="skill-folder-manage"[\s\S]*?onClick=\{\(\) => openEdit\(folder\)\}[\s\S]*?type="button"/);
-  assert.match(app, /onMove\(editingId, "up"\)/);
-  assert.match(app, /onMove\(editingId, "down"\)/);
-  assert.match(app, /SKILL_FOLDER_COLOR_HEX/);
-  assert.match(styles, /background: var\(--folder-tone\) !important/);
-  assert.match(styles, /\.skill-folder-strip \{[\s\S]*?grid-template-columns: repeat\(auto-fit/);
-  const folderStripStyles = styles.match(/\.skill-folder-strip \{([^}]*)\}/)?.[1] ?? "";
-  assert.doesNotMatch(folderStripStyles, /overflow-x:\s*auto/);
-  assert.match(styles, /\.skill-folder-item \{[\s\S]*?position: relative/);
-  assert.match(styles, /\.skill-folder-item > \.skill-folder-target \{[\s\S]*?padding-right: calc\(44px/);
-  assert.match(styles, /\.skill-folder-manage \{[\s\S]*?position: absolute[\s\S]*?top: var\(--space-2\)[\s\S]*?right: var\(--space-2\)[\s\S]*?width: 44px[\s\S]*?height: 44px/);
-  assert.match(styles, /\.source-folder-drag-handle \{[\s\S]*?min-width: 44px[\s\S]*?min-height: 44px/);
-  assert.match(styles, /\.skill-folder-editor \.folder-color-dot,[\s\S]*?width: 44px[\s\S]*?height: 44px/);
-  assert.match(styles, /source-group-title strong[\s\S]*?-webkit-line-clamp: 2/);
+test("library moves rows into folders with a pointer grip and an accessible menu alternative", () => {
+  // v3.3 §3.9: native file drop is on, which disables HTML5 drag inside the webview, so internal
+  // moves are pointer drags from a grip; "⋯ → 移到文件夹…" is the keyboard-accessible path.
+  assert.equal(tauriConfig.app.windows[0].dragDropEnabled, true);
+  assert.doesNotMatch(app, /draggable=/);
+  assert.doesNotMatch(app, /dataTransfer\.setData/);
+  assert.ok(app.includes('className="lib-grip" onPointerDown='));
+  assert.ok(app.includes('<Icon name="grip" />'));
+  assert.ok(app.includes('window.addEventListener("pointermove", move)'));
+  assert.ok(app.includes('window.addEventListener("pointercancel", cancel)'));
+  assert.ok(app.includes('key: "move", label: t("v33.moveToFolder")'));
+  assert.ok(app.includes('testId="move-folder-dialog"'));
+  assert.ok(app.includes('window.addEventListener("dragover", preventExternalDropNavigation)'));
+  assert.ok(app.includes('window.addEventListener("drop", preventExternalDropNavigation)'));
+  assert.ok(app.includes('type === "Files" || type === "text/plain" || type === "text/uri-list"'));
+  assert.ok(app.includes("delete_skill_folder"));
+  assert.ok(app.includes("update_skill_folder"));
+  assert.ok(app.includes("testId={`folder-chip-${folder.id}`}"));
 });
 
-test("the All filter cannot accept a classification drop", () => {
-  assert.match(app, /const acceptsDrop = !disabled && id !== "all"/);
-  assert.match(app, /onDrop=\{acceptsDrop \? event => acceptDrop/);
+test("the All chip cannot accept a classification drop", () => {
+  assert.ok(app.includes('if (over === undefined || over === "all") return;'));
+  assert.ok(app.includes('dropId="all"'));
+  assert.ok(app.includes('const destination = over === "unfiled" ? "" : over;'));
 });
 
-test("import draft retains a folder and can create a custom classification during add", () => {
-  const draftType = app.match(/type ImportWizardDraft = \{([\s\S]*?)\n\};/)?.[1] ?? "";
-  assert.match(draftType, /folderId: string/);
-  assert.match(draftType, /customFolderName: string/);
-  assert.match(app, /move_source_skills_to_folder/);
-  assert.match(app, /CREATE_IMPORT_FOLDER_VALUE/);
-  assert.match(app, /onCreateFolder\(requestedName, "", "cyan"\)/);
-  assert.match(app, /onMoveSourceSkillsToFolder\(promotedSource\.id, resolvedFolderId\)/);
-  assert.match(i18n, /新建自定义分类文件夹/);
+test("adding a source can file it into an existing or a new folder", () => {
+  // v3.3 §6.4 "更多选项": the folder (incl. 新建) travels in the one install request.
+  assert.ok(app.includes('<option value={NEW_FOLDER}>{t("v33.folderNewOption")}</option>'));
+  assert.ok(app.includes("folderId: folderId && folderId !== NEW_FOLDER ? folderId : null"));
+  assert.ok(app.includes("newFolderName: folderId === NEW_FOLDER && newFolderName.trim() ? newFolderName.trim() : null"));
+  assert.match(types, /newFolderName: string \| null;/);
 });
 
 test("homepage folder mode only reflects user folders and keeps unassigned Skills together", () => {
@@ -97,30 +74,28 @@ test("source identity is exact and a generic repository named skills cannot abso
   assert.match(backend, /format!\("\{\}--\{\}"/);
 });
 
-test("large source trees render incrementally and folder edits keep whole-tree semantics", () => {
-  assert.match(app, /const childLimit = childLimits\[source\.id\] \?\? 36/);
-  assert.match(app, /visibleChildSkills = childSkills\.slice\(0, childLimit\)/);
-  assert.match(app, /folders\.sourceTreeFolder/);
-  assert.match(app, /inherited-folder-chip/);
+test("large libraries render a window of rows and folder edits keep whole-tree semantics", () => {
+  assert.ok(app.includes("const CHILD_PAGE = 40;"));
+  assert.ok(app.includes("row.skills.slice(0, CHILD_PAGE)"));
+  assert.ok(app.includes("const WINDOW_THRESHOLD = 80;"));
+  assert.ok(app.includes("function useWindow(items: ListItem[]"));
+  assert.ok(app.includes("items.slice(window_.start, window_.end)"));
   assert.match(backend, /future children inherit without materialized rows/);
   assert.match(backend, /fn create_skill_folder\([\s\S]*?Result<Vec<SkillFolderCard>, String>/);
-  assert.match(app, /invoke<SkillFolderCard\[\]>/);
-  assert.match(app, /applySkillFolderCommandResult/);
-  assert.match(app, /setSnapshot\(current => applySkillFolderCommandResult\(/);
-  assert.match(app, /if \(mutationBlockedBySync\(\)\) return null/);
-  assert.match(app, /const unfiledCount = folderCounts\.get\("unfiled"\) \?\? 0/);
+  assert.ok(app.includes("invoke<SkillFolderCard[]>"));
+  assert.ok(app.includes("setSnapshot(current => current ? applySkillFolderCommandResult(current, command, args, folders) : current)"));
+  assert.ok(app.includes("if (mutationBlockedBySync()) return null"));
+  assert.ok(app.includes('countSkills(library, { folderId: "unfiled" }).skills'));
 });
 
-test("import finalization preserves metadata and stops on any failed follow-up write", () => {
-  const start = app.indexOf("async function promoteAndFinalize");
-  const end = app.indexOf("async function quickAdd", start);
-  const finalize = app.slice(start, end);
-  assert.match(app, /syncAndRefreshAll\(\{ refreshPopularity: false \}\)/);
-  assert.match(finalize, /if \(!refreshed\) throw new Error\(t\("toast\.syncFailed"\)\)/);
-  assert.match(finalize, /const saveResult = await onSaveSourceMetadata/);
-  assert.match(finalize, /if \(saveResult === "failed"\) throw new Error/);
-  assert.match(finalize, /const moved = await onMoveSourceSkillsToFolder/);
-  assert.match(finalize, /if \(!moved\) throw new Error\(t\("folders\.fileDuringImportFailed"\)\)/);
-  assert.equal([...app.matchAll(/"folders\.fileDuringImportFailed"/g)].length, 1);
-  assert.equal([...i18n.matchAll(/"folders\.fileDuringImportFailed":/g)].length, 3);
+test("install sends name, folder, category, tags and note in one request", () => {
+  // v3.3: no follow-up writes after an install, so nothing can half-apply.
+  const sheet = app.slice(app.indexOf("export function ImportSheet"), app.indexOf("function ProbePreview"));
+  assert.equal((sheet.match(/await installSkillSource\(/g) ?? []).length, 1);
+  assert.ok(sheet.includes("displayName: name.trim() && name.trim() !== probe.displayName ? name.trim() : null"));
+  assert.ok(sheet.includes("categoryId: category || null"));
+  assert.ok(sheet.includes("tags: parseTagInput(tags)"));
+  assert.ok(sheet.includes("note: note.trim() ? note.trim() : null"));
+  assert.doesNotMatch(sheet, /onSaveSourceMetadata|onMoveSourceSkillsToFolder|syncAndRefreshAll/);
+  assert.ok(sheet.includes('setPhase({ kind: "failed", error: normalized })'));
 });

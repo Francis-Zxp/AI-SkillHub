@@ -9,7 +9,7 @@ import { localizedSkillDescription } from "../localizedDescriptions";
 import { countSkills, rowFilterState, rowInFolder, type LibraryRow, type SkillCounts } from "../skillCounts";
 import { orderTargetsForRow, targetIconView } from "../deliveryView";
 import type { AgentId, LegacySnapshot, SkillAgent, SkillCard, SkillFolderCard, SkillTarget, TargetChange, TargetMutationResult } from "../types";
-import { displayCategoryName, isRouterHubSkill, skillInvocationName, stableSkillClientId } from "../appShared";
+import { copyTextToClipboard, displayCategoryName, isRouterHubSkill, skillInvocationName, stableSkillClientId } from "../appShared";
 import { Dialog, MoreMenu, StarRating, ToggleSwitch } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
 import "./library.css";
@@ -703,7 +703,7 @@ function LibraryRowView({
       <MoreMenu
         items={[
           { key: "open", label: t("v33.details"), onSelect: () => onOpen("overview"), icon: "info" },
-          ...(entry ? [{ key: "copy", label: t("v33.copyInvocation"), onSelect: () => onCopy(entry), icon: "copy" as const }] : []),
+          ...(entry ? [{ key: "copy", label: t("v33.copyInvocation"), onSelect: () => void copyTextToClipboard(skillInvocationName(entry), t("toast.skillNameCopied")), icon: "copy" as const }] : []),
           { key: "move", label: t("v33.moveToFolder"), onSelect: onMove, icon: "folder" },
           { key: "settings", label: t("v33.editSettings"), onSelect: () => onOpen("settings"), icon: "edit" }
         ]}
@@ -742,7 +742,7 @@ function ChildRow({
       </span>
       <span className="lib-child-summary">{summary}{tags.length > 0 && <em>{tags.join(" · ")}</em>}</span>
       <span className="lib-child-stars"><StarRating compact label={t("v33.rating")} onChange={onRate} value={skill.rating} /></span>
-      <button className="icon-action" onClick={onCopy} title={t("v33.copyInvocation")} aria-label={t("v33.copyInvocationOf", { name: skillInvocationName(skill) })} type="button">
+      <button className="icon-action" onClick={() => void copyTextToClipboard(skillInvocationName(skill), t("toast.skillNameCopied"))} title={t("v33.copyInvocation")} aria-label={t("v33.copyInvocationOf", { name: skillInvocationName(skill) })} type="button">
         <Icon name="copy" />
       </button>
       <ToggleSwitch

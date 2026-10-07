@@ -61,13 +61,13 @@ test("large source imports stay bounded, visible, and off the UI thread", () => 
       new RegExp(`async fn ${command}\\([\\s\\S]*?tauri::async_runtime::spawn_blocking`)
     );
   }
-  assert.match(app, /role="progressbar"/);
-  assert.match(app, /className={`import-progress/);
+  // v3.3 ImportSheet: one live progress line driven by backend stages, cancellable at any time.
+  assert.ok(app.includes('<p className="import-progress" data-testid="import-progress" role="status">'));
   assert.match(backend, /SOURCE_IMPORT_PROGRESS_EVENT/);
   assert.match(backend, /fn cancel_source_import/);
-  assert.match(app, /listen<SourceImportProgressEvent>\("source-import-progress"/);
-  assert.match(app, /is-indeterminate/);
-  assert.match(app, /onCancel\(activeOperationId\)/);
+  assert.ok(app.includes('export const SOURCE_IMPORT_PROGRESS_EVENT = "source-import-progress";'));
+  assert.ok(app.includes("listen<ImportProgress>(SOURCE_IMPORT_PROGRESS_EVENT"));
+  assert.ok(app.includes("if (operationRef.current) void cancelSourceImport(operationRef.current);"));
   assert.doesNotMatch(app, /setInterval\(\(\) => \{\s*setProgress/);
   assert.doesNotMatch(app, /current\.percent >= 64/);
 });

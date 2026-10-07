@@ -68,14 +68,15 @@ test("core sync is single-flight and follows with a lightweight popularity refre
   assert.match(syncEntry, /options: \{ refreshPopularity\?: boolean; continueRun\?: boolean \} = \{\}/);
   assert.match(syncEntry, /options\.refreshPopularity !== false/);
   assert.match(syncEntry, /void refreshSourcePopularity\(\{ background: true \}\)/);
-  assert.match(app, /syncAndRefreshAll\(\{ refreshPopularity: false \}\)/);
+  assert.match(app, /syncAndRefreshAll\(\{ continueRun: true, refreshPopularity: false \}\)/);
   const popularityStart = backend.indexOf("fn refresh_source_popularity_blocking");
   const popularityEnd = backend.indexOf("fn resolve_legacy_root", popularityStart);
   const popularityRefresh = backend.slice(popularityStart, popularityEnd);
   assert.match(popularityRefresh, /build_source_popularity_refresh_result/);
   assert.doesNotMatch(popularityRefresh, /scan_legacy_snapshot_blocking/);
-  assert.match(app, /loading=\{mutationBusy\}/);
-  assert.match(app, /disabled=\{loading \|\| syncing\}/);
+  // v3.3: the one 更新 button in the top bar; it stays disabled while an import or another run is busy.
+  assert.ok(app.includes('data-testid="update-button"\n              disabled={mutationBusy}\n              onClick={() => void syncAndRefreshAll()}'));
+  assert.ok(app.includes("if (importInFlight) {"));
 });
 
 test("full sync publishes once while local mutations still generate parents before publish", () => {

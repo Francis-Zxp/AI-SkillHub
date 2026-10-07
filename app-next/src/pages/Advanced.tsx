@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Icon } from "../icons";
 import { t } from "../i18n";
 import type { LegacySnapshot } from "../types";
-import { hasTauriRuntime, showUiToast, copyTextToClipboard } from "../appShared";
+import { hasTauriRuntime, messageFromError, showUiToast, copyTextToClipboard } from "../appShared";
 
 /* =============================================================
    Advanced view (merges release gate + snapshots)
@@ -87,6 +87,6 @@ async function openReleaseGateExportPath(path: string) {
     await invoke("open_release_gate_export_path", { path });
     showUiToast(t("toast.pathOpened"), "ok");
   } catch (error) {
-    showUiToast(t("toast.openFailed", { message: error instanceof Error ? error.message : String(error) }), "error");
+    showUiToast(t("toast.openFailed", { message: messageFromError(error) }), "error");
   }
 }

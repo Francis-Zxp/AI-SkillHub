@@ -46,17 +46,21 @@ test("same-name children are automatic parent isolation, not a manual decision w
   assert.doesNotMatch(sync, /需要人工处理的冲突/);
 });
 
-test("primary library header omits maintenance-only evidence and revision hashes", () => {
-  const sourceHeader = app.match(/<header className="source-group-head">[\s\S]*?<\/header>/)?.[0] ?? "";
-  assert.ok(sourceHeader);
-  assert.doesNotMatch(sourceHeader, /SourceQualityChip/);
-  assert.doesNotMatch(sourceHeader, /SourceVersionChip/);
-  assert.doesNotMatch(sourceHeader, /PopularityChip/);
+test("primary library row omits maintenance-only evidence and revision hashes", () => {
+  // v3.3 §6.3: the row is ☐ · name · summary · N 个技能 · ★ · AI tool icons · ⋯.
+  const row = app.slice(app.indexOf("function LibraryRowView"), app.indexOf("function ChildRow"));
+  assert.ok(row);
+  assert.doesNotMatch(row, /SourceQualityChip/);
+  assert.doesNotMatch(row, /SourceVersionChip/);
+  assert.doesNotMatch(row, /PopularityChip/);
   assert.doesNotMatch(app, /source-quality-panel/);
-  assert.match(sourceHeader, /status-badge/);
-  assert.match(sourceHeader, /source-parent-rating/);
-  assert.match(sourceHeader, /onSetSourceRating/);
-  assert.match(sourceHeader, /ToggleSwitch/);
+  // The parent rating stays on the row (DECISIONS.md:1097); health shows only as a problem badge.
+  assert.match(row, /<StarRating compact label=\{t\("v33\.rating"\)\} onChange=\{onRate\}/);
+  assert.match(row, /state\.problem && <span className="chip chip-problem">/);
+  assert.match(app, /onSetSourceRating\(item\.row\.source, rating\)/);
+  // The library on/off switch moved to the drawer (在所有 AI 工具中停用这个技能包).
+  assert.doesNotMatch(row, /ToggleSwitch/);
+  assert.match(app, /t\("v33\.disableEverywhere"\)/);
 });
 
 test("descriptions localize locally with original metadata left untouched", () => {

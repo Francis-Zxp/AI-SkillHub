@@ -24,7 +24,7 @@ const files = {
 test("GitHub import is driven by backend stages and supports cancellation", () => {
   assert.match(files.backend, /SOURCE_IMPORT_PROGRESS_EVENT: &str = "source-import-progress"/);
   assert.match(files.backend, /fn cancel_source_import/);
-  assert.match(files.app, /listen<SourceImportProgressEvent>\("source-import-progress"/);
+  assert.ok(files.app.includes("listen<ImportProgress>(SOURCE_IMPORT_PROGRESS_EVENT"));
   assert.match(files.app, /cancel_source_import/);
   assert.doesNotMatch(files.app, /current\.percent >= 64/);
   assert.doesNotMatch(files.app, /setInterval\(\(\) => \{\s*setProgress/);
@@ -36,8 +36,11 @@ test("formal desktop ACL grants only the event commands required by import progr
   assert.ok(capabilities.permissions.includes("core:event:allow-unlisten"));
   assert.ok(!capabilities.permissions.includes("core:event:default"));
   assert.ok(!capabilities.permissions.includes("core:event:allow-emit"));
-  assert.match(files.app, /catch \(error\) \{[\s\S]*continuing without live progress/);
-  assert.match(files.app, /unlisten\?\.\(\)/);
+  // v3.3 skillApi: a missing event permission degrades to "no live progress", never a failure,
+  // and every listener is released when the command finishes.
+  const listener = files.app.slice(files.app.indexOf("async function listenImportProgress"));
+  assert.match(listener, /\} catch \{\s*return \(\) => undefined;\s*\}/);
+  assert.match(files.app, /\} finally \{\s*stop\(\);\s*\}/);
 });
 
 test("archive symlinks are skipped without following or materializing", () => {
@@ -148,15 +151,15 @@ test("new capability surfaces are lazy-loaded instead of expanding the initial b
   assert.doesNotMatch(files.app, /from "\.\.?\/(McpCenter|CodexPluginDoctorPanel)"/);
 });
 
-test("source import drafts survive navigation without persisting transient execution state", () => {
-  assert.match(files.app, /IMPORT_WIZARD_DRAFT_STORAGE_KEY = "ai-skillhub-source-import-draft-v1"/);
-  assert.match(files.app, /const \[initialDraft\] = useState\(loadImportWizardDraft\)/);
-  assert.match(files.app, /useEffect\(\(\) => \{\s*saveImportWizardDraft\(\{/);
-  assert.match(files.app, /resetImportDraft\(\);\s*setStatus\(\{\s*tone: "ok"/);
-  assert.match(files.app, /t\("qa\.clearDraft"\)/);
-
-  const draftType = files.app.match(/type ImportWizardDraft = \{([\s\S]*?)\n\};/)?.[1] ?? "";
-  assert.match(draftType, /input: string/);
-  assert.match(draftType, /selectedCategoryIds: string\[\]/);
-  assert.doesNotMatch(draftType, /progress|status|securityReview|activeOperationId|operationId/);
+test("an unfinished add is kept as text only and restored only when the user asks", () => {
+  // v3.3 (bug #17): no automatic reopening; only the typed address is remembered.
+  const sheet = files.app.slice(files.app.indexOf('const DRAFT_KEY = "ai-skillhub-import-draft-v33";'), files.app.indexOf("function ProbePreview"));
+  assert.ok(sheet.length > 0);
+  assert.ok(sheet.includes("window.localStorage.setItem(DRAFT_KEY, value.slice(0, 2048));"));
+  assert.ok(sheet.includes("const [input, setInput] = useState(initialText);"));
+  assert.ok(sheet.includes('const [draft] = useState(() => (initialText ? "" : readDraft()));'));
+  assert.ok(sheet.includes('{empty && draft && phase.kind === "idle" && ('));
+  assert.ok(sheet.includes('{t("v33.restoreDraft")}'));
+  assert.doesNotMatch(sheet, /setItem\(DRAFT_KEY, JSON\.stringify/);
+  assert.doesNotMatch(files.app, /loadImportWizardDraft\(\)|saveImportWizardDraft/);
 });

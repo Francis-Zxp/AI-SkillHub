@@ -6,7 +6,7 @@ import { Suspense, lazy, useState } from "react";
 import { Icon } from "../icons";
 import { t } from "../i18n";
 import type { LegacySnapshot, RouterHubReport, SkillConflictCard } from "../types";
-import { hasTauriRuntime, showUiToast } from "../appShared";
+import { hasTauriRuntime, messageFromError, showUiToast } from "../appShared";
 import { DeferredSurface } from "../components/ui";
 import { Advanced } from "./Advanced";
 
@@ -62,7 +62,7 @@ function RouterHubPanel({ disabled }: { disabled: boolean }) {
       setReport(next);
       showUiToast(t("router.toastDryRun", { collections: next.totalCollections, duplicates: next.duplicateChildren.length }), "ok");
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
+      const message = messageFromError(caught);
       setError(message);
     } finally {
       setPending(false);
