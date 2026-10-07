@@ -11,12 +11,15 @@ const SRC = new URL("../src/", import.meta.url);
 export const APP_SOURCE_ORDER = Object.freeze([
   "App.tsx",
   "components/ui.tsx",
+  "components/shell.tsx",
   "pages/Dashboard.tsx",
   "pages/Library.tsx",
-  "pages/ImportWizard.tsx",
-  "pages/Workspaces.tsx",
+  "pages/SkillDrawer.tsx",
+  "pages/ImportSheet.tsx",
   "pages/Agents.tsx",
+  "pages/Onboarding.tsx",
   "pages/Advanced.tsx",
+  "pages/DevTools.tsx",
   "pages/Settings.tsx",
   "appShared.ts"
 ]);

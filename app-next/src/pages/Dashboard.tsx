@@ -1,5 +1,6 @@
-// Dashboard page (home overview, skill showcase, usage insights). Split out of App.tsx;
-// App() still owns the shared state and handlers. Never import from App.tsx here (use appShared.ts).
+// Home page (skills contract §6.2): four clickable numbers, the first-run or "new tool"
+// card, the 添加 box, then the islands / star map as an optional visual layer, usage
+// insights and recent activity. App owns the state; never import from App.tsx here.
 import {
   type CSSProperties,
   Fragment,
@@ -15,8 +16,8 @@ import { Icon } from "../icons";
 import { CountUp, ParticleField } from "../effects";
 import { getLang, t } from "../i18n";
 import { localizedSkillDescription } from "../localizedDescriptions";
-import { sourceUpdateFeedback } from "../sourceUpdateRun";
-import type { LegacySnapshot, LegacySummary, SkillCard, SourceCard, SourcePopularityCard } from "../types";
+import type { SkillCounts } from "../skillCounts";
+import type { LegacySnapshot, LegacySummary, SkillAgent, SkillCard, SkillDeliveryState, SourceCard, SourcePopularityCard } from "../types";
 import {
   type ThemeName,
   type SkyPhase,
@@ -30,59 +31,81 @@ import {
   formatCompactNumber
 } from "../appShared";
 import { SegmentedToggle, Metric } from "../components/ui";
+import { AgentGlyph } from "../components/shell";
 
 const SkillArchipelago = lazy(() => import("../SkillArchipelago").then(module => ({ default: module.SkillArchipelago })));
 const SkillUniverse = lazy(() => import("../SkillUniverse").then(module => ({ default: module.SkillUniverse })));
 
-/* =============================================================
-   Dashboard view
-   ============================================================= */
+type HomeVisual = "islands" | "universe" | "off";
 
 const ATLAS_INTRO_VISIBILITY_KEY = "ai-skillhub-atlas-intro-visible";
+const DISMISSED_AGENT_CARDS_KEY = "ai-skillhub-dismissed-agent-cards";
+
+function readDismissedAgents(): string[] {
+  try {
+    const raw = window.localStorage.getItem(DISMISSED_AGENT_CARDS_KEY);
+    const value = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").slice(0, 40) : [];
+  } catch {
+    return [];
+  }
+}
+
+/* =============================================================
+   Home
+   ============================================================= */
 
 export function Dashboard({
-  visible,
+  counts,
+  delivery,
+  homeVisual,
   immersive,
   loading,
+  mcpCount,
+  onAdd,
+  onChangeHomeVisual,
   onCopySkill,
-  onOpenAdvanced,
   onOpenAgents,
-  onOpenLibrary,
   onOpenFolder,
+  onOpenLibrary,
+  onOpenMcp,
+  onOpenOnboarding,
+  onOpenProblems,
   onOpenSkill,
   onOpenSource,
   onRefreshPopularity,
-  onSync,
+  onTakeover,
   onToggleImmersive,
+  popularityRefreshing,
   snapshot,
   summary,
-  syncing,
-  updateFeedback,
   theme
 }: {
-  visible: boolean;
+  counts: SkillCounts;
+  delivery: SkillDeliveryState | null;
+  homeVisual: HomeVisual;
   immersive: boolean;
   loading: boolean;
+  mcpCount: number | null;
+  onAdd: () => void;
+  onChangeHomeVisual: (value: HomeVisual) => void;
   onCopySkill: (skill: SkillCard) => void;
-  onOpenAdvanced: () => void;
   onOpenAgents: () => void;
-  onOpenLibrary: () => void;
   onOpenFolder: (folderId: string) => void;
+  onOpenLibrary: () => void;
+  onOpenMcp: () => void;
+  onOpenOnboarding: () => void;
+  onOpenProblems: () => void;
   onOpenSkill: (skill: SkillCard) => void;
   onOpenSource: (source: SourceCard) => void;
   onRefreshPopularity: () => void;
-  onSync: () => void;
+  onTakeover: (agent: SkillAgent) => void;
   onToggleImmersive: () => void;
+  popularityRefreshing: boolean;
   snapshot: LegacySnapshot | null;
   summary: LegacySummary;
-  syncing: boolean;
-  updateFeedback: ReturnType<typeof sourceUpdateFeedback>;
   theme: ThemeName;
 }) {
-  const backupBlocked = countByStatus(snapshot?.backupDryRun ?? [], "blocked");
-  const restoreBlocked = countByStatus(snapshot?.restoreDryRun ?? [], "blocked");
-  const rollbackBlocked = countByStatus(snapshot?.rollbackPlan ?? [], "blocked");
-  const healthIssues = summary.warnings + backupBlocked + restoreBlocked + rollbackBlocked;
   const [atlasIntroVisible, setAtlasIntroVisible] = useState(() => {
     try {
       return window.localStorage.getItem(ATLAS_INTRO_VISIBILITY_KEY) !== "false";
@@ -90,38 +113,17 @@ export function Dashboard({
       return true;
     }
   });
-  const [homeVisual, setHomeVisual] = useState<"islands" | "universe">(() => {
-    try { return window.localStorage.getItem("skillhub-home-visual") === "universe" ? "universe" : "islands"; }
-    catch { return "islands"; }
-  });
-  const chooseHomeVisual = (value: "islands" | "universe") => {
-    setHomeVisual(value);
-    try { window.localStorage.setItem("skillhub-home-visual", value); } catch { /* Session preference remains usable. */ }
-  };
-  const alerts = [
-    {
-      icon: "alert" as const,
-      title: healthIssues > 0 ? t("dash.alertGateReview") : t("dash.alertGateClear"),
-      body:
-        healthIssues > 0
-          ? t("dash.alertGateReviewBody", { n: healthIssues })
-          : t("dash.alertGateClearBody")
-    },
-    {
-      icon: "refresh" as const,
-      title: loading ? t("dash.alertIndexRunning") : t("dash.alertIndexReady"),
-      body: snapshot?.index.databaseFile
-        ? t("dash.alertIndexBodyReady")
-        : t("dash.alertIndexBodySeed")
-    },
-    {
-      icon: "info" as const,
-      title: t("dash.alertDaily"),
-      body: t("dash.alertDailyBody")
-    }
-  ];
+  const [dismissedAgents, setDismissedAgents] = useState<string[]>(() => readDismissedAgents());
+  const agents = delivery?.agents ?? [];
+  const installedDeliverable = agents.filter(agent => agent.installed && agent.canDeliver);
+  const taken = installedDeliverable.filter(agent => agent.takeover).length;
+  const problems = delivery?.problems.length ?? 0;
+  const discovered = agents.filter(agent => agent.statusWord === "available" && !dismissedAgents.includes(agent.id));
+  const onboardingPending = delivery?.onboarding === "pending";
   const atlasMode = isAtlasTheme(theme);
   const atlasVisual = atlasThemeVisual(theme);
+  const sceneVisual: HomeVisual = atlasMode ? homeVisual : "off";
+  const emptyLibrary = !loading && counts.rows === 0;
   const toggleAtlasIntro = () => {
     const next = !atlasIntroVisible;
     setAtlasIntroVisible(next);
@@ -131,36 +133,139 @@ export function Dashboard({
       // The visual preference can remain session-only when storage is unavailable.
     }
   };
+  const dismissAgentCard = (agentId: string) => {
+    const next = [...dismissedAgents, agentId];
+    setDismissedAgents(next);
+    try {
+      window.localStorage.setItem(DISMISSED_AGENT_CARDS_KEY, JSON.stringify(next));
+    } catch {
+      // Dismissal lasts for this session when storage is unavailable.
+    }
+  };
 
   return (
-    <div className="view dashboard-view" hidden={!visible}>
-      <section className={`dashboard-hero glow-card${atlasMode && (!atlasIntroVisible || homeVisual === "islands") ? " intro-collapsed" : ""}${atlasMode && homeVisual === "islands" ? " islands-home" : " universe-home"}`}>
-        {atlasMode && homeVisual === "islands" && (
+    <div className="view dashboard-view home-v33">
+      <section className="home-metrics" aria-label={t("v33.homeMetrics")}>
+        <Metric
+          icon="agent"
+          label={t("v33.metricAgents")}
+          onClick={onOpenAgents}
+          suffix={`/${installedDeliverable.length}`}
+          testId="home-metric-agents"
+          trend={installedDeliverable.length === 0 ? t("v33.metricAgentsNone") : t("v33.metricAgentsTrend")}
+          value={taken}
+        />
+        <Metric
+          icon="sparkle"
+          label={t("v33.metricSkills")}
+          onClick={onOpenLibrary}
+          testId="home-metric-skills"
+          trend={counts.updateRows > 0 ? t("v33.metricSkillsUpdates", { n: counts.updateRows }) : t("v33.metricSkillsPacks", { n: counts.packs })}
+          value={counts.skills}
+        />
+        <Metric
+          icon="plug"
+          label={t("v33.metricMcp")}
+          onClick={onOpenMcp}
+          testId="home-metric-mcp"
+          trend={mcpCount === null ? t("v33.metricMcpOpen") : t("v33.metricMcpTrend")}
+          value={mcpCount ?? 0}
+        />
+        <Metric
+          icon="alert"
+          label={t("v33.metricProblems")}
+          onClick={onOpenProblems}
+          testId="home-metric-problems"
+          tone={problems > 0 ? "alert" : ""}
+          trend={problems > 0 ? t("v33.metricProblemsTrend") : t("v33.metricProblemsNone")}
+          value={problems}
+        />
+      </section>
+
+      {onboardingPending ? (
+        <section className="home-card first-run" data-testid="home-first-run-card">
+          <Icon name="sparkle" />
+          <div>
+            <strong>{t("v33.firstRunTitle", { n: installedDeliverable.length })}</strong>
+            <span>{t("v33.firstRunBody")}</span>
+          </div>
+          <button className="primary-action" onClick={onOpenOnboarding} type="button">{t("v33.firstRunAction")}</button>
+        </section>
+      ) : discovered.length > 0 ? (
+        <section className="home-card discover" data-testid="home-discover-card">
+          <AgentGlyph agentId={discovered[0].id} name={discovered[0].name} />
+          <div>
+            <strong>{t("v33.discoverOne", { name: discovered[0].name })}</strong>
+            <span>{discovered[0].experimental ? t("v33.experimentalShort") : t("v33.discoverBody")}</span>
+          </div>
+          <button className="primary-action small" onClick={() => onTakeover(discovered[0])} type="button">{t("v33.takeover")}</button>
+          <button
+            aria-label={t("v33.dismiss")}
+            className="icon-action"
+            onClick={() => dismissAgentCard(discovered[0].id)}
+            title={t("v33.dismiss")}
+            type="button"
+          >
+            <Icon name="close" />
+          </button>
+        </section>
+      ) : null}
+
+      <section className="home-add" aria-label={t("v33.add")}>
+        <Icon name="add" />
+        <input
+          aria-label={t("v33.addPlaceholder")}
+          data-testid="home-add-input"
+          onClick={onAdd}
+          onFocus={event => {
+            event.currentTarget.blur();
+            onAdd();
+          }}
+          placeholder={t("v33.addPlaceholder")}
+          readOnly
+          value=""
+        />
+        <button className="primary-action small" onClick={onAdd} type="button">{t("v33.add")}</button>
+      </section>
+
+      {emptyLibrary && (
+        <section className="home-card empty" data-testid="home-empty-card">
+          <Icon name="library" />
+          <div>
+            <strong>{t("v33.emptyLibraryTitle")}</strong>
+            <span>{t("v33.emptyLibraryBody")}</span>
+          </div>
+          <button className="primary-action small" onClick={onAdd} type="button">{t("v33.add")}</button>
+        </section>
+      )}
+
+      <section className={`dashboard-hero glow-card${sceneVisual === "off" ? " scene-off" : ""}${atlasMode && (!atlasIntroVisible || sceneVisual === "islands") ? " intro-collapsed" : ""}${sceneVisual === "islands" ? " islands-home" : " universe-home"}`}>
+        {sceneVisual === "islands" && (
           <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
-            <SkillArchipelago visible={visible} centered lightTheme={isLightTheme(theme)} phase={theme.startsWith("sky-") ? (theme.slice(4) as SkyPhase) : isLightTheme(theme) ? "noon" : "night"} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} snapshot={snapshot} />
+            <SkillArchipelago visible centered lightTheme={isLightTheme(theme)} phase={theme.startsWith("sky-") ? (theme.slice(4) as SkyPhase) : isLightTheme(theme) ? "noon" : "night"} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} snapshot={snapshot} />
           </Suspense>
         )}
-        {atlasMode && homeVisual === "universe" && (
+        {sceneVisual === "universe" && (
           <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
-          <SkillUniverse
-              visible={visible}
-            centered={!atlasIntroVisible}
-            lightTheme={isLightTheme(theme)}
-            onOpenSkill={onOpenSkill}
-            onOpenSource={onOpenSource}
-            snapshot={snapshot}
-            tone={
-              theme.startsWith("sky-")
-                ? "sky"
-                : theme === "nocturne"
-                ? "prism"
-                : theme === "parchment"
-                  ? "parchment"
-                  : theme === "atlas-light" || theme === "atlas-legacy-light"
-                    ? "mist"
-                    : "biolume"
-            }
-          />
+            <SkillUniverse
+              visible
+              centered={!atlasIntroVisible}
+              lightTheme={isLightTheme(theme)}
+              onOpenSkill={onOpenSkill}
+              onOpenSource={onOpenSource}
+              snapshot={snapshot}
+              tone={
+                theme.startsWith("sky-")
+                  ? "sky"
+                  : theme === "nocturne"
+                  ? "prism"
+                  : theme === "parchment"
+                    ? "parchment"
+                    : theme === "atlas-light" || theme === "atlas-legacy-light"
+                      ? "mist"
+                      : "biolume"
+              }
+            />
           </Suspense>
         )}
         {!atlasMode && (
@@ -173,12 +278,20 @@ export function Dashboard({
           />
         )}
         {atlasMode && (
-          <div className="home-visual-switch" aria-label={getLang() === "zh" ? "首页视图" : getLang() === "ko" ? "홈 보기" : "Home view"}>
-            <button type="button" aria-pressed={homeVisual === "islands"} onClick={() => chooseHomeVisual("islands")}>{getLang() === "zh" ? "群岛" : getLang() === "ko" ? "섬" : "Islands"}</button>
-            <button type="button" aria-pressed={homeVisual === "universe"} onClick={() => chooseHomeVisual("universe")}>{getLang() === "zh" ? "星图" : getLang() === "ko" ? "별 지도" : "Star map"}</button>
+          <div className="home-visual-switch" aria-label={t("v33.homeScene")}>
+            <SegmentedToggle
+              label={t("v33.homeScene")}
+              onChange={onChangeHomeVisual}
+              options={[
+                { value: "islands", label: t("v33.sceneIslands") },
+                { value: "universe", label: t("v33.sceneStars") },
+                { value: "off", label: t("v33.sceneOff") }
+              ]}
+              value={homeVisual}
+            />
           </div>
         )}
-        {atlasMode && (
+        {atlasMode && sceneVisual !== "off" && (
           <button
             aria-pressed={immersive}
             className="atlas-immersive-toggle"
@@ -190,7 +303,7 @@ export function Dashboard({
             <span>{immersive ? t("atlas.exitImmersive") : t("atlas.enterImmersive")}</span>
           </button>
         )}
-        {atlasMode && homeVisual === "universe" && (
+        {atlasMode && sceneVisual === "universe" && (
           <button
             aria-pressed={!atlasIntroVisible}
             className="atlas-intro-toggle"
@@ -202,72 +315,15 @@ export function Dashboard({
             <span>{atlasIntroVisible ? t("atlas.hideIntro") : t("atlas.showIntro")}</span>
           </button>
         )}
-        <div aria-hidden={atlasMode && (!atlasIntroVisible || homeVisual === "islands")} className="dashboard-hero-inner">
+        {sceneVisual === "off" && atlasMode && (
+          <p className="scene-off-note">{t("v33.sceneOffNote")}</p>
+        )}
+        <div aria-hidden={atlasMode && (!atlasIntroVisible || sceneVisual !== "universe")} className="dashboard-hero-inner">
           <div className="atlas-hero-copy">
             <h2>{atlasMode ? t("atlas.heroTitle") : t("dash.title")}</h2>
-            <p>{atlasMode ? t("atlas.heroSubtitle", { skills: summary.skills, sources: summary.sources }) : t("dash.subtitle")}</p>
-            {atlasMode && (
-              <span className="atlas-interaction-hint"><i aria-hidden="true" /> {t("atlas.interact")}</span>
-            )}
+            <p>{atlasMode ? t("v33.heroSubtitle", { skills: counts.skills, packs: counts.packs }) : t("dash.subtitle")}</p>
           </div>
-          {!atlasMode && (
-            <div className="hero-actions">
-              <button className="secondary-action" disabled={loading || syncing} onClick={onSync} type="button">
-                <Icon className={loading || syncing ? "icon-spin" : ""} name="refresh" /> {syncing ? t("dash.syncing") : loading ? snapshot ? t("dash.processing") : t("dash.loadingIndex") : t("dash.sync")}
-              </button>
-              <button className="primary-action" onClick={onOpenLibrary} type="button">
-                <Icon name="add" /> {t("dash.addSource")}
-              </button>
-            </div>
-          )}
         </div>
-      </section>
-
-      <section className={`metric-grid${atlasMode ? " atlas-touchbar" : ""}`}>
-        <Metric
-          accent="violet"
-          icon="sparkle"
-          label={t("dash.metricSkills")}
-          onClick={onOpenLibrary}
-          trend={t("dash.trendSources", { n: summary.sources })}
-          value={summary.skills}
-        />
-        <Metric
-          accent="indigo"
-          icon="sources"
-          label={t("dash.metricSources")}
-          onClick={onOpenLibrary}
-          trend={t("dash.trendPrompts", { n: summary.prompts })}
-          value={summary.sources}
-        />
-        <Metric
-          accent="amber"
-          icon="agent"
-          label={t("dash.metricAgents")}
-          onClick={onOpenAgents}
-          trend={t("dash.trendAgents", { n: summary.agentsDetected })}
-          value={summary.agentsDetected}
-        />
-        <Metric
-          accent="rose"
-          icon="alert"
-          label={t("dash.metricIssues")}
-          onClick={onOpenAdvanced}
-          trend={healthIssues > 0 ? t("dash.trendAttention") : t("dash.trendClear")}
-          value={healthIssues}
-        />
-        {atlasMode && (
-          <div className="atlas-touchbar-actions">
-            <button disabled={loading || syncing} onClick={onSync} aria-label={updateFeedback ? `${updateFeedback.label} · ${t("dash.sync")}` : t("dash.sync")} title={updateFeedback ? `${t("dash.sync")} · ${updateFeedback.message}` : t("dash.sync")} type="button">
-              <Icon className={loading || syncing ? "icon-spin" : ""} name="refresh" />
-              <span>{syncing ? t("dash.syncing") : loading ? snapshot ? t("dash.processing") : t("dash.loadingIndex") : updateFeedback?.label ?? t("dash.sync")}</span>
-            </button>
-            <button onClick={onOpenLibrary} title={t("dash.addSource")} type="button">
-              <Icon name="add" />
-              <span>{t("dash.addSource")}</span>
-            </button>
-          </div>
-        )}
       </section>
 
       {!atlasMode && (
@@ -280,27 +336,8 @@ export function Dashboard({
       )}
 
       <section className="dashboard-grid">
-        <UsageInsightPanel loading={loading} onRefreshPopularity={onRefreshPopularity} snapshot={snapshot} />
-
+        <UsageInsightPanel loading={popularityRefreshing} onRefreshPopularity={onRefreshPopularity} snapshot={snapshot} />
         <aside className="panel alerts-panel glow-card">
-          <header className="panel-head">
-            <div>
-              <span className="eyebrow">{t("dash.alerts")}</span>
-              <h3>{t("dash.alerts")}</h3>
-            </div>
-            <em className="badge-soft">{healthIssues} SYS</em>
-          </header>
-          <div className="alert-list">
-            {alerts.map(alert => (
-              <article className="alert-item" key={alert.title}>
-                <span className="alert-icon"><Icon name={alert.icon} /></span>
-                <div>
-                  <strong>{alert.title}</strong>
-                  <p>{alert.body}</p>
-                </div>
-              </article>
-            ))}
-          </div>
           <ActivityTimeline snapshot={snapshot} />
         </aside>
       </section>
@@ -352,8 +389,10 @@ function SkillShowcase({
   const sources = snapshot?.sources ?? [];
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphRef = useRef<SkillGraphRuntime | null>(null);
-  const graphData = useMemo(() => buildSkillGraphData(skills, sources), [skills, sources]);
-  const categoryLegend = useMemo(() => buildConstellationLegend(skills, sources), [skills, sources]);
+  // The language is a dependency: category names in the legend and canvas are translated (bug #3).
+  const lang = getLang();
+  const graphData = useMemo(() => buildSkillGraphData(skills, sources), [skills, sources, lang]);
+  const categoryLegend = useMemo(() => buildConstellationLegend(skills, sources), [skills, sources, lang]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1308,18 +1347,9 @@ function heatLevel(value: number, max: number) {
   return 1;
 }
 
-function countByStatus(items: Array<{ status: string }>, status: string) {
-  return items.filter(item => item.status === status).length;
-}
-
+/** Activity rows are translated; unknown event types fall back to a generic label (bug #4). */
 function auditEventLabel(eventType: string) {
-  if (eventType === "legacy_scan_indexed") return "Index refresh";
-  if (eventType === "skill_metadata_updated") return "Skill metadata";
-  if (eventType === "skill_enabled_updated") return "Skill state";
-  if (eventType === "source_metadata_updated") return "Source metadata";
-  if (eventType === "usage_recorded") return "Usage recorded";
-  if (eventType === "state_updated") return "State updated";
-  if (eventType === "desktop_qa_updated") return "Desktop QA";
-  if (eventType === "operation_runner_completed") return "Runner completed";
-  return eventType;
+  const key = `audit.${eventType}`;
+  const label = t(key);
+  return label === key ? t("audit.generic") : label;
 }

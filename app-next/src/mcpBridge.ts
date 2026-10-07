@@ -78,3 +78,9 @@ export function looksLikeMcpConfig(text: string): boolean {
     return false;
   }
 }
+
+/** "+ 添加" / Ctrl+V routing (§6.1): MCP configs go to the MCP add flow, everything else to the ImportSheet. */
+export function classifyAddInput(text: string): "mcp-config" | "skills" | "empty" {
+  if (!text.trim()) return "empty";
+  return looksLikeMcpConfig(text) ? "mcp-config" : "skills";
+}

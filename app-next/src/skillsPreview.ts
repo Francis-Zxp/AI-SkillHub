@@ -258,11 +258,14 @@ function libraryEnabledFor(current: PreviewEngine, source: SourceCard) {
 
 export function overlayPreviewSnapshot(base: LegacySnapshot): LegacySnapshot {
   const current = state();
-  const sources = [...base.sources, ...current.extraSources].map(source => ({
+  // Idempotent: the preview UI may pass a snapshot that already carries the extras.
+  const extraSourceIds = new Set(current.extraSources.map(source => source.id));
+  const extraSkillIds = new Set(current.extraSkills.map(skill => skill.id));
+  const sources = [...base.sources.filter(source => !extraSourceIds.has(source.id)), ...current.extraSources].map(source => ({
     ...source,
     enabled: libraryEnabledFor(current, source)
   }));
-  const skills = [...base.skills, ...current.extraSkills].map(skill => ({
+  const skills = [...base.skills.filter(skill => !extraSkillIds.has(skill.id)), ...current.extraSkills].map(skill => ({
     ...skill,
     enabled: current.childEnabled.get(skill.folderName) ?? skill.enabled
   }));
