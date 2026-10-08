@@ -70,6 +70,13 @@ const waitLiveRaw = (page, minFrames) => page.waitForFunction(minFrames => {
 const waitAsleep = page => page.waitForFunction(() => document.querySelector(".sky-scene-host")?.dataset.sleeping === "1" &&
   document.querySelectorAll(".sky-world-canvas").length === 0, null, { timeout: 20000 });
 
+/** Home or the library, in the 3.2 shell (.nav) or the v3.3 rail. */
+async function navigate(page, where) {
+  const rail = page.locator(`[data-testid="nav-${where === "home" ? "dashboard" : "library"}"]`);
+  if (await rail.count()) return rail.first().click();
+  return page.locator(".nav .nav-item").nth(where === "home" ? 0 : 1).click();
+}
+
 const stats = page => page.evaluate(() => {
   const host = document.querySelector(".sky-scene-host");
   const s = host?.skyWorldStats?.() ?? {};
@@ -174,7 +181,7 @@ async function pixelDifference(page, a, b) {
 
       const remounts = [];
       for (let cycle = 0; cycle < 5; cycle++) {
-        await page.locator(".nav .nav-item").nth(1).click();
+        await navigate(page, "library");
         // The v3.3 shell unmounts home; the 3.2 shell keeps it mounted but
         // hidden, where the world sleeps after the (shortened) delay.
         await page.waitForFunction(() => !document.querySelector(".sky-islands") ||
@@ -195,7 +202,7 @@ async function pixelDifference(page, a, b) {
           };
           requestAnimationFrame(tick);
         });
-        await page.locator(".nav .nav-item").nth(0).click();
+        await navigate(page, "home");
         const shownAt = Date.now();
         await waitLive(page);
         const monitor = await page.evaluate(() => { window.__skyBlank.running = false; return window.__skyBlank; });
