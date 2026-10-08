@@ -9,7 +9,8 @@
 import * as THREE from "three";
 import type { SkyWeatherKind } from "../skyScene";
 import type { SkyPalette } from "./materials";
-import { SHARED_UNIFORMS, cloudMaterial } from "./materials";
+import { SHARED_UNIFORMS, cloudMaterial, phaseFilter } from "./materials";
+import { SKY_DIRECTIONS } from "./palettes";
 import { releaseAfterUpload } from "./memory";
 import { hashString, seededRandom } from "./noise";
 
@@ -211,6 +212,8 @@ const PARTICLE_FRAGMENT = `
         colour *= 0.9 + 0.12 * smoothstep(-0.4, 0.9, y);
       }
       alpha = smoothstep(0.0, pixel, inside);
+      // Lit like the islands: dimmer and cooler at night, warmer at dusk.
+      colour *= uColor;
     }
     alpha *= vFade * uOpacity;
     if (alpha < 0.01) discard;
@@ -372,6 +375,7 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
     const night = currentPalette.night;
     if (type === "rain") uniforms.uColor.value.set(night ? "#9fb4d8" : "#e4eef8");
     else if (type === "snow") uniforms.uColor.value.set(night ? "#dfe8f7" : "#ffffff");
+    else uniforms.uColor.value.copy(phaseFilter(currentPalette.grassLight, SKY_DIRECTIONS.noon.palette.grassLight));
   };
 
   let home = 120;
