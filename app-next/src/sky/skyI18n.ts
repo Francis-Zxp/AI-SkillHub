@@ -59,7 +59,7 @@ const plural = (lang: SkyLang, count: number, one: string, other: string) => {
 
 const WORDS: Record<SkyLang, Words> = {
   zh: {
-    world: "世界",
+    world: "天气",
     worldTitle: "天气与岛屿气候",
     weather: "天气",
     auto: "自动",
@@ -83,7 +83,7 @@ const WORDS: Record<SkyLang, Words> = {
     summary: (categories, skills) => `${categories.toLocaleString()} 个分类 · ${skills.toLocaleString()} 个技能`
   },
   en: {
-    world: "World",
+    world: "Weather",
     worldTitle: "Weather and island climates",
     weather: "Weather",
     auto: "Auto",
@@ -107,7 +107,7 @@ const WORDS: Record<SkyLang, Words> = {
     summary: (categories, skills) => `${categories.toLocaleString()} ${plural("en", categories, "category", "categories")} · ${skills.toLocaleString()} ${plural("en", skills, "skill", "skills")}`
   },
   ko: {
-    world: "세계",
+    world: "날씨",
     worldTitle: "날씨와 섬 기후",
     weather: "날씨",
     auto: "자동",
