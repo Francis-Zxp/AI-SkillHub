@@ -20749,6 +20749,11 @@ async fn complete_onboarding(
             serde_json::json!({ "agents": agent_ids, "adopt": adopt_existing_skills }),
         );
         drop(connection);
+        // Onboarding is committed above, so the tools it took over are synced
+        // even when adopting the existing skills fails below. The job waits for
+        // the write guard that adopt holds; a successful adopt asks again so
+        // its new packs are covered whenever the first job has already run.
+        let mut ticket = delivery_queue::request(delivery_queue::Depth::Full, "onboarding", false);
         let adopt = if adopt_existing_skills {
             let preview = skill_source::adopt_preview_blocking(None)?;
             let ids = preview
@@ -20760,17 +20765,20 @@ async fn complete_onboarding(
             if ids.is_empty() {
                 None
             } else {
-                Some(skill_source::adopt_blocking(
+                let report = skill_source::adopt_blocking(
                     Some(app.clone()),
                     ids,
                     "onboarding-adopt".to_string(),
                     false,
-                )?)
+                )?;
+                if report.adopted + report.library_only > 0 {
+                    ticket = delivery_queue::request(delivery_queue::Depth::Full, "adopt", false);
+                }
+                Some(report)
             }
         } else {
             None
         };
-        let ticket = delivery_queue::request(delivery_queue::Depth::Full, "onboarding", false);
         let connection = open_index_database(&root)?;
         let state = build_skill_delivery_state(&root, &connection, &evidence, None)?;
         Ok(OnboardingResult {
