@@ -1424,12 +1424,16 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       library.dispose();
       sun.shadow.map?.dispose();
       scene.clear();
+      liveWorlds--;
+      releaseShared();
+      // What this renderer still holds after everything above (QA reads it;
+      // cached models count while another world still draws them).
+      options.host.dataset.leftGeometries = String(renderer.info.memory.geometries);
+      options.host.dataset.leftTextures = String(renderer.info.memory.textures);
       renderer.dispose();
       renderer.forceContextLoss();
       canvas.remove();
       delete (options.host as HostWithStats).skyWorldStats;
-      liveWorlds--;
-      releaseShared();
       // Shared uniforms are not reset here: a successor world may already
       // own them (a re-roll disposes the old world after the new one is up).
     }

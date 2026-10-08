@@ -201,6 +201,55 @@ async function pressLabel(page, index, hold) {
       await context.close();
     }
 
+    // Hover names the climate; the world panel is a keyboard radio group.
+    {
+      const { context, page, errors } = await open(browser);
+      const label = page.locator(".sky-island-label").first();
+      await label.hover();
+      await page.waitForTimeout(400);
+      const tag = await label.locator(".sky-island-climate").evaluate(element => ({ text: element.textContent, opacity: getComputedStyle(element).opacity }));
+      check("hovering an island shows its climate above the label", Number(tag.opacity) > 0.95 && /草原|雪山|沙漠|热带|秋林|火山|水晶|梯田/.test(tag.text ?? ""), tag);
+      await page.mouse.move(5, 5);
+      await page.locator(".sky-world-toggle").focus();
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(200);
+      const opened = await page.evaluate(() => ({ role: document.activeElement?.getAttribute("role"), checked: document.activeElement?.getAttribute("aria-checked"), stops: document.querySelectorAll('.sky-weather-options [tabindex="0"]').length }));
+      await page.keyboard.press("ArrowRight");
+      await page.waitForTimeout(300);
+      const moved = await page.evaluate(() => ({ focused: document.activeElement?.getAttribute("data-weather"), checked: document.querySelector('.sky-weather-options [aria-checked="true"]')?.getAttribute("data-weather"), stored: localStorage.getItem("skillhub-sky-weather") }));
+      await page.keyboard.press("End");
+      const end = await page.evaluate(() => document.activeElement?.getAttribute("data-weather"));
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(200);
+      const closed = await page.evaluate(() => ({ panel: Boolean(document.querySelector(".sky-world-panel")), focusOnToggle: document.activeElement?.classList.contains("sky-world-toggle") }));
+      check("world panel: focus lands on the checked weather, one tab stop", opened.role === "radio" && opened.checked === "true" && opened.stops === 1, opened);
+      check("world panel: arrow keys move and choose; End jumps to the last available", moved.focused === moved.checked && moved.checked === moved.stored && moved.checked !== "clear" && end === "petals", { ...moved, end });
+      check("world panel: Escape closes it and focus returns to its button", !closed.panel && closed.focusOnToggle, closed);
+      allErrors.push(...errors);
+      await context.close();
+    }
+
+    // #42 A new time of day relights the world in place: same canvas, same view.
+    {
+      const { context, page, errors } = await open(browser);
+      const before = await page.evaluate(() => {
+        window.__qaCanvas = document.querySelector(".sky-world-canvas");
+        return [...document.querySelectorAll(".sky-island-label")].map(label => label.style.transform).join("|");
+      });
+      await page.locator(".theme-trigger").click();
+      await page.locator(".theme-menu button", { hasText: "天空 · 午后" }).click();
+      await page.waitForTimeout(1500);
+      const after = await page.evaluate(() => ({
+        sameCanvas: window.__qaCanvas === document.querySelector(".sky-world-canvas"),
+        phase: document.querySelector(".sky-islands")?.className.match(/sky-phase-([a-z]+)/)?.[1],
+        status: document.querySelector(".sky-islands")?.getAttribute("data-status"),
+        labels: [...document.querySelectorAll(".sky-island-label")].map(label => label.style.transform).join("|")
+      }));
+      check("#42 a new time of day keeps the world and its view", after.sameCanvas && after.phase === "golden" && after.status === "ready" && after.labels === before, { sameCanvas: after.sameCanvas, phase: after.phase, sameLabels: after.labels === before });
+      allErrors.push(...errors);
+      await context.close();
+    }
+
     // Overlay blocks above the scene: the islands move down into the free band.
     {
       const { context, page, errors } = await open(browser, { height: 900 });
@@ -257,6 +306,22 @@ async function pressLabel(page, index, hold) {
         return { awakeVsStill: mean(pa, pb), stillVsWoken: mean(pb, pc) };
       }, ["sleep-0-awake.png", "sleep-1-still.png", "sleep-2-woken.png"].map(name => `data:image/png;base64,${fs.readFileSync(path.join(shots, name)).toString("base64")}`));
       check("the still looks like the live scene (mean pixel difference < 4/255)", diff.awakeVsStill < 4 && diff.stillVsWoken < 4, { awakeVsStill: Number(diff.awakeVsStill.toFixed(2)), stillVsWoken: Number(diff.stillVsWoken.toFixed(2)) });
+      allErrors.push(...errors);
+      await context.close();
+    }
+
+    // The shell's "visible again" event wakes the world without a pointer.
+    {
+      const { context, page, errors } = await open(browser, { storage: { "skillhub-sky-sleep-ms": "1500" } });
+      await page.evaluate(() => window.dispatchEvent(new Event("skillhub-app-hidden")));
+      await page.waitForFunction(() => document.querySelector(".sky-scene-host")?.dataset.sleeping === "1", null, { timeout: 8000 }).catch(() => undefined);
+      const slept = await page.evaluate(() => document.querySelectorAll(".sky-world-canvas").length === 0);
+      const started = Date.now();
+      await page.evaluate(() => window.dispatchEvent(new Event("skillhub-app-visible")));
+      await page.waitForFunction(() => document.querySelectorAll(".sky-world-canvas").length === 1 && !document.querySelector(".sky-world-still"), null, { timeout: 8000 }).catch(() => undefined);
+      const wakeMs = Date.now() - started;
+      const awake = await page.evaluate(() => document.querySelectorAll(".sky-world-canvas").length === 1);
+      check("skillhub-app-hidden then skillhub-app-visible: sleeps, then wakes within about a second", slept && awake && wakeMs < 1500, { slept, awake, wakeMs });
       allErrors.push(...errors);
       await context.close();
     }

@@ -161,6 +161,14 @@ export function createFlocks(template: ModelTemplate, bounds: THREE.Box3, count:
 
 export type Walker = { object: THREE.Object3D; update: (delta: number) => void; dispose: () => void };
 
+/** A clone's skeletons own the bone textures the renderer made for them. */
+function releaseSkeletons(object: THREE.Object3D) {
+  object.traverse(child => {
+    const mesh = child as THREE.SkinnedMesh;
+    if (mesh.isSkinnedMesh) mesh.skeleton.dispose();
+  });
+}
+
 /** A villager walking `route` (island-local XZ points) on `shape`. */
 export function createWalker(gltf: GLTF, shape: IslandShape, origin: THREE.Vector3, route: Array<[number, number]>, height: number, seed: number): Walker | null {
   if (route.length < 2) return null;
@@ -230,6 +238,7 @@ export function createWalker(gltf: GLTF, shape: IslandShape, origin: THREE.Vecto
     dispose() {
       mixer.stopAllAction();
       mixer.uncacheRoot(object);
+      releaseSkeletons(object);
     }
   };
 }
@@ -390,6 +399,7 @@ export function createAnimal(
     dispose() {
       mixer.stopAllAction();
       mixer.uncacheRoot(object);
+      releaseSkeletons(object);
     }
   };
 }
