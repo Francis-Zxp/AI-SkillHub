@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { type CSSProperties, Suspense, lazy, useEffect, useState } from "react";
 import { Icon } from "../icons";
 import { LANG_OPTIONS, type Lang, t } from "../i18n";
+import { UI_MATERIALS, type UiMaterial } from "../uiMaterial";
 import { SKY_SCENE_EVENT, setSkySceneEnabled, skySceneEnabled } from "../skyScene";
 import { rt } from "../sourceUpdateRun";
 import type {
@@ -42,6 +43,7 @@ export function Settings({
   busyAction,
   currentIconScale,
   currentLang,
+  currentMaterial,
   currentTextScale,
   currentTheme,
   devMode,
@@ -53,6 +55,7 @@ export function Settings({
   onChangeIconScale,
   onChangeLang,
   onChangeTelemetry,
+  onChangeMaterial,
   onChangeTextScale,
   onChangeTheme,
   onCheckUpdate,
@@ -76,6 +79,7 @@ export function Settings({
   busyAction: string;
   currentIconScale: UiScalePreset;
   currentLang: Lang;
+  currentMaterial: UiMaterial;
   currentTextScale: UiScalePreset;
   currentTheme: ThemeName;
   devMode: boolean;
@@ -87,6 +91,7 @@ export function Settings({
   onChangeIconScale: (scale: UiScalePreset) => void;
   onChangeLang: (lang: Lang) => void;
   onChangeTelemetry: (value: boolean) => void;
+  onChangeMaterial: (material: UiMaterial) => void;
   onChangeTextScale: (scale: UiScalePreset) => void;
   onChangeTheme: (theme: ThemeName) => void;
   onCheckUpdate: () => void;
@@ -297,6 +302,18 @@ export function Settings({
                 </button>
               ))}
             </div>
+          </div>
+          <div className="settings-row settings-scale-row">
+            <span className="settings-scale-label">
+              <strong>{t("v33.material")}</strong>
+              <small>{t("v33.materialHint")}</small>
+            </span>
+            <SegmentedToggle
+              label={t("v33.material")}
+              value={currentMaterial}
+              options={UI_MATERIALS.map(value => ({ value, label: t(`v33.material.${value}`) }))}
+              onChange={onChangeMaterial}
+            />
           </div>
           <div className="settings-row settings-scale-row">
             <span className="settings-scale-label">

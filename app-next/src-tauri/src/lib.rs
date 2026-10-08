@@ -2481,6 +2481,26 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<Deliver
     let _ = fs::remove_file(&report_path);
     let mut results = BTreeMap::new();
 
+    // Takeover backups that SkillHub 3.1/3.2 left inside a skills folder make AI tools
+    // list every skill again; move them beside the folder (never delete) before syncing.
+    let delivered_roots = plan
+        .targets
+        .recipients
+        .iter()
+        .filter(|recipient| recipient.action == skill_delivery::RecipientAction::Deliver)
+        .map(|recipient| recipient.path.clone())
+        .chain(
+            plan.targets
+                .shared
+                .iter()
+                .filter(|shared| shared.action == Some(skill_delivery::RecipientAction::Deliver))
+                .map(|shared| shared.path.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    for skills_root in &delivered_roots {
+        skill_delivery::relocate_takeover_backups(skills_root);
+    }
+
     // The shared Coze/Codex folder stays in Rust (§3.3 rule 6). A same-name
     // personal entry is a per-entry conflict and never blocks the others.
     let mut real_shared_root = None;

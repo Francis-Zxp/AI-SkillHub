@@ -721,7 +721,9 @@ function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot, [string]$LinkS
         if ($currentTarget -eq $target) { continue }
         Remove-ReparsePointPath $dest
       } elseif ($item.Name -ne '.system') {
-        $backupRoot = Join-Path $RecipientSkillsRoot ('AI_global接管前备份_' + $Stamp)
+        # Beside the skills folder, never inside it: AI tools scan one level down and would
+        # list every backed-up skill again.
+        $backupRoot = Join-Path (Join-Path (Split-Path -Parent $RecipientSkillsRoot) 'AI_global接管前备份') ((Split-Path -Leaf $RecipientSkillsRoot) + '_' + $Stamp)
         New-Item -ItemType Directory -Force -Path $backupRoot | Out-Null
         Move-Item -LiteralPath $dest -Destination (Join-Path $backupRoot $skill.Name)
       }

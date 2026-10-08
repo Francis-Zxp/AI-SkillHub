@@ -3026,9 +3026,99 @@ pub(crate) fn pending_security_review(
         .map_err(|error| format!("Cannot read security review state: {error}"))
 }
 
+/// Prefix of the folders SkillHub 3.1/3.2 made when it replaced an entry during a takeover.
+const TAKEOVER_BACKUP_PREFIX: &str = "AI_global接管前备份_";
+
+/// SkillHub 3.1/3.2 put its takeover backups *inside* the skills folder
+/// (`<skills>/AI_global接管前备份_YYYYMMDD_HHMMSS/<skill>/SKILL.md`). AI tools look one
+/// level down, so Codex listed every skill once more per backup. Such folders (exactly
+/// that name, a real directory, never a link) are moved next to the skills folder, into
+/// `<parent>/AI_global接管前备份/<skills folder>_<stamp>`. Nothing is deleted; a backup
+/// whose destination already exists is left where it is.
+pub(crate) fn relocate_takeover_backups(skills_root: &Path) -> Vec<PathBuf> {
+    let mut moved = Vec::new();
+    let (Some(parent), Some(leaf)) = (skills_root.parent(), skills_root.file_name()) else {
+        return moved;
+    };
+    if crate::external_skills::is_link(skills_root) {
+        return moved;
+    }
+    let Ok(entries) = fs::read_dir(skills_root) else {
+        return moved;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(stamp) = name.strip_prefix(TAKEOVER_BACKUP_PREFIX) else {
+            continue;
+        };
+        let bytes = stamp.as_bytes();
+        let stamp_ok = bytes.len() == 15
+            && bytes[8] == b'_'
+            && bytes
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| index == 8 || byte.is_ascii_digit());
+        let path = entry.path();
+        if !stamp_ok || crate::external_skills::is_link(&path) || !path.is_dir() {
+            continue;
+        }
+        let destination = parent
+            .join("AI_global接管前备份")
+            .join(format!("{}_{stamp}", leaf.to_string_lossy()));
+        if destination.exists() || fs::create_dir_all(parent.join("AI_global接管前备份")).is_err()
+        {
+            continue;
+        }
+        if fs::rename(&path, &destination).is_ok() {
+            moved.push(destination);
+        }
+    }
+    moved
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn takeover_backups_move_out_of_the_skills_folder_and_nothing_else_does() {
+        let base = std::env::temp_dir().join(format!("skillhub-takeover-{}", uuid::Uuid::new_v4()));
+        let skills = base.join(".agents").join("skills");
+        let backup = skills.join("AI_global接管前备份_20261009_024300");
+        fs::create_dir_all(backup.join("nature-skills--yuan1z0825")).unwrap();
+        fs::write(
+            backup.join("nature-skills--yuan1z0825/SKILL.md"),
+            "---\nname: x\n---",
+        )
+        .unwrap();
+        // Look-alikes and personal folders stay.
+        for keep in [
+            "AI_global接管前备份_notes",
+            "AI_global接管前备份_2026100_024300",
+            "my-skill",
+        ] {
+            fs::create_dir_all(skills.join(keep)).unwrap();
+        }
+        let moved = relocate_takeover_backups(&skills);
+        let expected = base.join(".agents/AI_global接管前备份/skills_20261009_024300");
+        assert_eq!(moved, vec![expected.clone()]);
+        assert!(expected
+            .join("nature-skills--yuan1z0825/SKILL.md")
+            .is_file());
+        assert!(!backup.exists());
+        for keep in [
+            "AI_global接管前备份_notes",
+            "AI_global接管前备份_2026100_024300",
+            "my-skill",
+        ] {
+            assert!(skills.join(keep).is_dir(), "{keep} stays");
+        }
+        // A second backup with the same stamp is not merged into the first.
+        fs::create_dir_all(&backup).unwrap();
+        assert!(relocate_takeover_backups(&skills).is_empty());
+        assert!(backup.is_dir());
+        fs::remove_dir_all(base).unwrap();
+    }
 
     fn memory_db() -> Connection {
         let connection = Connection::open_in_memory().unwrap();

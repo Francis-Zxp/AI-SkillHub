@@ -1158,25 +1158,17 @@ function drawUniverseBackdrop(
   centerX: number, centerY: number, radius: number, width: number, height: number, lightTheme: boolean
 ) {
   context.save();
-  // The glow sits in the centre of the sphere (as in 3.2.10): nodes in front read
-  // brighter against it and the ones behind sink into it, which gives depth.
-  const core = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius * 1.05);
-  core.addColorStop(0, `${palette.core}${lightTheme ? 0.12 : 0.22})`);
-  core.addColorStop(0.18, `${palette.core}${lightTheme ? 0.08 : 0.14})`);
-  core.addColorStop(0.5, `${palette.core}${lightTheme ? 0.035 : 0.06})`);
+  // Only the heart of the sphere glows: nodes in front read brighter against it and
+  // the ones behind sink into it. No halo fills the whole ball (it looked like fog).
+  const glow = radius * 0.62;
+  const core = context.createRadialGradient(centerX, centerY, 0, centerX, centerY, glow);
+  core.addColorStop(0, `${palette.core}${lightTheme ? 0.12 : 0.24})`);
+  core.addColorStop(0.3, `${palette.core}${lightTheme ? 0.065 : 0.12})`);
+  core.addColorStop(0.65, `${palette.core}${lightTheme ? 0.02 : 0.035})`);
   core.addColorStop(1, `${palette.core}0)`);
   context.fillStyle = core;
   context.beginPath();
-  context.arc(centerX, centerY, radius * 1.05, 0, Math.PI * 2);
-  context.fill();
-  // A faint limb at the rim reads the sphere as a ball rather than a disc.
-  const limb = context.createRadialGradient(centerX, centerY, radius * 0.82, centerX, centerY, radius * 1.02);
-  limb.addColorStop(0, `${palette.core}0)`);
-  limb.addColorStop(0.82, `${palette.core}${lightTheme ? 0.035 : 0.05})`);
-  limb.addColorStop(1, `${palette.core}0)`);
-  context.fillStyle = limb;
-  context.beginPath();
-  context.arc(centerX, centerY, radius * 1.02, 0, Math.PI * 2);
+  context.arc(centerX, centerY, glow, 0, Math.PI * 2);
   context.fill();
   drawAtmosphereDither(context, width, height);
   const starCount = Math.min(STAR_FIELD.length, Math.max(260, Math.round(width * height / 3800)));

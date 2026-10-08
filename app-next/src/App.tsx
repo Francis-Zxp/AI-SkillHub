@@ -7,6 +7,7 @@ import { ParticleField, useCardGlow } from "./effects";
 import { type Lang, initialLang, setLang, t } from "./i18n";
 import { rt, shouldAutoContinue, sourceUpdateFeedback, sourceUpdateToast, summarizeSourceUpdateRun } from "./sourceUpdateRun";
 import { UI_ICON_SCALES, UI_ICON_SCALE_STORAGE_KEY, restoredIconScale } from "./iconScale";
+import { initialUiMaterial, saveUiMaterial, type UiMaterial } from "./uiMaterial";
 import type {
   AdoptReport,
   AgentId,
@@ -220,6 +221,7 @@ export function App() {
   // resolved phase, while settings keep showing the user's choice.
   const resolvedTheme: ThemeName = theme === "sky-auto" ? `sky-${skyPhase}` : theme;
   const [textScale, setTextScale] = useState<UiScalePreset>(() => initialUiScale(UI_TEXT_SCALE_STORAGE_KEY, "standard"));
+  const [material, setMaterial] = useState<UiMaterial>(initialUiMaterial);
   const [iconScale, setIconScale] = useState<UiScalePreset>(() => restoredIconScale(
     window.localStorage.getItem(UI_ICON_SCALE_STORAGE_KEY), window.localStorage.getItem("ai-skillhub-ui-icon-scale")
   ));
@@ -330,6 +332,12 @@ export function App() {
 
   function changeTextScale(nextScale: UiScalePreset) {
     setTextScale(nextScale);
+    toastMessage(t("set.displaySaved"), "ok");
+  }
+
+  function changeMaterial(next: UiMaterial) {
+    setMaterial(next);
+    saveUiMaterial(next);
     toastMessage(t("set.displaySaved"), "ok");
   }
 
@@ -1961,7 +1969,7 @@ export function App() {
 
   return (
     <main
-      className={`${runtimeAvailable ? "shell v33" : "shell v33 browser-preview-shell"} theme-${resolvedTheme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"}${resolvedTheme.startsWith("sky-") ? " theme-family-sky" : ""} page-${active} lang-${lang}${dashboardImmersive && active === "dashboard" ? " dashboard-immersive" : ""}`}
+      className={`${runtimeAvailable ? "shell v33" : "shell v33 browser-preview-shell"} theme-${resolvedTheme} ${atlasMode ? "theme-family-atlas" : "theme-family-classic"}${resolvedTheme.startsWith("sky-") ? " theme-family-sky" : ""} page-${active} lang-${lang} material-${material}${dashboardImmersive && active === "dashboard" ? " dashboard-immersive" : ""}`}
       data-runtime-hydrated={runtimeHydrated ? "true" : "false"}
       style={{
         "--ui-icon-scale": UI_ICON_SCALES[iconScale],
@@ -2246,6 +2254,7 @@ export function App() {
                 busyAction={busyAction}
                 currentIconScale={iconScale}
                 currentLang={lang}
+                currentMaterial={material}
                 currentTextScale={textScale}
                 currentTheme={theme}
                 devMode={devMode}
@@ -2256,6 +2265,7 @@ export function App() {
                 onChangeHomeVisual={changeHomeVisual}
                 onChangeIconScale={changeIconScale}
                 onChangeLang={changeLang}
+                onChangeMaterial={changeMaterial}
                 onChangeTelemetry={changeTelemetry}
                 onChangeTextScale={changeTextScale}
                 onChangeTheme={changeTheme}

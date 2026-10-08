@@ -1,6 +1,6 @@
 /* =============================================================
-   Liquid glass (v3.3)
-   One material for the app chrome, after Apple's Liquid Glass: a thin tint of
+   Glass materials (v3.3): frosted (default) and liquid glass
+   Liquid glass follows Apple's Liquid Glass: a thin tint of
    the theme's own surface over a blurred, saturated backdrop, a specular rim
    that is brightest along the top edge, a soft lifted shadow and springy
    motion. The large surfaces (top bar, rail, bottom bar, scene switch) also
@@ -18,26 +18,59 @@
   initial-value: 0;
 }
 
-/* ---------- material tokens: light themes ---------- */
+/* ---------- material tokens ----------
+   Two materials share every rule below; only the tokens differ.
+   - Frosted (default, the 3.2.x look): a near-solid panel of the theme's own
+     surface over a light blur, a hairline border, the theme's chrome shadow and
+     the brand colour for the chosen item.
+   - Liquid (main.shell.material-liquid): a thin tint, strong blur and
+     saturation, a specular rim, the lens and a pointer sheen. */
 main.shell.v33 {
+  --lg-fill: color-mix(in srgb, var(--surface-elevated) 90%, transparent);
+  --lg-fill-strong: var(--surface-elevated);
+  --lg-fill-inner: var(--surface-soft);
+  --lg-fill-hover: var(--surface-strong);
+  --lg-raise: var(--surface-elevated);
+  --lg-bead: var(--brand-fill, var(--brand-strong));
+  --lg-bead-text: var(--on-brand, var(--bg));
+  --lg-bead-shadow: 0 2px 8px color-mix(in srgb, var(--brand) 28%, transparent);
+  --lg-hairline: var(--border);
+  --lg-rim-hi: transparent;
+  --lg-rim-lo: transparent;
+  --lg-rim: 0 0 0 1px var(--border);
+  --lg-sheen-rgb: 255, 255, 255;
+  --lg-sheen-k: 0;
+  --lg-shadow: var(--shadow-chrome);
+  --lg-shadow-raised: var(--shadow-card);
+  --lg-blur: 14px;
+  --lg-sat: 130%;
+  --lg-blur-strong: 20px;
+  --lg-sat-strong: 140%;
+  --lg-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --lg-out: cubic-bezier(.22, 1, .36, 1);
+}
+
+/* Liquid glass, light themes. */
+main.shell.v33.material-liquid {
   --lg-fill: color-mix(in srgb, var(--surface-elevated) 58%, transparent);
   --lg-fill-strong: color-mix(in srgb, var(--surface-elevated) 80%, transparent);
   --lg-fill-inner: rgba(255, 255, 255, .42);
   --lg-fill-hover: rgba(255, 255, 255, .7);
+  --lg-raise: rgba(255, 255, 255, .94);
   --lg-bead: rgba(255, 255, 255, .94);
   --lg-bead-text: var(--brand-strong);
   --lg-hairline: rgba(15, 23, 42, .09);
   --lg-rim-hi: rgba(255, 255, 255, .95);
   --lg-rim-lo: rgba(255, 255, 255, .38);
   --lg-glow: rgba(255, 255, 255, .28);
-  --lg-sheen-rgb: 255, 255, 255;
+  --lg-sheen-k: .32;
   --lg-shadow: 0 1px 1px rgba(15, 23, 42, .04), 0 10px 30px rgba(15, 23, 42, .12);
   --lg-shadow-raised: 0 2px 6px rgba(15, 23, 42, .06), 0 22px 56px rgba(15, 23, 42, .2);
   --lg-bead-shadow: 0 1px 2px rgba(15, 23, 42, .1), 0 4px 12px rgba(15, 23, 42, .1), inset 0 1px 0 #fff;
   --lg-blur: 16px;
   --lg-sat: 185%;
-  --lg-spring: cubic-bezier(.34, 1.56, .64, 1);
-  --lg-out: cubic-bezier(.22, 1, .36, 1);
+  --lg-blur-strong: 28px;
+  --lg-sat-strong: 190%;
   --lg-rim:
     inset 0 1px 0 var(--lg-rim-hi),
     inset 1px 0 0 var(--lg-rim-lo),
@@ -47,12 +80,13 @@ main.shell.v33 {
     0 0 0 .5px var(--lg-hairline);
 }
 
-/* ---------- material tokens: dark themes ---------- */
-main.shell.v33:is(.theme-dark, .theme-classic-dark, .theme-atlas-dark, .theme-atlas-legacy-dark, .theme-nocturne, .theme-sky-night) {
+/* Liquid glass, dark themes. */
+main.shell.v33.material-liquid:is(.theme-dark, .theme-classic-dark, .theme-atlas-dark, .theme-atlas-legacy-dark, .theme-nocturne, .theme-sky-night) {
   --lg-fill: color-mix(in srgb, var(--surface-elevated) 52%, transparent);
   --lg-fill-strong: color-mix(in srgb, var(--surface-elevated) 82%, transparent);
   --lg-fill-inner: rgba(255, 255, 255, .06);
   --lg-fill-hover: rgba(255, 255, 255, .12);
+  --lg-raise: rgba(255, 255, 255, .17);
   --lg-bead: rgba(255, 255, 255, .17);
   --lg-bead-text: var(--text);
   --lg-hairline: rgba(0, 0, 0, .35);
@@ -75,11 +109,10 @@ main.shell.v33 .atlas-immersive-toggle,
 main.shell.v33 .atlas-intro-toggle {
   border-color: transparent;
   background:
-    radial-gradient(circle at var(--lg-x, 50%) var(--lg-y, 0%), rgba(var(--lg-sheen-rgb), calc(var(--lg-sheen) * .32)) 0, rgba(var(--lg-sheen-rgb), 0) 70%),
+    radial-gradient(circle at var(--lg-x, 50%) var(--lg-y, 0%), rgba(var(--lg-sheen-rgb), calc(var(--lg-sheen) * var(--lg-sheen-k))) 0, rgba(var(--lg-sheen-rgb), 0) 70%),
     var(--lg-fill);
   box-shadow: var(--lg-rim), var(--lg-shadow);
-  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
-  backdrop-filter: var(--lg-lens,) blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(1.04);
+  backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
   transition:
     --lg-sheen 260ms var(--lg-out),
     background-color 200ms var(--lg-out),
@@ -90,14 +123,18 @@ main.shell.v33 .atlas-intro-toggle {
 main.shell.v33 :is(.topbar, .metric-grid.atlas-touchbar, .segmented, .skill-universe-modes, .sky-controls, .atlas-immersive-toggle, .atlas-intro-toggle)[data-lg-lit],
 main.shell.v33 .side-rail[data-lg-lit]::before { --lg-sheen: 1; }
 main.shell.v33 .side-rail::before { border: 0; inset: 8px 6px; border-radius: 24px; }
+/* Only liquid glass bends the backdrop through the lens. */
+main.shell.v33.material-liquid :is(.topbar, .metric-grid.atlas-touchbar, .segmented, .skill-universe-modes, .sky-controls, .atlas-immersive-toggle, .atlas-intro-toggle),
+main.shell.v33.material-liquid .side-rail::before {
+  backdrop-filter: var(--lg-lens,) blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(1.04);
+}
 
 /* Thicker glass for things that hold reading: menus, popovers, panels, dialogs, drawers. */
 main.shell.v33 :is(.more-list, .problems-popover, .lang-menu, .theme-menu, .update-results-popover, .mcp-menu, .global-search-results, .toast, .dialog, .drawer, .import-sheet, .mcp-drawer) {
   border-color: transparent;
   background: var(--lg-fill-strong);
   box-shadow: var(--lg-rim), var(--lg-shadow-raised);
-  -webkit-backdrop-filter: blur(28px) saturate(190%);
-  backdrop-filter: blur(28px) saturate(190%);
+  backdrop-filter: blur(var(--lg-blur-strong)) saturate(var(--lg-sat-strong));
 }
 main.shell.v33 .drawer-backdrop { background: rgba(10, 14, 24, .22); backdrop-filter: blur(4px) saturate(120%); }
 
@@ -118,8 +155,8 @@ main.shell.v33 .topbar .command-search:focus-within {
 }
 main.shell.v33 .topbar .command-search kbd { border-color: transparent; background: var(--lg-fill-inner); box-shadow: 0 0 0 .5px var(--lg-hairline); }
 
-/* Primary actions: a lit drop of the theme colour. */
-main.shell.v33 :is(.primary-pill, .atlas-touchbar-actions button:last-child) {
+/* Primary actions (liquid): a lit drop of the theme colour. Frosted keeps the flat 3.2.x fill. */
+main.shell.v33.material-liquid :is(.primary-pill, .atlas-touchbar-actions button:last-child) {
   border-color: transparent;
   background: linear-gradient(180deg, color-mix(in srgb, var(--brand-fill, var(--brand-strong)) 80%, #fff) 0%, var(--brand-fill, var(--brand-strong)) 62%);
   /* Sky themes name their on-brand colour; the Atlas themes pair the brand with the page colour. */
@@ -127,7 +164,7 @@ main.shell.v33 :is(.primary-pill, .atlas-touchbar-actions button:last-child) {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .42), inset 0 -1px 0 rgba(0, 0, 0, .12), 0 6px 18px color-mix(in srgb, var(--brand) 32%, transparent);
   transition: transform 340ms var(--lg-spring), box-shadow 220ms var(--lg-out), filter 160ms var(--lg-out);
 }
-main.shell.v33 :is(.primary-pill, .atlas-touchbar-actions button:last-child):hover:not(:disabled) {
+main.shell.v33.material-liquid :is(.primary-pill, .atlas-touchbar-actions button:last-child):hover:not(:disabled) {
   filter: brightness(1.06);
   transform: translateY(-1px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .12), 0 10px 24px color-mix(in srgb, var(--brand) 38%, transparent);
@@ -143,9 +180,13 @@ main.shell.v33 :is(.primary-pill, .ghost-pill, .icon-button, .sync-indicator, .s
 main.shell.v33 .rail-item { transition: background 200ms var(--lg-out), color 160ms var(--lg-out), box-shadow 220ms var(--lg-out), transform 340ms var(--lg-spring); }
 main.shell.v33 .rail-item:hover { background: var(--lg-fill-inner); }
 main.shell.v33 .rail-item[aria-current="page"] {
+  background: color-mix(in srgb, var(--brand) 15%, var(--surface));
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text);
+}
+main.shell.v33.material-liquid .rail-item[aria-current="page"] {
   background: var(--lg-bead);
   box-shadow: var(--lg-bead-shadow);
-  color: var(--text);
 }
 main.shell.v33 .rail-footer { border-top-color: var(--lg-hairline); }
 
@@ -357,11 +398,10 @@ main.shell.v33.theme-family-atlas.page-dashboard .sky-board {
 main.shell.v33 .sky-board-card {
   border-color: transparent;
   background:
-    radial-gradient(circle at var(--lg-x, 50%) var(--lg-y, 0%), rgba(var(--lg-sheen-rgb), calc(var(--lg-sheen) * .4)) 0, rgba(var(--lg-sheen-rgb), 0) 70%),
+    radial-gradient(circle at var(--lg-x, 50%) var(--lg-y, 0%), rgba(var(--lg-sheen-rgb), calc(var(--lg-sheen) * var(--lg-sheen-k))) 0, rgba(var(--lg-sheen-rgb), 0) 70%),
     var(--lg-fill-strong);
   color: var(--text);
   box-shadow: var(--lg-rim), var(--lg-shadow);
-  -webkit-backdrop-filter: blur(14px) saturate(180%);
   backdrop-filter: blur(14px) saturate(180%);
   transition: --lg-sheen 260ms var(--lg-out), transform 380ms var(--lg-spring), box-shadow 240ms var(--lg-out);
 }
@@ -421,7 +461,6 @@ main.shell.v33 :is(.sky-world-panel, .sky-navigation, .sky-credits) {
   color: var(--text);
   background: var(--lg-fill-strong);
   box-shadow: var(--lg-rim), var(--lg-shadow-raised);
-  -webkit-backdrop-filter: blur(24px) saturate(185%);
   backdrop-filter: blur(24px) saturate(185%);
   border-radius: 18px;
 }
@@ -430,13 +469,12 @@ main.shell.v33 .sky-island-label {
   color: var(--text);
   background: var(--lg-fill-strong);
   box-shadow: var(--lg-rim), 0 4px 14px rgba(15, 23, 42, .14);
-  -webkit-backdrop-filter: blur(12px) saturate(180%);
   backdrop-filter: blur(12px) saturate(180%);
   border-radius: 12px;
 }
 main.shell.v33 .sky-island-label:is(.is-hovered, :hover) {
   border-color: transparent;
-  background: var(--lg-bead);
+  background: var(--lg-raise);
   box-shadow: var(--lg-rim), 0 0 0 1.5px color-mix(in srgb, var(--brand) 60%, transparent), 0 8px 20px rgba(15, 23, 42, .18);
 }
 main.shell.v33 .sky-caption span { background: var(--lg-fill); -webkit-backdrop-filter: blur(10px) saturate(170%); backdrop-filter: blur(10px) saturate(170%); border-radius: 999px; padding: 4px 10px; }
@@ -488,3 +526,9 @@ main.shell.v33 .drawer-backdrop { animation: backdrop-in 240ms var(--lg-out); }
 /* Rows answer the pointer with a soft wash instead of a hard swap. */
 main.shell.v33 .lib-row { transition: background 200ms var(--lg-out), box-shadow 240ms var(--lg-out); }
 main.shell.v33 .lib-row:hover:not(.selected) { background: color-mix(in srgb, var(--brand) 5%, var(--lg-fill-inner)); }
+
+/* ---------- top bar icons: one optical size ----------
+   The refresh glyph fills its whole box, so at the shared 22px it read a size larger
+   than the globe, sun and GitHub marks. */
+main.shell.v33 .topbar-actions :is(.ghost-pill, .icon-button, .lang-trigger, .theme-trigger, .primary-pill, .update-available-pill) svg { width: 18px; height: 18px; }
+main.shell.v33 .topbar-actions .update-pill svg { width: 16px; height: 16px; }
