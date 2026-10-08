@@ -119,7 +119,11 @@ export function Dashboard({
       return true;
     }
   });
-  const [dismissedAgents, setDismissedAgents] = useState<string[]>(() => readDismissedAgents());
+  // Tools dismissed from the old home card stay quiet here too.
+  const [dismissedAgents] = useState<string[]>(() => readDismissedAgents());
+  const viewRef = useRef<HTMLDivElement | null>(null);
+  const touchbarRef = useRef<HTMLElement | null>(null);
+  useTouchbarReserve(viewRef, touchbarRef);
   const agents = delivery?.agents ?? [];
   const installedDeliverable = agents.filter(agent => agent.installed && agent.canDeliver);
   const taken = installedDeliverable.filter(agent => agent.takeover).length;
@@ -129,7 +133,6 @@ export function Dashboard({
   const atlasMode = isAtlasTheme(theme);
   const atlasVisual = atlasThemeVisual(theme);
   const sceneVisual: HomeVisual | "none" = atlasMode && !sceneSuspended ? homeVisual : "none";
-  const emptyLibrary = !loading && counts.rows === 0;
   const toggleAtlasIntro = () => {
     const next = !atlasIntroVisible;
     setAtlasIntroVisible(next);
@@ -137,15 +140,6 @@ export function Dashboard({
       window.localStorage.setItem(ATLAS_INTRO_VISIBILITY_KEY, String(next));
     } catch {
       // The visual preference can remain session-only when storage is unavailable.
-    }
-  };
-  const dismissAgentCard = (agentId: string) => {
-    const next = [...dismissedAgents, agentId];
-    setDismissedAgents(next);
-    try {
-      window.localStorage.setItem(DISMISSED_AGENT_CARDS_KEY, JSON.stringify(next));
-    } catch {
-      // Dismissal lasts for this session when storage is unavailable.
     }
   };
 
@@ -167,7 +161,7 @@ export function Dashboard({
   // 3.2.x layout: the scene fills the page and the four numbers sit in the bar along the bottom,
   // so nothing covers the islands, the star map or the summary on any window shape.
   return (
-    <div className="view dashboard-view home-v33">
+    <div className="view dashboard-view home-v33" ref={viewRef}>
       <section className={`dashboard-hero glow-card${sceneVisual === "summary" ? " summary-home" : ""}${atlasMode && (!atlasIntroVisible || sceneVisual !== "universe") ? " intro-collapsed" : ""}${sceneVisual === "islands" ? " islands-home" : " universe-home"}`}>
         {sceneVisual === "islands" && (
           <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
@@ -244,7 +238,7 @@ export function Dashboard({
         </div>
       </section>
 
-      <section className={`metric-grid${atlasMode ? " atlas-touchbar" : ""}`} aria-label={t("v33.homeMetrics")} data-testid="home-touchbar">
+      <section className={`metric-grid${atlasMode ? " atlas-touchbar" : ""}`} aria-label={t("v33.homeMetrics")} data-testid="home-touchbar" ref={touchbarRef}>
         <Metric
           icon="agent"
           label={t("v33.metricAgents")}
@@ -325,6 +319,38 @@ export function Dashboard({
       </section>
     </div>
   );
+}
+
+/**
+ * The bottom bar wraps onto two rows in narrow windows (and grows with the text size), so the
+ * scene's own bottom elements (the islands' caption and credits, category navigation, the
+ * summary card) are placed from its measured height, published as --touchbar-reserve.
+ */
+function useTouchbarReserve(viewRef: React.RefObject<HTMLDivElement | null>, barRef: React.RefObject<HTMLElement | null>) {
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    const bar = barRef.current;
+    if (!view || !bar) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const reserve = Math.round(view.getBoundingClientRect().bottom - bar.getBoundingClientRect().top);
+      if (reserve > 0) view.style.setProperty("--touchbar-reserve", `${reserve}px`);
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(measure);
+    };
+    measure();
+    const observer = new ResizeObserver(schedule);
+    observer.observe(bar);
+    observer.observe(view);
+    window.addEventListener("resize", schedule);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", schedule);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [viewRef, barRef]);
 }
 
 function ActivityTimeline({ snapshot }: { snapshot: LegacySnapshot | null }) {

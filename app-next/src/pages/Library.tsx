@@ -676,9 +676,10 @@ function LibraryRowView({
         <span className="lib-avatar" style={{ "--avatar-hue": avatarHue(name) } as CSSProperties} aria-hidden="true">
           {name.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 1).toUpperCase() || "?"}
         </span>
-        <span className="lib-title">
+        <span className={note ? "lib-title has-note" : "lib-title"}>
           <strong>{name}</strong>
-          <small>{ownerOf(row)}</small>
+          <small className="lib-owner">{ownerOf(row)}</small>
+          {note && <small className="lib-title-note">{note}</small>}
         </span>
         {note ? (
           <span className="lib-summary has-note">

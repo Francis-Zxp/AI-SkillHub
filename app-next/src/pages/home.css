@@ -18,7 +18,7 @@
   position: absolute;
   top: calc(var(--home-scene-top, 160px));
   right: var(--atlas-page-gutter, 24px);
-  bottom: calc(var(--home-scene-bottom, 104px));
+  bottom: calc(var(--touchbar-reserve, 98px) + 8px);
   left: calc(var(--home-rail, 0px) + var(--atlas-page-gutter, 24px));
   z-index: 3;
   display: flex;
@@ -77,3 +77,10 @@
 .home-summary-scene .skill-showcase > .panel-head { display: none; }
 .home-summary-scene .skill-showcase { padding: 10px; }
 .home-summary-scene .skill-graph { border: 0; background: transparent; }
+
+/* The scene's bottom elements clear the bottom bar at its measured height (Dashboard.tsx). */
+.theme-family-atlas.page-dashboard .sky-caption { bottom: calc(var(--touchbar-reserve, 98px) + 15px); }
+.theme-family-atlas.page-dashboard .sky-loading { bottom: calc(var(--touchbar-reserve, 98px) + 47px); }
+.theme-family-atlas.page-dashboard .sky-credits,
+.theme-family-atlas.page-dashboard .sky-navigation { bottom: calc(var(--touchbar-reserve, 98px) + 52px); }
+.dashboard-immersive .home-summary-scene { bottom: 24px; }

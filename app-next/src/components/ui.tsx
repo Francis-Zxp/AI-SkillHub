@@ -214,6 +214,9 @@ export function MoreMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<React.CSSProperties | null>(null);
+  // Opened from the keyboard: focus moves into the list (it lives in the overlay layer, so Tab
+  // from the trigger would not reach it).
+  const keyboardOpen = useRef(false);
   const host = useRef<HTMLDivElement | null>(null);
   const list = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -254,6 +257,10 @@ export function MoreMenu({
       if (align === "start") next.left = Math.max(8, rect.left);
       else next.right = Math.max(8, window.innerWidth - rect.right);
       setPosition(next);
+      if (keyboardOpen.current) {
+        keyboardOpen.current = false;
+        list.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+      }
     };
     place();
     // A second pass once the list has its real height.
@@ -281,6 +288,7 @@ export function MoreMenu({
         data-testid={testId}
         onClick={event => {
           event.stopPropagation();
+          keyboardOpen.current = event.detail === 0;
           setOpen(value => !value);
         }}
         title={label}
@@ -292,6 +300,19 @@ export function MoreMenu({
         createPortal(
           <div
             className="more-list floating"
+            onKeyDown={event => {
+              const buttons = Array.from(list.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
+              const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                const step = event.key === "ArrowDown" ? 1 : -1;
+                buttons[(index + step + buttons.length) % buttons.length]?.focus();
+              } else if (event.key === "Tab") {
+                event.preventDefault();
+                setOpen(false);
+                host.current?.querySelector<HTMLButtonElement>(".more-trigger")?.focus();
+              }
+            }}
             ref={list}
             role="menu"
             style={position ?? { position: "fixed", top: -9999, left: -9999 }}

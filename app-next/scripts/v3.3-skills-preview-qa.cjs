@@ -94,10 +94,10 @@ async function probe(page, text) {
     expect(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")) === "import-input", "input focused");
     await page.keyboard.press("Escape");
     await page.waitForSelector('[data-testid="import-sheet"]', { state: "detached" });
-    await page.click('[data-testid="home-add-input"]');
+    await page.click('[data-testid="home-add-button"]');
     await page.waitForSelector('[data-testid="import-sheet"]');
-    expect(await page.locator(".import-sheet").count() === 1, "home box opens one sheet");
-    expect(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")) === "import-input", "input focused from home box");
+    expect(await page.locator(".import-sheet").count() === 1, "home 添加 opens one sheet");
+    expect(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")) === "import-input", "input focused from home 添加");
     await shot(page, "02-import-empty");
     await page.context().close();
   });

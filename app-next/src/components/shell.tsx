@@ -4,10 +4,10 @@
 import { type CSSProperties, useEffect, useRef } from "react";
 import { Icon, type IconName } from "../icons";
 import { t } from "../i18n";
-import { agentDotTone, availableAgents, sidebarAgents, type SyncIndicator } from "../deliveryView";
+import { type SyncIndicator } from "../deliveryView";
 import { skillHubErrorText } from "../skillErrors";
 import { problemText } from "../agentText";
-import type { DeliveryProblem, ErrorAction, NavKey, SkillAgent, SkillCard, SkillDeliveryState, SkillHubError } from "../types";
+import type { DeliveryProblem, ErrorAction, NavKey, SkillAgent, SkillCard, SkillHubError } from "../types";
 
 /* ---------- AI tool monogram ---------- */
 

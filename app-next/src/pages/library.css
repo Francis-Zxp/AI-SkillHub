@@ -158,9 +158,13 @@
 .lib-note .ui-icon { flex: 0 0 13px; width: 13px; height: 13px; color: var(--brand-strong); }
 .lib-summary.has-note small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .lib-copy { display: grid; place-items: center; width: 30px; height: 30px; }
+.lib-title-note { display: none; }
+/* Narrow windows: the summary column gives way; the note moves under the name (owner hidden). */
 @media (max-width: 1180px) {
-  .lib-main { grid-template-columns: 34px minmax(110px, 200px) minmax(0, 1fr); }
-  .lib-summary.has-note small { display: none; }
+  .lib-main { grid-template-columns: 34px minmax(0, 1fr); }
+  .lib-summary, .lib-summary.has-note { display: none; }
+  .lib-title.has-note .lib-owner { display: none; }
+  .lib-title-note { display: block; color: var(--brand-strong); font-weight: 600; }
   .lib-row .star-rating { display: none; }
 }
 
