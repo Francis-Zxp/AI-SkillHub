@@ -1,5 +1,5 @@
 import "./HomeScene.css";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { getLang } from "./i18n";
 import { buildSkyIslands, demoSkyIslands } from "./skyIslandModel";
@@ -134,6 +134,10 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   const awake = visible && !pageHidden && !appHidden;
   const worldPanelRef = useRef<HTMLDivElement>(null), worldToggleRef = useRef<HTMLButtonElement>(null);
   const worldPanelId = useId();
+  // The panel opens just under the controls, wherever the page puts them
+  // (the v3.3 home moves them below its own block).
+  const controlsRef = useRef<HTMLDivElement>(null);
+  const [worldPanelTop, setWorldPanelTop] = useState<number | null>(null);
   const visibleIslands = islands.filter(island => island.name.toLocaleLowerCase().includes(query.toLocaleLowerCase().trim()));
   const totalSkills = islands.reduce((sum, island) => sum + island.skillCount, 0);
   const hasSnapshot = Boolean(snapshot);
@@ -320,6 +324,16 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   const labelText = islands.map(island => `${island.name}:${island.skillCount}:${island.promptCount}`).join("|");
   useEffect(() => { world.current?.relayout(); }, [lang, labelText]);
 
+  useLayoutEffect(() => {
+    if (!worldPanel) return;
+    const place = () => {
+      const controls = controlsRef.current;
+      if (controls) setWorldPanelTop(controls.offsetTop + controls.offsetHeight + 10);
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [worldPanel]);
   // The world panel takes focus on its checked weather when it opens, and
   // closes on Escape (focus back on its button) or a click elsewhere.
   useEffect(() => {
@@ -396,7 +410,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
       <h2>{words.title}</h2>
       {islands.length > 0 && <p>{sky.summary(islands.length, totalSkills)}</p>}
     </header>
-    <div className="sky-controls">
+    <div className="sky-controls" ref={controlsRef}>
       {threeD && <>
       <button type="button" className="sky-control-compact" onClick={() => { world.current?.reset(); setQuery(""); setHovered(null); }} title={words.reset} aria-label={words.reset}><span aria-hidden="true">⌖</span><span>{words.reset}</span></button>
       <button type="button" className="sky-control-compact" aria-pressed={still3d} disabled={reducedMotion} onClick={togglePaused} title={reducedMotion ? sky.reducedMotion : still3d ? words.play : words.pause}><span aria-hidden="true">{still3d ? "▷" : "Ⅱ"}</span><span>{still3d ? words.play : words.pause}</span></button>
@@ -406,7 +420,8 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
       </>}
       <button type="button" aria-pressed={!sceneOn} onClick={() => setSkySceneEnabled(!sceneOn)} title={words.sceneHint}><span aria-hidden="true">{sceneOn ? "▦" : "◒"}</span><span>{sceneOn ? words.sceneOff : words.sceneOn}</span></button>
     </div>
-    {worldPanel && threeD && status !== "fallback" && <div className="sky-world-panel" id={worldPanelId} role="dialog" aria-label={sky.worldTitle} ref={worldPanelRef}>
+    {worldPanel && threeD && status !== "fallback" && <div className="sky-world-panel" id={worldPanelId} role="dialog" aria-label={sky.worldTitle} ref={worldPanelRef}
+      style={worldPanelTop === null ? undefined : { top: worldPanelTop, maxHeight: `calc(100% - ${worldPanelTop + 110}px)` }}>
       <h3 id={`${worldPanelId}-weather`}>{sky.weather}</h3>
       <div className="sky-weather-options" role="radiogroup" aria-labelledby={`${worldPanelId}-weather`} onKeyDown={onWeatherKey}>
         {WEATHER_OPTIONS.map(kind => {

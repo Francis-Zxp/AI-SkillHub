@@ -287,6 +287,8 @@ async function pressLabel(page, index, hold) {
       const asleep = await page.evaluate(() => ({ canvases: document.querySelectorAll(".sky-world-canvas").length, still: Boolean(document.querySelector(".sky-world-still")), labels: [...document.querySelectorAll(".sky-island-label")].filter(label => getComputedStyle(label).visibility === "visible").length }));
       await page.screenshot({ path: path.join(shots, "sleep-1-still.png") });
       check("sleep: no WebGL canvas, a still image and the labels stay", asleep.canvases === 0 && asleep.still && asleep.labels > 0, asleep);
+      const left = await page.evaluate(() => ({ geometries: document.querySelector(".sky-scene-host")?.dataset.leftGeometries, textures: document.querySelector(".sky-scene-host")?.dataset.leftTextures }));
+      check("sleep: every geometry and texture of the world was released", left.geometries === "0" && left.textures === "0", left);
       const started = Date.now();
       await page.mouse.move(800, 600);
       await page.mouse.move(820, 610);

@@ -107,6 +107,20 @@ const hostData = page => page.evaluate(() => {
         const data = await hostData(page);
         report.push({ name: `perf-${weather}-1920x1080`, islands: await page.evaluate(() => document.querySelectorAll(".sky-island-label").length), fps, drawCalls: data.drawCalls, weatherCalls: data.weatherCalls, triangles: data.triangles, pixelRatio: data.pixelRatio, errors });
         await shot(page, `perf-${weather}-1920x1080`);
+        if (weather === "storm") {
+          // While dragging the frame loop aims at 60 fps.
+          const box = await page.locator(".sky-world-canvas").boundingBox();
+          const before = await page.evaluate(() => ({ frames: document.querySelector(".sky-scene-host").skyWorldStats().frames, at: performance.now() }));
+          await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.62);
+          await page.mouse.down();
+          for (let step = 0; step < 60; step++) {
+            await page.mouse.move(box.x + box.width * (0.5 + 0.12 * Math.sin(step / 6)), box.y + box.height * (0.62 + 0.05 * Math.cos(step / 6)));
+            await page.waitForTimeout(50);
+          }
+          await page.mouse.up();
+          const after = await page.evaluate(() => ({ frames: document.querySelector(".sky-scene-host").skyWorldStats().frames, at: performance.now() }));
+          report.push({ name: "perf-storm-1920x1080-dragging", fps: Math.round((after.frames - before.frames) / ((after.at - before.at) / 1000) * 10) / 10, errors });
+        }
         await context.close();
       }
       // Reduced motion: a still frame, no lightning; low power: fewer pixels.
@@ -137,6 +151,12 @@ const hostData = page => page.evaluate(() => {
       await shot(english.page, "ui-english-noon");
       report.push({ name: "ui-english", labels: await english.page.evaluate(() => [...document.querySelectorAll(".sky-island-label")].map(label => `${label.title} | ${label.querySelector("span")?.textContent}`)), summary: await english.page.evaluate(() => document.querySelector(".sky-heading p")?.textContent), errors: english.errors });
       await english.context.close();
+      const korean = await open(browser, { theme: "sky-night", weather: "aurora", seed: "7", demo: 0, lang: "ko" });
+      await korean.page.click(".sky-world-toggle");
+      await korean.page.waitForSelector(".sky-world-panel");
+      await shot(korean.page, "ui-korean-night-world-panel");
+      report.push({ name: "ui-korean", summary: await korean.page.evaluate(() => document.querySelector(".sky-heading p")?.textContent), panel: await korean.page.evaluate(() => document.querySelector(".sky-world-panel")?.innerText.replace(/\s+/g, " ").slice(0, 200)), errors: korean.errors });
+      await korean.context.close();
     }
   } finally {
     await browser.close();
