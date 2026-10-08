@@ -88,6 +88,13 @@ async function heapAfterGc(cdp) {
   return Math.round(usage.usedSize / MB * 10) / 10;
 }
 
+/** Home or the library, in the 3.2 shell (.nav) or the v3.3 rail. */
+async function navigate(page, where) {
+  const rail = page.locator(`[data-testid="nav-${where === "home" ? "dashboard" : "library"}"]`);
+  if (await rail.count()) return rail.first().click();
+  return page.locator(".nav .nav-item").nth(where === "home" ? 0 : 1).click();
+}
+
 const sceneState = page => page.evaluate(() => ({
   status: document.querySelector(".sky-islands")?.getAttribute("data-status"),
   canvases: document.querySelectorAll(".sky-world-canvas").length,
@@ -135,11 +142,11 @@ const sceneState = page => page.evaluate(() => ({
     };
 
     // Leave home: the world should sleep after 15 s and release WebGL.
-    await page.locator(".nav .nav-item").nth(1).click();
+    await navigate(page, "library");
     await page.waitForTimeout(19000);
     report.offHome20s = { heapAfterGcMB: await heapAfterGc(cdp), process: processMemory(), scene: await sceneState(page) };
     const back = Date.now();
-    await page.locator(".nav .nav-item").nth(0).click();
+    await navigate(page, "home");
     await page.waitForFunction(() => document.querySelectorAll(".sky-world-canvas").length > 0 && !document.querySelector(".sky-world-still") && document.querySelector(".sky-islands")?.getAttribute("data-status") === "ready", null, { timeout: 15000 }).catch(() => undefined);
     report.wakeMs = Date.now() - back;
     await page.waitForTimeout(3000);
