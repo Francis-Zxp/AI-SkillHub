@@ -2211,6 +2211,7 @@ export function App() {
                 onOpenFolder={agentId => void openAgentFolder(agentId)}
                 onOpenLibraryRow={key => openDetail(key)}
                 onOpenMcp={() => navigate("connections")}
+                onProblemAction={(action, problem) => runErrorAction(action, problem)}
                 onRemoveLeftovers={agentId => void setTargetsBatch((delivery?.targets ?? [])
                   .filter(target => target.agentId === agentId && target.status === "orphan")
                   .map(target => ({ unitId: target.unitId, agentId: target.agentId, enabled: false })))}

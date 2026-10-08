@@ -19,6 +19,8 @@ import type {
   AdoptReport,
   AgentSkillEntry,
   AgentSkillInventory,
+  DeliveryProblem,
+  ErrorAction,
   LegacySnapshot,
   SkillAgent,
   SkillDeliveryState,
@@ -52,6 +54,7 @@ export function Agents({
   onOpenFolder,
   onOpenLibraryRow,
   onOpenMcp,
+  onProblemAction,
   onRemoveLeftovers,
   onSyncNow,
   onTakeover,
@@ -67,6 +70,8 @@ export function Agents({
   onOpenFolder: (agentId: string) => void;
   onOpenLibraryRow: (key: string) => void;
   onOpenMcp: () => void;
+  /** Runs the action that comes with a tool's problem (重试, 打开文件夹, 查看冲突 …). */
+  onProblemAction: (action: ErrorAction, problem: DeliveryProblem) => void;
   /** Removes entries SkillHub left in a tool that is no longer installed (orphans). */
   onRemoveLeftovers: (agentId: string) => void;
   onSyncNow: () => void;
@@ -125,6 +130,7 @@ export function Agents({
                   ?? delivery.units.find(unit => unit.unitId === unitId)?.entryName ?? ""}
                 onOpen={() => onOpenAgent(agent.id)}
                 onOpenFolder={() => onOpenFolder(agent.id)}
+                onProblemAction={onProblemAction}
                 onTakeover={enabled => onTakeover(agent, enabled)}
               />
             ))}
@@ -165,6 +171,7 @@ function AgentCardView({
   delivery,
   onOpen,
   onOpenFolder,
+  onProblemAction,
   onTakeover,
   unitName
 }: {
@@ -173,6 +180,7 @@ function AgentCardView({
   delivery: SkillDeliveryState;
   onOpen: () => void;
   onOpenFolder: () => void;
+  onProblemAction: (action: ErrorAction, problem: DeliveryProblem) => void;
   onTakeover: (enabled: boolean) => void;
   unitName: (unitId: string) => string;
 }) {
@@ -202,7 +210,19 @@ function AgentCardView({
         {agent.skillsPath && <code className="agent-path" title={agent.skillsPath}>{displayPath(agent.skillsPath)}</code>}
         {experimentalReason && <small className="muted">{experimentalReason}</small>}
         {afterSyncHint && <small className="agent-hint"><Icon name="info" /> {afterSyncHint}</small>}
-        {agent.health === "problem" && problem && <small className="agent-problem"><Icon name="alert" /> {problemText(problem, agents, unitName, false)}</small>}
+        {agent.health === "problem" && problem && (
+          <small className="agent-problem">
+            <Icon name="alert" />
+            <span>
+              {problemText(problem, agents, unitName, false)}
+              {problem.action && (
+                <button className="link-action" data-testid={`agent-problem-action-${agent.id}`} onClick={() => onProblemAction(problem.action!, problem)} type="button">
+                  {t(`err.action.${problem.action.kind}`)}
+                </button>
+              )}
+            </span>
+          </small>
+        )}
       </div>
       <div className="agent-card-side">
         <ToggleSwitch

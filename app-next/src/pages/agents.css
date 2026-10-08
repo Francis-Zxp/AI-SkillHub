@@ -21,6 +21,7 @@
 .agent-hint, .agent-problem { display: flex; align-items: flex-start; gap: 4px; font-size: 12px; line-height: 1.45; }
 .agent-hint { color: var(--info); }
 .agent-problem { color: var(--danger); }
+.agent-problem .link-action { margin-left: 6px; font-size: 12px; white-space: nowrap; }
 .agent-hint .ui-icon, .agent-problem .ui-icon { flex: none; width: 14px; height: 14px; margin-top: 2px; }
 .agent-card-side { display: flex; align-items: center; gap: 4px; }
 .agent-others { padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); }
