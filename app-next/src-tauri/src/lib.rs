@@ -2587,11 +2587,12 @@ fn script_error_lines(output: &str) -> String {
         .lines()
         .map(str::trim)
         .filter(|line| {
-            !line.is_empty()
-                && !line.starts_with('+')
-                && !line.chars().all(|c| c == '~' || c == ' ')
-                && !(line.starts_with("At ") && line.contains(".ps1:"))
-                && !line.starts_with("所在位置")
+            // Blank lines and `~~~` underlines are all spaces and tildes.
+            let position = line.chars().all(|c| c == '~' || c == ' ')
+                || line.starts_with('+')
+                || line.starts_with("所在位置")
+                || (line.starts_with("At ") && line.contains(".ps1:"));
+            !position
         })
         .collect::<Vec<_>>()
         .join("\n")
