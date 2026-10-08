@@ -11,14 +11,19 @@ const SRC = new URL("../src/", import.meta.url);
 export const APP_SOURCE_ORDER = Object.freeze([
   "App.tsx",
   "components/ui.tsx",
+  "components/shell.tsx",
   "pages/Dashboard.tsx",
   "pages/Library.tsx",
-  "pages/ImportWizard.tsx",
-  "pages/Workspaces.tsx",
+  "pages/SkillDrawer.tsx",
+  "pages/ImportSheet.tsx",
   "pages/Agents.tsx",
+  "pages/Onboarding.tsx",
   "pages/Advanced.tsx",
+  "pages/DevTools.tsx",
   "pages/Settings.tsx",
-  "appShared.ts"
+  "appShared.ts",
+  // v3.3: backend bridges that used to live inside App.tsx (typed command wrappers and events).
+  "skillApi.ts"
 ]);
 
 export function appSourceFiles() {
@@ -35,7 +40,8 @@ export function appSourceFiles() {
 
 export function readAppSourceSync() {
   return appSourceFiles()
-    .map(file => readFileSync(new URL(file, SRC), "utf8"))
+    // Checkouts may use CRLF (core.autocrlf); assertions are written against LF.
+    .map(file => readFileSync(new URL(file, SRC), "utf8").replace(/\r\n/g, "\n"))
     .join("\n");
 }
 

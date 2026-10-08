@@ -33,12 +33,12 @@ test("star map nodes are flat shapes with explicit focus states and placed label
 });
 
 test("startup loading is not mislabeled as a remote synchronization", () => {
-  assert.match(app, /snapshot\s*\?\s*t\("topbar\.processing"\)\s*:\s*t\("topbar\.loadingIndex"\)/);
-  assert.match(app, /syncing=\{Boolean\(operation\)\}/);
-  assert.match(app, /syncing\s*\?\s*t\("dash\.syncing"\)/);
-  assert.match(app, /t\("dash\.loadingIndex"\)/);
-  assert.equal((translations.match(/"topbar\.loadingIndex"/g) ?? []).length, 3);
-  assert.equal((translations.match(/"topbar\.processing"/g) ?? []).length, 3);
+  // v3.3: "正在更新…" only while the 更新 run is really running; loading the index is its own
+  // state, and delivery progress lives in the sync indicator.
+  assert.ok(app.includes('{operation ? t("v33.updating") : t("v33.update")}'));
+  assert.ok(app.includes('<DeferredSurface label={t("dash.loadingIndex")} />'));
+  assert.ok(app.includes('loading ? t("v33.loadingLibrary") : t("v33.noMatch")'));
+  assert.ok(app.includes('data-testid="sync-indicator"'));
   assert.equal((translations.match(/"dash\.loadingIndex"/g) ?? []).length, 3);
 });
 

@@ -11,24 +11,16 @@ const preview = await readFile(new URL("../src/preview.ts", import.meta.url), "u
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const universe = await readFile(new URL("../src/SkillUniverse.tsx", import.meta.url), "utf8");
 
-test("collapsed parent and expanded child Skills expose exact-name copy actions", () => {
-  const sourceHeaderStart = app.indexOf('<header className="source-group-head">');
-  const sourceHeaderEnd = app.indexOf("</header>", sourceHeaderStart);
-  const sourceHeader = app.slice(sourceHeaderStart, sourceHeaderEnd);
-  assert.match(app, /const primaryInvocationSkill = sourceParentSkill\(source, sourceSkills\)/);
-  assert.match(app, /const primaryInvocationName = primaryInvocationSkill \? skillInvocationName\(primaryInvocationSkill\) : ""/);
-  assert.match(sourceHeader, /className="icon-action source-parent-copy"/);
-  assert.match(sourceHeader, /aria-label=\{t\("lib\.copyName", \{ name: primaryInvocationName \}\)\}/);
-  assert.match(sourceHeader, /copyTextToClipboard\(primaryInvocationName, t\("toast\.skillNameCopied"\)\)/);
-  assert.match(app, /return skill\.invocationName\?\.trim\(\) \|\| skill\.folderName\.trim\(\) \|\| skill\.name\.trim\(\)/);
-  assert.match(backend, /invocation_name: row\.get\(2\)\?/);
+test("pack rows and child Skills expose exact-name copy actions", () => {
+  // v3.3: the row is the parent entry; "复制调用名" copies the exact invocation name, never a prompt.
+  assert.ok(app.includes("export function rowEntrySkill(row: LibraryRow): SkillCard | null"));
+  assert.ok(app.includes('copyTextToClipboard(skillInvocationName(entry), t("toast.skillNameCopied"))'));
+  assert.ok(app.includes('copyTextToClipboard(skillInvocationName(skill), t("toast.skillNameCopied"))'));
+  assert.ok(app.includes("return skill.invocationName?.trim() || skill.folderName.trim() || skill.name.trim()"));
+  assert.ok(backend.includes("invocation_name: row.get(2)?"));
   assert.match(preview, /name: "Nature-Paper-Skills",\s*invocationName: "nature-paper-skills"/);
-  assert.match(app, /className="skill-name-copy"/);
-  assert.match(app, /copyTextToClipboard\(skillInvocationName\(skill\), t\("toast\.skillNameCopied"\)\)/);
-  assert.match(app, /!isParent && \(/);
-  const copyNameAction = sourceHeader;
-  assert.doesNotMatch(copyNameAction, /copySkillPrompt|onRecordUsage|recordUsage/);
-  assert.equal([...i18n.matchAll(/"lib\.copyName":/g)].length, 3);
+  const rowMenu = app.slice(app.indexOf("function LibraryRowView"), app.indexOf("function ChildRow"));
+  assert.doesNotMatch(rowMenu, /copySkillPrompt|onRecordUsage|recordUsage/);
   assert.equal([...i18n.matchAll(/"toast\.skillNameCopied":/g)].length, 3);
 });
 
@@ -136,58 +128,51 @@ test("startup restores deferred runtime cards without rescanning or replacing th
   assert.doesNotMatch(backendHydration, /scan_legacy_snapshot|run_skillhub_script|run_diagnostics_export_script|hydrate_source_urls_from_git/);
 });
 
-test("folder drops and draggable rows honor the shared mutation busy state", () => {
-  assert.match(app, /const acceptsDrop = !disabled && id !== "all"/);
-  assert.match(app, /draggable=\{!loading\}/);
-  assert.match(app, /draggable=\{Boolean\(!loading && skill\.id && !skill\.sourceId\)\}/);
-  assert.match(app, /disabled=\{loading\}[\s\S]*?draft=\{sourceDrafts/);
-  assert.match(app, /if \(mutationBlockedBySync\(\)\) return null/);
+test("folder drops use pointer drags and honor the shared mutation busy state", () => {
+  // v3.3 §3.9: dragDropEnabled disables HTML5 drag inside the webview, so rows use pointer drags.
+  assert.doesNotMatch(app, /draggable=/);
+  assert.ok(app.includes("data-folder-drop={dropId}"));
+  assert.ok(app.includes('if (over === undefined || over === "all") return;'));
+  const folderCommand = app.slice(app.indexOf("async function runSkillFolderCommand"), app.indexOf("function onImportInstalled"));
+  assert.ok(folderCommand.includes("if (mutationBlockedBySync()) return null"));
 });
 
 test("source metadata and tags save through one compact background mutation", () => {
   const start = app.indexOf("async function updateSourceMetadata");
   const end = app.indexOf("async function deleteSource", start);
   const mutation = app.slice(start, end);
-  assert.match(mutation, /invoke<SourceMutationResult>\("save_source_metadata"/);
-  assert.match(mutation, /tags: parseTagInput\(draft\.tags\)/);
-  assert.match(mutation, /if \(result\.snapshot\) return result\.snapshot/);
-  assert.match(mutation, /sources: current\.sources\.map/);
-  assert.doesNotMatch(mutation, /"set_source_metadata"|"set_source_tags"/);
+  assert.ok(mutation.includes('invoke<SourceMutationResult>("save_source_metadata"'));
+  assert.ok(mutation.includes("tags: parseTagInput(draft.tags)"));
+  assert.ok(mutation.includes("if (result.snapshot) applySnapshot(result.snapshot, true)"));
+  assert.ok(mutation.includes("sources: current.sources.map"));
+  // The drawer never flips the library switch here; that goes through the security review gate.
+  assert.ok(mutation.includes("enabled: source.enabled"));
+  assert.doesNotMatch(mutation, /"set_source_metadata"|"set_source_tags"|setLoading\(true\)/);
   assert.equal((mutation.match(/await invoke</g) ?? []).length, 1);
-  const editorStart = app.indexOf("function SourceEditPanel");
-  const editorEnd = app.indexOf("function RouterHubPanel", editorStart);
+  const editorStart = app.indexOf("function SettingsTab");
+  const editorEnd = app.indexOf("export function ReviewSecurityDialog", editorStart);
   assert.ok(editorStart >= 0 && editorEnd > editorStart);
   const editor = app.slice(editorStart, editorEnd);
-  assert.match(editor, /const \[saving, setSaving\] = useState\(false\)/);
-  assert.match(editor, /if \(formDisabled\) return/);
-  assert.match(editor, /await onSave\(/);
-  assert.equal((editor.match(/disabled=\{formDisabled\}/g) ?? []).length >= 9, true);
+  assert.ok(editor.includes("const [saving, setSaving] = useState(false)"));
+  assert.ok(editor.includes("if (!dirty || disabled) return"));
+  assert.ok(editor.includes("await save(draft)"));
+  assert.equal((editor.match(/disabled=\{disabled\}/g) ?? []).length >= 7, true);
 });
 
-test("startup delivery locks mutations only while running and can retry in place", () => {
-  const skillStart = app.indexOf("function SkillEditPanel");
-  const skillEnd = app.indexOf("function SourceEditPanel", skillStart);
-  const editor = app.slice(skillStart, skillEnd);
-  assert.equal((editor.match(/disabled=\{disabled\}/g) ?? []).length, 7);
-  assert.match(app, /const \[initialDeliveryBusy, setInitialDeliveryBusy\] = useState\(true\)/);
-  assert.match(app, /const \[indexRefreshing, setIndexRefreshing\] = useState\(false\)/);
-  assert.match(app, /const mutationBusy = loading \|\| initialDeliveryBusy \|\| indexRefreshing \|\| popularityRefreshing \|\| Boolean\(operation\)/);
+test("startup never locks the window and reports a failed verify with an action", () => {
+  // v3.3 (I-4): startup enqueues a verify job; only the initial SQLite load counts as busy.
+  assert.ok(app.includes("const mutationBusy = loading || indexRefreshing || popularityRefreshing || Boolean(operation) || importInFlight;"));
+  assert.doesNotMatch(app, /initialDeliveryBusy/);
   assert.doesNotMatch(app, /const mutationBusy =[^\n]*!startupVerified/);
-  assert.match(app, /indexRefreshInFlightRef\.current/);
-  assert.match(app, /const pending = loadSnapshot\("scan", \{ background: true, quiet: true \}\)/);
-  assert.match(app, /initialDeliveryInFlightRef\.current = false/);
-  assert.match(app, /setInitialDeliveryBusy\(false\)/);
-  assert.match(app, /setStartupVerified\(verified\)/);
-  assert.match(app, /setStartupVerificationFailed\(runtimeAvailable && !verified\)/);
-  assert.match(app, /const \[startupVerificationError, setStartupVerificationError\] = useState\(""\)/);
-  assert.match(app, /setStartupVerificationError\(messageFromError\(error\)\)/);
-  assert.match(app, /verifyStartupSnapshot\(!snapshot\)/);
-  assert.match(app, /if \(!initialRun && \(initialDeliveryInFlightRef\.current \|\| mutationBusy \|\| mutationBlockedBySync\(false, false\)\)\) return/);
-  assert.match(app, /startupVerificationFailed && \([\s\S]*?disabled=\{mutationBusy\}[\s\S]*?verifyStartupSnapshot\(!snapshot\)/);
-  assert.match(app, /verifyStartupSnapshot\(true, \(\) => cancelled, true\)/);
-  assert.match(app, /const startTimer = window\.setTimeout/);
-  assert.match(app, /window\.clearTimeout\(startTimer\)/);
-  assert.match(app, /initialDeliveryCheckStartedRef\.current = false/);
+  assert.ok(app.includes("indexRefreshInFlightRef.current"));
+  assert.ok(app.includes('const pending = loadSnapshot("scan", { background: true, quiet: true })'));
+  assert.ok(app.includes("initialDeliveryInFlightRef.current = false"));
+  assert.ok(app.includes("setStartupVerified(verified)"));
+  assert.ok(app.includes('if (!isCancelled()) showError(error, "delivery")'));
+  assert.ok(app.includes("verifyStartupSnapshot(true, () => cancelled, true)"));
+  assert.ok(app.includes("const startTimer = window.setTimeout"));
+  assert.ok(app.includes("window.clearTimeout(startTimer)"));
+  assert.ok(app.includes("initialDeliveryCheckStartedRef.current = false"));
   assert.doesNotMatch(app, /window\.location\.reload\(\)/);
 });
 

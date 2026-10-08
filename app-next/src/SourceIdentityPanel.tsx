@@ -4,6 +4,7 @@ import { getLang } from "./i18n";
 import type { Lang } from "./i18n";
 import { Icon } from "./icons";
 import type { LegacySnapshot } from "./types";
+import { normalizeSkillHubError } from "./skillErrors";
 import "./SourceIdentityPanel.css";
 
 export type IdentityPlanEntry = {
@@ -53,7 +54,7 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
       setPlan(next);
       setSelected(new Set(next.entries.filter(entry => entry.action === "rename").map(entry => entry.sourceId)));
     } catch (error) {
-      onError(String(error));
+      onError(normalizeSkillHubError(error).message);
     } finally {
       setLoading(false);
     }
@@ -70,6 +71,8 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
 
   async function apply() {
     if (!plan || applying) return;
+    // An empty selection means "nothing", never "everything" (bug #0).
+    if (!plan.interrupted && selected.size === 0) return;
     setApplying(true);
     try {
       const snapshot = await invoke<LegacySnapshot>("apply_source_identity_migration", {
@@ -79,7 +82,7 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
       setConfirming(false);
       await refresh();
     } catch (error) {
-      onError(String(error));
+      onError(normalizeSkillHubError(error).message);
       await refresh();
     } finally {
       setApplying(false);
@@ -132,7 +135,7 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
             <label className="identity-check">
               <input
                 checked={allSelected}
-                disabled={busy}
+                disabled={busy || confirming}
                 onChange={event => setSelected(event.target.checked ? new Set(renames.map(entry => entry.sourceId)) : new Set())}
                 type="checkbox"
               />
@@ -148,7 +151,7 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
                 <label className="identity-check">
                   <input
                     checked={selected.has(entry.sourceId)}
-                    disabled={busy}
+                    disabled={busy || confirming}
                     onChange={event => {
                       const next = new Set(selected);
                       if (event.target.checked) next.add(entry.sourceId); else next.delete(entry.sourceId);
@@ -186,7 +189,7 @@ export function SourceIdentityPanel({ runtimeAvailable, disabled, onApplied, onE
               </ul>
               <div className="identity-actions">
                 <button className="ghost-action" disabled={applying} onClick={() => setConfirming(false)} type="button">{it("cancel")}</button>
-                <button className="primary-action" disabled={busy} onClick={() => void apply()} type="button">
+                <button className="primary-action" disabled={busy || (!plan?.interrupted && selected.size === 0)} onClick={() => void apply()} type="button">
                   {applying ? it("applying") : it("confirm", { n: selected.size })}
                 </button>
               </div>

@@ -39,3 +39,18 @@
   .theme-family-atlas.page-dashboard { --home-rail: 0px; }
   .dashboard-immersive.theme-family-atlas.page-dashboard .home-visual-switch { top: 18px; left: 14px; }
 }
+
+/* v3.3: the home block (numbers · card · 添加) sits under the top bar; the scene's own heading
+   and controls are placed below it by pages/home.css (from --home-top-bottom). Immersive mode
+   hides the block again. */
+.v33.dashboard-immersive.page-dashboard .home-top { display: none; }
+.v33.dashboard-immersive.theme-family-atlas.page-dashboard .sky-controls { top: 64px; }
+/* Under the 群岛/星图/关闭 switch (top 22px, 46px tall), not touching it. */
+.v33.dashboard-immersive.theme-family-atlas.page-dashboard .sky-heading { top: 80px; }
+@media (max-height: 750px) {
+  .v33.theme-family-atlas.page-dashboard .sky-heading { display: none; }
+}
+/* Search results, banners and the first-run screen clear the floating rail on home. */
+.v33.theme-family-atlas.page-dashboard .global-search-results,
+.v33.theme-family-atlas.page-dashboard .status-banner { margin-left: calc(var(--home-rail) + 24px); }
+.v33.theme-family-atlas.page-dashboard .onboarding-screen { padding: 96px 24px 40px calc(var(--home-rail) + 24px); }

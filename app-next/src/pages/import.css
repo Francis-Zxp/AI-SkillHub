@@ -1,0 +1,101 @@
+/* v3.3 "+ 添加" sheet (skills contract §6.4). */
+.sheet-layer { position: fixed; inset: 0; z-index: 110; display: flex; justify-content: center; align-items: flex-start; padding: 8vh 24px 24px; }
+.import-sheet {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(720px, 100%);
+  max-height: 84vh;
+  padding: 16px 18px 18px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+}
+.import-sheet:focus { outline: none; }
+.import-head { display: flex; align-items: center; justify-content: space-between; font-size: 16px; }
+.import-box { display: grid; gap: 8px; }
+.import-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+}
+.import-input-row:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent); }
+.import-input-row input,
+.import-input-row input:focus { height: 46px; padding: 0; border: 0; outline: none; background: transparent; box-shadow: none; color: var(--text); font-size: 15px; }
+.import-input-row .ui-icon { color: var(--text-muted); }
+.import-pickers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.import-pickers .muted { font-size: 12px; }
+.import-progress { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-soft); font-size: 13px; }
+.import-progress .link-action { margin-left: auto; }
+.import-notice { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-soft); font-size: 13px; }
+.import-notice > span { flex: 1 1 auto; }
+.import-notice.error { border-color: color-mix(in srgb, var(--danger) 50%, transparent); background: var(--danger-soft); }
+.import-notice.subtle { padding: 6px 10px; }
+.import-preview { display: grid; gap: 12px; }
+.import-preview-head { display: flex; align-items: center; gap: 12px; }
+.import-preview-head > div { display: grid; flex: 1 1 auto; min-width: 0; }
+.import-preview-head small { color: var(--text-muted); }
+.import-tabs { display: flex; gap: 4px; }
+.import-tabs button { padding: 6px 12px; border-radius: var(--radius-pill); color: var(--text-soft); font-weight: 600; }
+.import-tabs button.active { background: var(--surface-soft); color: var(--text); box-shadow: inset 0 0 0 1px var(--border-strong); }
+.import-tab-body { max-height: 260px; overflow: auto; }
+.import-groups { display: grid; gap: 6px; }
+.import-group { border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.import-group header { display: flex; align-items: center; gap: 8px; padding: 6px 10px; }
+.import-group header input, .import-group li input { width: 16px; height: 16px; accent-color: var(--brand); }
+.import-group-toggle { display: flex; flex: 1 1 auto; align-items: center; gap: 8px; text-align: left; }
+.import-group-toggle small { margin-left: auto; color: var(--text-muted); }
+.import-group ul { display: grid; margin: 0; padding: 0 10px 8px 34px; list-style: none; }
+.import-group li label { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.import-group li label > span { display: grid; flex: 1 1 auto; min-width: 0; }
+.import-group li small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.import-group li.invalid { opacity: .55; }
+.import-mcp, .import-docs { display: grid; gap: 6px; margin: 0; }
+.import-mcp-file { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.import-mcp-file span { flex: 1 1 auto; color: var(--text-soft); }
+.import-docs { padding-left: 20px; }
+.import-security { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; }
+.import-security > div { display: grid; gap: 4px; }
+.import-security span { color: var(--text-soft); }
+.import-security.tone-passed { border-color: color-mix(in srgb, var(--success) 45%, transparent); background: var(--success-soft); }
+.import-security.tone-passed > .ui-icon { color: var(--success); }
+.import-security.tone-review { border-color: color-mix(in srgb, var(--warning) 50%, transparent); background: var(--warning-soft); }
+.import-security.tone-review > .ui-icon { color: var(--warning); }
+.import-security.tone-blocked { border-color: color-mix(in srgb, var(--danger) 50%, transparent); background: var(--danger-soft); }
+.import-findings { display: grid; gap: 2px; margin: 2px 0; padding-left: 18px; color: var(--text-soft); font-size: 12px; }
+.import-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.import-chips > span:first-child { color: var(--text-soft); font-weight: 600; }
+.agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-soft);
+  color: var(--text-soft);
+  font-weight: 600;
+}
+.agent-chip.on { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 16%, var(--surface)); color: var(--text); }
+.agent-chip .ui-icon { width: 14px; height: 14px; color: var(--brand-strong); }
+.chip-tag { padding: 0 6px; border-radius: var(--radius-pill); background: var(--warning-soft); color: var(--warning); font-size: 10.5px; font-style: normal; }
+.import-more summary { color: var(--text-soft); font-size: 13px; font-weight: 600; cursor: pointer; }
+.import-more-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-top: 10px; }
+.import-more-grid .field.wide { grid-column: 1 / -1; }
+.import-foot-actions { display: flex; justify-content: flex-end; }
+.import-foot-actions .primary-action { min-width: 220px; height: 42px; }
+.import-done { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb, var(--success) 45%, transparent); border-radius: var(--radius-sm); background: var(--success-soft); }
+.import-done > div { display: grid; flex: 1 1 auto; }
+.import-done > .ui-icon { color: var(--success); }
+.import-done span { color: var(--text-soft); font-size: 12px; }
+.import-foot { margin: 0; font-size: 12px; }

@@ -8,6 +8,7 @@ import {
   isRouterHubSkill as modelIsRouterHubSkill,
   skillBelongsToSource as modelSkillBelongsToSource
 } from "./skyIslandModel";
+import { normalizeSkillHubError } from "./skillErrors";
 import type { SkillCard, SourceCard } from "./types";
 
 export const SourceUpdatePanel = lazy(() => import("./SourceUpdatePanel").then(module => ({ default: module.SourceUpdatePanel })));
@@ -44,94 +45,6 @@ export type SourceDraft = {
   note: string;
   sourceType: SourceCard["sourceType"];
   tags: string;
-};
-export type ImportWizardDraft = {
-  customCategory: string;
-  customFolderName: string;
-  enabled: boolean;
-  importKind: "github" | "local" | "zip";
-  input: string;
-  folderId: string;
-  note: string;
-  selectedCategoryIds: string[];
-  sourceType: SourceCard["sourceType"];
-  tags: string;
-};
-
-export const IMPORT_WIZARD_DRAFT_STORAGE_KEY = "ai-skillhub-source-import-draft-v1";
-
-export const EMPTY_IMPORT_WIZARD_DRAFT: ImportWizardDraft = {
-  customCategory: "",
-  customFolderName: "",
-  enabled: true,
-  importKind: "github",
-  input: "",
-  folderId: "",
-  note: "",
-  selectedCategoryIds: [],
-  sourceType: "skill",
-  tags: ""
-};
-
-export function loadImportWizardDraft(): ImportWizardDraft {
-  try {
-    const raw = window.localStorage.getItem(IMPORT_WIZARD_DRAFT_STORAGE_KEY);
-    if (!raw) return { ...EMPTY_IMPORT_WIZARD_DRAFT };
-    const saved = JSON.parse(raw) as Partial<ImportWizardDraft>;
-    const importKind = ["github", "local", "zip"].includes(saved.importKind ?? "")
-      ? saved.importKind as ImportWizardDraft["importKind"]
-      : "github";
-    const sourceType = ["skill", "prompt", "mixed"].includes(saved.sourceType ?? "")
-      ? saved.sourceType as SourceCard["sourceType"]
-      : "skill";
-    const text = (value: unknown, maxLength: number) =>
-      typeof value === "string" ? value.slice(0, maxLength) : "";
-    return {
-      customCategory: text(saved.customCategory, 500),
-      customFolderName: text(saved.customFolderName, 48),
-      enabled: typeof saved.enabled === "boolean" ? saved.enabled : true,
-      importKind,
-      input: text(saved.input, 10_000),
-      folderId: text(saved.folderId, 200),
-      note: text(saved.note, 20_000),
-      selectedCategoryIds: Array.isArray(saved.selectedCategoryIds)
-        ? saved.selectedCategoryIds.filter(value => typeof value === "string").slice(0, 100)
-        : [],
-      sourceType,
-      tags: text(saved.tags, 10_000)
-    };
-  } catch {
-    return { ...EMPTY_IMPORT_WIZARD_DRAFT };
-  }
-}
-
-export function importWizardDraftHasContent(draft: ImportWizardDraft) {
-  return Boolean(
-    draft.input.trim() ||
-    draft.folderId.trim() ||
-    draft.note.trim() ||
-    draft.tags.trim() ||
-    draft.customCategory.trim() ||
-    draft.customFolderName.trim() ||
-    draft.selectedCategoryIds.length ||
-    draft.importKind !== EMPTY_IMPORT_WIZARD_DRAFT.importKind ||
-    draft.sourceType !== EMPTY_IMPORT_WIZARD_DRAFT.sourceType ||
-    draft.enabled !== EMPTY_IMPORT_WIZARD_DRAFT.enabled
-  );
-}
-export type SourceImportProgressEvent = {
-  operationId: string;
-  stage: "inspect" | "git" | "zip" | "write" | "security" | string;
-  state: "started" | "progress" | "completed" | "cancelled" | string;
-  message: string;
-  current: number;
-  total: number;
-};
-export type ImportFeedbackOptions = {
-  quiet?: boolean;
-  securityReviewConfirmed?: boolean;
-  operationId?: string;
-  onProgress?: (event: SourceImportProgressEvent) => void;
 };
 export type ToastTone = "info" | "ok" | "warn" | "error";
 type AppUpdatePhase =
@@ -301,20 +214,9 @@ export function showUiToast(message: string, tone: ToastTone = "info") {
   window.dispatchEvent(new CustomEvent(TOAST_EVENT, { detail: { message, tone } }));
 }
 
+/** Plain text for any thrown value; an object never renders as "[object Object]" (skills contract §4.5). */
 export function messageFromError(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export function createSourceImportOperationId() {
-  const random = globalThis.crypto?.randomUUID?.().replace(/[^a-zA-Z0-9_-]/g, "")
-    ?? Math.random().toString(36).slice(2);
-  return `source-import-${Date.now()}-${random}`.slice(0, 92);
-}
-
-export function friendlyErrorMessage(message: string) {
-  if (message.includes("Source metadata is too long")) return t("error.sourceTooLong");
-  if (message.includes("GitHub API")) return t("error.github");
-  return message;
+  return normalizeSkillHubError(error).message;
 }
 
 export function parseTagInput(value: string): string[] {

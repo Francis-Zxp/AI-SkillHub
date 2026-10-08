@@ -1,201 +1,59 @@
 /* Browser-preview fixtures and simulators.
    Only used when the Tauri runtime is unavailable; the desktop app reads real SQLite. */
 
-import type {
-  LegacySnapshot,
-  SourceCard,
-  SourceImportExecutionCard,
-  SourceImportPlanCard,
-  SourceImportPromotionCard
-} from "./types";
+import type { LegacySnapshot } from "./types";
+import { overlayPreviewSnapshot, setPreviewBaseSnapshot } from "./skillsPreview";
 
-export function normalizePreviewGithubUrl(input: string): string {
-  const value = input
-    .trim()
-    .replace(/^git@github\.com:/i, "https://github.com/")
-    .replace(/^ssh:\/\/git@github\.com\//i, "https://github.com/");
-  const match = value.match(/^https?:\/\/github\.com\/([^/\s]+)\/([^/\s?#]+?)(?:\.git)?(?:[?#].*)?$/i);
-  if (!match) return "";
-  return `https://github.com/${match[1]}/${match[2].replace(/\.git$/i, "")}.git`.toLowerCase();
-}
+// v3.3 Skills commands (skills contract §5.3) are served by the stateful mock in skillsPreview.ts.
+export { previewSkillCommand } from "./skillsPreview";
 
-export function createPreviewSourceImportPlan(
-  importKind: string,
-  input: string,
-  sources: SourceCard[]
-): SourceImportPlanCard {
-  const value = input.trim();
-  const displayName =
-    value
-      .split(/[\\/]/)
-      .filter(Boolean)
-      .pop()
-      ?.replace(/\.git$/i, "")
-      .replace(/\.(zip|skill)$/i, "") || "未命名来源";
-  const normalizedGithub = normalizePreviewGithubUrl(value);
-  const normalizedTarget = importKind === "github" ? normalizedGithub : value;
-  const duplicate = sources.find(source => {
-    if (importKind === "github") {
-      return normalizePreviewGithubUrl(source.url) === normalizedGithub;
-    }
-    return (source.localPath || source.url || "").trim().toLowerCase() === value.toLowerCase();
-  });
-  const isGithubValid = importKind !== "github" || Boolean(normalizedGithub);
-  const isPackage = importKind === "zip";
-  const safeToContinue = Boolean(value && isGithubValid && !duplicate && !isPackage);
-  const status = duplicate || !isGithubValid ? "blocked" : isPackage ? "locked" : safeToContinue ? "ready" : "warn";
-  const targetRoot = "浏览器预览/app-next/data/github_sources";
-  const targetPath = `${targetRoot}/${displayName}`;
-  const backupPath = `浏览器预览/app-next/.skillhub-next/backups/source-imports/${displayName}`;
-  const blockingChecks = [
-    duplicate ? `重复来源：${duplicate.name}` : "",
-    !isGithubValid ? "GitHub 地址格式不符合普通仓库地址。" : "",
-    isPackage ? "zip/.skill 必须先通过解压安全扫描。" : "",
-    "未开启真实写入授权时，只会刷新 AI SkillHub 索引，不会写入 AI 工具目录。"
-  ].filter((check): check is string => Boolean(check));
-
-  return {
-    id: `preview-${importKind}-${displayName}`,
-    importKind,
-    input: value,
-    normalizedTarget,
-    targetRoot,
-    targetPath,
-    backupPath,
-    displayName,
-    status,
-    riskLevel: duplicate || !isGithubValid ? "high" : isPackage ? "medium" : "low",
-    writeGateStatus: safeToContinue ? "dry-run-ready" : isPackage ? "locked" : "blocked",
-    safeToContinue,
-    duplicateSourceId: duplicate?.id ?? "",
-    duplicateReason: duplicate
-      ? `已存在同一来源：${duplicate.name}。真实导入前必须合并或改名。`
-      : !isGithubValid
-        ? "GitHub 地址格式不符合普通仓库地址。"
-        : isPackage
-          ? "zip/.skill 仍需要解压安全扫描，当前只允许生成计划。"
-          : "",
-    skillCount: 0,
-    promptCount: 0,
-    plannedSteps:
-      importKind === "github"
-        ? [
-            "校验 GitHub 普通仓库地址。",
-            "检查本地 SQLite 是否已有同源仓库。",
-            "生成快照后 clone/pull 到 github_sources。",
-            "扫描 SKILL.md，只把有效 Skill 进入候选库。"
-          ]
-        : importKind === "local"
-          ? [
-              "检查本地路径是否可访问。",
-              "递归扫描 SKILL.md，并跳过 target/node_modules/.git 等目录。",
-              "检查重复来源和重复 Skill 名称。",
-              "生成快照和回滚计划后登记为来源。"
-            ]
-          : [
-              "验证 zip/.skill 文件扩展名。",
-              "先做 zip-slip 与路径穿越扫描。",
-              "解压到临时目录后统计 SKILL.md。",
-              "解压安全报告通过后才允许登记为来源。"
-            ],
-    installPlanSteps:
-      importKind === "github"
-        ? [
-            "创建来源导入快照。",
-            "如果目标目录已存在，先备份到 source-imports。",
-            "clone 或 pull 到 github_sources 的隔离目录。",
-            "重新扫描 SKILL.md 并更新本地 SQLite 来源记录。"
-          ]
-        : importKind === "local"
-          ? [
-              "创建来源导入快照。",
-              "把本地来源登记为可管理候选，不直接修改原目录。",
-              "按有效 SKILL.md 目录生成候选索引。",
-              "更新本地 SQLite 来源记录。"
-            ]
-          : [
-              "创建临时解压目录。",
-              "先执行路径穿越和重复名称扫描。",
-              "安全通过后生成导入快照和备份计划。",
-              "解压进入隔离来源目录并重新扫描。"
-            ],
-    blockingChecks,
-    rollbackSummary: "当前只生成 dry-run；没有写入任何文件，因此不需要执行回滚。"
-  };
-}
-
-export function createPreviewSourceImportExecution(importKind: string, input: string): SourceImportExecutionCard {
-  const value = input.trim();
-  const displayName =
-    value
-      .split(/[\\/]/)
-      .filter(Boolean)
-      .pop()
-      ?.replace(/\.git$/i, "")
-      .replace(/\.(zip|skill)$/i, "") || "preview-source";
-  const isLockedPackage = importKind === "zip";
-  return {
-    id: `preview-stage-${Date.now()}`,
-    importKind,
-    input: value,
-    status: isLockedPackage ? "locked" : "staged",
-    riskLevel: isLockedPackage ? "medium" : "low",
-    summary: isLockedPackage
-      ? "浏览器预览：zip/.skill staging 仍锁定。"
-      : "浏览器预览：已模拟写入隔离 staging，桌面版才会真实创建 staging 文件夹。",
-    stagedPath: `浏览器预览/app-next/.skillhub-next/staging/source-imports/${displayName}`,
-    reportPath: `浏览器预览/app-next/.skillhub-next/reports/source-import-staging/${displayName}.md`,
-    manifestPath: `浏览器预览/app-next/.skillhub-next/reports/source-import-staging/${displayName}-manifest.json`,
-    copiedFiles: isLockedPackage ? 0 : 12,
-    copiedBytes: isLockedPackage ? 0 : 48 * 1024,
-    skillCount: isLockedPackage ? 0 : 1,
-    promptCount: 0,
-    blockingChecks: ["浏览器预览不执行本机文件写入。", "正式 app-next/data/github_sources 安装仍锁定。"],
-    rollbackSteps: ["删除 staging 目录即可撤销。", "正式来源目录和 AI 工具目录保持不变。"],
-    realWriteScope: "preview-only",
-    downloadMethod: importKind === "github" ? "preview-github" : "preview-local",
-    securityStatus: "passed",
-    securityScannedFiles: isLockedPackage ? 0 : 12,
-    securityFindings: []
-  };
-}
-
-export function createPreviewSourceImportPromotion(
-  importKind: string,
-  stagedPath: string,
-  sourceName: string
-): SourceImportPromotionCard {
-  const safeName =
-    (sourceName || "preview-source")
-      .trim()
-      .replace(/[^\p{L}\p{N}._-]+/gu, "-")
-      .replace(/^-+|-+$/g, "") || "preview-source";
-  return {
-    id: `preview-promotion-${Date.now()}`,
-    importKind,
-    sourceName: safeName,
-    status: "promoted",
-    riskLevel: importKind === "github" ? "medium" : "low",
-    summary: "浏览器预览：已模拟提升为受管理来源；桌面版才会写入 app-next/data/github_sources。",
-    stagedPath,
-    targetPath: `浏览器预览/app-next/data/github_sources/${safeName}`,
-    reportPath: `浏览器预览/app-next/.skillhub-next/reports/source-import-promotion/${safeName}.md`,
-    manifestPath: `浏览器预览/app-next/.skillhub-next/reports/source-import-promotion/${safeName}-manifest.json`,
-    copiedFiles: 12,
-    copiedBytes: 48 * 1024,
-    skillCount: 1,
-    promptCount: 0,
-    blockingChecks: ["浏览器预览不执行本机文件写入。", "AI 工具同步/接管仍锁定。"],
-    rollbackSteps: ["删除受管理来源目录即可回滚。", "重新扫描本地 SQLite 索引。"],
-    realWriteScope: "preview-only",
-    securityStatus: "passed",
-    securityScannedFiles: 12,
-    securityFindings: [],
-    securityReviewConfirmed: false
-  };
-}
-
+/** Fixture + the v3.3 delivery overlay (agents, units, targets, the flagged pack and one standalone skill). */
 export function createPreviewSnapshot(): LegacySnapshot {
+  return overlayPreviewSnapshot(createBasePreviewSnapshot());
+}
+
+/** Re-applies the mock delivery state onto the snapshot the preview UI already holds (keeps local edits such as ratings). */
+export function refreshPreviewSnapshot(current: LegacySnapshot | null): LegacySnapshot {
+  return overlayPreviewSnapshot(current ?? createBasePreviewSnapshot());
+}
+
+setPreviewBaseSnapshot(createBasePreviewSnapshot);
+
+function createBasePreviewSnapshot(): LegacySnapshot {
+  return withLargePreviewLibrary(createFixtureSnapshot());
+}
+
+/**
+ * `?previewLarge=N` (QA only) adds N one-skill packs and one pack with 150 skills, so the
+ * windowed library list and its memory use can be checked in the browser preview.
+ */
+function withLargePreviewLibrary(snapshot: LegacySnapshot): LegacySnapshot {
+  let count = 0;
+  try {
+    count = Math.min(2000, Math.max(0, Number(new URLSearchParams(window.location.search).get("previewLarge") ?? 0) || 0));
+  } catch {
+    count = 0;
+  }
+  if (count === 0) return snapshot;
+  const sourceTemplate = snapshot.sources[0];
+  const skillTemplate = snapshot.skills[0];
+  const sources = [...snapshot.sources];
+  const skills = [...snapshot.skills];
+  const addPack = (index: number, size: number) => {
+    const id = `source-preview-large-${index}`;
+    const name = size > 1 ? "preview-big-pack" : `preview-pack-${index}`;
+    sources.push({ ...sourceTemplate, id, name, url: `https://github.com/preview/${name}.git`, skillCount: size, userFolderId: "", userFolderName: "", userFolderColor: "", tags: [], note: "" });
+    for (let child = 0; child < size; child += 1) {
+      const folderName = size > 1 ? `big-skill-${child}` : `preview-skill-${index}`;
+      skills.push({ ...skillTemplate, id: `preview-large-${index}-${child}`, sourceId: id, source: name, name: folderName, folderName, description: `Preview skill ${child + 1}`, relativePath: `skills/${folderName}`, userFolderId: "", userFolderName: "", userFolderColor: "", isRouterHub: false, rating: 0, tags: [] });
+    }
+  };
+  addPack(0, 150);
+  for (let index = 1; index <= count; index += 1) addPack(index, 1);
+  return { ...snapshot, sources, skills };
+}
+
+function createFixtureSnapshot(): LegacySnapshot {
   return {
     root: "浏览器预览模式",
     skillsDir: "../skills",
@@ -271,7 +129,7 @@ export function createPreviewSnapshot(): LegacySnapshot {
         invocationName: "nature-paper-skills",
         folderName: "Nature-Paper-Skills",
         category: "academic-writing",
-        description: "[ROUTER-HUB] Nature 论文技能集合的路由入口。",
+        description: "[ROUTER-HUB] Nature 论文技能集合的入口。",
         note: "",
         source: "AI-SkillHub-local-routers",
         health: "ok",
@@ -1331,18 +1189,6 @@ export function updatePreviewEnabled(
   id: string,
   enabled: boolean
 ): LegacySnapshot {
-  if (command === "set_workspace_enabled") {
-    return {
-      ...snapshot,
-      workspaces: snapshot.workspaces.map(item => (item.id === id ? { ...item, enabled } : item))
-    };
-  }
-  if (command === "set_preset_enabled") {
-    return {
-      ...snapshot,
-      presets: snapshot.presets.map(item => (item.id === id ? { ...item, enabled } : item))
-    };
-  }
   if (command === "set_agent_adapter_enabled") {
     return {
       ...snapshot,
@@ -1363,33 +1209,6 @@ export function updatePreviewSkillRating(
     skills: snapshot.skills.map(skill =>
       skill.folderName === folderName ? { ...skill, rating: normalizedRating } : skill
     )
-  };
-}
-
-export function updatePreviewPresetDistribution(
-  snapshot: LegacySnapshot,
-  presetId: string,
-  workspaceId: string,
-  enabled: boolean
-): LegacySnapshot {
-  const presetDistributions = snapshot.presetDistributions.map(item =>
-    item.presetId === presetId && item.workspaceId === workspaceId
-      ? { ...item, enabled, status: enabled ? "enabled" : "disabled" }
-      : item
-  );
-  const workspaceCountByPreset = new Map<string, number>();
-  for (const item of presetDistributions) {
-    if (item.enabled) {
-      workspaceCountByPreset.set(item.presetId, (workspaceCountByPreset.get(item.presetId) ?? 0) + 1);
-    }
-  }
-  return {
-    ...snapshot,
-    presetDistributions,
-    presets: snapshot.presets.map(preset => ({
-      ...preset,
-      workspaceCount: workspaceCountByPreset.get(preset.id) ?? 0
-    }))
   };
 }
 
@@ -1417,21 +1236,6 @@ export function updatePreviewOperationRunner(snapshot: LegacySnapshot, runnerId:
       },
       ...snapshot.auditEvents
     ].slice(0, 30)
-  };
-}
-
-export function updatePreviewRealWriteAuthorization(snapshot: LegacySnapshot, enabled: boolean): LegacySnapshot {
-  const now = new Date().toISOString();
-  return {
-    ...snapshot,
-    operatorConsent: {
-      realWritesEnabled: enabled,
-      enabledAt: enabled ? now : "",
-      updatedAt: now,
-      summary: enabled
-        ? "用户已手动授权真实写入；同步按钮会运行 GitHub 更新、Skill 路由重建和 AI 工具链接同步。"
-        : "真实写入授权未开启；同步按钮只刷新索引，不会写入 AI 工具目录。"
-    }
   };
 }
 

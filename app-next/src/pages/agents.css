@@ -1,0 +1,74 @@
+/* v3.3 AI 工具 page, tool detail, adopt sheet and first-run screen (§6.5, §6.6). */
+.agents-v33 { gap: 14px; }
+.agent-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+.agent-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.agent-card.status-taken-over { border-color: color-mix(in srgb, var(--success) 30%, var(--border)); }
+.agent-card-main { display: grid; gap: 4px; min-width: 0; }
+.agent-card-main header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.agent-name { padding: 0; font-size: 15px; font-weight: 700; text-align: left; }
+.agent-name:hover { color: var(--brand-strong); }
+.agent-counts { margin: 0; color: var(--text-soft); font-size: 13px; }
+.agent-path { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-hint, .agent-problem { display: flex; align-items: flex-start; gap: 4px; font-size: 12px; line-height: 1.45; }
+.agent-hint { color: var(--info); }
+.agent-problem { color: var(--danger); }
+.agent-problem .link-action { margin-left: 6px; font-size: 12px; white-space: nowrap; }
+.agent-hint .ui-icon, .agent-problem .ui-icon { flex: none; width: 14px; height: 14px; margin-top: 2px; }
+.agent-card-side { display: flex; align-items: center; gap: 4px; }
+.agent-others { padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.agent-others summary { color: var(--text-soft); font-weight: 600; cursor: pointer; }
+.agent-others ul { display: grid; gap: 6px; margin: 10px 0 0; padding: 0; list-style: none; }
+.agent-others li { display: flex; align-items: center; gap: 10px; }
+.agent-others li small { color: var(--text-muted); }
+.back-link { display: inline-flex; align-items: center; gap: 4px; width: max-content; text-decoration: none; }
+.agent-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+.agent-detail-head > div { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: 8px; }
+.agent-detail-head h2 { margin: 0; font-size: 22px; }
+.agent-skill-groups { display: grid; gap: 12px; }
+.agent-skill-group { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.agent-skill-group header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.agent-skill-group ul { display: grid; gap: 2px; max-height: 360px; margin: 8px 0 0; padding: 0; overflow: auto; list-style: none; }
+.agent-skill-group li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.agent-skill-group li > span { display: grid; min-width: 0; }
+.agent-skill-group li small { overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
+.agent-skill-group.problems { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+.agent-mcp-tab { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; }
+.agent-mcp-tab p { margin: 0; }
+.agent-diagnostics { display: grid; gap: 12px; }
+.adopt-sheet { width: min(620px, 100%); }
+.adopt-list, .adopt-report ul { display: grid; gap: 2px; max-height: 46vh; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.adopt-list label { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--border); }
+.adopt-list label > span { display: grid; flex: 1 1 auto; min-width: 0; }
+.adopt-list small { color: var(--text-muted); font-size: 12px; }
+.adopt-list .state-name-clash .chip { color: var(--danger); }
+.adopt-report li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.adopt-report li small { grid-column: 1 / -1; color: var(--danger); }
+.adopt-report .outcome-adopted span { color: var(--success); }
+.adopt-report .outcome-failed span { color: var(--danger); }
+
+.onboarding-screen { display: grid; place-items: start center; padding-top: 4vh; }
+.onboarding-card { display: grid; gap: 16px; width: min(720px, 100%); padding: 24px 26px; border: 1px solid var(--border); border-radius: var(--radius-xl); background: var(--surface-elevated); }
+.onboarding-card > header { display: flex; gap: 14px; }
+.onboarding-card h2 { margin: 0 0 4px; font-size: 24px; }
+.onboarding-card p { margin: 0; color: var(--text-soft); }
+.onboarding-icon { display: grid; place-items: center; width: 44px; height: 44px; flex: 0 0 44px; border-radius: 14px; background: color-mix(in srgb, var(--brand) 18%, transparent); color: var(--brand-strong); }
+.onboarding-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.onboarding-list label { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px; }
+.onboarding-list label:hover { background: var(--surface-soft); }
+.onboarding-list input, .onboarding-options input { width: 18px; height: 18px; accent-color: var(--brand); }
+.onboarding-list li.disabled { opacity: .55; }
+.onboarding-list small { font-size: 12px; }
+.onboarding-options { display: grid; gap: 8px; padding: 10px 12px; border-radius: 12px; background: var(--surface-soft); }
+.onboarding-options label { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.onboarding-card footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.onboarding-card footer .primary-action { height: 44px; min-width: 200px; }
+.onboarding-card footer .link-action { margin-left: auto; color: var(--text-muted); }

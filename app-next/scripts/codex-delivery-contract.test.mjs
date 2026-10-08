@@ -52,7 +52,9 @@ test("startup verifies delivery without repeating the full Agent diagnostics sca
     app.indexOf("async function verifyStartupSnapshot"),
     app.indexOf("useEffect(() =>", app.indexOf("async function verifyStartupSnapshot"))
   );
-  assert.match(startup, /invoke<LegacySnapshot>\("ensure_agent_skill_delivery"\)/);
+  // v3.3 (I-4): startup only enqueues a verify job and never holds the window on the link script.
+  assert.match(startup, /skillApi\.requestSkillDelivery\("startup", "verify"\)/);
+  assert.doesNotMatch(startup, /setLoading\(true\)/);
   assert.doesNotMatch(startup, /refresh_agent_detection|shouldReconcileDelivery/);
   assert.match(rust, /fn agent_delivery_fingerprint/);
   assert.match(rust, /agent_delivery_links_are_healthy/);
@@ -101,7 +103,7 @@ test("disabled and invalid Skills are not published to a recipient", () => {
 });
 
 test("display-only task bundles are not exposed in primary navigation", () => {
-  const navBlock = app.match(/const NAV_ITEMS:[\s\S]*?\];/)?.[0] ?? "";
+  const navBlock = app.match(/const NAV:[\s\S]*?\];/)?.[0] ?? "";
   assert.ok(navBlock);
   assert.doesNotMatch(navBlock, /key: "presets"/);
   assert.doesNotMatch(app, /active === "presets" && <Presets/);

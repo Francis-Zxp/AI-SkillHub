@@ -1,11 +1,10 @@
-// Advanced page (release gate, operation runners). Split out of App.tsx;
-// App() still owns the shared state and handlers. Never import from App.tsx here (use appShared.ts).
+// Release support tools, shown only in 设置 → 开发者模式 (v3.3). The former consent
+// pill and its switch are gone (S0-8): pause and per-tool takeover replace them.
 import { invoke } from "@tauri-apps/api/core";
 import { Icon } from "../icons";
 import { t } from "../i18n";
 import type { LegacySnapshot } from "../types";
-import { hasTauriRuntime, showUiToast, formatScanTime, copyTextToClipboard } from "../appShared";
-import { ToggleSwitch } from "../components/ui";
+import { hasTauriRuntime, messageFromError, showUiToast, copyTextToClipboard } from "../appShared";
 
 /* =============================================================
    Advanced view (merges release gate + snapshots)
@@ -13,54 +12,16 @@ import { ToggleSwitch } from "../components/ui";
 
 export function Advanced({
   disabled,
-  onRealWriteAuthorization,
   onRunRunner,
   snapshot
 }: {
   disabled: boolean;
-  onRealWriteAuthorization: (enabled: boolean) => Promise<void>;
   onRunRunner: (runnerId: string) => Promise<void>;
   snapshot: LegacySnapshot | null;
 }) {
   const supportRunner = snapshot?.operationRunners.find(runner => runner.id === "diagnostics-export");
-  const operatorConsent = snapshot?.operatorConsent ?? {
-    realWritesEnabled: false,
-    enabledAt: "",
-    updatedAt: "",
-    summary: ""
-  };
-
   return (
-    <div className="view advanced-view">
-      <section className="page-header glow-card">
-        <div>
-          <span className="eyebrow"><Icon name="shield" /> {t("nav.advanced")}</span>
-          <h2>{t("adv.title")}</h2>
-          <p>{t("adv.subtitle")}</p>
-        </div>
-      </section>
-
-      <section className="panel glow-card consent-panel">
-        <header className="panel-head">
-          <div>
-            <span className="eyebrow">{t("adv.consentEyebrow")}</span>
-            <h3>{t("adv.consentTitle")}</h3>
-            <p>{operatorConsent.summary}</p>
-            <small>
-              {operatorConsent.realWritesEnabled
-                ? t("adv.consentOnSince", { time: formatScanTime(operatorConsent.enabledAt || operatorConsent.updatedAt) })
-                : t("adv.consentOffHint")}
-            </small>
-          </div>
-          <ToggleSwitch
-            disabled={disabled}
-            enabled={operatorConsent.realWritesEnabled}
-            label={operatorConsent.realWritesEnabled ? t("adv.authorized") : t("adv.unauthorized")}
-            onClick={() => void onRealWriteAuthorization(!operatorConsent.realWritesEnabled)}
-          />
-        </header>
-      </section>
-
+    <div className="advanced-view">
       <section className="panel glow-card support-panel">
         <header className="panel-head">
           <div>
@@ -126,6 +87,6 @@ async function openReleaseGateExportPath(path: string) {
     await invoke("open_release_gate_export_path", { path });
     showUiToast(t("toast.pathOpened"), "ok");
   } catch (error) {
-    showUiToast(t("toast.openFailed", { message: error instanceof Error ? error.message : String(error) }), "error");
+    showUiToast(t("toast.openFailed", { message: messageFromError(error) }), "error");
   }
 }

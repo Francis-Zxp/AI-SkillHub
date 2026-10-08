@@ -1,1979 +1,948 @@
-// Library page (sources, skills, folders, editors, router hub). Split out of App.tsx;
-// App() still owns the shared state and handlers. Never import from App.tsx here (use appShared.ts).
-import { invoke } from "@tauri-apps/api/core";
-import { type CSSProperties, type DragEvent, useEffect, useMemo, useState } from "react";
-import { Icon, type IconName } from "../icons";
+// 技能 (Library) page — skills contract §6.3. One filter bar, one row of folder chips and a
+// compact list: each row is the pack's entry (☐ · name · summary · N 个技能 · ★ · AI tool
+// icons · ⋯). Long lists are windowed so only the rows on screen exist in the DOM.
+// App owns all state and backend calls; never import from App.tsx here.
+import { type CSSProperties, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Icon } from "../icons";
 import { getLang, t } from "../i18n";
 import { localizedSkillDescription } from "../localizedDescriptions";
-import { sourcePresentation } from "../sourceIdentity";
-import { buildSkyIslands } from "../skyIslandModel";
-import { PromptLauncherAction } from "../PromptLauncherAction";
-import type {
-  AgentSkillStatusCard,
-  LegacySnapshot,
-  RouterHubReport,
-  SkillCard,
-  SkillConflictCard,
-  SkillFolderCard,
-  PromptInvocationCard,
-  SourceCard,
-  SourceImportExecutionCard,
-  SourceImportPlanCard,
-  SourceImportPromotionCard,
-  SourceGovernanceCard,
-  SourcePopularityCard
-} from "../types";
-import {
-  type SkillDraft,
-  type SourceDraft,
-  loadImportWizardDraft,
-  importWizardDraftHasContent,
-  type ImportFeedbackOptions,
-  hasInternalSkillDrag,
-  hasTauriRuntime,
-  showUiToast,
-  parseTagInput,
-  skillMatchesSearch,
-  sourceMatchesSearch,
-  skillBelongsToSource,
-  normalizeLookup,
-  isRouterHubSkill,
-  stableSkillClientId,
-  skillInvocationName,
-  displayCategoryName,
-  sourceTypeLabel,
-  formatCompactNumber,
-  formatFileSize,
-  copyTextToClipboard,
-  copySkillPrompt
-} from "../appShared";
-import { Drawer, ToggleSwitch } from "../components/ui";
-import { ImportWizard } from "./ImportWizard";
+import { countSkills, rowFilterState, rowInFolder, type LibraryRow, type SkillCounts } from "../skillCounts";
+import { orderTargetsForRow, targetIconView } from "../deliveryView";
+import type { AgentId, LegacySnapshot, SkillAgent, SkillCard, SkillFolderCard, SkillTarget, TargetChange, TargetMutationResult } from "../types";
+import { copyTextToClipboard, displayCategoryName, isRouterHubSkill, skillInvocationName, stableSkillClientId } from "../appShared";
+import { Dialog, MoreMenu, StarRating, ToggleSwitch, useConfirm } from "../components/ui";
+import { AgentGlyph } from "../components/shell";
+import { targetErrorText } from "../agentText";
+import "./library.css";
 
-type SourceSortKey = "recent" | "rating" | "usage" | "heat" | "skillCount" | "health" | "name";
+export type LibraryFilter = "all" | "synced" | "unsynced" | "update" | "problem";
+const FILTERS: LibraryFilter[] = ["all", "synced", "unsynced", "update", "problem"];
+const FOLDER_COLORS = ["cyan", "violet", "magenta", "amber", "emerald", "blue", "coral", "slate"];
+const ROW_HEIGHT = 64;
+const CHILD_HEIGHT = 44;
+const MORE_HEIGHT = 40;
+const CHILD_PAGE = 40;
+const MAX_ICONS = 6;
+/** Below this many visible items everything renders; above it only the window around the viewport does. */
+const WINDOW_THRESHOLD = 80;
+const OVERSCAN_PX = 600;
 
-/* =============================================================
-   Library — merged sources + skills tree
-   ============================================================= */
+type ListItem =
+  | { type: "row"; key: string; row: LibraryRow }
+  | { type: "child"; key: string; row: LibraryRow; skill: SkillCard }
+  | { type: "more"; key: string; row: LibraryRow; hidden: number };
 
-type LibraryProps = {
-  metadataAnalyzing: boolean;
-  onConsolidateSources: () => Promise<LegacySnapshot | null>;
-  suggestedLocalPath: string;
-  onDismissLocalImport: () => void;
-  atlasMode: boolean;
+type DragState = { kind: "source" | "skill"; id: string; label: string; x: number; y: number; over: string | null };
+
+export function Library({
+  agents,
+  busyAction,
+  childBusy,
+  counts,
+  folderId,
+  library,
+  loading,
+  metadataAnalyzing,
+  mutationBusy,
+  onAdd,
+  onBatchTargets,
+  onConsolidate,
+  onCopySkill,
+  onCreateFolder,
+  onDeleteFolder,
+  onMoveSkillToFolder,
+  onMoveSourceToFolder,
+  onOpenDetail,
+  onOpenLibraryFolder,
+  onReanalyze,
+  onRepair,
+  onSelectFolder,
+  onSetChildEnabled,
+  onSetSkillRating,
+  onSetSourceRating,
+  onTargetClick,
+  onUpdateFolder,
+  paused,
+  rows
+}: {
+  agents: SkillAgent[];
+  busyAction: string;
+  childBusy: ReadonlySet<string>;
+  counts: SkillCounts;
+  folderId: string;
+  library: LegacySnapshot | null;
   loading: boolean;
-  onCancelImport: (operationId: string) => Promise<boolean>;
+  metadataAnalyzing: boolean;
+  mutationBusy: boolean;
+  onAdd: () => void;
+  onBatchTargets: (changes: TargetChange[]) => Promise<TargetMutationResult | null>;
+  onConsolidate: () => void;
+  onCopySkill: (skill: SkillCard) => void;
   onCreateFolder: (name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
-  onDeleteSource: (source: SourceCard) => Promise<"failed" | "preview" | "deleted">;
   onDeleteFolder: (folderId: string) => Promise<LegacySnapshot | null>;
-  onPreviewImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportPlanCard>;
-  onPromoteImport: (
-    importKind: string,
-    stagedPath: string,
-    sourceName: string,
-    options?: ImportFeedbackOptions
-  ) => Promise<SourceImportPromotionCard>;
-  onRecordUsage: (
-    targetType: string,
-    targetId: string,
-    targetName: string,
-    sourceName: string,
-    eventType: string
-  ) => Promise<void>;
-  onMoveFolder: (folderId: string, direction: "up" | "down") => Promise<LegacySnapshot | null>;
   onMoveSkillToFolder: (skillId: string, folderId: string) => Promise<LegacySnapshot | null>;
-  onMoveSourceSkillsToFolder: (sourceId: string, folderId: string) => Promise<LegacySnapshot | null>;
-  onReanalyzeMetadata: () => Promise<LegacySnapshot | null>;
-  onRefreshIndex: (localOnly?: boolean) => Promise<LegacySnapshot | null>;
-  onSaveSkillMetadata: (skill: SkillCard, draft: SkillDraft) => Promise<"failed" | "preview" | "saved">;
-  onSaveSourceMetadata: (source: SourceCard, draft: SourceDraft) => Promise<"failed" | "preview" | "saved">;
-  onSetSkillEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
-  onSetSkillRating: (skill: SkillCard, rating: number) => Promise<boolean>;
-  onSetSourceRating: (source: SourceCard, rating: number) => Promise<boolean>;
-  onSetSourceVersionPin: (source: SourceCard, pinned: boolean) => Promise<boolean>;
-  onUpdateFolder: (folderId: string, name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
-  onRefreshSourceVersion: (source: SourceCard) => Promise<boolean>;
-  onRollbackSourceVersion: (source: SourceCard) => Promise<boolean>;
-  onStageImport: (importKind: string, input: string, options?: ImportFeedbackOptions) => Promise<SourceImportExecutionCard>;
-  realWritesEnabled: boolean;
-  searchQuery: string;
-  selectedFolderId: string;
+  onMoveSourceToFolder: (sourceId: string, folderId: string) => Promise<LegacySnapshot | null>;
+  onOpenDetail: (key: string, tab?: "overview" | "versions" | "settings") => void;
+  onOpenLibraryFolder: () => void;
+  onReanalyze: () => void;
+  onRepair: () => void;
   onSelectFolder: (folderId: string) => void;
-  snapshot: LegacySnapshot | null;
-};
+  onSetChildEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
+  onSetSkillRating: (skill: SkillCard, rating: number) => Promise<boolean>;
+  onSetSourceRating: (source: NonNullable<LibraryRow["source"]>, rating: number) => Promise<boolean>;
+  onTargetClick: (row: LibraryRow, target: SkillTarget) => void;
+  onUpdateFolder: (folderId: string, name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
+  paused: boolean;
+  rows: LibraryRow[];
+}) {
+  const [filter, setFilter] = useState<LibraryFilter>("all");
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const [showAllChildren, setShowAllChildren] = useState<ReadonlySet<string>>(() => new Set());
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [folderDialog, setFolderDialog] = useState<{ mode: "create" } | { mode: "move"; row: LibraryRow } | { mode: "rename"; id: string } | null>(null);
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const [confirmNode, askConfirm] = useConfirm();
+  const folders = library?.skillFolders ?? [];
+  const managedAgents = agents.filter(agent => agent.takeover && agent.canDeliver);
+  const scope = folderId === "all" ? "all" : folderId;
+  const folderCounts = useMemo(() => countSkills(library, { folderId: scope }), [library, scope]);
+  // One count per chip, recomputed only when the library changes (not on every delivery event
+  // that re-renders the page with the same snapshot).
+  const chipCounts = useMemo(() => {
+    const result = new Map<string, number>([["unfiled", countSkills(library, { folderId: "unfiled" }).skills]]);
+    for (const folder of library?.skillFolders ?? []) result.set(folder.id, countSkills(library, { folderId: folder.id }).skills);
+    return result;
+  }, [library?.skills, library?.sources, library?.skillFolders]);
 
-export function Library(props: LibraryProps) {
-  const {
-    atlasMode,
-    loading,
-    onCancelImport,
-    onCreateFolder,
-    onDeleteSource,
-    onDeleteFolder,
-    onPreviewImport,
-    onPromoteImport,
-    onRecordUsage,
-    onMoveFolder,
-    onMoveSkillToFolder,
-    onMoveSourceSkillsToFolder,
-    onReanalyzeMetadata,
-    onRefreshIndex,
-    onSaveSkillMetadata,
-    onSaveSourceMetadata,
-    onSetSkillEnabled,
-    onSetSkillRating,
-    onSetSourceRating,
-    onSetSourceVersionPin,
-    onUpdateFolder,
-    onRefreshSourceVersion,
-    onRollbackSourceVersion,
-    onStageImport,
-    realWritesEnabled,
-    searchQuery,
-    selectedFolderId,
-    onSelectFolder: setSelectedFolderId,
-    snapshot
-  } = props;
-  const sources = snapshot?.sources ?? [];
-  const skills = snapshot?.skills ?? [];
-  const skillFolders = snapshot?.skillFolders ?? [];
-  const folderCounts = useMemo(() => new Map(buildSkyIslands(snapshot, "").map(island => [island.id, island.skillCount])), [snapshot]);
-  const skillConflicts = snapshot?.skillConflicts ?? [];
-  const [sortKey, setSortKey] = useState<SourceSortKey>("recent");
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [editingSourceId, setEditingSourceId] = useState("");
-  const [editingSkillId, setEditingSkillId] = useState("");
-  const [showImport, setShowImport] = useState(() => Boolean(props.suggestedLocalPath) || importWizardDraftHasContent(loadImportWizardDraft()));
-  const [showMaintenance, setShowMaintenance] = useState(false);
-  const [sourceTypeFilter, setSourceTypeFilter] = useState<"all" | "skill" | "prompt" | "other">("all");
-  const [sourceDrafts, setSourceDrafts] = useState<Record<string, SourceDraft>>({});
-  const [skillDrafts, setSkillDrafts] = useState<Record<string, SkillDraft>>({});
-  const [childLimits, setChildLimits] = useState<Record<string, number>>({});
-  const [promptInvocation, setPromptInvocation] = useState<PromptInvocationCard | null>(null);
-  const [promptInvocationPending, setPromptInvocationPending] = useState("");
+  const visibleRows = useMemo(() => rows.filter(row => {
+    if (!rowInFolder(row, scope)) return false;
+    if (filter === "all") return true;
+    const state = rowFilterState(row);
+    return state[filter];
+  }), [rows, scope, filter]);
 
-  const skillsBySourceId = useMemo(() => {
-    const grouped = new Map<string, SkillCard[]>();
-    for (const skill of skills) {
-      const sourceId = resolveSkillSource(skill, sources)?.id;
-      if (!sourceId) continue;
-      grouped.set(sourceId, [...(grouped.get(sourceId) ?? []), skill]);
-    }
-    return grouped;
-  }, [skills, sources]);
+  // Selection covers only the current filter results.
+  useEffect(() => {
+    setSelected(current => {
+      if (current.size === 0) return current;
+      const visible = new Set(visibleRows.map(row => row.key));
+      const next = new Set([...current].filter(key => visible.has(key)));
+      return next.size === current.size ? current : next;
+    });
+  }, [visibleRows]);
 
   useEffect(() => {
-    if (snapshot && selectedFolderId !== "all" && selectedFolderId !== "unfiled" &&
-        !skillFolders.some(folder => folder.id === selectedFolderId)) setSelectedFolderId("all");
-  }, [snapshot, selectedFolderId, skillFolders, setSelectedFolderId]);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || document.querySelector("[data-overlay]")) return;
+      if (drag) setDrag(null);
+      else if (selected.size > 0) setSelected(new Set());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected.size, drag]);
 
-  const popularityById = useMemo(
-    () => new Map((snapshot?.sourcePopularity ?? []).map(item => [item.sourceId, item])),
-    [snapshot?.sourcePopularity]
-  );
-  const governanceById = useMemo(
-    () => new Map((snapshot?.sourceGovernance ?? []).map(item => [item.sourceId, item])),
-    [snapshot?.sourceGovernance]
-  );
-  const agentStatusesBySkill = useMemo(() => {
-    const groups = new Map<string, AgentSkillStatusCard[]>();
-    for (const status of snapshot?.agentSkillStatuses ?? []) {
-      groups.set(status.skillFolderName, [...(groups.get(status.skillFolderName) ?? []), status]);
+  const items = useMemo<ListItem[]>(() => {
+    const list: ListItem[] = [];
+    for (const row of visibleRows) {
+      list.push({ type: "row", key: row.key, row });
+      if (!expanded.has(row.key) || row.kind !== "pack" || row.skills.length < 2) continue;
+      const all = showAllChildren.has(row.key);
+      const children = all ? row.skills : row.skills.slice(0, CHILD_PAGE);
+      for (const skill of children) list.push({ type: "child", key: `${row.key}::${skill.folderName}`, row, skill });
+      if (!all && row.skills.length > CHILD_PAGE) list.push({ type: "more", key: `${row.key}::more`, row, hidden: row.skills.length - CHILD_PAGE });
     }
-    return groups;
-  }, [snapshot?.agentSkillStatuses]);
+    return list;
+  }, [visibleRows, expanded, showAllChildren]);
 
-  const visibleSources = useMemo(() => {
-    const drafted = sources.map(source => applySourceDraft(source, sourceDrafts[source.id]));
-    const folderFiltered = selectedFolderId === "all"
-      ? drafted
-      : drafted.filter(source => sourceMatchesUserFolder(source, selectedFolderId, skillFolders) ||
-          (skillsBySourceId.get(source.id) ?? []).some(skill =>
-            !isRouterHubSkill(skill) && skillMatchesUserFolder(skill, selectedFolderId, source, skillFolders)));
-    const filtered = searchQuery.trim()
-      ? folderFiltered.filter(
-          source =>
-            sourceMatchesSearch(source, searchQuery) ||
-            (skillsBySourceId.get(source.id) ?? []).some(skill => skillMatchesSearch(skill, searchQuery))
-        )
-      : folderFiltered;
-    const typed = filtered.filter(source => sourceTypeFilter === "all" ||
-      (sourceTypeFilter === "other" ? source.sourceType !== "skill" && source.sourceType !== "prompt" : source.sourceType === sourceTypeFilter));
-    return sortSources(typed, sortKey, popularityById, skills);
-  }, [popularityById, selectedFolderId, skills, skillsBySourceId, sources, sourceDrafts, sortKey, searchQuery, skillFolders, sourceTypeFilter]);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const window_ = useWindow(items, listRef);
 
-  const localSkills = useMemo(() => {
-    const filtered = skills
-      .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
-      .filter(skill => {
-        if (sourceTypeFilter === "prompt" || sourceTypeFilter === "other") return false;
-        if (resolveSkillSource(skill, sources)) {
-          return false;
+  function toggleSelected(row: LibraryRow, shift: boolean) {
+    setSelected(current => {
+      const next = new Set(current);
+      if (shift && anchor) {
+        const keys = visibleRows.map(item => item.key);
+        const from = keys.indexOf(anchor);
+        const to = keys.indexOf(row.key);
+        if (from >= 0 && to >= 0) {
+          const [start, end] = from < to ? [from, to] : [to, from];
+          for (const key of keys.slice(start, end + 1)) next.add(key);
+          return next;
         }
-        if (!skillMatchesUserFolder(skill, selectedFolderId, undefined, skillFolders)) return false;
-        return searchQuery.trim() ? skillMatchesSearch(skill, searchQuery) : true;
-      });
-    return sortSkills(filtered, sortKey);
-  }, [skillDrafts, skills, sources, selectedFolderId, searchQuery, sortKey, skillFolders, sourceTypeFilter]);
-
-  const totalMatches =
-    visibleSources.length +
-    skills.filter(skill => skillMatchesSearch(skill, searchQuery)).length;
-
-  function toggleExpand(sourceId: string) {
-    setExpanded(prev => {
-      const next = new Set(prev);
-      if (next.has(sourceId)) next.delete(sourceId);
-      else next.add(sourceId);
+      }
+      if (next.has(row.key)) next.delete(row.key);
+      else next.add(row.key);
       return next;
     });
+    setAnchor(row.key);
   }
-  function expandSource(sourceId: string) {
-    setExpanded(prev => {
-      const next = new Set(prev);
-      next.add(sourceId);
+
+  function toggleExpanded(key: string) {
+    setExpanded(current => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
 
-  const editingSource = sources.find(source => source.id === editingSourceId) ?? null;
-  const editingSkill = skills.find(skill => skill.folderName === editingSkillId) ?? null;
+  /* ---------- pointer drag: grip → folder chip (dragDropEnabled disables HTML5 drag on Windows) ---------- */
 
-  async function saveSourceDraft(source: SourceCard, draft: SourceDraft) {
-    const result = await onSaveSourceMetadata(source, draft);
-    if (result === "preview") setSourceDrafts(prev => ({ ...prev, [source.id]: draft }));
-    if (result !== "failed") setEditingSourceId("");
-  }
-  async function saveSkillDraft(skill: SkillCard, draft: SkillDraft) {
-    const result = await onSaveSkillMetadata(skill, draft);
-    if (result === "preview") setSkillDrafts(prev => ({ ...prev, [skill.folderName]: draft }));
-    if (result !== "failed") setEditingSkillId("");
+  function startDrag(event: ReactPointerEvent, kind: DragState["kind"], id: string, label: string) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let started = false;
+    const move = (moveEvent: PointerEvent) => {
+      if (!started && Math.abs(moveEvent.clientX - startX) + Math.abs(moveEvent.clientY - startY) < 5) return;
+      started = true;
+      const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY) as HTMLElement | null;
+      const over = target?.closest<HTMLElement>("[data-folder-drop]")?.dataset.folderDrop ?? null;
+      setDrag({ kind, id, label, x: moveEvent.clientX, y: moveEvent.clientY, over });
+    };
+    const up = (upEvent: PointerEvent) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      setDrag(null);
+      if (!started) return;
+      const target = document.elementFromPoint(upEvent.clientX, upEvent.clientY) as HTMLElement | null;
+      const over = target?.closest<HTMLElement>("[data-folder-drop]")?.dataset.folderDrop;
+      if (over === undefined || over === "all") return;
+      const destination = over === "unfiled" ? "" : over;
+      if (kind === "source") void onMoveSourceToFolder(id, destination);
+      else void onMoveSkillToFolder(id, destination);
+    };
+    const cancel = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      setDrag(null);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
   }
 
-  async function deleteSourceFromPanel(source: SourceCard) {
-    const confirmed = window.confirm(t("srcEditor.confirmDelete", { name: source.name }));
-    if (!confirmed) return;
-    const result = await onDeleteSource(source);
-    if (result !== "failed") setEditingSourceId("");
-  }
+  /* ---------- selection bar ---------- */
 
-  async function preparePromptInvocation(source: SourceCard) {
-    if (!hasTauriRuntime()) {
-      showUiToast(t("lib.promptLoadFailed", { message: t("router.browserBlocked") }), "warn");
-      return;
+  const selectedRows = visibleRows.filter(row => selected.has(row.key) && row.unit && row.kind !== "prompt");
+
+  function batchFor(agentId: AgentId, enable: boolean): TargetChange[] {
+    const changes: TargetChange[] = [];
+    for (const row of selectedRows) {
+      const target = row.targets.find(item => item.agentId === agentId);
+      if (enable) {
+        if (!row.unit?.libraryEnabled) continue;
+        if (target?.desired) continue;
+      } else if (!target?.desired) continue;
+      changes.push({ unitId: row.unit!.unitId, agentId, enabled: enable });
     }
-    setPromptInvocationPending(source.id);
-    try {
-      const card = await invoke<PromptInvocationCard>("load_prompt_invocation", {
-        sourceId: source.id
-      });
-      setPromptInvocation(card);
-    } catch (error) {
-      showUiToast(
-        t("lib.promptLoadFailed", {
-          message: error instanceof Error ? error.message : String(error)
-        }),
-        "error"
-      );
-    } finally {
-      setPromptInvocationPending("");
-    }
+    return changes;
   }
 
-  const githubSources = sources.filter(source => source.url).length;
-  const localSources = sources.filter(source => !source.url && source.localPath).length;
-  const enabledSkillCount = skills.filter(skill => skill.enabled).length;
+  const empty = !loading && rows.length === 0;
+  const maintenanceBusy = metadataAnalyzing || busyAction === "consolidate";
 
   return (
-    <div className="view library-view">
-      <section className="page-header glow-card">
+    <div className="view library-view lib-v33" data-testid="library-page">
+      <header className="lib-head">
         <div>
-          <span className="eyebrow"><Icon name="library" /> {t("nav.library")}</span>
-          <h2>{t("lib.title")}</h2>
-          <p>{t("lib.subtitle")}</p>
+          <h2>{t("nav.library")}</h2>
+          <span className="lib-count" data-count={counts.skills} data-testid="library-count">
+            {t("v33.libraryCount", { skills: counts.skills, packs: counts.packs })}
+          </span>
         </div>
-        <div className="page-header-stats">
-          <span>{t("lib.statSources", { n: sources.length })}</span>
-          <span>{t("lib.statSkills", { n: skills.length })}</span>
-          <span>{t("lib.statGithub", { n: githubSources })}</span>
-          <span>{t("lib.statLocal", { n: localSources })}</span>
+        <div className="lib-head-actions">
+          <button className="primary-action small" onClick={onAdd} type="button"><Icon name="add" /> {t("v33.add")}</button>
+          <MoreMenu
+            items={[
+              { key: "reanalyze", label: metadataAnalyzing ? t("v33.reanalyzing") : t("v33.reanalyze"), onSelect: onReanalyze, disabled: mutationBusy || maintenanceBusy, icon: "sparkle" },
+              { key: "repair", label: t("v33.repair"), onSelect: onRepair, icon: "refresh" },
+              { key: "consolidate", label: busyAction === "consolidate" ? t("v33.consolidating") : t("v33.consolidate"), onSelect: onConsolidate, disabled: mutationBusy || maintenanceBusy, icon: "list" },
+              { key: "folder", label: t("v33.libraryFolder"), onSelect: onOpenLibraryFolder, icon: "folder" }
+            ]}
+            label={t("v33.moreActions")}
+            testId="library-more"
+          />
         </div>
-      </section>
+      </header>
 
-      <section className="library-toolbar">
-        <div className="library-toolbar-left">
-          <label className="library-sort">
-            <span>{t("lib.sort")}</span>
-            <select value={sortKey} onChange={event => setSortKey(event.target.value as SourceSortKey)}>
-              <option value="recent">{t("lib.sortRecent")}</option>
-              <option value="rating">{t("lib.sortRating")}</option>
-              <option value="usage">{t("lib.sortUsage")}</option>
-              <option value="heat">{t("lib.sortHeat")}</option>
-              <option value="skillCount">{t("lib.sortSkillCount")}</option>
-              <option value="health">{t("lib.sortHealth")}</option>
-              <option value="name">{t("lib.sortName")}</option>
-            </select>
-          </label>
-          <button
-            className="ghost-action"
-            onClick={() => setExpanded(new Set(sources.map(source => source.id)))}
-            type="button"
-          >
-            {t("lib.expandAll")}
-          </button>
-          <button className="ghost-action" onClick={() => setExpanded(new Set())} type="button">
-            {t("lib.collapseAll")}
-          </button>
-        </div>
-        <div className="library-toolbar-right">
-          <button
-            className="ghost-action metadata-reanalyze-action"
-            disabled={loading}
-            onClick={() => void onReanalyzeMetadata()}
-            title={t("metadata.reanalyzeTip")}
-            type="button"
-          >
-            <Icon className={props.metadataAnalyzing ? "icon-spin" : ""} name="refresh" />
-            {t("metadata.reanalyze")}
-          </button>
-          <button
-            className={showMaintenance ? "ghost-action active" : "ghost-action"}
-            onClick={() => setShowMaintenance(value => !value)}
-            type="button"
-          >
-            <Icon name="settings" /> {t("lib.maintenance")}
-          </button>
-          <button
-            className="primary-action"
-            onClick={() => setShowImport(value => !value)}
-            type="button"
-          >
-            <Icon name="add" /> {t("qa.title")}
-          </button>
-        </div>
-      </section>
-
-      {searchQuery.trim() && (
-        <section className="search-scope-note">
-          <Icon name="search" />
-          <span>{t("lib.searchActive", { n: totalMatches })}</span>
-        </section>
-      )}
-
-      {showImport && (
-        <ImportWizard
-          suggestedLocalPath={props.suggestedLocalPath}
-          onDismissLocalImport={props.onDismissLocalImport}
-          disabled={loading}
-          onCancel={onCancelImport}
-          onCreateFolder={onCreateFolder}
-          onPreview={onPreviewImport}
-          onPromote={onPromoteImport}
-          onRefreshIndex={onRefreshIndex}
-          onMoveSourceSkillsToFolder={onMoveSourceSkillsToFolder}
-          onSaveSourceMetadata={onSaveSourceMetadata}
-          onStage={onStageImport}
-          sources={sources}
-          skillFolders={skillFolders}
-        />
-      )}
-
-      {showMaintenance && (
-        <div className="library-maintenance">
-          <section className="panel duplicate-source-maintenance">
-            <h3>{getLang() === "zh" ? "重复仓库" : getLang() === "ko" ? "중복 저장소" : "Duplicate repositories"}</h3>
-            <p>{getLang() === "zh" ? "同一 GitHub 仓库且文件内容相同的副本可合并。保留原分类、评分与备注，并备份移出的副本。不同作者的同名技能不合并。" : getLang() === "ko" ? "동일한 GitHub 저장소의 내용이 같은 복사본만 병합합니다. 분류, 평점, 메모와 백업을 보존합니다." : "Consolidate identical copies of the same repository, retaining metadata and backups. Skills from different authors remain separate."}</p>
-            <button className="secondary-action" type="button" disabled={loading} onClick={() => void props.onConsolidateSources()}>{getLang() === "zh" ? "合并相同副本" : getLang() === "ko" ? "동일 복사본 병합" : "Consolidate identical copies"}</button>
-          </section>
-          {atlasMode && skillConflicts.length > 0 && (
-            <ParentIsolationPanel conflicts={skillConflicts} />
-          )}
-          <RouterHubPanel disabled={loading} realWritesEnabled={realWritesEnabled} />
-          {!atlasMode && skillConflicts.length > 0 && (
-            <ParentIsolationPanel conflicts={skillConflicts} />
-          )}
-        </div>
-      )}
-
-      <SkillFolderShelf
-        disabled={loading}
-        folders={skillFolders}
-        folderCounts={folderCounts}
-        onCreate={onCreateFolder}
-        onDelete={onDeleteFolder}
-        onDropSkill={(skillId, folderId) => onMoveSkillToFolder(skillId, folderId)}
-        onDropSource={(sourceId, folderId) => onMoveSourceSkillsToFolder(sourceId, folderId)}
-        onMove={onMoveFolder}
-        onSelect={setSelectedFolderId}
-        onUpdate={onUpdateFolder}
-        selectedId={selectedFolderId}
-        skills={skills}
-      />
-
-      <div className={atlasMode ? "library-stage atlas-library-stage" : "library-stage"}>
-        {atlasMode && (
-          <aside className="atlas-library-filter-deck" aria-label={t("atlas.filterDeck")}>
-            <header>
-              <button type="button" className="source-type-filter" aria-pressed={sourceTypeFilter === "all"} onClick={() => setSourceTypeFilter("all")}>{t("nav.library")}</button>
-              <b>{visibleSources.length.toLocaleString()}</b>
-            </header>
-            <div className="atlas-filter-meter">
-              <span>{t("atlas.enabledSkills")}</span>
-              <strong>{enabledSkillCount}</strong>
-              <i style={{ "--meter": `${skills.length ? Math.round((enabledSkillCount / skills.length) * 100) : 0}%` } as CSSProperties} />
-            </div>
-            <dl>
-              {(["skill", "prompt", "other"] as const).map(type => (
-                <div key={type}><dt><button type="button" className="source-type-filter" aria-pressed={sourceTypeFilter === type} onClick={() => setSourceTypeFilter(current => current === type ? "all" : type)}>{t(type === "skill" ? "atlas.skillSources" : type === "prompt" ? "atlas.promptSources" : "atlas.otherSources")}</button></dt><dd>{sources.filter(source => type === "other" ? source.sourceType !== "skill" && source.sourceType !== "prompt" : source.sourceType === type).length}</dd></div>
-              ))}
-            </dl>
-          </aside>
-        )}
-
-        <section className="library-tree">
-        {visibleSources.map(source => {
-          const isExpanded = expanded.has(source.id);
-          const sourceSkills = sortSkills(
-            (skillsBySourceId.get(source.id) ?? [])
-              .map(skill => applySkillDraft(skill, skillDrafts[skill.folderName]))
-              .filter(skill => skillMatchesUserFolder(skill, selectedFolderId, source, skillFolders))
-              .filter(skill => !searchQuery.trim() || skillMatchesSearch(skill, searchQuery) || sourceMatchesSearch(source, searchQuery)),
-            sortKey
-          );
-          const totalSkillCount = Math.max(source.skillCount ?? 0, sourceSkills.length);
-          const singleRootSkill = sourceSkills.length === 1;
-          const parentSkills = singleRootSkill ? [] : sourceSkills.filter(isRouterHubSkill);
-          const childSkills = singleRootSkill ? sourceSkills : sourceSkills.filter(skill => !isRouterHubSkill(skill));
-          const primaryInvocationSkill = sourceParentSkill(source, sourceSkills);
-          const primaryInvocationName = primaryInvocationSkill ? skillInvocationName(primaryInvocationSkill) : "";
-          const childLimit = childLimits[source.id] ?? 36;
-          const visibleChildSkills = childSkills.slice(0, childLimit);
-          const matchesQuery = searchQuery.trim()
-            ? sourceSkills.some(skill => skillMatchesSearch(skill, searchQuery))
-            : true;
-          const skillCountText =
-            source.sourceType === "prompt" && totalSkillCount === 0
-              ? t("lib.promptSource")
-              : t("lib.skillsTotal", { n: totalSkillCount });
+      <div className="lib-filters" role="toolbar" aria-label={t("v33.filterLabel")}>
+        {FILTERS.map(key => {
+          const value = key === "all" ? folderCounts.rows
+            : key === "synced" ? folderCounts.syncedRows
+              : key === "unsynced" ? folderCounts.unsyncedRows
+                : key === "update" ? folderCounts.updateRows
+                  : folderCounts.problemRows;
           return (
-            <article
-              className={`source-group glow-card${isExpanded ? " expanded" : ""}${matchesQuery ? "" : " dimmed"}`}
-              key={source.id}
+            <button
+              aria-pressed={filter === key}
+              className={`lib-filter${filter === key ? " active" : ""}${key === "problem" && value > 0 ? " has-problem" : ""}`}
+              data-count={value}
+              data-testid={`library-filter-${key}`}
+              key={key}
+              onClick={() => setFilter(key)}
+              type="button"
             >
-              <header className="source-group-head">
-                <button
-                  aria-expanded={isExpanded}
-                  className="source-group-toggle"
-                  onClick={() => toggleExpand(source.id)}
-                  type="button"
-                >
-                  <span className={`source-group-chevron${isExpanded ? " open" : ""}`} aria-hidden="true">
-                    <Icon name="chevron" />
-                  </span>
-                  <span className={`source-avatar tone-${source.url ? sourceTypeTone(source.sourceType, source.categoryId) : "local"}`} aria-hidden="true">
-                    <Icon name={source.url ? sourceTypeIcon(source.sourceType) : "sources"} />
-                  </span>
-                  <div className="source-group-title">
-                    <strong title={source.name}>{sourcePresentation(source).title}</strong>
-                    <span>
-                      {sourcePresentation(source).owner && <em className="source-author">{sourcePresentation(source).owner} · </em>}
-                      {displayCategoryName(source.categoryId)} · {sourceTypeLabel(source.sourceType)} ·{" "}
-                      {skillCountText}
-                    </span>
-                  </div>
-                </button>
-                <div className="source-group-meta">
-                  {primaryInvocationSkill && (
-                    <button
-                      aria-label={t("lib.copyName", { name: primaryInvocationName })}
-                      className="icon-action source-parent-copy"
-                      onClick={() => void copyTextToClipboard(primaryInvocationName, t("toast.skillNameCopied"))}
-                      title={`${t("lib.copyParent")}：${primaryInvocationName}`}
-                      type="button"
-                    >
-                      <Icon name="copy" />
-                    </button>
-                  )}
-                  <span
-                    aria-label={t("folders.dragSource", { name: source.name })}
-                    aria-disabled={loading}
-                    className={`source-folder-drag-handle${loading ? " disabled" : ""}`}
-                    draggable={!loading}
-                    onDragStart={event => {
-                      if (loading) {
-                        event.preventDefault();
-                        return;
-                      }
-                      event.dataTransfer.effectAllowed = "move";
-                      event.dataTransfer.setData("application/x-ai-skillhub-source-id", source.id);
-                      event.dataTransfer.setData("text/plain", source.id);
-                    }}
-                    title={t("folders.dragSource", { name: source.name })}
-                  >
-                    <Icon name="grip" />
-                    <small>{t("folders.dragShort")}</small>
-                  </span>
-                  <label className="skill-folder-select source-folder-select" title={t("folders.chooseSource") }>
-                    <Icon name="folder" />
-                    <select
-                      aria-label={t("folders.chooseSource")}
-                      disabled={loading}
-                      id={`source-folder-${source.id}`}
-                      onChange={event => void onMoveSourceSkillsToFolder(source.id, event.target.value)}
-                      value={source.userFolderId ?? ""}
-                    >
-                      <option value="">{t("folders.unfiled")}</option>
-                      {skillFolders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-                    </select>
-                  </label>
-                  <span className="source-parent-rating">
-                    <span>{t("lib.parentRating")}</span>
-                    <SkillRating
-                      disabled={loading}
-                      onChange={rating => void onSetSourceRating(source, rating)}
-                      rating={source.rating ?? 0}
-                      skillName={source.name}
-                    />
-                  </span>
-                  <span className={`status-badge ${source.health}`}>
-                    <span className={`status-dot ${statusDotClass(source.health)}`} />
-                    {skillStatusLabel(source.health)}
-                  </span>
-                  <ToggleSwitch
-                    disabled={loading}
-                    enabled={source.enabled}
-                    label={source.enabled ? t("common.enabled") : t("common.disabled")}
-                    onClick={() =>
-                      void onSaveSourceMetadata(source, {
-                        category: source.categoryId,
-                        enabled: !source.enabled,
-                        name: source.name,
-                        note: source.note,
-                        sourceType: source.sourceType,
-                        tags: tagInputValue(source.tags)
-                      })
-                    }
-                  />
-                  <button
-                    className="icon-action"
-                    onClick={() => setEditingSourceId(source.id)}
-                    title={t("lib.editSource")}
-                    type="button"
-                  >
-                    <Icon name="edit" />
-                  </button>
-                </div>
-              </header>
-              {source.note && <p className="source-note">{source.note}</p>}
-              {isExpanded && (
-                <div className="source-children">
-                  {parentSkills.length > 0 && (
-                    <div className="parent-skills">
-                      {parentSkills.map(skill => (
-                        <SkillRow
-                          agentStatuses={agentStatusesBySkill.get(skill.folderName) ?? []}
-                          isParent
-                          key={skill.folderName}
-                          loading={loading}
-                          folders={skillFolders}
-                          onCopy={() => void copySkillPrompt(skill, onRecordUsage)}
-                          onEdit={() => setEditingSkillId(skill.folderName)}
-                          onMoveFolder={folderId => void onMoveSkillToFolder(skill.id ?? stableSkillClientId(skill), folderId)}
-                          onRate={rating => void onSetSkillRating(skill, rating)}
-                          onToggleEnabled={() => void onSetSkillEnabled(skill, !skill.enabled)}
-                          skill={skill}
-                        />
-                      ))}
-                    </div>
-                  )}
-                  {childSkills.length === 0 && parentSkills.length === 0 ? (
-                    source.sourceType === "prompt" ? (
-                      <div className="source-children-empty prompt-source-callout">
-                        <div>
-                          <strong>{t("lib.promptOnly")}</strong>
-                          <span>{t("lib.promptMethodBody")}</span>
-                        </div>
-                        <button
-                          className="primary-action small"
-                          disabled={promptInvocationPending === source.id}
-                          onClick={() => void preparePromptInvocation(source)}
-                          type="button"
-                        >
-                          <Icon name="copy" />
-                          {promptInvocationPending === source.id
-                            ? t("lib.promptPreparing")
-                            : t("lib.promptPrepare")}
-                        </button>
-                      </div>
-                    ) : (
-                      <p className="source-children-empty">{t("lib.noChildren")}</p>
-                    )
-                  ) : (
-                    <div className="child-skills">
-                      {visibleChildSkills.map(skill => (
-                        <SkillRow
-                          agentStatuses={agentStatusesBySkill.get(skill.folderName) ?? []}
-                          isParent={false}
-                          key={skill.folderName}
-                          loading={loading}
-                          folders={skillFolders}
-                          onCopy={() => void copySkillPrompt(skill, onRecordUsage)}
-                          onEdit={() => setEditingSkillId(skill.folderName)}
-                          onMoveFolder={folderId => void onMoveSkillToFolder(skill.id ?? stableSkillClientId(skill), folderId)}
-                          onRate={rating => void onSetSkillRating(skill, rating)}
-                          onToggleEnabled={() => void onSetSkillEnabled(skill, !skill.enabled)}
-                          skill={skill}
-                        />
-                      ))}
-                      {childSkills.length > visibleChildSkills.length && (
-                        <button
-                          className="source-children-more"
-                          onClick={() => setChildLimits(previous => ({ ...previous, [source.id]: childLimit + 36 }))}
-                          type="button"
-                        >
-                          {t("lib.showMoreChildren", { n: childSkills.length - visibleChildSkills.length })}
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </article>
+              {t(`v33.filter.${key}`)} <em>{value}</em>
+            </button>
           );
         })}
-
-        {localSkills.length > 0 && (
-          <article className="source-group glow-card local-group expanded">
-            <header className="source-group-head">
-              <div className="source-group-toggle static">
-                <span className="source-avatar tone-local" aria-hidden="true">
-                  <Icon name="workspaces" />
-                </span>
-                <div className="source-group-title">
-                  <strong>{t("lib.localGroup")}</strong>
-                  <span>{t("lib.localGroupHint")} · {t("lib.skillsTotal", { n: localSkills.length })}</span>
-                </div>
-              </div>
-            </header>
-            <div className="source-children">
-              <div className="child-skills">
-                {localSkills.map(skill => (
-                  <SkillRow
-                    agentStatuses={agentStatusesBySkill.get(skill.folderName) ?? []}
-                    isParent={isRouterHubSkill(skill)}
-                    key={skill.folderName}
-                    loading={loading}
-                    folders={skillFolders}
-                    onCopy={() => void copySkillPrompt(skill, onRecordUsage)}
-                    onEdit={() => setEditingSkillId(skill.folderName)}
-                    onMoveFolder={folderId => void onMoveSkillToFolder(skill.id ?? stableSkillClientId(skill), folderId)}
-                    onRate={rating => void onSetSkillRating(skill, rating)}
-                    onToggleEnabled={() => void onSetSkillEnabled(skill, !skill.enabled)}
-                    skill={skill}
-                  />
-                ))}
-              </div>
-            </div>
-          </article>
-        )}
-
-        {visibleSources.length === 0 && localSkills.length === 0 && (
-          <p className="library-empty">{searchQuery.trim() ? t("lib.emptySearch") : t("lib.empty")}</p>
-        )}
-        </section>
-
+        {paused && <span className="lib-paused-note"><Icon name="pause" /> {t("v33.pausedNote")}</span>}
       </div>
 
-      {editingSkill && (
-        <SkillEditPanel
-          disabled={loading}
-          draft={skillDrafts[editingSkill.folderName]}
-          folders={skillFolders}
-          onClose={() => setEditingSkillId("")}
-          onMoveFolder={folderId => editingSkill.sourceId
-            ? onMoveSourceSkillsToFolder(editingSkill.sourceId, folderId)
-            : onMoveSkillToFolder(editingSkill.id ?? stableSkillClientId(editingSkill), folderId)}
-          onSave={draft => void saveSkillDraft(editingSkill, draft)}
-          skill={editingSkill}
+      <div className="lib-folders" role="toolbar" aria-label={t("v33.foldersLabel")}>
+        <FolderChip
+          active={folderId === "all"}
+          count={counts.skills}
+          dropId="all"
+          label={t("v33.folderAll")}
+          onClick={() => onSelectFolder("all")}
+          over={drag?.over === "all"}
+          testId="folder-chip-all"
         />
-      )}
-      {promptInvocation && (
-        <PromptInvocationPanel
-          card={promptInvocation}
-          onCreated={() => onRefreshIndex(true)}
-          onClose={() => setPromptInvocation(null)}
-          onRecordUsage={onRecordUsage}
+        <FolderChip
+          active={folderId === "unfiled"}
+          count={chipCounts.get("unfiled") ?? 0}
+          dropId="unfiled"
+          label={t("v33.folderUnfiled")}
+          onClick={() => onSelectFolder("unfiled")}
+          over={drag?.over === "unfiled"}
+          testId="folder-chip-unfiled"
         />
-      )}
-      {editingSource && (
-        <SourceEditPanel
-          disabled={loading}
-          draft={sourceDrafts[editingSource.id]}
-          onClose={() => setEditingSourceId("")}
-          onDelete={() => void deleteSourceFromPanel(editingSource)}
-          onOpenChildren={() => expandSource(editingSource.id)}
-          onMoveFolder={folderId => onMoveSourceSkillsToFolder(editingSource.id, folderId)}
-          onRefreshVersion={() => void onRefreshSourceVersion(editingSource)}
-          onRollbackVersion={() => {
-            const governance = governanceById.get(editingSource.id);
-            const revision = shortRevision(governance?.latestBackupRevision);
-            if (
-              window.confirm(
-                t("governance.confirmRollback", {
-                  name: editingSource.name,
-                  revision: revision || t("governance.unknownRevision")
-                })
-              )
-            ) {
-              void onRollbackSourceVersion(editingSource);
-            }
-          }}
-          onSave={draft => saveSourceDraft(editingSource, draft)}
-          onSetPinned={pinned => void onSetSourceVersionPin(editingSource, pinned)}
-          governance={governanceById.get(editingSource.id)}
-          popularity={popularityById.get(editingSource.id)}
-          source={editingSource}
-          sourceSkills={skillsBySourceId.get(editingSource.id) ?? []}
-          folders={skillFolders}
-        />
-      )}
-    </div>
-  );
-}
-
-function PromptInvocationPanel({
-  card,
-  onCreated,
-  onClose,
-  onRecordUsage
-}: {
-  card: PromptInvocationCard;
-  onCreated: () => Promise<unknown>;
-  onClose: () => void;
-  onRecordUsage: LibraryProps["onRecordUsage"];
-}) {
-  const [task, setTask] = useState("");
-  const lang = getLang();
-  const promptCopy = lang === "zh" ? { task: "本次任务", placeholder: "说明目标、材料与输出要求…", preview: "查看将复制的完整内容" }
-    : lang === "ko" ? { task: "이번 작업", placeholder: "목표, 자료와 출력 요구사항…", preview: "복사할 내용 보기" }
-      : { task: "Your task", placeholder: "Goal, inputs, and expected output…", preview: "Preview copied instructions" };
-  const invocationText = task.trim() ? `${card.copyText}\n\n## ${promptCopy.task}\n${task.trim()}` : card.copyText;
-  async function copyInvocation() {
-    await copyTextToClipboard(invocationText, t("lib.promptCopied"));
-    await onRecordUsage("prompt", card.sourceId, card.sourceName, card.sourceName, "copy_prompt");
-  }
-
-  async function openSourceFolder() {
-    try {
-      await invoke("open_prompt_source_folder", { sourceId: card.sourceId });
-      showUiToast(t("lib.promptOpened"), "ok");
-    } catch (error) {
-      showUiToast(
-        t("lib.promptOpenFailed", {
-          message: error instanceof Error ? error.message : String(error)
-        }),
-        "error"
-      );
-    }
-  }
-
-  return (
-    <Drawer eyebrow={t("lib.promptDrawerEyebrow")} onClose={onClose} title={card.sourceName} wide>
-      <section className="prompt-invocation-identity">
-        <Icon name="info" />
-        <div>
-          <strong>{t("lib.promptNotSkill")}</strong>
-          <span>{t("lib.promptMethodBody")}</span>
-        </div>
-      </section>
-
-      <section className={`prompt-workspace-status ${card.workspaceComplete ? "complete" : "incomplete"}`}>
-        <Icon name={card.workspaceComplete ? "shield" : "alert"} />
-        <div>
-          <strong>
-            {card.workspaceComplete
-              ? t("lib.promptWorkspaceComplete")
-              : t("lib.promptWorkspaceIncomplete")}
-          </strong>
-          {!card.workspaceComplete && <span>{t("lib.promptReadd")}</span>}
-        </div>
-      </section>
-
-      <section className="prompt-invocation-section">
-        <h3>{t("lib.promptHosts")}</h3>
-        <div className="prompt-host-list">
-          {card.hosts.map(host => (
-            <article key={host.id}>
-              <span className={`status-dot ${host.deliveryStatus === "copy-paste-ready" ? "ok" : "warn"}`} />
-              <div>
-                <strong>{host.name}</strong>
-                <small>
-                  {host.deliveryStatus === "copy-paste-ready"
-                    ? t("lib.promptHostReady")
-                    : t("lib.promptHostNotReady")}
-                </small>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="prompt-invocation-section">
-        <h3>{t("lib.promptAssets")}</h3>
-        <div className="prompt-asset-list">
-          {card.assets.map(asset => (
-            <article key={asset.relativePath}>
-              <div>
-                <strong>{asset.name}</strong>
-                <small>{formatFileSize(asset.bytes)}</small>
-              </div>
-              <span>{asset.included ? t("lib.promptIncluded") : t("lib.promptReference")}</span>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      {card.warnings.length > 0 && (
-        <ul className="prompt-warning-list">
-          {card.warnings.map(warning => <li key={warning}>{warning}</li>)}
-        </ul>
-      )}
-
-      <section className="prompt-compose">
-        <label htmlFor="prompt-task">{promptCopy.task}</label>
-        <textarea id="prompt-task" value={task} onChange={event => setTask(event.target.value)} placeholder={promptCopy.placeholder} />
-        <details><summary>{promptCopy.preview}</summary><pre>{invocationText}</pre></details>
-      </section>
-      <PromptLauncherAction sourceId={card.sourceId} onCreated={onCreated} />
-
-      <footer>
-        <button className="secondary-action" onClick={() => void openSourceFolder()} type="button">
-          <Icon name="folder" /> {t("lib.promptOpenFolder")}
-        </button>
-        <span className="footer-spacer" />
-        <button className="primary-action" onClick={() => void copyInvocation()} type="button">
-          <Icon name="copy" /> {t("lib.promptCopy")}
-        </button>
-      </footer>
-    </Drawer>
-  );
-}
-
-const SKILL_FOLDER_COLOR_OPTIONS = ["cyan", "violet", "magenta", "amber", "emerald", "blue", "coral", "slate"];
-const SKILL_FOLDER_COLOR_HEX: Record<string, string> = {
-  cyan: "#16b8c4",
-  violet: "#7c6ee6",
-  magenta: "#cf4fa7",
-  amber: "#c88720",
-  emerald: "#20a874",
-  blue: "#338bd4",
-  coral: "#d85f4d",
-  slate: "#6f7f96"
-};
-
-function SkillFolderShelf({
-  disabled,
-  folders,
-  folderCounts,
-  onCreate,
-  onDelete,
-  onDropSkill,
-  onDropSource,
-  onMove,
-  onSelect,
-  onUpdate,
-  selectedId,
-  skills
-}: {
-  disabled: boolean;
-  folders: SkillFolderCard[];
-  folderCounts: Map<string, number>;
-  onCreate: (name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
-  onDelete: (folderId: string) => Promise<LegacySnapshot | null>;
-  onDropSkill: (skillId: string, folderId: string) => Promise<LegacySnapshot | null>;
-  onDropSource: (sourceId: string, folderId: string) => Promise<LegacySnapshot | null>;
-  onMove: (folderId: string, direction: "up" | "down") => Promise<LegacySnapshot | null>;
-  onSelect: (folderId: string) => void;
-  onUpdate: (folderId: string, name: string, note: string, color: string) => Promise<LegacySnapshot | null>;
-  selectedId: string;
-  skills: SkillCard[];
-}) {
-  const [editingId, setEditingId] = useState("");
-  const [showEditor, setShowEditor] = useState(false);
-  const [name, setName] = useState("");
-  const [note, setNote] = useState("");
-  const [color, setColor] = useState("cyan");
-  const [dropTarget, setDropTarget] = useState("");
-  const unfiledCount = folderCounts.get("unfiled") ?? 0;
-  const editingIndex = folders.findIndex(folder => folder.id === editingId);
-
-  function openCreate() {
-    setEditingId("");
-    setName("");
-    setNote("");
-    setColor("cyan");
-    setShowEditor(true);
-  }
-
-  function openEdit(folder: SkillFolderCard) {
-    setEditingId(folder.id);
-    setName(folder.name);
-    setNote(folder.note);
-    setColor(folder.color);
-    setShowEditor(true);
-  }
-
-  async function submitFolder() {
-    if (!name.trim()) return;
-    const result = editingId
-      ? await onUpdate(editingId, name, note, color)
-      : await onCreate(name, note, color);
-    if (result) setShowEditor(false);
-  }
-
-  function acceptDrop(event: DragEvent<HTMLElement>, folderId: string) {
-    if (disabled || !hasInternalSkillDrag(event.dataTransfer)) return;
-    event.preventDefault();
-    setDropTarget("");
-    const sourceId = event.dataTransfer.getData("application/x-ai-skillhub-source-id");
-    if (sourceId.trim()) {
-      void onDropSource(sourceId.trim(), folderId);
-      return;
-    }
-    const skillId = event.dataTransfer.getData("application/x-ai-skillhub-skill-id");
-    if (skillId.trim()) void onDropSkill(skillId.trim(), folderId);
-  }
-
-  const renderTarget = (id: string, label: string, count: number, tone: string, noteText = "") => {
-    const acceptsDrop = !disabled && id !== "all";
-    return (
-      <button
-        aria-pressed={selectedId === id}
-        className={`skill-folder-target tone-${tone}${selectedId === id ? " active" : ""}${dropTarget === id ? " drop-ready" : ""}`}
-        key={id}
-        onClick={() => onSelect(id)}
-        onDragEnter={acceptsDrop ? event => {
-          if (!hasInternalSkillDrag(event.dataTransfer)) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "move";
-          setDropTarget(id);
-        } : undefined}
-        onDragOver={acceptsDrop ? event => {
-          if (!hasInternalSkillDrag(event.dataTransfer)) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "move";
-        } : undefined}
-        onDragLeave={acceptsDrop ? () => setDropTarget(current => current === id ? "" : current) : undefined}
-        onDrop={acceptsDrop ? event => acceptDrop(event, id === "unfiled" ? "" : id) : undefined}
-        title={noteText || label}
-        type="button"
-      >
-        <Icon name="folder" />
-        <span><strong>{label}</strong>{noteText && <small>{noteText}</small>}</span>
-        <b>{count}</b>
-      </button>
-    );
-  };
-
-  return (
-    <section className="skill-folder-shelf glow-card" aria-label={t("folders.aria")}>
-      <header>
-        <div>
-          <span className="eyebrow"><Icon name="folder" /> {t("folders.eyebrow")}</span>
-          <p>{t("folders.subtitle")}</p>
-        </div>
-        <button className="ghost-action" disabled={disabled} onClick={openCreate} type="button">
-          <Icon name="add" /> {t("folders.new")}
-        </button>
-      </header>
-      <div className="skill-folder-strip">
-        {renderTarget("all", t("folders.all"), skills.filter(skill => !isRouterHubSkill(skill)).length, "slate")}
         {folders.map(folder => (
-          <div className="skill-folder-item" key={folder.id}>
-            {renderTarget(folder.id, folder.name, folderCounts.get(folder.id) ?? 0, folder.color, folder.note)}
-            <button
-              aria-label={t("folders.manage", { name: folder.name })}
-              className="skill-folder-manage"
-              disabled={disabled}
-              onClick={() => openEdit(folder)}
-              title={t("folders.manage", { name: folder.name })}
-              type="button"
-            ><Icon name="edit" /></button>
-          </div>
-        ))}
-        {renderTarget("unfiled", t("folders.unfiled"), unfiledCount, "slate")}
-      </div>
-      {showEditor && (
-        <div className="skill-folder-editor">
-          <label><span>{t("folders.name")}</span><input maxLength={48} onChange={event => setName(event.target.value)} value={name} /></label>
-          <label className="grow"><span>{t("folders.note")}</span><input maxLength={500} onChange={event => setNote(event.target.value)} value={note} /></label>
-          <fieldset>
-            <legend>{t("folders.color")}</legend>
-            {SKILL_FOLDER_COLOR_OPTIONS.map(value => (
-              <button
-                aria-label={t(`folders.color.${value}`)}
-                aria-pressed={color === value}
-                className={`folder-color-dot tone-${value}`}
-                key={value}
-                onClick={() => setColor(value)}
-                style={{ "--folder-tone": SKILL_FOLDER_COLOR_HEX[value] } as CSSProperties}
-                type="button"
-              />
-            ))}
-          </fieldset>
-          <div className="skill-folder-editor-actions">
-            {editingId && (
-              <>
-                <button
-                  className="ghost-action"
-                  disabled={disabled || editingIndex <= 0}
-                  onClick={() => void onMove(editingId, "up")}
-                  type="button"
-                >↑ {t("folders.moveUp")}</button>
-                <button
-                  className="ghost-action"
-                  disabled={disabled || editingIndex < 0 || editingIndex >= folders.length - 1}
-                  onClick={() => void onMove(editingId, "down")}
-                  type="button"
-                >↓ {t("folders.moveDown")}</button>
-                <button
-                  className="danger-action"
-                  disabled={disabled}
-                  onClick={() => {
-                    if (window.confirm(t("folders.confirmDelete", { name }))) {
-                      void onDelete(editingId).then(result => { if (result) setShowEditor(false); });
+          <FolderChip
+            active={folderId === folder.id}
+            color={folder.color}
+            count={chipCounts.get(folder.id) ?? 0}
+            dropId={folder.id}
+            key={folder.id}
+            label={folder.name}
+            menu={folderId === folder.id ? (
+              <MoreMenu
+                items={[
+                  { key: "rename", label: t("v33.folderRename"), onSelect: () => setFolderDialog({ mode: "rename", id: folder.id }) },
+                  {
+                    key: "delete",
+                    label: t("v33.folderDelete"),
+                    danger: true,
+                    onSelect: () => {
+                      void askConfirm({
+                        title: t("v33.folderDelete"),
+                        body: t("v33.folderDeleteConfirm", { name: folder.name }),
+                        confirmLabel: t("v33.folderDelete"),
+                        danger: true,
+                        testId: "folder-delete-dialog"
+                      }).then(ok => {
+                        if (!ok) return;
+                        void onDeleteFolder(folder.id).then(result => {
+                          if (result) onSelectFolder("all");
+                        });
+                      });
                     }
-                  }}
+                  }
+                ]}
+                label={t("v33.folderMenu")}
+              />
+            ) : null}
+            onClick={() => onSelectFolder(folder.id)}
+            over={drag?.over === folder.id}
+            testId={`folder-chip-${folder.id}`}
+          />
+        ))}
+        <button className="folder-chip add" data-testid="folder-chip-new" onClick={() => setFolderDialog({ mode: "create" })} type="button">
+          <Icon name="add" /> {t("v33.folderNew")}
+        </button>
+      </div>
+
+      {selected.size > 0 && (
+        <div className="lib-selection" data-testid="library-selection" role="toolbar">
+          <strong>{t("v33.selected", { n: selected.size })}</strong>
+          <BatchMenu
+            agents={managedAgents}
+            enable
+            label={t("v33.syncTo")}
+            onApply={changes => void onBatchTargets(changes).then(result => { if (result) setSelected(new Set()); })}
+            plan={agentId => batchFor(agentId, true)}
+            rows={selectedRows}
+          />
+          <BatchMenu
+            agents={managedAgents}
+            enable={false}
+            label={t("v33.removeFrom")}
+            onApply={changes => void onBatchTargets(changes).then(result => { if (result) setSelected(new Set()); })}
+            plan={agentId => batchFor(agentId, false)}
+            rows={selectedRows}
+          />
+          <button className="ghost-action small" onClick={() => setSelected(new Set())} type="button">{t("v33.clearSelection")}</button>
+        </div>
+      )}
+
+      {empty ? (
+        <section className="lib-empty" data-testid="library-empty">
+          <Icon name="library" />
+          <strong>{t("v33.emptyLibraryTitle")}</strong>
+          <span>{t("v33.emptyLibraryBody")}</span>
+          <button className="primary-action" onClick={onAdd} type="button"><Icon name="add" /> {t("v33.add")}</button>
+        </section>
+      ) : visibleRows.length === 0 ? (
+        <section className="lib-empty compact">
+          <strong>{loading ? t("v33.loadingLibrary") : t("v33.noMatch")}</strong>
+          {!loading && (
+            <button className="ghost-action small" onClick={() => { setFilter("all"); onSelectFolder("all"); }} type="button">{t("v33.showAll")}</button>
+          )}
+        </section>
+      ) : (
+        <div className="lib-list" ref={listRef} role="list" style={{ height: window_.total } as CSSProperties}>
+          <div style={{ height: window_.offsetTop }} aria-hidden="true" />
+          {items.slice(window_.start, window_.end).map(item => {
+            if (item.type === "row") {
+              return (
+                <LibraryRowView
+                  agents={agents}
+                  expanded={expanded.has(item.row.key)}
+                  key={item.key}
+                  onCopy={onCopySkill}
+                  onDragStart={startDrag}
+                  onMove={() => setFolderDialog({ mode: "move", row: item.row })}
+                  onOpen={tab => onOpenDetail(item.row.key, tab)}
+                  onRate={rating => item.row.source
+                    ? void onSetSourceRating(item.row.source, rating)
+                    : item.row.skill ? void onSetSkillRating(item.row.skill, rating) : undefined}
+                  onSelect={shift => toggleSelected(item.row, shift)}
+                  onTargetClick={target => onTargetClick(item.row, target)}
+                  onToggleExpanded={() => toggleExpanded(item.row.key)}
+                  row={item.row}
+                  selected={selected.has(item.row.key)}
+                />
+              );
+            }
+            if (item.type === "child") {
+              return (
+                <ChildRow
+                  busy={childBusy.has(item.skill.folderName)}
+                  key={item.key}
+                  onCopy={() => onCopySkill(item.skill)}
+                  onDragStart={event => startDrag(event, "skill", stableSkillClientId(item.skill), item.skill.name)}
+                  onRate={rating => void onSetSkillRating(item.skill, rating)}
+                  onToggle={() => void onSetChildEnabled(item.skill, !item.skill.enabled)}
+                  libraryOff={item.row.unit ? !item.row.unit.libraryEnabled && item.row.unit.libraryOnlyReason !== "no-enabled-skills" : false}
+                  skill={item.skill}
+                />
+              );
+            }
+            return (
+              <div className="lib-more-row" key={item.key} role="listitem" style={{ height: MORE_HEIGHT }}>
+                <button
+                  className="ghost-action small"
+                  onClick={() => setShowAllChildren(current => new Set(current).add(item.row.key))}
                   type="button"
                 >
-                  <Icon name="trash" /> {t("folders.delete")}
+                  {t("v33.showAllChildren", { n: item.row.skills.length })}
                 </button>
-              </>
-            )}
-            <button className="ghost-action" onClick={() => setShowEditor(false)} type="button">{t("common.cancel")}</button>
-            <button className="primary-action" disabled={disabled || !name.trim()} onClick={() => void submitFolder()} type="button">{t("common.save")}</button>
-          </div>
+              </div>
+            );
+          })}
+          <div style={{ height: window_.offsetBottom }} aria-hidden="true" />
         </div>
       )}
-    </section>
-  );
-}
 
-function SkillRow({
-  agentStatuses,
-  folders,
-  isParent,
-  loading,
-  onCopy,
-  onEdit,
-  onMoveFolder,
-  onRate,
-  onToggleEnabled,
-  skill
-}: {
-  agentStatuses: AgentSkillStatusCard[];
-  folders: SkillFolderCard[];
-  isParent: boolean;
-  loading: boolean;
-  onCopy: () => void;
-  onEdit: () => void;
-  onMoveFolder: (folderId: string) => void;
-  onRate: (rating: number) => void;
-  onToggleEnabled: () => void;
-  skill: SkillCard;
-}) {
-  return (
-    <article
-      className={`skill-row glow-card ${skill.health}${isParent ? " is-parent" : ""}`}
-      draggable={Boolean(!loading && skill.id && !skill.sourceId)}
-      onDragStart={event => {
-        if (loading || skill.sourceId) {
-          event.preventDefault();
-          return;
-        }
-        const id = skill.id ?? stableSkillClientId(skill);
-        event.dataTransfer.effectAllowed = "move";
-        event.dataTransfer.setData("application/x-ai-skillhub-skill-id", id);
-        event.dataTransfer.setData("text/plain", id);
-      }}
-    >
-      <div className={`skill-row-icon tone-${skillTone(skill.category)}`}>
-        <Icon name={skillIcon(skill.category)} />
-      </div>
-      <div className="skill-row-main">
-        <header>
-          <strong>{skill.name}</strong>
-          {!isParent && (
-            <button
-              aria-label={t("lib.copyName", { name: skillInvocationName(skill) })}
-              className="skill-name-copy"
-              onClick={() => void copyTextToClipboard(skillInvocationName(skill), t("toast.skillNameCopied"))}
-              title={t("lib.copyName", { name: skillInvocationName(skill) })}
-              type="button"
-            >
-              <Icon name="copy" />
-            </button>
-          )}
-          <span
-            className={`kind-chip ${isParent ? "router" : "child"}`}
-            title={isParent ? t("lib.parentTip") : t("lib.childTip")}
-          >
-            {isParent ? t("lib.parentSkill") : t("lib.childSkill")}
-          </span>
-          <span className={`status-badge ${skill.health}`}>
-            <span className={`status-dot ${statusDotClass(skill.health)}`} />
-            {skillStatusLabel(skill.health)}
-          </span>
-        </header>
-        <p>{localizedSkillDescription(skill, getLang())}</p>
-        <div className="skill-row-tags">
-          <span>{displayCategoryName(skill.category) || t("conf.uncategorized")}</span>
-          {(skill.tags ?? []).slice(0, 4).map(tag => (
-            <span className="tag-chip" key={tag}>{tag}</span>
-          ))}
-          {agentStatuses.slice(0, 3).map(status => (
-            <span
-              className={`agent-skill-pill ${agentSkillStatusTone(status.status)}`}
-              key={status.id}
-              title={status.summary}
-            >
-              {compactAgentName(status.agentName)}
-              <b>{agentSkillStatusLabel(status.status)}</b>
-            </span>
-          ))}
+      {drag && (
+        <div className="drag-ghost" style={{ left: drag.x + 14, top: drag.y + 10 } as CSSProperties} aria-hidden="true">
+          <Icon name="folder" /> {drag.label}
         </div>
-        {skill.note && <small className="skill-row-note">{t("lib.note")}：{skill.note}</small>}
-      </div>
-      <div className="skill-row-actions">
-        {skill.sourceId ? (
-          <span className="inherited-folder-chip" title={t("folders.inheritedTip")}>
-            <Icon name="folder" /> {skill.userFolderName || t("folders.unfiled")}
-          </span>
-        ) : (
-          <label className="skill-folder-select" title={t("folders.choose")}>
-            <Icon name="folder" />
-            <select
-              aria-label={t("folders.choose")}
-              disabled={loading}
-              onChange={event => onMoveFolder(event.target.value)}
-              value={skill.userFolderId ?? ""}
-            >
-              <option value="">{t("folders.unfiled")}</option>
-              {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-            </select>
-          </label>
-        )}
-        <SkillRating disabled={loading} onChange={onRate} rating={skill.rating ?? 0} skillName={skill.name} />
-        <ToggleSwitch
-          disabled={loading}
-          enabled={skill.enabled}
-          label={skill.enabled ? t("common.enabled") : t("common.disabled")}
-          onClick={onToggleEnabled}
-        />
-        <button className="icon-action" onClick={onCopy} title={t("lib.copy")} type="button">
-          <Icon name="copy" />
-        </button>
-        <button className="icon-action" onClick={onEdit} title={t("lib.edit")} type="button">
-          <Icon name="edit" />
-        </button>
-      </div>
-    </article>
-  );
-}
+      )}
 
-function SkillRating({
-  disabled,
-  onChange,
-  rating,
-  skillName
-}: {
-  disabled: boolean;
-  onChange: (rating: number) => void;
-  rating: number;
-  skillName: string;
-}) {
-  const normalizedRating = Math.max(0, Math.min(5, Math.round(rating)));
-  return (
-    <div
-      aria-label={t("rating.group", { name: skillName })}
-      className="skill-rating"
-      role="group"
-      title={normalizedRating > 0 ? t("rating.current", { n: normalizedRating }) : t("rating.unrated")}
-    >
-      {[1, 2, 3, 4, 5].map(value => (
-        <button
-          aria-label={t("rating.set", { n: value, name: skillName })}
-          aria-pressed={value <= normalizedRating}
-          className={value <= normalizedRating ? "filled" : ""}
-          disabled={disabled}
-          key={value}
-          onClick={() => onChange(value === normalizedRating ? 0 : value)}
-          title={value === normalizedRating ? t("rating.clear") : t("rating.setShort", { n: value })}
-          type="button"
-        >
-          <span aria-hidden="true">★</span>
-        </button>
-      ))}
+      {folderDialog && (
+        <FolderDialog
+          folders={folders}
+          mode={folderDialog}
+          onClose={() => setFolderDialog(null)}
+          onCreate={(name, color) => onCreateFolder(name, "", color).then(result => {
+            if (result) setFolderDialog(null);
+          })}
+          onMove={destination => {
+            if (folderDialog.mode !== "move") return;
+            const row = folderDialog.row;
+            const action = row.source
+              ? onMoveSourceToFolder(row.source.id, destination)
+              : row.skill ? onMoveSkillToFolder(stableSkillClientId(row.skill), destination) : Promise.resolve(null);
+            void action.then(() => setFolderDialog(null));
+          }}
+          onRename={(id, name, color) => {
+            const folder = folders.find(item => item.id === id);
+            void onUpdateFolder(id, name, folder?.note ?? "", color).then(result => {
+              if (result) setFolderDialog(null);
+            });
+          }}
+        />
+      )}
+      {confirmNode}
     </div>
-  );
-}
-
-function SkillEditPanel({
-  disabled,
-  draft,
-  folders,
-  onClose,
-  onMoveFolder,
-  onSave,
-  skill
-}: {
-  disabled: boolean;
-  draft?: SkillDraft;
-  folders: SkillFolderCard[];
-  onClose: () => void;
-  onMoveFolder: (folderId: string) => Promise<LegacySnapshot | null>;
-  onSave: (draft: SkillDraft) => void;
-  skill: SkillCard;
-}) {
-  const [name, setName] = useState(draft?.name ?? skill.name);
-  const [category, setCategory] = useState(draft?.category ?? skill.category);
-  const [description, setDescription] = useState(draft?.description ?? skill.description);
-  const [note, setNote] = useState(draft?.note ?? skill.note ?? "");
-  const [tags, setTags] = useState(draft?.tags ?? tagInputValue(skill.tags ?? []));
-
-  useEffect(() => {
-    setName(draft?.name ?? skill.name);
-    setCategory(draft?.category ?? skill.category);
-    setDescription(draft?.description ?? skill.description);
-    setNote(draft?.note ?? skill.note ?? "");
-    setTags(draft?.tags ?? tagInputValue(skill.tags ?? []));
-  }, [draft, skill.folderName]);
-
-  return (
-    <Drawer onClose={onClose} eyebrow={t("skillEditor.eyebrow")} title={skill.name}>
-      <label>
-        {skill.sourceId ? t("folders.sourceTreeFolder") : t("folders.choose")}
-        <select
-          disabled={disabled}
-          onChange={event => void onMoveFolder(event.target.value)}
-          value={skill.userFolderId ?? ""}
-        >
-          <option value="">{t("folders.unfiled")}</option>
-          {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-        </select>
-        {skill.sourceId && <small className="drawer-field-hint">{t("folders.inheritedTip")}</small>}
-      </label>
-      <label>
-        {t("skillEditor.name")}
-        <input disabled={disabled} onChange={event => setName(event.target.value)} value={name} />
-      </label>
-      <label>
-        {t("skillEditor.category")}
-        <input disabled={disabled} onChange={event => setCategory(event.target.value)} value={category} />
-      </label>
-      <label>
-        {t("skillEditor.tags")}
-        <input
-          disabled={disabled}
-          onChange={event => setTags(event.target.value)}
-          placeholder={t("skillEditor.tagsPlaceholder")}
-          value={tags}
-        />
-      </label>
-      <label>
-        {t("skillEditor.description")}
-        <textarea disabled={disabled} onChange={event => setDescription(event.target.value)} rows={4} value={description} />
-      </label>
-      <label>
-        {t("skillEditor.note")}
-        <textarea
-          disabled={disabled}
-          onChange={event => setNote(event.target.value)}
-          placeholder={t("skillEditor.notePlaceholder")}
-          rows={3}
-          value={note}
-        />
-      </label>
-      <footer>
-        <button className="secondary-action" onClick={onClose} type="button">{t("common.cancel")}</button>
-        <button
-          className="primary-action"
-          disabled={disabled}
-          onClick={() => onSave({ category, description, name, note, tags })}
-          type="button"
-        >
-          {t("common.save")}
-        </button>
-      </footer>
-    </Drawer>
-  );
-}
-
-function SourceEditPanel({
-  disabled,
-  draft,
-  folders,
-  governance,
-  onClose,
-  onDelete,
-  onOpenChildren,
-  onMoveFolder,
-  onRefreshVersion,
-  onRollbackVersion,
-  onSave,
-  onSetPinned,
-  popularity,
-  source,
-  sourceSkills
-}: {
-  disabled: boolean;
-  draft?: SourceDraft;
-  folders: SkillFolderCard[];
-  governance?: SourceGovernanceCard;
-  onClose: () => void;
-  onDelete: () => void;
-  onOpenChildren: () => void;
-  onMoveFolder: (folderId: string) => Promise<LegacySnapshot | null>;
-  onRefreshVersion: () => void;
-  onRollbackVersion: () => void;
-  onSave: (draft: SourceDraft) => Promise<void>;
-  onSetPinned: (pinned: boolean) => void;
-  popularity?: SourcePopularityCard;
-  source: SourceCard;
-  sourceSkills: SkillCard[];
-}) {
-  const [name, setName] = useState(draft?.name ?? source.name);
-  const [category, setCategory] = useState(draft?.category ?? source.categoryId);
-  const [sourceType, setSourceType] = useState<SourceCard["sourceType"]>(draft?.sourceType ?? source.sourceType);
-  const [note, setNote] = useState(draft?.note ?? source.note ?? "");
-  const [enabled, setEnabled] = useState(draft?.enabled ?? source.enabled);
-  const [tags, setTags] = useState(draft?.tags ?? tagInputValue(source.tags ?? []));
-  const [saving, setSaving] = useState(false);
-  const formDisabled = disabled || saving;
-  const totalSkillCount = Math.max(source.skillCount ?? 0, sourceSkills.length);
-  const singleRootSkill = sourceSkills.length === 1;
-  const routerSkills = singleRootSkill ? [] : sourceSkills.filter(isRouterHubSkill);
-  const childSkills = singleRootSkill ? sourceSkills : sourceSkills.filter(skill => !isRouterHubSkill(skill));
-  const mapSkills = childSkills.length > 0 ? childSkills : sourceSkills;
-  const projectAddress = source.url || source.localPath || t("srcEditor.noAddress");
-
-  useEffect(() => {
-    setName(draft?.name ?? source.name);
-    setCategory(draft?.category ?? source.categoryId);
-    setSourceType(draft?.sourceType ?? source.sourceType);
-    setNote(draft?.note ?? source.note ?? "");
-    setEnabled(draft?.enabled ?? source.enabled);
-    setTags(draft?.tags ?? tagInputValue(source.tags ?? []));
-    setSaving(false);
-  }, [draft, source.id]);
-
-  async function submit() {
-    if (formDisabled) return;
-    setSaving(true);
-    try {
-      await onSave({ category, enabled, name, note, sourceType, tags });
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Drawer onClose={onClose} eyebrow={t("srcEditor.eyebrow")} title={source.name} wide>
-      <label className="source-folder-drawer-field">
-        {t("folders.sourceTreeFolder")}
-        <select disabled={formDisabled} onChange={event => void onMoveFolder(event.target.value)} value={source.userFolderId ?? ""}>
-          <option value="">{t("folders.unfiled")}</option>
-          {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-        </select>
-        <small className="drawer-field-hint">{t("folders.sourceTreeHint")}</small>
-      </label>
-      <div className="source-detail-address">
-        <span>{t("srcEditor.address")}</span>
-        <code title={projectAddress}>{projectAddress}</code>
-      </div>
-      <div className="source-detail-metrics">
-        <span>
-          <b>{totalSkillCount}</b>
-          <small>{t("srcEditor.skills")}</small>
-        </span>
-        <span>
-          <b>{popularity?.stars ? formatCompactNumber(popularity.stars) : t("srcEditor.notRefreshed")}</b>
-          <small>{t("srcEditor.stars")}</small>
-        </span>
-        <span>
-          <b>{popularity?.localTotalCount ?? 0}</b>
-          <small>{t("srcEditor.calls")}</small>
-        </span>
-      </div>
-      <section className="source-governance-panel" aria-label={t("governance.title")}>
-        <header>
-          <div>
-            <span>{t("governance.eyebrow")}</span>
-            <strong>
-              {governance?.supportStatus === "git"
-                ? governance.pinned
-                  ? t("governance.pinned")
-                  : t("governance.autoUpdate")
-                : t("governance.localOnly")}
-            </strong>
-          </div>
-          {governance?.diffSource === "cached" && <em>{t("governance.cached")}</em>}
-        </header>
-        {governance?.supportStatus === "git" ? (
-          <>
-            <dl className="source-governance-revisions">
-              <div>
-                <dt>{t("governance.current")}</dt>
-                <dd>{shortRevision(governance.currentRevision) || "—"}</dd>
-              </div>
-              <div>
-                <dt>{t("governance.upstream")}</dt>
-                <dd>{shortRevision(governance.remoteRevision) || "—"}</dd>
-              </div>
-              <div>
-                <dt>{t("governance.diff")}</dt>
-                <dd>
-                  {t("governance.diffValue", {
-                    files: governance.changedFiles,
-                    additions: governance.additions,
-                    deletions: governance.deletions
-                  })}
-                </dd>
-              </div>
-              <div>
-                <dt>{t("governance.backups")}</dt>
-                <dd>{governance.backupCount}</dd>
-              </div>
-            </dl>
-            {governance.trackingBranch && (
-              <p className="source-governance-branch">
-                {t("governance.tracking", { branch: governance.trackingBranch })}
-              </p>
-            )}
-            {governance.remoteDefaultBranch
-              && governance.trackingBranch
-              && !governance.trackingBranch.endsWith(`/${governance.remoteDefaultBranch}`)
-              && governance.trackingBranch !== governance.remoteDefaultBranch && (
-              <p className="source-governance-branch-warning" role="note">
-                {t("governance.defaultBranchChanged", {
-                  remote: governance.remoteDefaultBranch,
-                  branch: governance.trackingBranch
-                })}
-              </p>
-            )}
-            {governance.remoteSummary && <p>{governance.remoteSummary}</p>}
-            <div className="source-governance-actions">
-              <button className="ghost-action small" disabled={formDisabled} onClick={onRefreshVersion} type="button">
-                <Icon name="refresh" /> {t("governance.refresh")}
-              </button>
-              <button
-                className={governance.pinned ? "ghost-action small active" : "ghost-action small"}
-                disabled={formDisabled}
-                onClick={() => onSetPinned(!governance.pinned)}
-                type="button"
-              >
-                <Icon name="shield" />
-                {governance.pinned ? t("governance.unpin") : t("governance.pin")}
-              </button>
-              <button
-                className="ghost-action small"
-                disabled={formDisabled || !governance.canRollback}
-                onClick={onRollbackVersion}
-                title={
-                  governance.canRollback
-                    ? t("governance.rollbackTip", {
-                        revision: shortRevision(governance.latestBackupRevision)
-                      })
-                    : t("governance.noRollback")
-                }
-                type="button"
-              >
-                <Icon name="snapshots" /> {t("governance.rollback")}
-              </button>
-            </div>
-          </>
-        ) : (
-          <p>{t("governance.localExplanation")}</p>
-        )}
-      </section>
-      <div className="source-detail-skill-map">
-        <div className="source-detail-section-title">
-          <strong>{t("srcEditor.map")}</strong>
-          <span>{t("srcEditor.mapCount", { total: totalSkillCount, routers: routerSkills.length, children: childSkills.length })}</span>
-          <button className="ghost-action small" onClick={onOpenChildren} type="button">
-            <Icon name="chevron" />
-          </button>
-        </div>
-        {mapSkills.length === 0 && (
-          <p className="source-detail-muted">
-            {source.sourceType === "prompt" ? t("lib.promptOnly") : t("srcEditor.noChildren")}
-          </p>
-        )}
-        {mapSkills.slice(0, 10).map(skill => (
-          <article className="source-detail-child" key={skill.folderName}>
-            <strong>{skill.name}</strong>
-            <span>{localizedSkillDescription(skill, getLang()) || displayCategoryName(skill.category)}</span>
-          </article>
-        ))}
-      </div>
-      <label>
-        {t("srcEditor.name")}
-        <input disabled={formDisabled} onChange={event => setName(event.target.value)} value={name} />
-      </label>
-      <label>
-        {t("srcEditor.type")}
-        <select disabled={formDisabled} onChange={event => setSourceType(event.target.value as SourceCard["sourceType"])} value={sourceType}>
-          <option value="skill">{t("type.skill")}</option>
-          <option value="prompt">{t("type.prompt")}</option>
-          <option value="mixed">{t("type.mixed")}</option>
-        </select>
-      </label>
-      <label>
-        {t("srcEditor.category")}
-        <input disabled={formDisabled} onChange={event => setCategory(event.target.value)} value={category} />
-      </label>
-      <label>
-        {t("srcEditor.tags")}
-        <input
-          disabled={formDisabled}
-          onChange={event => setTags(event.target.value)}
-          placeholder={t("srcEditor.tagsPlaceholder")}
-          value={tags}
-        />
-      </label>
-      <label>
-        {t("srcEditor.note")}
-        <textarea
-          disabled={formDisabled}
-          onChange={event => setNote(event.target.value)}
-          placeholder={t("srcEditor.notePlaceholder")}
-          rows={3}
-          value={note}
-        />
-      </label>
-      <div className="source-editor-toggle">
-        <div>
-          <strong>{t("srcEditor.enable")}</strong>
-          <span>{t("srcEditor.enableHint")}</span>
-        </div>
-        <ToggleSwitch
-          disabled={formDisabled}
-          enabled={enabled}
-          label={enabled ? t("common.enabled") : t("common.disabled")}
-          onClick={() => setEnabled(value => !value)}
-        />
-      </div>
-      <footer>
-        <button className="danger-action" disabled={formDisabled} onClick={onDelete} type="button">
-          <Icon name="trash" /> {t("srcEditor.delete")}
-        </button>
-        <span className="footer-spacer" />
-        <button className="secondary-action" onClick={onClose} type="button">{t("common.cancel")}</button>
-        <button
-          className="primary-action"
-          disabled={formDisabled}
-          onClick={() => void submit()}
-          type="button"
-        >
-          {saving ? `${t("common.save")}…` : t("common.save")}
-        </button>
-      </footer>
-    </Drawer>
   );
 }
 
 /* =============================================================
-   Router hub + conflict selector (used inside Library maintenance)
+   Window over the flat list (rows + expanded children)
    ============================================================= */
 
-function RouterHubPanel({
-  disabled,
-  realWritesEnabled
-}: {
-  disabled: boolean;
-  realWritesEnabled: boolean;
-}) {
-  const [report, setReport] = useState<RouterHubReport | null>(null);
-  const [pending, setPending] = useState<"" | "plan" | "commit">("");
-  const [error, setError] = useState("");
-  const runtimeAvailable = hasTauriRuntime();
+function itemHeight(item: ListItem) {
+  return item.type === "row" ? ROW_HEIGHT : item.type === "child" ? CHILD_HEIGHT : MORE_HEIGHT;
+}
 
-  async function run(commit: boolean) {
-    if (!runtimeAvailable) {
-      setError(t("router.browserBlocked"));
+function useWindow(items: ListItem[], listRef: React.RefObject<HTMLDivElement | null>) {
+  const offsets = useMemo(() => {
+    const result = new Array<number>(items.length + 1);
+    result[0] = 0;
+    for (let index = 0; index < items.length; index += 1) result[index + 1] = result[index] + itemHeight(items[index]);
+    return result;
+  }, [items]);
+  const total = offsets[items.length] ?? 0;
+  const windowed = items.length > WINDOW_THRESHOLD;
+  const [range, setRange] = useState({ start: 0, end: windowed ? Math.min(items.length, 30) : items.length });
+
+  useLayoutEffect(() => {
+    if (!windowed) {
+      setRange({ start: 0, end: items.length });
       return;
     }
-    setPending(commit ? "commit" : "plan");
-    setError("");
-    try {
-      const next = await invoke<RouterHubReport>("regenerate_router_hubs", { commit });
-      setReport(next);
-      showUiToast(
-        commit
-          ? routerHubCommitMessage(next)
-          : t("router.toastDryRun", {
-              collections: next.totalCollections,
-              duplicates: next.duplicateChildren.length
-            }),
-        "ok"
-      );
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : String(caught);
-      setError(message);
-      showUiToast(t("router.toastFailed", { message }), "error");
-    } finally {
-      setPending("");
-    }
-  }
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const host = listRef.current;
+      if (!host) return;
+      const top = host.getBoundingClientRect().top;
+      const from = Math.max(0, -top - OVERSCAN_PX);
+      const to = Math.max(0, -top + window.innerHeight + OVERSCAN_PX);
+      const start = Math.max(0, upperBound(offsets, from) - 1);
+      const end = Math.min(items.length, upperBound(offsets, to));
+      setRange(current => (current.start === start && current.end === end ? current : { start, end }));
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [offsets, windowed, items.length, listRef]);
 
+  const start = Math.min(range.start, items.length);
+  const end = Math.min(Math.max(range.end, start), items.length);
+  return { start, end, total, offsetTop: offsets[start] ?? 0, offsetBottom: total - (offsets[end] ?? total) };
+}
+
+function upperBound(offsets: number[], value: number) {
+  let low = 0;
+  let high = offsets.length - 1;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (offsets[mid] <= value) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+/* =============================================================
+   Rows
+   ============================================================= */
+
+function ownerOf(row: LibraryRow) {
+  const url = row.source?.url ?? "";
+  const match = url.match(/github\.com[/:]([^/]+)\//i);
+  if (match) return match[1];
+  if (row.kind === "standalone") return t("v33.standalone");
+  return url ? "" : t("v33.local");
+}
+
+function stripRouterMarker(text: string) {
+  return text.replace(/\[ROUTER-HUB\]/gi, "").replace(/\s+/g, " ").trim();
+}
+
+export function rowSummary(row: LibraryRow) {
+  const lang = getLang();
+  if (row.skill) return stripRouterMarker(localizedSkillDescription(row.skill, lang) || row.skill.description) || displayCategoryName(row.skill.category);
+  if (row.source?.usageGuide) return row.source.usageGuide;
+  // A generated parent entry only describes routing; an upstream umbrella SKILL.md is real content.
+  const parent = row.ownedSkills.find(skill => isRouterHubSkill(skill) && row.ownedSkills.length > 1);
+  const parentText = parent ? stripRouterMarker(localizedSkillDescription(parent, lang) || parent.description) : "";
+  if (parentText && !/路由|router|入口集合|parent entry/i.test(parentText)) return parentText;
+  const first = row.skills[0];
+  const firstText = first ? stripRouterMarker(localizedSkillDescription(first, lang) || first.description) : "";
+  return firstText || (row.source ? displayCategoryName(row.source.categoryId) : "");
+}
+
+export function rowName(row: LibraryRow) {
+  return row.source?.name ?? row.skill?.name ?? row.key;
+}
+
+/** The skill whose invocation name the "复制调用名" action copies: the parent entry or the only skill. */
+export function rowEntrySkill(row: LibraryRow): SkillCard | null {
+  if (row.skill) return row.skill;
+  if (row.skills.length === 1) return row.skills[0];
+  return row.ownedSkills.find(skill => isRouterHubSkill(skill)) ?? null;
+}
+
+function avatarHue(name: string) {
+  let hash = 0;
+  for (let index = 0; index < name.length; index += 1) hash = (hash * 31 + name.charCodeAt(index)) | 0;
+  return Math.abs(hash) % 360;
+}
+
+function LibraryRowView({
+  agents,
+  expanded,
+  onCopy,
+  onDragStart,
+  onMove,
+  onOpen,
+  onRate,
+  onSelect,
+  onTargetClick,
+  onToggleExpanded,
+  row,
+  selected
+}: {
+  agents: SkillAgent[];
+  expanded: boolean;
+  onCopy: (skill: SkillCard) => void;
+  onDragStart: (event: ReactPointerEvent, kind: DragState["kind"], id: string, label: string) => void;
+  onMove: () => void;
+  onOpen: (tab?: "overview" | "versions" | "settings") => void;
+  onRate: (rating: number) => void;
+  onSelect: (shift: boolean) => void;
+  onTargetClick: (target: SkillTarget) => void;
+  onToggleExpanded: () => void;
+  row: LibraryRow;
+  selected: boolean;
+}) {
+  const name = rowName(row);
+  const state = rowFilterState(row);
+  const entry = rowEntrySkill(row);
+  const targets = orderTargetsForRow(row.targets, agents);
+  const shown = targets.slice(0, MAX_ICONS);
+  const hidden = targets.length - shown.length;
+  const rating = row.source?.rating ?? row.skill?.rating ?? 0;
+  const expandable = row.kind === "pack" && row.skills.length > 1;
+  const dragKind: DragState["kind"] = row.source ? "source" : "skill";
+  const dragId = row.source ? row.source.id : row.skill ? stableSkillClientId(row.skill) : row.key;
   return (
-    <section className="router-hub-panel glow-card">
-      <header className="panel-head">
-        <div>
-          <span className="eyebrow">{t("router.eyebrow")}</span>
-          <h3>{t("router.title")}</h3>
-          <p>{t("router.subtitle")}</p>
+    <div
+      className={`lib-row kind-${row.kind}${selected ? " selected" : ""}${state.problem ? " has-problem" : ""}`}
+      data-testid={`library-row-${row.key}`}
+      role="listitem"
+      style={{ height: ROW_HEIGHT }}
+    >
+      <span className="lib-grip" onPointerDown={event => onDragStart(event, dragKind, dragId, name)} title={t("v33.dragToFolder")} aria-hidden="true">
+        <Icon name="grip" />
+      </span>
+      <input
+        aria-label={t("v33.selectRow", { name })}
+        checked={selected}
+        className="lib-check"
+        onChange={() => undefined}
+        onClick={event => onSelect(event.shiftKey)}
+        type="checkbox"
+      />
+      <button
+        aria-expanded={expandable ? expanded : undefined}
+        aria-label={expandable ? (expanded ? t("v33.collapse") : t("v33.expand")) : undefined}
+        className={`lib-chevron${expanded ? " open" : ""}`}
+        disabled={!expandable}
+        onClick={onToggleExpanded}
+        type="button"
+      >
+        {expandable && <Icon name="chevron" />}
+      </button>
+      <button className="lib-main" onClick={() => onOpen()} type="button">
+        <span className="lib-avatar" style={{ "--avatar-hue": avatarHue(name) } as CSSProperties} aria-hidden="true">
+          {name.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 1).toUpperCase() || "?"}
+        </span>
+        <span className="lib-title">
+          <strong>{name}</strong>
+          <small>{ownerOf(row)}</small>
+        </span>
+        <span className="lib-summary">{rowSummary(row)}</span>
+      </button>
+      <span className="lib-badges">
+        {row.kind === "prompt" ? (
+          <span className="chip chip-prompt">{t("v33.promptChip")}</span>
+        ) : row.kind === "empty" ? (
+          <span className="chip chip-warn">{t("v33.noSkillsChip")}</span>
+        ) : (
+          <span className="chip">{t("v33.skillsInPack", { n: row.skills.length })}</span>
+        )}
+        {state.update && <span className="chip chip-update">{t("v33.updateChip")}</span>}
+        {state.problem && <span className="chip chip-problem">{t("v33.problemChip")}</span>}
+      </span>
+      <StarRating compact label={t("v33.rating")} onChange={onRate} value={rating} />
+      <span className="target-icons" aria-label={t("v33.syncedTo")}>
+        {shown.map((target, index) => {
+          const agent = agents.find(item => item.id === target.agentId);
+          const view = targetIconView(target, row.unit?.libraryOnlyReason ?? "");
+          const linkedNext = target.agentId === "codex" && shown[index + 1]?.agentId === "coze";
+          const tip = t(view.tooltipKey, { tool: agent?.name ?? target.agentId, message: targetErrorText(target.error) });
+          return (
+            <span className="target-icon-wrap" key={target.agentId}>
+              <button
+                aria-label={tip}
+                className={`target-icon look-${view.look}`}
+                data-status={target.status}
+                data-testid={`target-icon-${row.key}-${target.agentId}`}
+                disabled={view.disabled}
+                onClick={event => {
+                  event.stopPropagation();
+                  onTargetClick(target);
+                }}
+                title={tip}
+                type="button"
+              >
+                <AgentGlyph agentId={target.agentId} name={agent?.name} size="sm" />
+                {(view.look === "spin") && <i className="target-spin" aria-hidden="true" />}
+                {view.look === "paused" && <i className="target-badge pause" aria-hidden="true"><Icon name="pause" /></i>}
+                {view.look === "red" && <i className="target-badge red" aria-hidden="true" />}
+                {view.look === "blocked" && <i className="target-badge ban" aria-hidden="true"><Icon name="ban" /></i>}
+              </button>
+              {linkedNext && <i className="target-link" title={t("v33.sharedFolder")} aria-hidden="true"><Icon name="link" /></i>}
+            </span>
+          );
+        })}
+        {hidden > 0 && (
+          <button className="target-more" onClick={() => onOpen("overview")} title={t("v33.moreTools", { n: hidden })} type="button">+{hidden}</button>
+        )}
+      </span>
+      <MoreMenu
+        items={[
+          { key: "open", label: t("v33.details"), onSelect: () => onOpen("overview"), icon: "info" },
+          ...(entry ? [{ key: "copy", label: t("v33.copyInvocation"), onSelect: () => void copyTextToClipboard(skillInvocationName(entry), t("toast.skillNameCopied")), icon: "copy" as const }] : []),
+          { key: "move", label: t("v33.moveToFolder"), onSelect: onMove, icon: "folder" },
+          { key: "settings", label: t("v33.editSettings"), onSelect: () => onOpen("settings"), icon: "edit" }
+        ]}
+        label={t("v33.rowMenu", { name })}
+        testId={`library-row-menu-${row.key}`}
+      />
+    </div>
+  );
+}
+
+function ChildRow({
+  busy,
+  libraryOff,
+  onCopy,
+  onDragStart,
+  onRate,
+  onToggle,
+  skill
+}: {
+  busy: boolean;
+  libraryOff: boolean;
+  onCopy: () => void;
+  onDragStart: (event: ReactPointerEvent) => void;
+  onRate: (rating: number) => void;
+  onToggle: () => void;
+  skill: SkillCard;
+}) {
+  const summary = stripRouterMarker(localizedSkillDescription(skill, getLang()) || skill.description) || displayCategoryName(skill.category);
+  const tags = Array.from(new Set((skill.tags ?? []).map(tag => tag.trim()).filter(Boolean))).slice(0, 2);
+  return (
+    <div className={`lib-child${skill.enabled ? "" : " off"}`} data-testid={`library-child-${skill.folderName}`} role="listitem" style={{ height: CHILD_HEIGHT }}>
+      <span className="lib-grip" onPointerDown={onDragStart} title={t("v33.dragToFolder")} aria-hidden="true"><Icon name="grip" /></span>
+      <span className="lib-child-name">
+        <strong>{skill.name}</strong>
+        {skill.health === "error" && <span className="chip chip-problem">{t("v33.problemChip")}</span>}
+      </span>
+      <span className="lib-child-summary">{summary}{tags.length > 0 && <em>{tags.join(" · ")}</em>}</span>
+      <span className="lib-child-stars"><StarRating compact label={t("v33.rating")} onChange={onRate} value={skill.rating} /></span>
+      <button className="icon-action" onClick={() => void copyTextToClipboard(skillInvocationName(skill), t("toast.skillNameCopied"))} title={t("v33.copyInvocation")} aria-label={t("v33.copyInvocationOf", { name: skillInvocationName(skill) })} type="button">
+        <Icon name="copy" />
+      </button>
+      <ToggleSwitch
+        busy={busy}
+        disabled={busy || libraryOff}
+        enabled={skill.enabled}
+        label={skill.enabled ? t("v33.childOn", { name: skill.name }) : t("v33.childOff", { name: skill.name })}
+        onClick={onToggle}
+        showLabel={false}
+        testId={`child-switch-${skill.folderName}`}
+      />
+    </div>
+  );
+}
+
+function FolderChip({
+  active,
+  color,
+  count,
+  dropId,
+  label,
+  menu,
+  onClick,
+  over,
+  testId
+}: {
+  active: boolean;
+  color?: string;
+  count: number;
+  dropId: string;
+  label: string;
+  menu?: React.ReactNode;
+  onClick: () => void;
+  over: boolean;
+  testId: string;
+}) {
+  return (
+    <span className={`folder-chip-wrap${active ? " active" : ""}${over ? " drop-over" : ""}`} data-folder-drop={dropId}>
+      <button aria-pressed={active} className="folder-chip" data-count={count} data-testid={testId} onClick={onClick} type="button">
+        {color && <i className={`folder-dot color-${color}`} aria-hidden="true" />}
+        <span>{label}</span>
+        <em>{count}</em>
+      </button>
+      {menu}
+    </span>
+  );
+}
+
+function BatchMenu({
+  agents,
+  enable,
+  label,
+  onApply,
+  plan,
+  rows
+}: {
+  agents: SkillAgent[];
+  enable: boolean;
+  label: string;
+  onApply: (changes: TargetChange[]) => void;
+  plan: (agentId: AgentId) => TargetChange[];
+  rows: LibraryRow[];
+}) {
+  const [open, setOpen] = useState(false);
+  const host = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      if (!host.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+  return (
+    <div className={`batch-menu${open ? " open" : ""}`} ref={host}>
+      <button aria-expanded={open} className="ghost-action small" data-testid={enable ? "batch-sync-to" : "batch-remove-from"} onClick={() => setOpen(value => !value)} type="button">
+        {label} <Icon name="chevron" className="rotate-90" />
+      </button>
+      {open && (
+        <div className="more-list" role="menu">
+          {agents.length === 0 && <span className="more-empty">{t("v33.noManagedTools")}</span>}
+          {agents.map(agent => {
+            const changes = plan(agent.id);
+            const synced = rows.filter(row => row.targets.some(target => target.agentId === agent.id && target.desired)).length;
+            return (
+              <button
+                disabled={changes.length === 0}
+                key={agent.id}
+                onClick={() => {
+                  setOpen(false);
+                  onApply(changes);
+                }}
+                role="menuitem"
+                type="button"
+              >
+                <AgentGlyph agentId={agent.id} name={agent.name} size="sm" />
+                <span>{agent.name}</span>
+                <small>{t("v33.batchCoverage", { x: synced, n: rows.length })}</small>
+                <b>{changes.length > 0 ? t(enable ? "v33.batchSyncN" : "v33.batchRemoveN", { n: changes.length }) : t("v33.batchNothing")}</b>
+              </button>
+            );
+          })}
         </div>
-        <div className="panel-head-actions">
-          <button
-            className="ghost-action"
-            disabled={disabled || pending !== ""}
-            onClick={() => void run(false)}
-            type="button"
-          >
-            {pending === "plan" ? t("router.previewing") : t("router.preview")}
-          </button>
+      )}
+    </div>
+  );
+}
+
+function FolderDialog({
+  folders,
+  mode,
+  onClose,
+  onCreate,
+  onMove,
+  onRename
+}: {
+  folders: SkillFolderCard[];
+  mode: { mode: "create" } | { mode: "move"; row: LibraryRow } | { mode: "rename"; id: string };
+  onClose: () => void;
+  onCreate: (name: string, color: string) => Promise<void>;
+  onMove: (folderId: string) => void;
+  onRename: (id: string, name: string, color: string) => void;
+}) {
+  const existing = mode.mode === "rename" ? folders.find(folder => folder.id === mode.id) : null;
+  const [name, setName] = useState(existing?.name ?? "");
+  const [color, setColor] = useState(existing?.color ?? FOLDER_COLORS[folders.length % FOLDER_COLORS.length]);
+  if (mode.mode === "move") {
+    const current = mode.row.folderId;
+    return (
+      <Dialog onClose={onClose} title={t("v33.moveToFolderOf", { name: rowName(mode.row) })} testId="move-folder-dialog">
+        <div className="folder-pick-list">
+          <button className={current === "" ? "active" : ""} data-autofocus="" onClick={() => onMove("")} type="button">{t("v33.folderUnfiled")}</button>
+          {folders.map(folder => (
+            <button className={current === folder.id ? "active" : ""} key={folder.id} onClick={() => onMove(folder.id)} type="button">
+              <i className={`folder-dot color-${folder.color}`} aria-hidden="true" /> {folder.name}
+            </button>
+          ))}
+        </div>
+      </Dialog>
+    );
+  }
+  const valid = name.trim().length > 0 && name.trim().length <= 48;
+  return (
+    <Dialog
+      footer={
+        <>
+          <button className="secondary-action" onClick={onClose} type="button">{t("common.cancel")}</button>
           <button
             className="primary-action"
-            disabled={disabled || pending !== "" || !realWritesEnabled || !runtimeAvailable}
-            onClick={() => void run(true)}
-            title={
-              !realWritesEnabled ? t("router.needAuth") : !runtimeAvailable ? t("router.previewOnly") : t("router.runNow")
-            }
+            disabled={!valid}
+            onClick={() => (mode.mode === "create" ? void onCreate(name.trim(), color) : onRename(mode.id, name.trim(), color))}
             type="button"
           >
-            {pending === "commit" ? t("router.rebuilding") : t("router.rebuild")}
-          </button>
-        </div>
-      </header>
-
-      {!report && !error && <p className="router-hub-hint">{t("router.hint")}</p>}
-      {error && <div className="router-hub-error">{error}</div>}
-
-      {report && (
-        <>
-          <div className="router-hub-stats">
-            <span className="router-hub-stat">
-              <strong>{report.totalCollections}</strong>
-              <em>{t("router.collections")}</em>
-            </span>
-            <span className="router-hub-stat ok">
-              <strong>{report.writtenCount}</strong>
-              <em>{report.committed ? t("router.written") : t("router.pendingWrite")}</em>
-            </span>
-            <span className="router-hub-stat">
-              <strong>{routerHubUnchangedCount(report)}</strong>
-              <em>{t("router.upToDate")}</em>
-            </span>
-            <span className="router-hub-stat">
-              <strong>{report.skippedCount}</strong>
-              <em>{t("router.skipped")}</em>
-            </span>
-            <span className="router-hub-stat warn">
-              <strong>{report.duplicateChildren.length}</strong>
-              <em>{t("router.duplicates")}</em>
-            </span>
-            <span className="router-hub-stat warn">
-              <strong>{report.healthWarnings.length}</strong>
-              <em>{t("router.formatWarnings")}</em>
-            </span>
-          </div>
-          <button className="ghost-action small" onClick={() => setReport(null)} type="button">
-            {t("router.collapse")}
+            {mode.mode === "create" ? t("v33.folderCreate") : t("common.save")}
           </button>
         </>
-      )}
-    </section>
-  );
-}
-
-function ParentIsolationPanel({ conflicts }: { conflicts: SkillConflictCard[] }) {
-  const sourceCount = new Set(
-    conflicts.flatMap(conflict => conflict.choices.map(choice => choice.sourceName))
-  ).size;
-  return (
-    <section className="parent-isolation-panel glow-card">
-      <span className="parent-isolation-icon" aria-hidden="true"><Icon name="shield" /></span>
-      <div>
-        <h3>{t("conf.parentIsolationTitle")}</h3>
-        <p>{t("conf.parentIsolationBody", { conflicts: conflicts.length, sources: sourceCount })}</p>
-      </div>
-      <span className="parent-isolation-status">
-        <Icon name="shield" /> {t("conf.parentIsolationActive")}
-      </span>
-    </section>
-  );
-}
-
-function tagInputValue(tags?: string[]): string {
-  return (tags ?? []).join(", ");
-}
-
-function sortSources(
-  sources: SourceCard[],
-  sortKey: SourceSortKey,
-  popularityById: Map<string, SourcePopularityCard>,
-  skills: SkillCard[]
-): SourceCard[] {
-  return [...sources].sort((left, right) => {
-    const leftPop = popularityById.get(left.id);
-    const rightPop = popularityById.get(right.id);
-    const nameCompare = left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
-    switch (sortKey) {
-      case "rating": {
-        const leftSkills = skills.filter(skill => skillBelongsToSource(skill, left));
-        const rightSkills = skills.filter(skill => skillBelongsToSource(skill, right));
-        const leftParent = sourceParentSkill(left, leftSkills);
-        const rightParent = sourceParentSkill(right, rightSkills);
-        const leftRating = skillRatingSummary(leftSkills.filter(skill => skill !== leftParent));
-        const rightRating = skillRatingSummary(rightSkills.filter(skill => skill !== rightParent));
-        return (
-          normalizedSourceRating(right, rightParent) - normalizedSourceRating(left, leftParent) ||
-          rightRating.max - leftRating.max ||
-          rightRating.average - leftRating.average ||
-          rightRating.count - leftRating.count ||
-          nameCompare
-        );
       }
-      case "usage":
-        return (rightPop?.localTotalCount ?? 0) - (leftPop?.localTotalCount ?? 0) || nameCompare;
-      case "heat":
-        return (rightPop?.stars ?? 0) - (leftPop?.stars ?? 0) || nameCompare;
-      case "skillCount":
-        return right.skillCount - left.skillCount || nameCompare;
-      case "health":
-        return healthRank(left) - healthRank(right) || nameCompare;
-      case "name":
-        return nameCompare;
-      default:
-        return dateValue(right.createdAt) - dateValue(left.createdAt) || nameCompare;
-    }
-  });
-}
-
-type SkillRatingSummary = { average: number; count: number; max: number };
-
-function normalizedSkillRating(skill: SkillCard) {
-  return Math.max(0, Math.min(5, Math.round(skill.rating ?? 0)));
-}
-
-function normalizedOptionalSkillRating(skill?: SkillCard) {
-  return skill ? normalizedSkillRating(skill) : 0;
-}
-
-function normalizedSourceRating(source: SourceCard, parentSkill?: SkillCard) {
-  const rating = Math.max(0, Math.min(5, Math.round(source.rating ?? 0)));
-  return rating || normalizedOptionalSkillRating(parentSkill);
-}
-
-function sourceParentSkill(source: SourceCard, skills: SkillCard[]): SkillCard | undefined {
-  const sourceKey = normalizeLookup(source.name);
-  return (
-    skills.find(
-      skill =>
-        isRouterHubSkill(skill) &&
-        [skill.folderName, skill.name].some(candidate => normalizeLookup(candidate) === sourceKey)
-    ) ??
-    skills.find(isRouterHubSkill) ??
-    (skills.length === 1 ? skills[0] : undefined)
+      onClose={onClose}
+      testId="folder-dialog"
+      title={mode.mode === "create" ? t("v33.folderNew") : t("v33.folderRename")}
+    >
+      <label className="field">
+        <span>{t("v33.folderName")}</span>
+        <input data-autofocus="" maxLength={48} onChange={event => setName(event.target.value)} value={name} />
+      </label>
+      <div className="folder-colors" role="radiogroup" aria-label={t("v33.folderColor")}>
+        {FOLDER_COLORS.map(value => (
+          <button aria-checked={color === value} className={`folder-dot color-${value}${color === value ? " active" : ""}`} key={value} onClick={() => setColor(value)} role="radio" title={value} type="button" />
+        ))}
+      </div>
+    </Dialog>
   );
 }
 
-function skillRatingSummary(skills: SkillCard[]): SkillRatingSummary {
-  const ratings = skills.map(normalizedSkillRating).filter(rating => rating > 0);
-  if (ratings.length === 0) return { average: 0, count: 0, max: 0 };
-  return {
-    average: ratings.reduce((total, rating) => total + rating, 0) / ratings.length,
-    count: ratings.length,
-    max: Math.max(...ratings)
-  };
-}
-
-function sortSkills(skills: SkillCard[], sortKey: SourceSortKey): SkillCard[] {
-  if (sortKey !== "rating") return skills;
-  return [...skills].sort((left, right) => {
-    const ratingCompare = normalizedSkillRating(right) - normalizedSkillRating(left);
-    return (
-      ratingCompare ||
-      left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" })
-    );
-  });
-}
-
-function healthRank(source: SourceCard) {
-  const ranks: Record<string, number> = { error: 0, warn: 1, info: 2, ok: 3 };
-  return ranks[source.health] ?? 4;
-}
-
-function dateValue(value?: string) {
-  if (!value) return 0;
-  if (/^\d+$/.test(value)) {
-    const numeric = Number(value);
-    return Number.isFinite(numeric) ? (value.length > 16 ? Math.floor(numeric / 1_000_000) : numeric) : 0;
-  }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function applySkillDraft(skill: SkillCard, draft?: SkillDraft): SkillCard {
-  if (!draft) return skill;
-  return {
-    ...skill,
-    category: draft.category.trim() || skill.category,
-    description: draft.description.trim() || skill.description,
-    name: draft.name.trim() || skill.name,
-    note: draft.note.trim() || skill.note,
-    tags: parseTagInput(draft.tags)
-  };
-}
-
-function applySourceDraft(source: SourceCard, draft?: SourceDraft): SourceCard {
-  if (!draft) return source;
-  return {
-    ...source,
-    categoryId: draft.category.trim() || source.categoryId,
-    enabled: draft.enabled,
-    name: draft.name.trim() || source.name,
-    note: draft.note.trim() || source.note,
-    sourceType: draft.sourceType,
-    tags: parseTagInput(draft.tags)
-  };
-}
-
-function resolveSkillSource(skill: SkillCard, sources: SourceCard[]): SourceCard | undefined {
-  if (skill.sourceId) return sources.find(source => source.id === skill.sourceId);
-  const matches = sources.filter(source => skillBelongsToSource(skill, source));
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
-function skillMatchesUserFolder(skill: SkillCard, selectedFolderId: string, source?: SourceCard, folders?: SkillFolderCard[]) {
-  if (selectedFolderId === "all") return true;
-  const assigned = skill.userFolderId || source?.userFolderId || "";
-  const folderId = folders && !folders.some(folder => folder.id === assigned) ? "" : assigned;
-  if (selectedFolderId === "unfiled") return !folderId;
-  return folderId === selectedFolderId;
-}
-
-function sourceMatchesUserFolder(source: SourceCard, selectedFolderId: string, folders?: SkillFolderCard[]) {
-  if (selectedFolderId === "all") return true;
-  const folderId = folders && !folders.some(folder => folder.id === source.userFolderId) ? "" : source.userFolderId;
-  if (selectedFolderId === "unfiled") return !folderId;
-  return folderId === selectedFolderId;
-}
-
-function categoryToneId(category: string): string {
-  const value = (category || "").toLowerCase();
-  if (value.includes("security") || value.includes("vibesec")) return "security";
-  if (value.includes("design") || value.includes("ui") || value.includes("image")) return "design";
-  if (value.includes("figure") || value.includes("chart") || value.includes("data")) return "figure";
-  if (value.includes("presentation") || value.includes("ppt") || value.includes("slide")) return "presentation";
-  if (value.includes("knowledge") || value.includes("retrieval") || value.includes("zotero") || value.includes("search")) return "knowledge";
-  if (value.includes("research") || value.includes("paper") || value.includes("academic") || value.includes("literature") || value.includes("writing")) return "academic";
-  if (value.includes("agent") || value.includes("automation") || value.includes("workflow") || value.includes("development") || value.includes("dev") || value.includes("browser")) return "agent";
-  if (value.includes("prompt")) return "prompt";
-  return "surface";
-}
-
-function skillTone(category: string): string {
-  return categoryToneId(category);
-}
-
-function skillIcon(category: string): IconName {
-  const value = (category || "").toLowerCase();
-  if (value.includes("design") || value.includes("ui")) return "sparkle";
-  if (value.includes("research") || value.includes("writing") || value.includes("paper")) return "library";
-  if (value.includes("figure") || value.includes("data")) return "dashboard";
-  if (value.includes("security")) return "shield";
-  if (value.includes("presentation") || value.includes("ppt") || value.includes("slide")) return "snapshots";
-  if (value.includes("knowledge") || value.includes("retrieval") || value.includes("zotero") || value.includes("search")) return "search";
-  if (value.includes("prompt")) return "list";
-  if (value.includes("development") || value.includes("dev")) return "workspaces";
-  if (value.includes("agent")) return "agent";
-  return "sparkle";
-}
-
-function sourceTypeTone(sourceType: SourceCard["sourceType"], _category: string): string {
-  if (sourceType === "prompt") return "prompt";
-  if (sourceType === "mixed") return "other";
-  return "skill";
-}
-
-function sourceTypeIcon(sourceType: SourceCard["sourceType"]): IconName {
-  if (sourceType === "prompt") return "list";
-  if (sourceType === "mixed") return "sources";
-  return "library";
-}
-
-function statusDotClass(health: string) {
-  if (health === "ok") return "healthy";
-  if (health === "error") return "error";
-  return "syncing";
-}
-
-function skillStatusLabel(health: string) {
-  if (health === "ok") return t("health.ok");
-  if (health === "warn") return t("health.warn");
-  if (health === "error") return t("health.error");
-  if (health === "info") return t("health.info");
-  return health;
-}
-
-function agentSkillStatusTone(status: string) {
-  if (["installed", "routed-via-parent"].includes(status)) return "ok";
-  if (["missing", "agent-disabled", "skill-disabled", "invalid-manifest"].includes(status)) return "warn";
-  return "info";
-}
-
-function agentSkillStatusLabel(status: string) {
-  if (status === "installed") return t("agentSkill.installed");
-  if (status === "routed-via-parent") return t("agentSkill.routedViaParent");
-  if (status === "missing") return t("agentSkill.missing");
-  if (["agent-disabled", "skill-disabled"].includes(status)) return t("agentSkill.disabled");
-  if (status === "invalid-manifest") return t("agentSkill.invalid");
-  if (status === "agent-missing") return t("agentSkill.notDetected");
-  return status;
-}
-
-function compactAgentName(name: string) {
-  const normalized = name.toLowerCase();
-  if (normalized.includes("claude")) return "Claude";
-  if (normalized.includes("codex")) return "Codex";
-  if (normalized.includes("antigravity")) return "Antigravity";
-  return name.replace(/\s+code$/i, "").trim();
-}
-
-function shortRevision(value?: string) {
-  return (value ?? "").trim().slice(0, 8);
-}
-
-function routerHubUnchangedCount(report: RouterHubReport) {
-  return report.unchangedCount ?? report.plans.filter(plan => plan.status === "unchanged").length;
-}
-
-function routerHubCommitMessage(report: RouterHubReport) {
-  const unchanged = routerHubUnchangedCount(report);
-  const skipped = report.skippedCount;
-  const duplicateCount = report.duplicateChildren.length;
-  const warningCount = report.healthWarnings.length;
-  const suffixParts = [
-    skipped > 0 ? t("router.suffixSkipped", { n: skipped }) : "",
-    duplicateCount > 0 ? t("router.suffixDuplicates", { n: duplicateCount }) : "",
-    warningCount > 0 ? t("router.suffixWarnings", { n: warningCount }) : ""
-  ].filter(Boolean);
-  const suffix = suffixParts.length > 0 ? `; ${suffixParts.join(", ")}` : "";
-  if (report.writtenCount === 0 && unchanged > 0) {
-    return t("router.commitFresh", { unchanged, suffix });
-  }
-  return t("router.commitDone", { written: report.writtenCount, unchanged, suffix });
-}

@@ -187,7 +187,9 @@ export function ParticleField({
         : (canvas.parentElement?.getBoundingClientRect() ?? canvas.getBoundingClientRect());
       width = Math.max(1, Math.floor(rect.width));
       height = Math.max(1, Math.floor(rect.height));
-      const pixelBudgetScale = Math.sqrt(1_700_000 / Math.max(1, width * height));
+      // The page backdrop sits at half opacity behind content, so it renders at roughly half the
+      // pixels (v3.3 memory budget); the home field keeps the full budget.
+      const pixelBudgetScale = Math.sqrt(1_700_000 / Math.max(1, width * height)) * (mode === "backdrop" ? 0.72 : 1);
       dpr = Math.min(window.devicePixelRatio || 1, maxDpr, pixelBudgetScale);
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
@@ -455,7 +457,14 @@ export function ParticleField({
     function onVisibilityChange() {
       pageVisible = !document.hidden;
       cancelScheduledDraw();
-      if (pageVisible) scheduleDraw(true);
+      if (pageVisible) {
+        resize();
+        scheduleDraw(true);
+      } else {
+        // A hidden or minimized window keeps no canvas backing store (v3.3 memory budget).
+        canvas.width = 1;
+        canvas.height = 1;
+      }
     }
 
     function onFocus() {
@@ -581,25 +590,28 @@ function colorAlpha(color: string, alpha: number): string {
 /* Animated counter — eases to the target whenever it changes. */
 export function CountUp({ value }: { value: number }) {
   const [display, setDisplay] = useState(value);
-  const fromRef = useRef(value);
+  // The number currently on screen. A value change mid-animation continues from here,
+  // not from the previous target (bug #12).
+  const shownRef = useRef(value);
 
   useEffect(() => {
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduceMotion || fromRef.current === value) {
-      fromRef.current = value;
+    if (reduceMotion || shownRef.current === value) {
+      shownRef.current = value;
       setDisplay(value);
       return;
     }
-    const from = fromRef.current;
+    const from = shownRef.current;
     const start = performance.now();
     const duration = 850;
     let raf = 0;
     const tick = (now: number) => {
       const progress = Math.min(1, (now - start) / duration);
       const eased = 1 - Math.pow(1 - progress, 3);
-      setDisplay(Math.round(from + (value - from) * eased));
+      const next = Math.round(from + (value - from) * eased);
+      shownRef.current = next;
+      setDisplay(next);
       if (progress < 1) raf = window.requestAnimationFrame(tick);
-      else fromRef.current = value;
     };
     raf = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(raf);
