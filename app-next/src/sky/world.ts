@@ -6,6 +6,7 @@
 // The React layer owns labels, navigation and fallbacks; this module owns
 // WebGL and must release every GPU resource, listener and frame.
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { SkyWeatherKind, SkyWeatherSetting } from "../skyScene";
 import { loadSkyLibrary } from "./assets";
 import type { ModelTemplate, SkyLibrary } from "./assets";
@@ -22,6 +23,7 @@ import { spillwayGeometry } from "./water";
 import type { KitModel } from "./kit";
 import { layoutIslands } from "./layout";
 import type { LayoutIsland } from "./layout";
+import { releaseAfterUpload, releaseInstanceMatrix } from "./memory";
 import {
   SHARED_UNIFORMS, cloudMaterial, kitShader, lavaMaterial, paletteGround, phaseFilter, resetSharedUniforms, setSkyDomePalette,
   setTerrainGround, setWaterColors, setWaterfallColor, skyDomeMaterial, terrainMaterial, toonMaterial, waterColors,
@@ -39,7 +41,13 @@ import type { SkyPhaseName } from "./weatherPlan";
 export type SkyWorldIsland = { id: string; name: string; weight: number };
 
 /** Where the camera looks: kept across a world re-roll. */
-export type SkyWorldView = { target: [number, number, number]; distance: number; focusId: string | null };
+export type SkyWorldView = {
+  target: [number, number, number];
+  distance: number;
+  focusId: string | null;
+  /** Scene time (seconds): a woken world continues where it fell asleep. */
+  time?: number;
+};
 
 export type SkyWorldInfo = {
   seed: number;
@@ -67,6 +75,8 @@ export type SkyWorldOptions = {
   onHover: (id: string | null) => void;
   onFailure: (reason: string) => void;
   onInfo?: (info: SkyWorldInfo) => void;
+  /** Called once the first frame is on screen (a still image may go). */
+  onFirstFrame?: () => void;
 };
 
 export type SkyWorld = {
@@ -79,9 +89,14 @@ export type SkyWorld = {
   setWeather: (setting: SkyWeatherSetting) => void;
   focus: (id: string | null) => void;
   reset: () => void;
+  /** Label text changed (another language): measure and place them again. */
+  relayout: () => void;
   view: () => SkyWorldView;
   info: () => SkyWorldInfo;
   stats: () => Record<string, number | string>;
+  /** The current view as a 2D canvas at CSS size, for a still image while
+   * the world sleeps; null if there is nothing to show. */
+  snapshot: () => HTMLCanvasElement | null;
 };
 
 type BuiltIsland = {
@@ -103,6 +118,7 @@ type BuiltIsland = {
 };
 
 const UP = new THREE.Vector3(0, 1, 0);
+const WHITE = new THREE.Color(1, 1, 1);
 const NOON = SKY_DIRECTIONS.noon.palette;
 const PHASES: SkyPhaseName[] = ["dawn", "noon", "golden", "night"];
 /** Above this many islands, small ones skip villagers and animals. */
@@ -163,6 +179,9 @@ function groundLook(palette: SkyPalette, tone: GroundTone, climate: ClimateSpec,
   return look;
 }
 
+/** QA reads full diagnostics from the host on demand (nothing per frame). */
+type HostWithStats = HTMLElement & { skyWorldStats?: () => Record<string, number | string> };
+
 export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld> {
   let direction = SKY_DIRECTIONS[options.direction] ?? SKY_DIRECTIONS.noon;
   let phase: SkyPhaseName = PHASES.includes(options.direction as SkyPhaseName) ? options.direction as SkyPhaseName : "noon";
@@ -171,7 +190,15 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   let weatherSetting: SkyWeatherSetting = options.weather ?? "auto";
   const now = options.now ?? (() => new Date());
   resetSharedUniforms();
-  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", alpha: false });
+  const buildStarted = performance.now();
+  // A woken world carries on from the time it fell asleep at, so the clouds
+  // and the gulls are where the still image showed them.
+  const savedTime = options.initialView?.time;
+  const startClock = typeof savedTime === "number" && Number.isFinite(savedTime) ? Math.max(0, savedTime) : 0;
+  // MSAA only where pixels are large: at 1.5x and above the extra resolution
+  // already smooths edges, and four samples per pixel cost GPU memory.
+  const msaa = (window.devicePixelRatio || 1) < 1.5;
+  const renderer = new THREE.WebGLRenderer({ antialias: msaa, powerPreference: "high-performance", alpha: false });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.NoToneMapping;
   renderer.shadowMap.enabled = !options.lowPower;
@@ -194,6 +221,9 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   scene.fog = fog;
   const disposables: Array<{ dispose: () => void }> = [];
   const track = <T extends { dispose: () => void }>(item: T) => (disposables.push(item), item);
+  // Geometry built for this world only: its CPU copy goes after upload.
+  const releasable: THREE.BufferGeometry[] = [];
+  const own = <T extends THREE.BufferGeometry>(geometry: T) => (releasable.push(geometry), geometry);
   const kit = buildKit();
   track({ dispose: () => disposeKit(kit) });
 
@@ -209,7 +239,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   sun.shadow.radius = 3;
   scene.add(sun, sun.target);
 
-  const skyGeometry = track(new THREE.SphereGeometry(900, 32, 16));
+  const skyGeometry = own(track(new THREE.SphereGeometry(900, 32, 16)));
   const skyMaterial = track(skyDomeMaterial(palette));
   const sky = new THREE.Mesh(skyGeometry, skyMaterial);
   sky.frustumCulled = false;
@@ -298,7 +328,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     const origin = new THREE.Vector3(position.x, position.y, position.z);
     const tone = themeTone(theme);
     const material = track(terrainMaterial(palette, tone, plan.shape.paths, groundLook(palette, tone, climate, plan.shape)));
-    const geometry = track(plan.shape.buildGeometry(quality));
+    const geometry = own(track(plan.shape.buildGeometry(quality)));
     const terrain = new THREE.Mesh(geometry, material);
     terrain.position.copy(origin);
     terrain.receiveShadow = true;
@@ -356,22 +386,27 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     }
     for (const [x, y, z] of plan.vents) vents.push(new THREE.Vector3(origin.x + x, origin.y + y, origin.z + z));
 
+    // Houses are instanced too, one mesh per model part and roof colour
+    // across the archipelago, instead of a group of meshes per house.
     for (const building of plan.buildings) {
       const template = library.buildings.get(building.model);
       if (!template) continue;
-      const group = new THREE.Group();
-      for (const part of template.parts) {
-        const mesh = new THREE.Mesh(part.geometry, part.role === "roof" ? library.roofMaterial(building.roof) : part.material);
-        mesh.applyMatrix4(part.matrix);
-        mesh.castShadow = mesh.receiveShadow = true;
-        group.add(mesh);
-      }
+      const key = `building:${building.model}:${building.roof}`;
+      const bucket = instanceBuckets.get(key) ?? {
+        parts: template.parts.map(part => ({ geometry: part.geometry, material: part.role === "roof" ? library.roofMaterial(building.roof) : part.material, matrix: part.matrix, tinted: false })),
+        matrices: [],
+        tints: [],
+        small: false,
+        floating: false
+      };
+      instanceBuckets.set(key, bucket);
       const level = plan.shape.heightAt(building.x, building.z);
-      group.position.set(origin.x + building.x, origin.y + level - 0.04, origin.z + building.z);
-      group.rotation.y = building.yaw;
-      group.scale.setScalar(building.scale);
-      group.userData.islandId = item.id;
-      scene.add(group);
+      bucket.matrices.push(new THREE.Matrix4().compose(
+        new THREE.Vector3(origin.x + building.x, origin.y + level - 0.04, origin.z + building.z),
+        new THREE.Quaternion().setFromAxisAngle(UP, building.yaw),
+        new THREE.Vector3(building.scale, building.scale, building.scale)
+      ));
+      bucket.tints.push(WHITE);
     }
 
     // Tufts a shade deeper than the ground they grow from, in this light.
@@ -459,21 +494,32 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     const random = seededRandom(hashString(`far:${built.length}`));
     farMaterial = track(terrainMaterial(palette, themeTone("meadow")));
     const tree = kit.get("round-23")!;
+    // Their own materials: sharing the instanced kit materials with plain
+    // meshes would switch shader programs back and forth every frame.
+    const farTreeMaterials = tree.parts.map(part => track(toonMaterial({ color: part.role === "tint" ? "#73b257" : "#ffffff" })));
     for (let index = 0; index < 6; index++) {
       const radius = 5 + random() * 6;
       const shape = new IslandShape(radius, 9000 + index * 131);
       const group = new THREE.Group();
-      group.add(new THREE.Mesh(track(shape.buildGeometry(0.5)), farMaterial));
+      group.add(new THREE.Mesh(own(track(shape.buildGeometry(0.5))), farMaterial));
+      // The few trees of a far island merge into one mesh per part: two draw
+      // calls per island instead of two per tree.
+      const pieces: THREE.BufferGeometry[][] = tree.parts.map(() => []);
+      const placement = new THREE.Matrix4(), spot = new THREE.Vector3(), turn = new THREE.Quaternion(), grow = new THREE.Vector3();
       for (let count = 0; count < 3 + Math.floor(random() * 3); count++) {
         const angle = random() * Math.PI * 2, distance = Math.sqrt(random()) * radius * 0.6;
         const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
         tree.parts.forEach((part, partIndex) => {
-          const mesh = new THREE.Mesh(part.geometry, kitMaterial(tree, partIndex));
-          mesh.position.set(x, shape.heightAt(x, z), z);
-          mesh.scale.setScalar(1.3 + random() * 0.4);
-          group.add(mesh);
+          const scale = 1.3 + random() * 0.4;
+          placement.compose(spot.set(x, shape.heightAt(x, z), z), turn, grow.setScalar(scale));
+          pieces[partIndex].push(part.geometry.clone().applyMatrix4(placement));
         });
       }
+      pieces.forEach((list, partIndex) => {
+        const merged = list.length ? mergeGeometries(list, false) : null;
+        for (const piece of list) piece.dispose();
+        if (merged) group.add(new THREE.Mesh(own(track(merged)), farTreeMaterials[partIndex]));
+      });
       scene.add(group);
       farIslands.push({
         group,
@@ -496,6 +542,17 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     }
   };
 
+  // Shadow casters of one kind share one depth material. A single shared
+  // depth material for plain, instanced, tinted and skinned meshes would make
+  // three.js switch (and re-key) shader programs per object, every frame.
+  const depthMaterial = () => track(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
+  const depthInstanced = depthMaterial(), depthInstancedTinted = depthMaterial(), depthSkinned = depthMaterial();
+  for (const walker of walkers) {
+    walker.object.traverse(child => {
+      if ((child as THREE.SkinnedMesh).isSkinnedMesh) (child as THREE.SkinnedMesh).customDepthMaterial = depthSkinned;
+    });
+  }
+
   // One instanced mesh per model part across the whole archipelago.
   const instanced: Array<{ mesh: THREE.InstancedMesh; bucket: Bucket; tinted: boolean }> = [];
   const resolveTint = (tint: Tint) => (typeof tint === "function" ? tint() : tint);
@@ -510,6 +567,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       mesh.castShadow = !options.lowPower && !bucket.small;
       mesh.receiveShadow = !bucket.small && !bucket.floating;
+      mesh.customDepthMaterial = mesh.instanceColor ? depthInstancedTinted : depthInstanced;
       mesh.computeBoundingSphere();
       // Floating shards bob in the shader beyond their static bounds.
       if (bucket.floating && mesh.boundingSphere) mesh.boundingSphere.radius += 2;
@@ -532,7 +590,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   const size = bounds.getSize(new THREE.Vector3());
   const center = bounds.getCenter(new THREE.Vector3());
   const cloudMat = track(cloudMaterial(palette));
-  const cloudShapes = [1, 2, 3, 4].map(cloudSeed => track(cloudGeometry(cloudSeed)));
+  const cloudShapes = [1, 2, 3, 4].map(cloudSeed => own(track(cloudGeometry(cloudSeed))));
   const clouds: Array<{ mesh: THREE.Mesh; baseX: number; speed: number; span: number }> = [];
   {
     const random = seededRandom(77);
@@ -579,6 +637,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     seed,
     lowPower: options.lowPower,
     reducedMotion: () => reduced.matches,
+    startTime: startClock,
     petals: hasAutumn ? ["#f2a03c", "#f4a6c0", "#e8743a"] : ["#f4a6c0", "#ffffff", "#f7c3d4"]
   });
   track(weather);
@@ -623,13 +682,17 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   let width = 1, height = 1, minDistance = 12, maxDistance = 200;
   let safeLeft = 0, safeTop = 0;
   const viewDirection = new THREE.Vector3(0, Math.sin(pitch), Math.cos(pitch));
+  // Bumped whenever the camera moves, so labels are placed only then.
+  let cameraVersion = 0;
   const applyCamera = () => {
     camera.position.copy(view.target).addScaledVector(viewDirection, view.distance);
     camera.lookAt(view.target);
     camera.updateMatrixWorld();
+    cameraVersion++;
   };
   // Silhouette points for framing: terrain vertices (rim and underside) and
-  // the rim raised by the crown height, where trees and roofs stand.
+  // the rim raised by the crown height, where trees and roofs stand. Read
+  // now: the terrain's CPU copy is released after its first upload.
   const silhouette = (() => {
     const points: THREE.Vector3[] = [];
     const vertex = new THREE.Vector3();
@@ -650,11 +713,58 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     }
     return points;
   })();
+
+  // Free screen space: below the scene's own heading and controls and below
+  // any block over the scene that opts in with [data-sky-overlay] (the home
+  // numbers, say); above any opted-in block in the lower half.
+  let safeBottom = 0;
+  const observedOverlays = new Set<Element>();
+  const measureChrome = () => {
+    const hostRect = options.host.getBoundingClientRect();
+    safeTop = 0;
+    safeBottom = 0;
+    const consider = (element: Element, alwaysTop: boolean) => {
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      if (rect.right <= hostRect.left || rect.left >= hostRect.right || rect.bottom <= hostRect.top || rect.top >= hostRect.bottom) return;
+      if (alwaysTop || rect.top + rect.height / 2 < hostRect.top + hostRect.height / 2) safeTop = Math.max(safeTop, rect.bottom - hostRect.top + 12);
+      else safeBottom = Math.max(safeBottom, hostRect.bottom - rect.top + 12);
+    };
+    options.host.closest(".sky-islands")?.querySelectorAll(".sky-heading, .sky-controls").forEach(element => consider(element, true));
+    (options.host.closest(".shell") ?? document.body).querySelectorAll("[data-sky-overlay]").forEach(element => {
+      consider(element, false);
+      // A block that grows (a longer language, a wrapped row) reframes the view.
+      if (!observedOverlays.has(element)) {
+        observedOverlays.add(element);
+        resizeObserver.observe(element);
+      }
+    });
+  };
+
+  /** The rows the archipelago is framed into (canvas pixels) and how far the
+   * view shifts down to centre it there. Overlays push the band down; the
+   * islands keep a usable size instead of shrinking to a dot. */
+  const frameBand = () => {
+    const short = height < 760;
+    const defaultTop = height * (1 - (short ? 0.58 : 0.62)) / 2;
+    const defaultBottom = height * (1 + (short ? 0.62 : 0.68)) / 2;
+    let top = Math.max(defaultTop, safeTop + 18);
+    let bottom = Math.min(defaultBottom, height - safeBottom - 8);
+    const minimum = height * 0.3;
+    if (bottom - top < minimum) {
+      bottom = Math.min(height - 8, top + minimum);
+      top = Math.min(top, bottom - minimum);
+    }
+    return { top, bottom, shift: (top + bottom) / 2 - (defaultTop + defaultBottom) / 2 };
+  };
+  const fitPoint = new THREE.Vector3(), farEye = new THREE.Vector3();
   const fitHome = () => {
-    const points = silhouette;
-    // Leave room for the heading above and the status bar below.
-    const top = Math.min(height < 760 ? 0.58 : 0.62, 1 - 2 * (safeTop + 18) / height);
-    const bottom = height < 760 ? 0.62 : 0.68;
+    const band = frameBand();
+    // Keep the sky full bleed; shift only the content projection away from
+    // the floating navigation rail and down into the free band.
+    camera.setViewOffset(width, height, -safeLeft / 2, -band.shift, width, height);
+    camera.updateProjectionMatrix();
+    const top = 1 - 2 * band.top / height, bottom = 1 - 2 * band.bottom / height;
     const left = -1 + 2 * (safeLeft + 24) / width, right = 1 - 48 / width;
     let low = 8, high = 1500;
     for (let iteration = 0; iteration < 40; iteration++) {
@@ -662,14 +772,15 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       view.target.copy(home.target);
       view.distance = middle;
       applyCamera();
-      const fits = points.every(point => {
-        const projected = point.clone().project(camera);
-        return projected.x > left && projected.x < right && projected.y < top && projected.y > -bottom;
-      });
+      let fits = true;
+      for (let index = 0; fits && index < silhouette.length; index++) {
+        fitPoint.copy(silhouette[index]).project(camera);
+        fits = fitPoint.x > left && fitPoint.x < right && fitPoint.y < top && fitPoint.y > bottom;
+      }
       if (fits) high = middle; else low = middle;
     }
     home.distance = high;
-    placeFarIslands(home.target.clone().addScaledVector(viewDirection, high));
+    placeFarIslands(farEye.copy(home.target).addScaledVector(viewDirection, high));
     minDistance = Math.max(10, Math.min(...built.map(island => island.layout.radius)) * 2.6);
     maxDistance = home.distance * 1.6;
     // Fog is in world units: a big archipelago framed from far away would
@@ -684,16 +795,10 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     width = options.host.clientWidth;
     height = options.host.clientHeight;
     safeLeft = Number.parseFloat(getComputedStyle(options.host).getPropertyValue("--home-rail")) || 0;
-    const hostTop = options.host.getBoundingClientRect().top;
-    const chrome = options.host.closest(".sky-islands")?.querySelectorAll(".sky-heading, .sky-controls");
-    safeTop = Math.max(0, ...Array.from(chrome ?? []).map(element => element.getBoundingClientRect().bottom - hostTop + 12));
+    measureChrome();
     renderer.setPixelRatio(pixelRatio());
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
-    // Keep the sky full bleed; shift only the content projection away from
-    // the floating navigation rail, which is not usable scene space.
-    camera.setViewOffset(width, height, -safeLeft / 2, 0, width, height);
-    camera.updateProjectionMatrix();
     updatePointScale();
     // Stay on the overview if the user has not moved away from it.
     const atHome = !initialized || (goal.target.distanceTo(home.target) < 0.01 && Math.abs(goal.distance - home.distance) < 0.01);
@@ -714,27 +819,39 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     if (smoke) setPointScale(smoke.object.material as THREE.ShaderMaterial, pixels, direction.fov);
   };
 
-  // Resolution: native up to a 4K pixel budget, scaled down adaptively when
-  // this device cannot hold the target frame rate.
+  // Resolution: native up to a pixel budget, scaled down adaptively when this
+  // device cannot hold the target frame rate. High-density screens get a
+  // tighter budget (and no MSAA): about 3.7 million pixels is already sharp.
   let resolutionScale = 1;
   const pixelRatio = () => {
-    const native = Math.min(window.devicePixelRatio || 1, lowPower ? 1 : 2);
-    const budget = Math.sqrt(8_300_000 / Math.max(1, width * height));
+    const device = window.devicePixelRatio || 1;
+    const native = Math.min(device, lowPower ? 1 : 2);
+    const budget = Math.sqrt((device >= 1.5 ? 3_700_000 : 8_300_000) / Math.max(1, width * height));
     return Math.max(0.6, Math.min(native, budget) * resolutionScale);
   };
 
-  // State and loop.
+  // State and loop. Nothing in the frame loop allocates: frame times live in
+  // a ring buffer, labels reuse their objects, diagnostics update once a second.
   let disposed = false, failed = false, initialized = false;
   let paused = options.paused, lowPower = options.lowPower;
   let visible = options.visible ?? true;
   let intersecting = true;
-  let raf = 0, lastFrame = 0, clock = 0, frames = 0, dirty = true;
-  let frameTimes: number[] = [];
+  let raf = 0, lastFrame = 0, frames = 0, dirty = true, statsAt = 0, labelsVersion = -1;
+  let clock = startClock;
+  SHARED_UNIFORMS.uTime.value = clock;
+  const FRAME_SAMPLES = 64;
+  const frameTimes = new Float32Array(FRAME_SAMPLES), sortedFrames = new Float32Array(FRAME_SAMPLES);
+  let frameSampleCount = 0, frameSampleHead = 0;
+  const recordFrame = (milliseconds: number) => {
+    frameTimes[frameSampleHead] = milliseconds;
+    frameSampleHead = (frameSampleHead + 1) % FRAME_SAMPLES;
+    frameSampleCount = Math.min(FRAME_SAMPLES, frameSampleCount + 1);
+  };
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
   const animating = () => !paused && !reduced.matches;
   let hovered: string | null = null, focusId: string | null = null;
   let pointerDown = false, moved = false, downX = 0, downY = 0, lastX = 0, lastY = 0, lastInteraction = 0;
-  // A re-rolled world opens where the old one was looking.
+  // A re-rolled or woken world opens where the old one was looking.
   let pendingView = options.initialView ?? null;
   const raycaster = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
@@ -747,6 +864,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   }
 
   function settle(delta: number) {
+    if (view.target.distanceTo(goal.target) + Math.abs(goal.distance - view.distance) < 1e-4) return false;
     const ease = reduced.matches ? 1 : 1 - Math.exp(-delta * 7);
     view.target.lerp(goal.target, ease);
     view.distance += (goal.distance - view.distance) * ease;
@@ -758,77 +876,152 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
 
   // Labels: projected to each island's front edge; when two would overlap
   // on screen, the smaller island's label steps down below the larger one's,
-  // or hides (its island stays clickable) if there is no room.
-  const labelSizes = new Map<string, { width: number; height: number }>();
-  const measureLabels = () => {
-    for (const [id, label] of options.labels) labelSizes.set(id, { width: label.offsetWidth, height: label.offsetHeight });
-  };
+  // or hides (its island stays clickable) if there is no room. Runs only when
+  // the camera moved; every object here is made once and reused.
+  type ScreenPoint = { x: number; y: number; z: number };
+  type TopShape = { x0: number; y0: number; x1: number; y1: number; rx: number; ry: number };
+  type LabelSlot = { id: string; island: BuiltIsland; element: HTMLElement | null; width: number; height: number; drawnX: number; drawnY: number; drawnShown: number };
   const labelOrder = [...built].sort((a, b) => b.layout.radius - a.layout.radius);
+  const slots: LabelSlot[] = labelOrder.map(island => ({ id: island.layout.id, island, element: null, width: 0, height: 0, drawnX: Number.NaN, drawnY: Number.NaN, drawnShown: -1 }));
   // Screen footprint of each island's top (grass ellipse up to its crown),
   // which labels of other islands must not cover.
-  type TopShape = { id: string; x0: number; y0: number; x1: number; y1: number; rx: number; ry: number };
-  const toScreen = (point: THREE.Vector3) => {
-    projected.copy(point).project(camera);
-    return { x: (projected.x * 0.5 + 0.5) * width, y: (-projected.y * 0.5 + 0.5) * height, z: projected.z };
-  };
+  const shapes: TopShape[] = built.map(() => ({ x0: 0, y0: 0, x1: 0, y1: 0, rx: 1, ry: 4 }));
+  const shapeOwners = built.map(island => island.layout.id);
+  const candidates: ScreenPoint[] = [{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 0 }];
+  const placed = slots.map(() => ({ left: 0, right: 0, top: 0, bottom: 0 }));
+  const CORNERS = [0, 0.5, 1];
+  const screenPoint: ScreenPoint = { x: 0, y: 0, z: 0 };
   const scratch = new THREE.Vector3();
-  const topShapes = (): TopShape[] => built.map(island => {
-    const o = island.terrain.position, r = island.layout.radius * 1.05;
-    const ground = toScreen(scratch.set(o.x, island.surfaceY, o.z));
-    const crown = toScreen(scratch.set(o.x, island.surfaceY + island.crown, o.z));
-    const side = toScreen(scratch.set(o.x + r, island.surfaceY, o.z));
-    const front = toScreen(scratch.set(o.x, island.surfaceY, o.z + r));
-    return { id: island.layout.id, x0: ground.x, y0: ground.y, x1: crown.x, y1: crown.y, rx: Math.abs(side.x - ground.x), ry: Math.max(4, Math.abs(front.y - ground.y)) };
-  });
+  const toScreen = (point: THREE.Vector3, out: ScreenPoint) => {
+    projected.copy(point).project(camera);
+    out.x = (projected.x * 0.5 + 0.5) * width;
+    out.y = (-projected.y * 0.5 + 0.5) * height;
+    out.z = projected.z;
+    return out;
+  };
+  const measureLabels = () => {
+    for (const slot of slots) {
+      const label = options.labels.get(slot.id);
+      if (!label) continue;
+      slot.width = label.offsetWidth;
+      slot.height = label.offsetHeight;
+    }
+    labelsVersion = -1;
+  };
+  const updateShapes = () => {
+    for (let index = 0; index < built.length; index++) {
+      const island = built[index], shape = shapes[index];
+      const o = island.terrain.position, r = island.layout.radius * 1.05;
+      toScreen(scratch.set(o.x, island.surfaceY, o.z), screenPoint);
+      shape.x0 = screenPoint.x;
+      shape.y0 = screenPoint.y;
+      toScreen(scratch.set(o.x, island.surfaceY + island.crown, o.z), screenPoint);
+      shape.x1 = screenPoint.x;
+      shape.y1 = screenPoint.y;
+      toScreen(scratch.set(o.x + r, island.surfaceY, o.z), screenPoint);
+      shape.rx = Math.abs(screenPoint.x - shape.x0);
+      toScreen(scratch.set(o.x, island.surfaceY, o.z + r), screenPoint);
+      shape.ry = Math.max(4, Math.abs(screenPoint.y - shape.y0));
+    }
+  };
   const covers = (shape: TopShape, x: number, y: number) => {
     const dx = (x - shape.x0) / shape.rx;
     if (Math.abs(dx) >= 1) return false;
     const below = (y - shape.y0) / shape.ry, above = (y - shape.y1) / shape.ry;
     return dx * dx + below * below < 1 || dx * dx + above * above < 1 || (y < shape.y0 && y > shape.y1);
   };
-  const blocksIsland = (shapes: TopShape[], own: string, left: number, top: number, w: number, h: number) =>
-    shapes.some(shape => shape.id !== own && [0, 0.5, 1].some(u => [0, 0.5, 1].some(v => covers(shape, left + u * w, top + v * h))));
+  const blocksIsland = (own: string, left: number, top: number, w: number, h: number) => {
+    for (let index = 0; index < shapes.length; index++) {
+      if (shapeOwners[index] === own) continue;
+      for (let u = 0; u < 3; u++) {
+        for (let v = 0; v < 3; v++) if (covers(shapes[index], left + CORNERS[u] * w, top + CORNERS[v] * h)) return true;
+      }
+    }
+    return false;
+  };
+  const fitsChrome = (candidate: ScreenPoint, w: number, h: number) =>
+    candidate.x - w / 2 > safeLeft + 8 && candidate.x + w / 2 < width - 8 && candidate.y > safeTop && candidate.y + h < height - Math.max(8, safeBottom);
 
   function placeLabels() {
-    const shapes = topShapes();
-    const placedRects: Array<{ left: number; right: number; top: number; bottom: number }> = [];
-    for (const island of labelOrder) {
-      const label = options.labels.get(island.layout.id);
+    updateShapes();
+    let placedCount = 0;
+    for (let index = 0; index < slots.length; index++) {
+      const slot = slots[index];
+      const label = options.labels.get(slot.id);
       if (!label) continue;
-      let labelSize = labelSizes.get(island.layout.id);
-      if (!labelSize || !labelSize.width) {
-        // Labels are hidden until the scene is ready; measure once they show.
-        labelSize = { width: label.offsetWidth, height: label.offsetHeight };
-        labelSizes.set(island.layout.id, labelSize);
+      if (label !== slot.element) {
+        slot.element = label;
+        slot.drawnX = slot.drawnY = Number.NaN;
+        slot.drawnShown = -1;
       }
-      const measured = labelSize;
+      if (!slot.width) {
+        // Labels are hidden until the scene is ready; measure once they show.
+        slot.width = label.offsetWidth;
+        slot.height = label.offsetHeight;
+      }
+      const w = slot.width, h = slot.height, island = slot.island, o = island.terrain.position;
       // Front edge first; then below the rock tip; then above the crown.
-      const o = island.terrain.position;
-      const candidates = [
-        toScreen(island.labelAnchor),
-        toScreen(island.tipAnchor),
-        (() => {
-          const above = toScreen(scratch.set(o.x, island.surfaceY + island.crown, o.z));
-          return { ...above, y: above.y - measured.height - 6 };
-        })()
-      ];
-      const fitsChrome = (candidate: typeof candidates[number]) => candidate.x - measured.width / 2 > safeLeft + 8 && candidate.x + measured.width / 2 < width - 8 && candidate.y > safeTop && candidate.y + measured.height < height - 8;
-      const anchor = candidates.find(candidate => fitsChrome(candidate) && !blocksIsland(shapes, island.layout.id, candidate.x - measured.width / 2, candidate.y, measured.width, measured.height)) ?? candidates[0];
-      let shown = anchor.z < 1 && fitsChrome(anchor);
+      toScreen(island.labelAnchor, candidates[0]);
+      toScreen(island.tipAnchor, candidates[1]);
+      toScreen(scratch.set(o.x, island.surfaceY + island.crown, o.z), candidates[2]);
+      candidates[2].y -= h + 6;
+      let anchor = candidates[0];
+      for (let choice = 0; choice < 3; choice++) {
+        const candidate = candidates[choice];
+        if (fitsChrome(candidate, w, h) && !blocksIsland(slot.id, candidate.x - w / 2, candidate.y, w, h)) {
+          anchor = candidate;
+          break;
+        }
+      }
+      let shown = anchor.z < 1 && fitsChrome(anchor, w, h);
       const x = anchor.x;
       let y = anchor.y;
-      const rect = () => ({ left: x - measured.width / 2 - 4, right: x + measured.width / 2 + 4, top: y - 3, bottom: y + measured.height + 3 });
       for (let attempt = 0; shown && attempt < 3; attempt++) {
-        const box = rect();
-        const blocker = placedRects.find(other => box.left < other.right && box.right > other.left && box.top < other.bottom && box.bottom > other.top);
-        if (!blocker) break;
-        if (attempt === 2 || blocker.bottom - box.top > measured.height * 1.6) shown = false;
-        else y = blocker.bottom + 3;
+        const left = x - w / 2 - 4, right = x + w / 2 + 4, top = y - 3, bottom = y + h + 3;
+        let blocker = -1;
+        for (let other = 0; other < placedCount; other++) {
+          const rect = placed[other];
+          if (left < rect.right && right > rect.left && top < rect.bottom && bottom > rect.top) {
+            blocker = other;
+            break;
+          }
+        }
+        if (blocker < 0) break;
+        if (attempt === 2 || placed[blocker].bottom - top > h * 1.6) shown = false;
+        else y = placed[blocker].bottom + 3;
       }
-      if (shown) placedRects.push(rect());
-      label.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, 0)`;
-      label.style.visibility = shown ? "visible" : "hidden";
+      if (shown) {
+        const rect = placed[placedCount++];
+        rect.left = x - w / 2 - 4;
+        rect.right = x + w / 2 + 4;
+        rect.top = y - 3;
+        rect.bottom = y + h + 3;
+      }
+      // Touch the DOM only when something changed.
+      if (Number.isNaN(slot.drawnX) || Math.abs(x - slot.drawnX) > 0.05 || Math.abs(y - slot.drawnY) > 0.05) {
+        slot.drawnX = x;
+        slot.drawnY = y;
+        label.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) translate(-50%, 0)`;
+      }
+      const showing = shown ? 1 : 0;
+      if (showing !== slot.drawnShown) {
+        slot.drawnShown = showing;
+        label.style.visibility = shown ? "visible" : "hidden";
+      }
     }
+  }
+
+  /** Diagnostics for tests and QA, written once a second (not per frame). */
+  function writeStats(now: number) {
+    statsAt = now;
+    const host = options.host;
+    host.dataset.frames = String(frames);
+    host.dataset.statsAt = String(Math.round(now));
+    host.dataset.drawCalls = String(renderer.info.render.calls);
+    host.dataset.triangles = String(renderer.info.render.triangles);
+    host.dataset.pixelRatio = renderer.getPixelRatio().toFixed(2);
+    host.dataset.weather = weather.kind();
+    host.dataset.weatherCalls = String(weather.drawCalls());
   }
 
   function draw(now: number) {
@@ -844,10 +1037,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       return;
     }
     const delta = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 1 / 60;
-    if (lastFrame) {
-      frameTimes.push(now - lastFrame);
-      if (frameTimes.length > 90) frameTimes.shift();
-    }
+    if (lastFrame) recordFrame(now - lastFrame);
     lastFrame = now;
     dirty = false;
     const moving = settle(delta);
@@ -856,43 +1046,47 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       SHARED_UNIFORMS.uTime.value = clock;
       flock?.update(clock);
       driftClouds(clock);
-      for (const walker of walkers) walker.update(delta);
+      for (let index = 0; index < walkers.length; index++) walkers[index].update(delta);
     }
     const weatherBusy = weather.update(clock, delta, view.target, animating());
     let highlighting = false;
-    for (const island of built) {
+    for (let index = 0; index < built.length; index++) {
+      const island = built[index];
       const target = island.layout.id === (hovered ?? focusId) ? 1 : 0;
+      if (island.highlight === target) continue;
       island.highlight += (target - island.highlight) * Math.min(1, delta * 8);
       if (Math.abs(target - island.highlight) > 0.01) highlighting = true;
+      else island.highlight = target;
       island.material.userData.uniforms.uHighlight.value = island.highlight;
     }
-    placeLabels();
+    if (labelsVersion !== cameraVersion) {
+      placeLabels();
+      labelsVersion = cameraVersion;
+    }
     renderer.render(scene, camera);
     frames++;
     if (frames % 30 === 0) adaptResolution();
-    const host = options.host;
-    host.dataset.frames = String(frames);
-    host.dataset.drawCalls = String(renderer.info.render.calls);
-    host.dataset.triangles = String(renderer.info.render.triangles);
-    host.dataset.pixelRatio = renderer.getPixelRatio().toFixed(2);
-    host.dataset.weather = weather.kind();
-    host.dataset.weatherCalls = String(weather.drawCalls());
-    host.dataset.flash = weather.flash().toFixed(2);
-    initialized = true;
+    if (frames === 1 || now - statsAt >= 1000) writeStats(now);
+    if (!initialized) {
+      initialized = true;
+      options.host.dataset.buildMs = String(Math.round(performance.now() - buildStarted));
+      options.onFirstFrame?.();
+    }
     if (animating() || moving || highlighting || (weatherBusy && !reduced.matches)) raf = requestAnimationFrame(draw);
   }
 
   function adaptResolution() {
-    if (frameTimes.length < 60 || !animating()) return;
-    const sorted = [...frameTimes].sort((a, b) => a - b);
-    const typical = sorted[Math.floor(sorted.length * 0.5)];
+    if (frameSampleCount < FRAME_SAMPLES || !animating()) return;
+    sortedFrames.set(frameTimes);
+    sortedFrames.sort();
+    const typical = sortedFrames[FRAME_SAMPLES >> 1];
     const budget = (lowPower ? 1000 / 22 : 1000 / 34) * 1.35;
     if (typical > budget && resolutionScale > 0.62) {
       resolutionScale = Math.max(0.62, resolutionScale * 0.85);
       renderer.setPixelRatio(pixelRatio());
       renderer.setSize(width, height, false);
       updatePointScale();
-      frameTimes = [];
+      frameSampleCount = frameSampleHead = 0;
     }
   }
 
@@ -1024,6 +1218,13 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     }
   });
   intersection.observe(options.host);
+  // The GPU keeps what was built for this world: drop the CPU copies after
+  // the first upload. (Cached models, pick volumes and instance colours,
+  // which change with the time of day, keep theirs.)
+  for (const geometry of releasable) releaseAfterUpload(geometry);
+  for (const geometry of waterGeometryCache) releaseAfterUpload(geometry);
+  for (const model of kit.values()) for (const part of model.parts) releaseAfterUpload(part.geometry);
+  for (const { mesh } of instanced) releaseInstanceMatrix(mesh);
   resize();
   goal.distance = view.distance = home.distance;
   if (pendingView) {
@@ -1053,7 +1254,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     if (!disposed) options.onInfo?.(info());
   });
 
-  return {
+  const world: SkyWorld = {
     setVisible(value) {
       visible = value;
       lastFrame = 0;
@@ -1115,12 +1316,32 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       lastInteraction = performance.now();
       requestDraw();
     },
+    relayout() {
+      measureLabels();
+      requestDraw();
+    },
     view() {
-      return { target: [goal.target.x, goal.target.y, goal.target.z], distance: goal.distance, focusId };
+      return { target: [goal.target.x, goal.target.y, goal.target.z], distance: goal.distance, focusId, time: clock };
     },
     info,
+    snapshot() {
+      if (disposed || failed || width < 2 || height < 2) return null;
+      try {
+        // The drawing buffer is readable only in the task that rendered it.
+        renderer.render(scene, camera);
+        const still = document.createElement("canvas");
+        still.width = width;
+        still.height = height;
+        const context = still.getContext("2d");
+        if (!context) return null;
+        context.drawImage(canvas, 0, 0, width, height);
+        return still;
+      } catch {
+        return null;
+      }
+    },
     stats() {
-      const sorted = [...frameTimes].sort((a, b) => a - b);
+      const sorted = Array.from(frameTimes.subarray(0, frameSampleCount)).sort((a, b) => a - b);
       return {
         islands: built.length,
         climates: built.map(island => island.climate.id).join(","),
@@ -1174,7 +1395,11 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       renderer.dispose();
       renderer.forceContextLoss();
       canvas.remove();
-      resetSharedUniforms();
+      delete (options.host as HostWithStats).skyWorldStats;
+      // Shared uniforms are not reset here: a successor world may already
+      // own them (a re-roll disposes the old world after the new one is up).
     }
   };
+  (options.host as HostWithStats).skyWorldStats = world.stats;
+  return world;
 }

@@ -35,13 +35,6 @@ export function isRouterHubSkill(skill: SkillCard): boolean {
       && normalizeSourceName(skill.folderName) === normalizeSourceName(skill.source));
 }
 
-/** Whether a skill counts as a Skill on the islands (and should on every
- * shelf): parent router hubs do not, except when their repository holds just
- * that one skill, which the library shows as its only child. */
-export function isCountedSkill(skill: SkillCard, ownerSkillCount: number | null): boolean {
-  return !isRouterHubSkill(skill) || ownerSkillCount === 1;
-}
-
 function stableSeed(id: string): number {
   let hash = 2166136261;
   for (let index = 0; index < id.length; index++) {
@@ -78,16 +71,10 @@ export function buildSkyIslands(
     sourceSets.get(island.id)!.add(source.id);
     if (source.sourceType === "prompt" || source.sourceType === "mixed") island.promptCount++;
   }
-  const ownerOf = (skill: SkillCard) => (skill.sourceId ? sourcesById.get(skill.sourceId) : sourcesByName.get(normalizeSourceName(skill.source))) ?? null;
-  const perOwner = new Map<string, number>();
   for (const skill of snapshot.skills) {
-    const owner = ownerOf(skill);
-    if (owner) perOwner.set(owner.id, (perOwner.get(owner.id) ?? 0) + 1);
-  }
-  for (const skill of snapshot.skills) {
-    const owner = ownerOf(skill);
-    // Single-skill repositories: their one skill is the content, not a router.
-    if (!isCountedSkill(skill, owner ? perOwner.get(owner.id) ?? 0 : null)) continue;
+    if (isRouterHubSkill(skill)) continue;
+    const owner = skill.sourceId ? sourcesById.get(skill.sourceId)
+      : sourcesByName.get(normalizeSourceName(skill.source));
     const island = destination(skill.userFolderId || owner?.userFolderId);
     island.skillCount++;
     if (owner) sourceSets.get(island.id)!.add(owner.id);
@@ -102,7 +89,7 @@ export function buildSkyIslands(
 
 const DEMO_NAMES = [
   "安全审计", "数据分析", "UI 设计", "学术研究", "代码工程", "写作润色", "创意绘图", "日常工具",
-  "运维脚本", "旅行攻略", "知识库", "性能压测", "论文阅读", "Prompt 灵感", "营销内容", "数学推导"
+  "运维脚本", "旅行攻略", "知识库", "性能压测", "论文阅读", "提示词灵感", "营销内容", "数学推导"
 ];
 
 /** Development only: extra demo islands to preview many climates at once. */

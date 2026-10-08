@@ -4,6 +4,7 @@
 import * as THREE from "three";
 import type { SkyPalette } from "./materials";
 import { SHARED_UNIFORMS } from "./materials";
+import { releaseAfterUpload } from "./memory";
 
 export type Smoke = { object: THREE.Points; setPalette: (palette: SkyPalette) => void; setLowPower: (lowPower: boolean) => void; dispose: () => void };
 
@@ -25,6 +26,7 @@ export function createSmoke(vents: THREE.Vector3[], scale: number, palette: SkyP
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute("aSeed", new THREE.BufferAttribute(seeds, 1));
   geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), Infinity);
+  releaseAfterUpload(geometry);
   const material = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,

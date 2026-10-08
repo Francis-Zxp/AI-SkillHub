@@ -239,8 +239,10 @@ export class IslandShape {
         if (distance < 1) height = Math.min(height, basin);
       }
     }
-    for (const channel of this.channels) {
-      const [ax, az] = channel.from, [bx, bz] = channel.to;
+    // Walking animals call this every frame: plain indexing, no destructuring.
+    for (let index = 0; index < this.channels.length; index++) {
+      const channel = this.channels[index];
+      const ax = channel.from[0], az = channel.from[1], bx = channel.to[0], bz = channel.to[1];
       const dx = bx - ax, dz = bz - az;
       const t = THREE.MathUtils.clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0, 1);
       const distance = Math.hypot(x - ax - dx * t, z - az - dz * t);

@@ -9,9 +9,13 @@ import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { ModelTemplate } from "./assets";
 import { SHARED_UNIFORMS, toonGradient } from "./materials";
+import { releaseAfterUpload } from "./memory";
 import { seededRandom } from "./noise";
 import type { IslandShape } from "./terrain";
 import { createFarmLegSolver } from "./animalRig";
+
+/** Points baked along each flock's closed route. */
+const ROUTE_SAMPLES = 720;
 
 // Measured in the sky lab: head toward +X, wingspan along Z, wings raised.
 const GULL_SHOULDER = 6;
@@ -58,6 +62,8 @@ export function createFlocks(template: ModelTemplate, bounds: THREE.Box3, count:
   const random = seededRandom(seed);
   for (let index = 0; index < count; index++) seeds[index] = random();
   geometry.setAttribute("aSeed", new THREE.InstancedBufferAttribute(seeds, 1));
+  // A copy made for this world: the GPU keeps it (the matrices stay, they move).
+  releaseAfterUpload(geometry);
   const mesh = new THREE.InstancedMesh(geometry, material, count);
   mesh.frustumCulled = false;
   mesh.castShadow = false;
@@ -86,8 +92,29 @@ export function createFlocks(template: ModelTemplate, bounds: THREE.Box3, count:
         center.z + offset.z + Math.sin(angle) * radiusZ * wobble
       ));
     }
-    return { curve: new THREE.CatmullRomCurve3(points, true, "centripetal"), speed: 0.012 + random() * 0.006, start: random() };
+    // Baked once: evaluating the spline per bird per frame allocated.
+    const curve = new THREE.CatmullRomCurve3(points, true, "centripetal");
+    const samples = new Float32Array(ROUTE_SAMPLES * 3);
+    const point = new THREE.Vector3();
+    for (let sample = 0; sample < ROUTE_SAMPLES; sample++) {
+      curve.getPointAt(sample / ROUTE_SAMPLES, point);
+      samples[sample * 3] = point.x;
+      samples[sample * 3 + 1] = point.y;
+      samples[sample * 3 + 2] = point.z;
+    }
+    return { samples, speed: 0.012 + random() * 0.006, start: random() };
   });
+  /** A point on a baked closed route at t (0..1), linearly interpolated. */
+  const routePoint = (samples: Float32Array, t: number, out: THREE.Vector3) => {
+    const position = (((t % 1) + 1) % 1) * ROUTE_SAMPLES;
+    const index = Math.floor(position) % ROUTE_SAMPLES, next = (index + 1) % ROUTE_SAMPLES, weight = position - Math.floor(position);
+    out.set(
+      samples[index * 3] + (samples[next * 3] - samples[index * 3]) * weight,
+      samples[index * 3 + 1] + (samples[next * 3 + 1] - samples[index * 3 + 1]) * weight,
+      samples[index * 3 + 2] + (samples[next * 3 + 2] - samples[index * 3 + 2]) * weight
+    );
+    return out;
+  };
   const birds = groupSizes.flatMap((size, flock) => Array.from({ length: size }, (_, index) => ({
     flock,
     lag: index * (0.009 + random() * 0.005),
@@ -97,24 +124,28 @@ export function createFlocks(template: ModelTemplate, bounds: THREE.Box3, count:
   const scale = wingspan / (GULL_SPAN * 2);
   const position = new THREE.Vector3(), ahead = new THREE.Vector3(), further = new THREE.Vector3();
   const forward = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0), side = new THREE.Vector3();
+  const bend = new THREE.Vector3(), normal = new THREE.Vector3(), sized = new THREE.Vector3(scale, scale, scale);
   const basis = new THREE.Matrix4(), roll = new THREE.Matrix4(), matrix = new THREE.Matrix4();
+  // Runs every frame: scratch vectors only, no allocations.
   const update = (time: number) => {
-    birds.forEach((bird, index) => {
+    for (let index = 0; index < birds.length; index++) {
+      const bird = birds[index];
       const route = routes[bird.flock];
       const t = (((route.start + time * route.speed - bird.lag) % 1) + 1) % 1;
-      route.curve.getPointAt(t, position);
-      route.curve.getPointAt((t + 0.004) % 1, ahead);
-      route.curve.getPointAt((t + 0.008) % 1, further);
+      routePoint(route.samples, t, position);
+      routePoint(route.samples, t + 0.004, ahead);
+      routePoint(route.samples, t + 0.008, further);
       forward.subVectors(ahead, position).normalize();
-      const turn = new THREE.Vector3().subVectors(further, ahead).normalize().cross(forward).y;
+      const turn = bend.subVectors(further, ahead).normalize().cross(forward).y;
       // Model +X is the head; keep the basis right-handed: Z = X × up, Y = Z × X.
       side.crossVectors(forward, up).normalize();
-      basis.makeBasis(forward, new THREE.Vector3().crossVectors(side, forward), side);
+      basis.makeBasis(forward, normal.crossVectors(side, forward), side);
       roll.makeRotationX(THREE.MathUtils.clamp(turn * 18, -0.55, 0.55));
-      position.add(bird.offset).add(new THREE.Vector3(0, Math.sin(time * 0.7 + index) * 0.15, 0));
-      matrix.copy(basis).multiply(roll).scale(new THREE.Vector3(scale, scale, scale)).setPosition(position);
+      position.add(bird.offset);
+      position.y += Math.sin(time * 0.7 + index) * 0.15;
+      matrix.copy(basis).multiply(roll).scale(sized).setPosition(position);
       mesh.setMatrixAt(index, matrix);
-    });
+    }
     mesh.instanceMatrix.needsUpdate = true;
   };
   update(0);
@@ -278,16 +309,33 @@ export function createAnimal(
   };
   switchTo(idle);
   place();
-  const solve = () => solver.update(point => shape.heightAt(point.x - origin.x, point.z - origin.z) - shape.heightAt(x, z), true);
+  // Every frame: one ground function and fixed scratch storage, no garbage.
+  let groundBase = 0;
+  const groundOffset = (point: THREE.Vector3) => shape.heightAt(point.x - origin.x, point.z - origin.z) - groundBase;
+  const solve = () => {
+    groundBase = shape.heightAt(x, z);
+    solver.update(groundOffset, true);
+  };
+  const steps = new Float64Array(Math.max(1, contacts.length));
   const animate = (delta: number, moving: number) => {
     if (walk) walk.setEffectiveTimeScale(rate * moving);
     for (const contact of contacts) { contact.y = contact.bone.position.y;contact.z = contact.bone.position.z; }
     mixer.update(delta);
     // The clip's planted feet move backwards at a non-uniform speed. Move
     // the body by the same amount instead of guessing from clip duration.
-    const planted = contacts.filter(item => Math.max(item.y, item.bone.position.y) < item.floor + stride * 0.06)
-      .map(item => Math.max(0, item.z - item.bone.position.z) * rigScale).sort((a, b) => a - b);
-    authoredStep = planted.length ? planted[Math.floor(planted.length / 2)] : speed * delta * moving * 0.5;
+    let plantedCount = 0;
+    for (const item of contacts) {
+      if (Math.max(item.y, item.bone.position.y) >= item.floor + stride * 0.06) continue;
+      // Insertion sort into the scratch: at most four feet.
+      const value = Math.max(0, item.z - item.bone.position.z) * rigScale;
+      let slot = plantedCount++;
+      while (slot > 0 && steps[slot - 1] > value) {
+        steps[slot] = steps[slot - 1];
+        slot--;
+      }
+      steps[slot] = value;
+    }
+    authoredStep = plantedCount ? steps[Math.floor(plantedCount / 2)] : speed * delta * moving * 0.5;
     if (!walk) {
       phase = (phase + delta * rate * moving / cycle) % 1;
       gaitWeight += (moving - gaitWeight) * Math.min(1, delta * 8);

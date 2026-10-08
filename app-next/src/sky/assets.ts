@@ -57,6 +57,10 @@ function loadRaw(): Promise<RawLibrary> {
     loader.loadAsync(`${base}gull.glb`),
     Promise.all(ANIMALS.map(name => loader.loadAsync(`${base}animals/${name}.glb`)))
   ]).then(([buildings, props, villager, gull, animals]) => {
+    // A cottage arrives as 42 meshes, a tower as 114: one per material is
+    // enough, and every mesh is a draw call (twice, with shadows).
+    mergeByMaterial(buildings);
+    mergeByMaterial(props);
     const toonify = (gltf: GLTF, animal = false) => gltf.scene.traverse(object => {
       const mesh = object as THREE.Mesh;
       if (!mesh.isMesh) return;
@@ -86,6 +90,60 @@ function loadRaw(): Promise<RawLibrary> {
     pending = null;
   });
   return pending;
+}
+
+/** Copies an attribute as plain floats, in index order when indexed. */
+function plainAttribute(attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute, index: THREE.BufferAttribute | null) {
+  const count = index ? index.count : attribute.count;
+  const size = attribute.itemSize;
+  const array = new Float32Array(count * size);
+  for (let vertex = 0; vertex < count; vertex++) {
+    const source = index ? index.getX(vertex) : vertex;
+    array[vertex * size] = attribute.getX(source);
+    if (size > 1) array[vertex * size + 1] = attribute.getY(source);
+    if (size > 2) array[vertex * size + 2] = attribute.getZ(source);
+    if (size > 3) array[vertex * size + 3] = attribute.getW(source);
+  }
+  return new THREE.Float32BufferAttribute(array, size);
+}
+
+/**
+ * Each model (a root child of the file) keeps one mesh per material: its
+ * meshes sharing a material are merged in the model's own space. Done once
+ * per session on the cached files; the originals are released.
+ */
+function mergeByMaterial(gltf: GLTF) {
+  gltf.scene.updateMatrixWorld(true);
+  for (const root of gltf.scene.children) {
+    const inverse = root.matrixWorld.clone().invert();
+    const groups = new Map<THREE.Material, THREE.Mesh[]>();
+    root.traverse(object => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh || (mesh as THREE.SkinnedMesh).isSkinnedMesh || Array.isArray(mesh.material)) return;
+      groups.set(mesh.material, [...(groups.get(mesh.material) ?? []), mesh]);
+    });
+    for (const [material, meshes] of groups) {
+      if (meshes.length < 2) continue;
+      const names = ["position", "normal", "uv"].filter(name => meshes.every(mesh => mesh.geometry.getAttribute(name)));
+      if (!names.includes("position") || !names.includes("normal")) continue;
+      const pieces = meshes.map(mesh => {
+        const piece = new THREE.BufferGeometry();
+        for (const name of names) piece.setAttribute(name, plainAttribute(mesh.geometry.getAttribute(name), mesh.geometry.index));
+        return piece.applyMatrix4(inverse.clone().multiply(mesh.matrixWorld));
+      });
+      const merged = mergeGeometries(pieces, false);
+      for (const piece of pieces) piece.dispose();
+      if (!merged) continue;
+      const combined = new THREE.Mesh(merged, material);
+      combined.name = `${root.name}:${material.name}`;
+      root.add(combined);
+      for (const mesh of meshes) {
+        mesh.removeFromParent();
+        mesh.geometry.dispose();
+      }
+    }
+  }
+  gltf.scene.updateMatrixWorld(true);
 }
 
 /**

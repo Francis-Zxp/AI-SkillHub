@@ -21,9 +21,9 @@ export type SkillArchipelagoProps = SkillUniverseProps & {
   onAdd?: () => void;
 };
 const copy = {
-  zh: { title: "天空岛", basis: "岛屿面积按 Skills 数 + Prompt 来源数计算", unfiled: "未归档", search: "寻找分类", reset: "回到全景", pause: "暂停动画", play: "播放动画", lowPower: "省电模式", lowPowerHint: "降低分辨率与阴影，减少动画帧率", loading: "正在准备天空岛…", fallback: "当前设备无法显示 3D 场景，已切换为分类列表", open: "打开分类", noMatch: "没有匹配的分类", browse: "分类导航", collapse: "收起导航", focus: "在地图中定位", retry: "重新加载场景", hint: "拖动平移 · 滚轮缩放 · 点击岛屿打开分类", credits: "素材与许可", sceneOn: "3D 天空岛", sceneOff: "简洁分类", sceneHint: "简洁分类以卡片显示分类，不占用显卡；可随时在这里或设置中切换。", creditsTitle: "天空岛素材", creditsOriginal: "岛屿地形、云海、水面、天气、布局与动画为 AI SkillHub 原创。", close: "关闭" },
-  en: { title: "Sky islands", basis: "Island area = Skills + Prompt sources", unfiled: "Unfiled", search: "Find a category", reset: "Show all", pause: "Pause motion", play: "Play motion", lowPower: "Low power", lowPowerHint: "Lower resolution, no shadows, fewer frames", loading: "Preparing your islands…", fallback: "3D is unavailable on this device; showing the category list", open: "Open category", noMatch: "No matching categories", browse: "Categories", collapse: "Close navigation", focus: "Locate on map", retry: "Reload scene", hint: "Drag to pan · Scroll to zoom · Click an island to open", credits: "Assets & licences", sceneOn: "3D islands", sceneOff: "Simple view", sceneHint: "Simple view shows category cards and uses no GPU. Switch back here or in Settings.", creditsTitle: "Sky island assets", creditsOriginal: "Island terrain, clouds, water, weather, layout and animation are original to AI SkillHub.", close: "Close" },
-  ko: { title: "하늘섬", basis: "섬 면적 = Skills 수 + Prompt 소스 수", unfiled: "미분류", search: "분류 찾기", reset: "전체 보기", pause: "애니메이션 정지", play: "애니메이션 재생", lowPower: "저전력", lowPowerHint: "해상도와 그림자를 낮추고 프레임을 줄입니다", loading: "하늘섬을 준비하는 중…", fallback: "이 기기에서는 3D를 표시할 수 없어 분류 목록을 보여 줍니다", open: "분류 열기", noMatch: "일치하는 분류가 없습니다", browse: "분류 탐색", collapse: "탐색 닫기", focus: "지도에서 찾기", retry: "장면 다시 로드", hint: "드래그 이동 · 스크롤 확대 · 섬을 클릭해 열기", credits: "에셋과 라이선스", sceneOn: "3D 하늘섬", sceneOff: "간단히 보기", sceneHint: "간단히 보기는 분류 카드를 보여 주며 GPU를 쓰지 않습니다. 여기나 설정에서 다시 켤 수 있습니다.", creditsTitle: "하늘섬 에셋", creditsOriginal: "섬 지형, 구름, 물, 날씨, 배치와 애니메이션은 AI SkillHub 자체 제작입니다.", close: "닫기" }
+  zh: { title: "天空岛", unfiled: "未归档", search: "寻找分类", reset: "回到全景", pause: "暂停动画", play: "播放动画", lowPower: "省电模式", lowPowerHint: "降低分辨率与阴影，减少动画帧率", loading: "正在准备天空岛…", fallback: "当前设备无法显示 3D 场景，已切换为分类列表", open: "打开分类", noMatch: "没有匹配的分类", browse: "分类导航", collapse: "收起导航", focus: "在地图中定位", retry: "重新加载场景", hint: "拖动平移 · 滚轮缩放 · 点击岛屿打开分类", credits: "素材与许可", sceneOn: "3D 天空岛", sceneOff: "简洁分类", sceneHint: "简洁分类以卡片显示分类，不占用显卡；可随时在这里或设置中切换。", creditsTitle: "天空岛素材", creditsOriginal: "岛屿地形、云海、水面、天气、布局与动画为 AI SkillHub 原创。", close: "关闭" },
+  en: { title: "Sky islands", unfiled: "Unfiled", search: "Find a category", reset: "Show all", pause: "Pause motion", play: "Play motion", lowPower: "Low power", lowPowerHint: "Lower resolution, no shadows, fewer frames", loading: "Preparing your islands…", fallback: "3D is unavailable on this device; showing the category list", open: "Open category", noMatch: "No matching categories", browse: "Categories", collapse: "Close navigation", focus: "Locate on map", retry: "Reload scene", hint: "Drag to pan · Scroll to zoom · Click an island to open", credits: "Assets & licences", sceneOn: "3D islands", sceneOff: "Simple view", sceneHint: "Simple view shows category cards and uses no GPU. Switch back here or in Settings.", creditsTitle: "Sky island assets", creditsOriginal: "Island terrain, clouds, water, weather, layout and animation are original to AI SkillHub.", close: "Close" },
+  ko: { title: "하늘섬", unfiled: "미분류", search: "분류 찾기", reset: "전체 보기", pause: "애니메이션 정지", play: "애니메이션 재생", lowPower: "저전력", lowPowerHint: "해상도와 그림자를 낮추고 프레임을 줄입니다", loading: "하늘섬을 준비하는 중…", fallback: "이 기기에서는 3D를 표시할 수 없어 분류 목록을 보여 줍니다", open: "분류 열기", noMatch: "일치하는 분류가 없습니다", browse: "분류 탐색", collapse: "탐색 닫기", focus: "지도에서 찾기", retry: "장면 다시 로드", hint: "드래그 이동 · 스크롤 확대 · 섬을 클릭해 열기", credits: "에셋과 라이선스", sceneOn: "3D 하늘섬", sceneOff: "간단히 보기", sceneHint: "간단히 보기는 분류 카드를 보여 주며 GPU를 쓰지 않습니다. 여기나 설정에서 다시 켤 수 있습니다.", creditsTitle: "하늘섬 에셋", creditsOriginal: "섬 지형, 구름, 물, 날씨, 배치와 애니메이션은 AI SkillHub 자체 제작입니다.", close: "닫기" }
 };
 
 
@@ -35,6 +35,38 @@ const ASSET_CREDITS = [
 ];
 
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
+
+/** The shell tells the page when the window is minimised or restored:
+ * `skillhub-app-hidden` with `detail: true` (or no detail) when hidden,
+ * `detail: false` or a `skillhub-app-shown` event when shown again. */
+export const APP_HIDDEN_EVENT = "skillhub-app-hidden";
+export const APP_SHOWN_EVENT = "skillhub-app-shown";
+
+/** Out of sight this long, the 3D world sleeps: a still image stays on screen
+ * and every GPU resource (and the WebGL context) is released. */
+const SLEEP_AFTER_MS = 15_000;
+
+type Still = { key: string; url: string; view: SkyWorldView; width: number; height: number };
+/** The last still image, kept across remounts: home unmounts when another
+ * page opens, and coming back shows it at once while the world rebuilds. */
+let lastStill: Still | null = null;
+
+function keepStill(next: Still | null) {
+  if (lastStill && lastStill.url !== next?.url) URL.revokeObjectURL(lastStill.url);
+  lastStill = next;
+}
+
+/** A 2D snapshot canvas as a compact image (about 0.2 MB instead of 8 MB). */
+function encodeStill(canvas: HTMLCanvasElement, done: (url: string | null) => void) {
+  try {
+    canvas.toBlob(blob => {
+      canvas.width = canvas.height = 0;
+      done(blob ? URL.createObjectURL(blob) : null);
+    }, "image/webp", 0.92);
+  } catch {
+    done(null);
+  }
+}
 
 /** Development preview only: `?skyDemo=12` or localStorage
  * `skillhub-sky-demo-islands` adds demo islands to see many climates. */
@@ -69,10 +101,13 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   // Unrelated sync progress must not rebuild the GPU scene or reset its camera.
   const modelKey = JSON.stringify(islands.map(island => [island.id, island.name, island.weight]));
   const stableIslands = useMemo(() => islands, [modelKey]);
+  const stillKey = `${modelKey}|${seed}|${timeOfDay}`;
   const host = useRef<HTMLDivElement>(null), world = useRef<SkyWorld | null>(null);
   // A world being replaced stays on screen until its successor is ready.
   const retiring = useRef<SkyWorld[]>([]);
-  const savedView = useRef<{ key: string; view: SkyWorldView } | null>(null);
+  const [still, setStill] = useState<string | null>(() => (lastStill?.key === stillKey ? lastStill.url : null));
+  const stillRef = useRef(still); stillRef.current = still;
+  const savedView = useRef<{ key: string; view: SkyWorldView } | null>(lastStill?.key === stillKey ? { key: modelKey, view: lastStill.view } : null);
   const labels = useRef(new Map<string, HTMLElement>());
   const openRef = useRef(onOpenFolder); openRef.current = onOpenFolder;
   const [status, setStatus] = useState<"loading" | "ready" | "fallback" | "off" | "empty">("loading");
@@ -90,12 +125,18 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   const [hovered, setHovered] = useState<string | null>(null);
   const [credits, setCredits] = useState(false);
   const [worldPanel, setWorldPanel] = useState(false);
+  // Sleep: the scene is out of sight (another page, a hidden tab, a
+  // minimised window) for SLEEP_AFTER_MS. Waking rebuilds it behind the still.
+  const [pageHidden, setPageHidden] = useState(() => document.hidden);
+  const [appHidden, setAppHidden] = useState(false);
+  const [asleep, setAsleep] = useState(false);
+  const awake = visible && !pageHidden && !appHidden;
   const worldPanelRef = useRef<HTMLDivElement>(null), worldToggleRef = useRef<HTMLButtonElement>(null);
   const visibleIslands = islands.filter(island => island.name.toLocaleLowerCase().includes(query.toLocaleLowerCase().trim()));
   const totalSkills = islands.reduce((sum, island) => sum + island.skillCount, 0);
   const hasSnapshot = Boolean(snapshot);
-  const current = useRef({ paused, lowPower, visible, timeOfDay, weatherSetting });
-  current.current = { paused, lowPower, visible, timeOfDay, weatherSetting };
+  const current = useRef({ paused, lowPower, awake, timeOfDay, weatherSetting, modelKey, stillKey });
+  current.current = { paused, lowPower, awake, timeOfDay, weatherSetting, modelKey, stillKey };
 
   useEffect(() => {
     const query = window.matchMedia(REDUCED_MOTION);
@@ -104,13 +145,55 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
     return () => query.removeEventListener("change", onChange);
   }, []);
 
+  useEffect(() => {
+    const onVisibility = () => setPageHidden(document.hidden);
+    const onHidden = (event: Event) => setAppHidden((event as CustomEvent<boolean | undefined>).detail !== false);
+    const onShown = () => setAppHidden(false);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener(APP_HIDDEN_EVENT, onHidden);
+    window.addEventListener(APP_SHOWN_EVENT, onShown);
+    // A restored window takes focus again even if the shell says nothing.
+    window.addEventListener("focus", onShown);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener(APP_HIDDEN_EVENT, onHidden);
+      window.removeEventListener(APP_SHOWN_EVENT, onShown);
+      window.removeEventListener("focus", onShown);
+    };
+  }, []);
+
+  const clearStill = () => {
+    const url = stillRef.current;
+    if (!url) return;
+    stillRef.current = null;
+    setStill(null);
+    // The cached copy for the next visit stays; any other image goes.
+    if (lastStill?.url !== url) window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
   const disposeRetiring = () => {
     for (const old of retiring.current.splice(0)) old.dispose();
   };
   useEffect(() => () => {
-    disposeRetiring();
-    world.current?.dispose();
+    // Leaving home: keep a still of the view for the next visit, then free
+    // the GPU. The encode finishes after unmount; it only touches lastStill.
+    const old = world.current;
     world.current = null;
+    if (old) {
+      const key = current.current.stillKey;
+      const view = old.view();
+      const canvas = old.snapshot();
+      if (canvas) {
+        const { width, height } = canvas;
+        encodeStill(canvas, url => {
+          if (url) keepStill({ key, url, view, width, height });
+        });
+      }
+      old.dispose();
+    }
+    disposeRetiring();
+    const url = stillRef.current;
+    if (url && lastStill?.url !== url) URL.revokeObjectURL(url);
   }, []);
 
   useEffect(() => {
@@ -122,15 +205,23 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
     if (!sceneOn) {
       setStatus("off");
       disposeRetiring();
+      clearStill();
       return;
     }
     if (!probeGraphics().webgl) {
       setStatus("fallback");
       disposeRetiring();
+      clearStill();
+      return;
+    }
+    if (asleep) {
+      // The still image and the labels stay; the GPU world is gone.
+      disposeRetiring();
       return;
     }
     let cancelled = false;
-    if (!retiring.current.length) setStatus("loading");
+    // With a still image on screen the labels stay up while the world builds.
+    if (!retiring.current.length && !stillRef.current) setStatus("loading");
     const initialView = savedView.current?.key === modelKey ? savedView.current.view : null;
     import("./sky/world").then(({ createSkyWorld }) => {
       if (cancelled || !host.current) return;
@@ -140,7 +231,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
         labels: labels.current,
         direction: current.current.timeOfDay,
         paused: current.current.paused,
-        visible: current.current.visible,
+        visible: current.current.awake,
         lowPower: current.current.lowPower,
         seed,
         weather: current.current.weatherSetting,
@@ -148,9 +239,11 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
         onOpen: id => openRef.current?.(id),
         onHover: setHovered,
         onInfo: setInfo,
+        onFirstFrame: clearStill,
         onFailure: () => {
           world.current?.dispose();
           world.current = null;
+          clearStill();
           setStatus("fallback");
         }
       }).then(created => {
@@ -160,7 +253,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
         }
         disposeRetiring();
         world.current = created;
-        created.setVisible(current.current.visible);
+        created.setVisible(current.current.awake);
         created.setDirection(current.current.timeOfDay);
         setRerolling(false);
         setStatus("ready");
@@ -168,6 +261,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
     }).catch(() => {
       if (cancelled) return;
       disposeRetiring();
+      clearStill();
       setRerolling(false);
       setStatus("fallback");
     });
@@ -181,13 +275,48 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
         retiring.current.push(old);
       }
     };
-  }, [stableIslands, retry, sceneOn, seed, hasSnapshot]);
-  useEffect(() => { world.current?.setVisible(visible); }, [visible]);
+  }, [stableIslands, retry, sceneOn, seed, hasSnapshot, asleep]);
+  useEffect(() => { world.current?.setVisible(awake); }, [awake]);
   useEffect(() => { world.current?.setPaused(paused); }, [paused]);
   useEffect(() => { world.current?.setLowPower(lowPower); }, [lowPower]);
   // The time of day changes the light in place: no rebuild, the view stays.
   useEffect(() => { world.current?.setDirection(timeOfDay); }, [timeOfDay]);
   useEffect(() => { world.current?.setWeather(weatherSetting); }, [weatherSetting]);
+
+  // Out of sight long enough: keep a still image and release the world.
+  useEffect(() => {
+    if (awake || asleep) return;
+    const timer = window.setTimeout(() => {
+      const sleeping = world.current;
+      if (!sleeping) return;
+      const canvas = sleeping.snapshot();
+      if (canvas) {
+        const view = sleeping.view();
+        const { width, height } = canvas;
+        const key = current.current.stillKey;
+        encodeStill(canvas, url => {
+          if (!url) return;
+          keepStill({ key, url, view, width, height });
+          stillRef.current = url;
+          setStill(url);
+        });
+      }
+      setAsleep(true);
+    }, SLEEP_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, [awake, asleep]);
+  // Back in sight: rebuild behind the still (it goes after the first frame).
+  useEffect(() => {
+    if (awake && asleep) setAsleep(false);
+  }, [awake, asleep]);
+  const wake = () => {
+    if (appHidden) setAppHidden(false);
+    if (asleep && visible && !pageHidden) setAsleep(false);
+  };
+
+  // Labels change size with the language: let the world place them again.
+  const labelText = islands.map(island => `${island.name}:${island.skillCount}:${island.promptCount}`).join("|");
+  useEffect(() => { world.current?.relayout(); }, [lang, labelText]);
 
   // The world panel closes on Escape or a click elsewhere.
   useEffect(() => {
@@ -235,13 +364,13 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   };
   const label = (island: (typeof islands)[number]) => `${sky.skills(island.skillCount)}${island.promptCount > 0 ? ` · ${sky.prompts(island.promptCount)}` : ""}`;
   const climateOf = (id: string) => (info?.climates[id] ? sky.climateNames[info.climates[id]] : "");
-  const still = paused || reducedMotion;
+  const still3d = paused || reducedMotion;
   const legend = info ? climateCounts(info.climates) : [];
   const weatherName = info ? sky.weathers[info.weather] : "";
 
   const maxWeight = Math.max(1, ...islands.map(island => island.weight));
   const threeD = islands.length > 0 && status !== "off";
-  return <section className={`skill-archipelago sky-islands sky-phase-${timeOfDay}${lightTheme ? " is-light" : ""}${status === "fallback" ? " is-fallback" : ""}${status === "off" ? " is-flat" : ""}`} aria-label={words.title} data-status={status} data-weather={info?.weather ?? ""} data-world-seed={seed}>
+  return <section className={`skill-archipelago sky-islands sky-phase-${timeOfDay}${lightTheme ? " is-light" : ""}${status === "fallback" ? " is-fallback" : ""}${status === "off" ? " is-flat" : ""}`} aria-label={words.title} data-status={status} data-weather={info?.weather ?? ""} data-world-seed={seed} onPointerMove={asleep || appHidden ? wake : undefined}>
     <header className="sky-heading">
       <h2>{words.title}</h2>
       {islands.length > 0 && <p>{sky.summary(islands.length, totalSkills)}</p>}
@@ -249,7 +378,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
     <div className="sky-controls">
       {threeD && <>
       <button type="button" className="sky-control-compact" onClick={() => { world.current?.reset(); setQuery(""); setHovered(null); }} title={words.reset} aria-label={words.reset}><span aria-hidden="true">⌖</span><span>{words.reset}</span></button>
-      <button type="button" className="sky-control-compact" aria-pressed={still} disabled={reducedMotion} onClick={togglePaused} title={reducedMotion ? sky.reducedMotion : still ? words.play : words.pause}><span aria-hidden="true">{still ? "▷" : "Ⅱ"}</span><span>{still ? words.play : words.pause}</span></button>
+      <button type="button" className="sky-control-compact" aria-pressed={still3d} disabled={reducedMotion} onClick={togglePaused} title={reducedMotion ? sky.reducedMotion : still3d ? words.play : words.pause}><span aria-hidden="true">{still3d ? "▷" : "Ⅱ"}</span><span>{still3d ? words.play : words.pause}</span></button>
       <button type="button" className="sky-control-compact" aria-pressed={lowPower} onClick={toggleLowPower} title={words.lowPowerHint}><span aria-hidden="true">◐</span><span>{words.lowPower}</span></button>
       {status !== "fallback" && <button ref={worldToggleRef} type="button" className="sky-control-compact sky-world-toggle" aria-haspopup="dialog" aria-expanded={worldPanel} onClick={() => showPanel("world")} title={sky.worldTitle}><span aria-hidden="true">{WEATHER_GLYPHS[info?.weather ?? "auto"]}</span><span>{sky.world}</span></button>}
       <button type="button" aria-expanded={navigation} onClick={() => showPanel("navigation")}>{navigation ? words.collapse : words.browse}<span aria-hidden="true">{navigation ? "−" : "+"}</span></button>
@@ -281,7 +410,8 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
         <i aria-hidden="true" style={{ width: `${Math.max(6, Math.round((island.weight / maxWeight) * 100))}%` }} />
       </button></div>)}
     </div>}
-    <div className="sky-scene-host" ref={host}>
+    <div className="sky-scene-host" ref={host} data-sleeping={asleep ? "1" : undefined}>
+      {still && threeD && status !== "fallback" && <img className="sky-world-still" src={still} alt="" aria-hidden="true" draggable={false} />}
       <div className="sky-map-labels" hidden={status !== "ready"}>{islands.map(island => {
         const climate = climateOf(island.id);
         return <button key={island.id} ref={element => { if (element) labels.current.set(island.id, element); else labels.current.delete(island.id); }}
@@ -304,10 +434,10 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
       {status === "fallback" && <div className="sky-fallback-note"><span>{words.fallback}</span>{probeGraphics().webgl && <button type="button" onClick={() => setRetry(value => value + 1)}>{words.retry}</button>}</div>}
     </aside>}
     {!snapshot ? <div className="sky-empty" role="status">{words.loading}</div>
-      : !islands.length ? <div className="sky-empty"><h3>{sky.empty}</h3><p>{sky.emptyHint}</p><button type="button" onClick={() => (onAdd ? onAdd() : open("all"))}>{onAdd ? sky.addSource : `${words.browse} →`}</button></div>
-      : status === "loading" ? <div className="sky-loading" role="status">{words.loading}</div>
+      : !islands.length ? <div className="sky-empty"><h3>{sky.empty}</h3><p>{sky.emptyHint}</p><button type="button" onClick={() => (onAdd ? onAdd() : open("all"))}>{onAdd ? sky.addSource : sky.openLibrary}</button></div>
+      : status === "loading" && !still ? <div className="sky-loading" role="status">{words.loading}</div>
       : rerolling ? <div className="sky-loading" role="status">{sky.rerolling}</div> : null}
-    {islands.length > 0 && status !== "off" && <footer className="sky-caption"><span>{words.basis}</span><span>{words.hint}<button type="button" className="sky-credits-toggle" aria-expanded={credits} onClick={() => showPanel("credits")}>{words.credits}</button></span></footer>}
+    {islands.length > 0 && status !== "off" && <footer className="sky-caption"><span>{sky.basis}</span><span>{words.hint}<button type="button" className="sky-credits-toggle" aria-expanded={credits} onClick={() => showPanel("credits")}>{words.credits}</button></span></footer>}
     {credits && <aside className="sky-credits" aria-label={words.creditsTitle}>
       <header><strong>{words.creditsTitle}</strong><button type="button" onClick={() => setCredits(false)} aria-label={words.close}>×</button></header>
       <ul>{ASSET_CREDITS.map(item => <li key={item.work}><span>{item.work}</span><small>{item.author} · {item.licence}</small></li>)}</ul>

@@ -20,6 +20,8 @@
 /* Stacked: a world being replaced stays on top until its successor is ready. */
 .sky-world-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
 .sky-map-labels { position: absolute; inset: 0; pointer-events: none; }
+/* While the 3D world sleeps (or wakes up) a still of the last frame stands in. */
+.sky-world-still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; user-select: none; }
 /* A label the scene has not placed yet must not flash in the corner. */
 .sky-island-label:not([style*="translate"]) { visibility: hidden; }
 .sky-island-label { pointer-events: auto; position: absolute; left: 0; top: 0; width: max-content; max-width: 220px; border: 1px solid #ffffff1f; border-radius: 9px; padding: 6px 12px 7px; color: #f7f1ea; background: #131b2cdb; text-align: center; cursor: pointer; box-shadow: 0 2px 8px #0508122e; transition: background .16s, border-color .16s; will-change: transform; }

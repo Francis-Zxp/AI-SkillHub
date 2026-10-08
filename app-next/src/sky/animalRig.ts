@@ -30,6 +30,9 @@ export function repairFarmHoofWeights(gltf: GLTF) {
   });
 }
 
+/** Four-beat walk: the phase offset of each leg. */
+const GAIT_OFFSETS = [0, 0.5, 0.25, 0.75];
+
 /** Reconstruct the two-bone IK omitted by the FBX exporter. The authored
  * root-level Foot tracks are targets, not deform bones. Solve the upper and
  * lower leg toward them after AnimationMixer, retaining rigid hoof weights. */
@@ -46,7 +49,7 @@ export function createFarmLegSolver(object: Object3D) {
     const axis = end.clone().sub(h).normalize();
     const pole = k.clone().sub(h).addScaledVector(axis, -k.clone().sub(h).dot(axis)).normalize();
     pole.applyQuaternion(object.getWorldQuaternion(new Quaternion()).invert());
-    return [{ upper, lower, foot, endpoint: lower.worldToLocal(end), pole, rest: foot.position.clone(), planted: null as Vector3 | null }];
+    return [{ upper, lower, foot, endpoint: lower.worldToLocal(end), pole, rest: foot.position.clone(), planted: null as Vector3 | null, anchor: new Vector3() }];
   });
   const h = new Vector3(), k = new Vector3(), end = new Vector3(), target = new Vector3(), axis = new Vector3(), pole = new Vector3(), joint = new Vector3();
   const from = new Vector3(), to = new Vector3(), delta = new Quaternion(), world = new Quaternion(), parent = new Quaternion();
@@ -61,7 +64,7 @@ export function createFarmLegSolver(object: Object3D) {
     /** Four-beat walking only for assets with no authored walk clip. */
     gait(phase: number, stride: number, weight: number) {
       legs.forEach((leg, index) => {
-        const t = (phase + [0, 0.5, 0.25, 0.75][index]) % 1;
+        const t = (phase + GAIT_OFFSETS[index]) % 1;
         const swing = Math.max(0, (t - 0.62) / 0.38);
         const z = t < 0.62 ? 0.5 - t / 0.62 : -0.5 + swing * swing * (3 - 2 * swing);
         leg.foot.position.copy(leg.rest);
@@ -80,7 +83,7 @@ export function createFarmLegSolver(object: Object3D) {
         // differ slightly between legs; a single body velocity cannot cancel
         // every one exactly. Release as soon as the foot begins its swing.
         if (grounded && leg.foot.position.y < leg.rest.y + 0.035) {
-          if (!leg.planted || leg.planted.distanceTo(target) > (a + b) * 0.45) leg.planted = target.clone();
+          if (!leg.planted || leg.planted.distanceTo(target) > (a + b) * 0.45) leg.planted = leg.anchor.copy(target);
           target.copy(leg.planted);
         } else leg.planted = null;
         const distance = Math.max(Math.abs(a - b) + 1e-5, Math.min(h.distanceTo(target), (a + b) * 0.999));

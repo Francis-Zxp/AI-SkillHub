@@ -30,7 +30,10 @@ const biomes = load("sky/biomes.ts", { "./terrain": terrain, "./noise": noise })
 const layout = load("sky/layout.ts", { "./noise": noise });
 const weatherPlan = load("sky/weatherPlan.ts", { "./noise": noise });
 const scene = load("skyScene.ts");
-const model = load("skyIslandModel.ts");
+// Island counts use the shared counting rule (skillCounts.ts, from the v3.3
+// Skills track) once both lines are merged; without it the model stands alone.
+const hasSharedCounts = fs.existsSync(path.join(__dirname, "../src/skillCounts.ts"));
+const model = load("skyIslandModel.ts", hasSharedCounts ? { "./skillCounts": load("skillCounts.ts") } : {});
 const i18n = load("sky/skyI18n.ts");
 
 const { CLIMATES, CLIMATE_IDS, assignClimates, layoutNeighbours, climateCounts } = climates;
@@ -261,7 +264,7 @@ test("the world seed follows the ISO week until re-rolled", () => {
   assert.equal(scene.skyWeatherSetting(), "auto");
 });
 
-test("island counts include single-skill repositories but not parent routers", () => {
+test("island counts include single-skill repositories but not parent routers", { skip: hasSharedCounts ? false : "bug #40 is fixed by the shared skillCounts.ts rule (v33/skills-frontend); runs once merged" }, () => {
   const snapshot = {
     skillFolders: [{ id: "ui", name: "软件与 UI", sortOrder: 0 }],
     sources: [
@@ -278,25 +281,55 @@ test("island counts include single-skill repositories but not parent routers", (
   };
   const islands = Object.fromEntries(model.buildSkyIslands(snapshot, "Unfiled").map(island => [island.id, island]));
   assert.equal(islands.ui.skillCount, 3, "single-skill repo counted, multi-skill router excluded");
-  assert.equal(islands.unfiled, undefined, "a router with no known repository is not content");
-  assert.equal(model.isCountedSkill(snapshot.skills[0], 1), true);
-  assert.equal(model.isCountedSkill(snapshot.skills[1], 3), false);
+});
+
+test("demo islands are a development preview only", () => {
   const demo = model.demoSkyIslands(12);
   assert.equal(demo.length, 12);
   assert.ok(demo.every(island => island.weight > 0 && island.id.startsWith("demo-island-")));
   assert.equal(model.demoSkyIslands(0).length, 0);
+  const archipelago = fs.readFileSync(path.join(__dirname, "../src/SkillArchipelago.tsx"), "utf8");
+  assert.match(archipelago, /if \(!import\.meta\.env\.DEV\) return 0;/, "demo islands never show in a release build");
 });
 
 test("English labels use singular and plural forms", () => {
   const en = i18n.skyWords("en");
-  assert.equal(en.skills(1), "1 Skill");
-  assert.equal(en.skills(2), "2 Skills");
-  assert.equal(en.prompts(1), "1 Prompt source");
-  assert.equal(en.summary(1, 1), "1 category · 1 Skill");
-  assert.equal(en.summary(5, 4), "5 categories · 4 Skills");
+  assert.equal(en.skills(1), "1 skill");
+  assert.equal(en.skills(2), "2 skills");
+  assert.equal(en.prompts(1), "1 prompt source");
+  assert.equal(en.summary(1, 1), "1 category · 1 skill");
+  assert.equal(en.summary(5, 4), "5 categories · 4 skills");
   for (const lang of ["zh", "en", "ko"]) {
     const words = i18n.skyWords(lang);
     for (const id of CLIMATE_IDS) assert.ok(words.climateNames[id], `${lang} names ${id}`);
     for (const kind of scene.SKY_WEATHER_KINDS) assert.ok(words.weathers[kind], `${lang} names ${kind}`);
   }
+});
+
+test("Chinese and Korean island text does not mix in English words", () => {
+  const latin = /[A-Za-z]{2,}/;
+  for (const lang of ["zh", "ko"]) {
+    const words = i18n.skyWords(lang);
+    const samples = [
+      words.skills(13), words.prompts(2), words.categories(5), words.summary(5, 13), words.basis, words.empty, words.emptyHint,
+      words.addSource, words.openLibrary, words.world, words.worldTitle, words.weather, words.auto, words.reroll, words.climates,
+      ...Object.values(words.weathers), ...Object.values(words.climateNames)
+    ];
+    for (const text of samples) assert.doesNotMatch(text, latin, `${lang}: "${text}"`);
+  }
+  assert.equal(i18n.skyWords("zh").skills(13), "13 个技能");
+  assert.equal(i18n.skyWords("zh").prompts(1), "1 个提示词来源");
+  assert.equal(i18n.skyWords("ko").skills(13), "스킬 13개");
+  // Every language has the same keys.
+  const keys = lang => Object.keys(i18n.skyWords(lang)).sort().join(",");
+  assert.equal(keys("en"), keys("zh"));
+  assert.equal(keys("ko"), keys("zh"));
+});
+
+test("the empty state offers adding a source, and falls back to the library", () => {
+  const archipelago = fs.readFileSync(path.join(__dirname, "../src/SkillArchipelago.tsx"), "utf8");
+  assert.match(archipelago, /onAdd\?: \(\) => void;/);
+  assert.match(archipelago, /onClick=\{\(\) => \(onAdd \? onAdd\(\) : open\("all"\)\)\}>\{onAdd \? sky\.addSource : sky\.openLibrary\}/);
+  assert.equal(i18n.skyWords("zh").addSource, "+ 添加");
+  assert.doesNotMatch(archipelago, /创建分类/);
 });

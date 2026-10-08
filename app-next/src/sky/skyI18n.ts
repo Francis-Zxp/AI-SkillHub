@@ -41,6 +41,8 @@ type Words = {
   empty: string;
   emptyHint: string;
   addSource: string;
+  openLibrary: string;
+  basis: string;
   skills: (count: number) => string;
   prompts: (count: number) => string;
   categories: (count: number) => string;
@@ -62,21 +64,23 @@ const WORDS: Record<SkyLang, Words> = {
     weather: "天气",
     auto: "自动",
     autoNow: name => `自动 · ${name}`,
-    weathers: { clear: "晴", cloudy: "多云", rain: "小雨", storm: "雷雨", snow: "降雪", fog: "薄雾", rainbow: "雨后彩虹", petals: "落英", aurora: "极光" },
+    weathers: { clear: "晴天", cloudy: "多云", rain: "小雨", storm: "雷雨", snow: "下雪", fog: "起雾", rainbow: "彩虹", petals: "落花", aurora: "极光" },
     auroraNight: "极光只在夜晚出现",
     reroll: "🎲 换一个世界",
-    rerollHint: "重新随机岛屿的气候和自动天气",
+    rerollHint: "随机换一套岛屿气候和自动天气",
     rerolling: "正在生成新世界…",
-    climates: "本次的岛屿气候",
-    climateNames: { temperate: "温带草甸", alpine: "雪山", desert: "沙漠台地", tropical: "热带海岛", autumn: "秋林", volcanic: "火山", crystal: "晶石", terraced: "梯田" },
+    climates: "这次的岛屿气候",
+    climateNames: { temperate: "草原", alpine: "雪山", desert: "沙漠", tropical: "热带", autumn: "秋林", volcanic: "火山", crystal: "水晶", terraced: "梯田" },
     reducedMotion: "系统已开启“减少动态效果”，场景保持静止",
-    empty: "添加第一个技能来源",
-    emptyHint: "添加技能来源后，每个分类都会变成一座天空岛。",
-    addSource: "+ 添加来源",
-    skills: count => `${count.toLocaleString()} Skills`,
-    prompts: count => `${count.toLocaleString()} Prompt 来源`,
+    empty: "这里还没有技能",
+    emptyHint: "添加一个技能包后，每个分类都会变成一座天空岛。",
+    addSource: "+ 添加",
+    openLibrary: "打开技能库 →",
+    basis: "岛屿大小按技能数和提示词来源数计算",
+    skills: count => `${count.toLocaleString()} 个技能`,
+    prompts: count => `${count.toLocaleString()} 个提示词来源`,
     categories: count => `${count.toLocaleString()} 个分类`,
-    summary: (categories, skills) => `${categories.toLocaleString()} 个分类 · ${skills.toLocaleString()} 个 Skills`
+    summary: (categories, skills) => `${categories.toLocaleString()} 个分类 · ${skills.toLocaleString()} 个技能`
   },
   en: {
     world: "World",
@@ -92,13 +96,15 @@ const WORDS: Record<SkyLang, Words> = {
     climates: "Island climates",
     climateNames: { temperate: "Meadow", alpine: "Snowy peak", desert: "Desert mesa", tropical: "Tropical isle", autumn: "Autumn woods", volcanic: "Volcano", crystal: "Crystal", terraced: "Rice terraces" },
     reducedMotion: "Your system asks for reduced motion, so the scene stays still",
-    empty: "Add your first skill source",
-    emptyHint: "Add a skill source and each category becomes a sky island.",
-    addSource: "+ Add source",
-    skills: count => `${count.toLocaleString()} ${plural("en", count, "Skill", "Skills")}`,
-    prompts: count => `${count.toLocaleString()} ${plural("en", count, "Prompt source", "Prompt sources")}`,
+    empty: "No skills yet",
+    emptyHint: "Add a skill pack and each category becomes a sky island.",
+    addSource: "+ Add",
+    openLibrary: "Open the library →",
+    basis: "Island size follows its skills and prompt sources",
+    skills: count => `${count.toLocaleString()} ${plural("en", count, "skill", "skills")}`,
+    prompts: count => `${count.toLocaleString()} ${plural("en", count, "prompt source", "prompt sources")}`,
     categories: count => `${count.toLocaleString()} ${plural("en", count, "category", "categories")}`,
-    summary: (categories, skills) => `${categories.toLocaleString()} ${plural("en", categories, "category", "categories")} · ${skills.toLocaleString()} ${plural("en", skills, "Skill", "Skills")}`
+    summary: (categories, skills) => `${categories.toLocaleString()} ${plural("en", categories, "category", "categories")} · ${skills.toLocaleString()} ${plural("en", skills, "skill", "skills")}`
   },
   ko: {
     world: "세계",
@@ -114,13 +120,15 @@ const WORDS: Record<SkyLang, Words> = {
     climates: "이번 섬 기후",
     climateNames: { temperate: "온대 초원", alpine: "설산", desert: "사막 메사", tropical: "열대 섬", autumn: "가을 숲", volcanic: "화산", crystal: "수정", terraced: "계단식 논" },
     reducedMotion: "시스템에서 동작 줄이기가 켜져 있어 장면이 멈춰 있습니다",
-    empty: "첫 스킬 소스를 추가하세요",
-    emptyHint: "스킬 소스를 추가하면 분류마다 하늘섬이 생깁니다.",
-    addSource: "+ 소스 추가",
-    skills: count => `Skills ${count.toLocaleString()}개`,
-    prompts: count => `Prompt 소스 ${count.toLocaleString()}개`,
+    empty: "아직 스킬이 없습니다",
+    emptyHint: "스킬 팩을 추가하면 분류마다 하늘섬이 생깁니다.",
+    addSource: "+ 추가",
+    openLibrary: "라이브러리 열기 →",
+    basis: "섬 크기는 스킬 수와 프롬프트 소스 수를 따릅니다",
+    skills: count => `스킬 ${count.toLocaleString()}개`,
+    prompts: count => `프롬프트 소스 ${count.toLocaleString()}개`,
     categories: count => `분류 ${count.toLocaleString()}개`,
-    summary: (categories, skills) => `분류 ${categories.toLocaleString()}개 · Skills ${skills.toLocaleString()}개`
+    summary: (categories, skills) => `분류 ${categories.toLocaleString()}개 · 스킬 ${skills.toLocaleString()}개`
   }
 };
 

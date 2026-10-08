@@ -4,11 +4,13 @@
 // work. One merged cloud deck for overcast skies. Rainbows, aurora and
 // lightning live in the sky dome's shader. Weather also owns the light, fog
 // and cloud tint multipliers, so a change of weather fades in smoothly.
-// At most two draw calls: the particles and the deck.
+// At most two draw calls: the particles and the deck. The frame update only
+// eases numbers and writes uniforms; colours are parsed once per palette.
 import * as THREE from "three";
 import type { SkyWeatherKind } from "../skyScene";
 import type { SkyPalette } from "./materials";
 import { SHARED_UNIFORMS, cloudMaterial } from "./materials";
+import { releaseAfterUpload } from "./memory";
 import { hashString, seededRandom } from "./noise";
 
 type Particles = "none" | "rain" | "snow" | "petals";
@@ -31,6 +33,8 @@ type Look = {
   deck: number;
   particles: number;
 };
+
+const LOOK_KEYS: Array<keyof Look> = ["sun", "hemi", "fogNear", "fogFar", "fogGrey", "dim", "cloudDark", "lift", "wind", "rain", "rainbow", "aurora", "deck", "particles"];
 
 const CLEAR: Look = { sun: 1, hemi: 1, fogNear: 1, fogFar: 1, fogGrey: 0, dim: 0, cloudDark: 0, lift: 0, wind: 1, rain: 0, rainbow: 0, aurora: 0, deck: 0, particles: 0 };
 
@@ -70,6 +74,8 @@ export type WeatherOptions = {
   reducedMotion: () => boolean;
   /** Petal colours: garden blossom, autumn leaves or both. */
   petals: string[];
+  /** Scene time the world starts at (a woken world keeps its clock). */
+  startTime?: number;
 };
 
 export type Weather = {
@@ -292,6 +298,9 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
     return { center: new THREE.Vector3(x, y, z), size: [scale, scale * 0.78] as [number, number], seed: 20 + index };
   });
   const deckGeo = deckGeometry(slots);
+  // Both are built for this world only; the GPU keeps them after upload.
+  releaseAfterUpload(particleGeo);
+  releaseAfterUpload(deckGeo);
   const deckMaterial = cloudMaterial(palette, true);
   const deck = new THREE.Mesh(deckGeo, deckMaterial);
   deck.frustumCulled = false;
@@ -300,10 +309,25 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
 
   // Lightning: a double flash every 6-14 s of scene time (storm only).
   const flashRandom = seededRandom(hashString(`flash:${options.seed}`));
-  let nextFlash = 3 + flashRandom() * 5, flashAt = -100, boltAzimuth = 0, boltSeed = 0, lastFlash = 0;
+  const startTime = options.startTime ?? 0;
+  let nextFlash = startTime + 3 + flashRandom() * 5, flashAt = -100, boltAzimuth = 0, boltSeed = 0, lastFlash = 0;
 
-  const grey = new THREE.Color(), base = new THREE.Color(), scratch = new THREE.Color();
+  // Colours parsed once per palette, never in the frame loop.
+  const GREY_DAY = new THREE.Color("#9aa6b2"), GREY_NIGHT = new THREE.Color("#2a3550");
+  const CLOUD_DAY = new THREE.Color("#b9c3cd"), CLOUD_NIGHT = new THREE.Color("#3a4560");
+  const SHADE_DAY = new THREE.Color("#7d8896"), SHADE_NIGHT = new THREE.Color("#1a2235");
+  const paletteFog = new THREE.Color(), paletteSkyBelow = new THREE.Color(), paletteCloud = new THREE.Color(), paletteCloudShade = new THREE.Color();
+  const readPalette = (p: SkyPalette) => {
+    paletteFog.set(p.fog);
+    paletteSkyBelow.set(p.skyBelow);
+    paletteCloud.set(p.cloud);
+    paletteCloudShade.set(p.cloudShade);
+  };
+  readPalette(palette);
+  const scratch = new THREE.Color();
   const cloudLight = new THREE.Color(), cloudShade = new THREE.Color();
+  // Whether the current look has been written to the scene at all.
+  let applied = false;
 
   const particleKind = () => PARTICLES[currentKind];
   const configureParticles = () => {
@@ -352,16 +376,16 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
 
   const apply = (flash: number) => {
     const p = currentPalette;
+    applied = true;
     targets.sun.intensity = p.sunIntensity * look.sun * (1 + flash * 0.4);
     targets.hemisphere.intensity = p.ambientIntensity * look.hemi * (1 + flash * 1.6);
     // Overcast grey keeps a little of the palette's hue; night stays dark.
-    grey.set(p.night ? "#2a3550" : "#9aa6b2");
-    base.set(p.fog);
-    targets.fog.color.copy(base).lerp(grey, look.fogGrey);
+    const grey = p.night ? GREY_NIGHT : GREY_DAY;
+    targets.fog.color.copy(paletteFog).lerp(grey, look.fogGrey);
     targets.fog.near = fogRange.near * look.fogNear;
     targets.fog.far = Math.max(targets.fog.near + 40, fogRange.far * look.fogFar);
     const sky = targets.sky.uniforms;
-    scratch.set(p.skyBelow).lerp(grey, 0.7).multiplyScalar(p.night ? 0.8 : 0.92 - look.cloudDark * 0.3);
+    scratch.copy(paletteSkyBelow).lerp(grey, 0.7).multiplyScalar(p.night ? 0.8 : 0.92 - look.cloudDark * 0.3);
     (sky.uOvercast.value as THREE.Color).copy(scratch);
     sky.uDim.value = look.dim;
     sky.uRainbow.value = look.rainbow * (p.night ? 0.25 : 1);
@@ -369,8 +393,8 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
     sky.uFlash.value = flash;
     // Clouds: darker and greyer in rain and storms; the shaded side deepens
     // first, so overcast banks keep their shape against a grey sky.
-    cloudLight.set(p.cloud).lerp(scratch.set(p.night ? "#3a4560" : "#b9c3cd"), look.cloudDark);
-    cloudShade.set(p.cloudShade).lerp(scratch.set(p.night ? "#1a2235" : "#7d8896"), Math.min(1, look.cloudDark * 1.8));
+    cloudLight.copy(paletteCloud).lerp(p.night ? CLOUD_NIGHT : CLOUD_DAY, look.cloudDark);
+    cloudShade.copy(paletteCloudShade).lerp(p.night ? SHADE_NIGHT : SHADE_DAY, Math.min(1, look.cloudDark * 1.8));
     (targets.clouds.uniforms.uLight.value as THREE.Color).copy(cloudLight);
     (targets.clouds.uniforms.uShade.value as THREE.Color).copy(cloudShade);
     targets.clouds.uniforms.uLift.value = look.lift;
@@ -406,6 +430,7 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
     setKind,
     setPalette(next) {
       currentPalette = next;
+      readPalette(next);
       configureParticles();
       apply(0);
     },
@@ -427,9 +452,12 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
     },
     update(time, delta, target, animating) {
       (particleMaterial.uniforms.uCenter.value as THREE.Vector3).copy(target);
-      let busy = false;
+      let busy = false, changed = false;
       const ease = animating ? 1 - Math.exp(-delta * 1.8) : 1;
-      for (const key of Object.keys(look) as Array<keyof Look>) {
+      for (let index = 0; index < LOOK_KEYS.length; index++) {
+        const key = LOOK_KEYS[index];
+        if (look[key] === goal[key]) continue;
+        changed = true;
         const value = lerp(look[key], goal[key], ease);
         if (Math.abs(value - goal[key]) > 1e-3) busy = true;
         look[key] = Math.abs(value - goal[key]) > 1e-3 ? value : goal[key];
@@ -448,9 +476,13 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
           busy = true;
         }
       }
-      (targets.sky.uniforms.uBolt.value as THREE.Vector3).set(boltAzimuth, boltSeed, Math.min(1, flash * 1.4));
-      lastFlash = Math.min(1, flash);
-      apply(lastFlash);
+      // Write the scene only while something changes (a fade, a flash).
+      const flashNow = Math.min(1, flash);
+      if (changed || flashNow !== lastFlash || !applied) {
+        (targets.sky.uniforms.uBolt.value as THREE.Vector3).set(boltAzimuth, boltSeed, Math.min(1, flash * 1.4));
+        lastFlash = flashNow;
+        apply(lastFlash);
+      }
       return busy;
     },
     drawCalls: () => (particles.visible ? 1 : 0) + (deck.visible ? 1 : 0),
