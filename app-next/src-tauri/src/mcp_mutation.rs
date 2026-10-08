@@ -127,12 +127,18 @@ pub(crate) fn redact_home_path(path: &Path, home: &Path) -> String {
     let path_text = normalize(path);
     let home_text = normalize(home);
     let home_text = home_text.trim_end_matches('/');
-    if !home_text.is_empty()
-        && path_text.len() >= home_text.len()
-        && path_text[..home_text.len()].eq_ignore_ascii_case(home_text)
+    // `get` instead of slicing: a non-ASCII path outside the home folder
+    // (for example a redirected %APPDATA% under D:\资料) must never panic on
+    // a byte index inside a character. The prefix must also end at a folder
+    // boundary, so `C:/Users/ab` never redacts `C:/Users/abc/…`.
+    if let Some(prefix) = path_text
+        .get(..home_text.len())
+        .filter(|_| !home_text.is_empty())
     {
         let rest = &path_text[home_text.len()..];
-        return format!("~{rest}");
+        if prefix.eq_ignore_ascii_case(home_text) && (rest.is_empty() || rest.starts_with('/')) {
+            return format!("~{rest}");
+        }
     }
     path.file_name()
         .map(|name| format!("…/{}", name.to_string_lossy()))
@@ -1522,7 +1528,7 @@ pub(crate) fn validate_command(value: &str) -> Result<(), String> {
             | "mshta"
             | "rundll32"
     ) {
-        return Err("MCP command 不接受 shell 或脚本宿主。".to_string());
+        return Err("MCP 命令不能是 shell 或脚本解释器。".to_string());
     }
     Ok(())
 }
@@ -1561,7 +1567,7 @@ pub(crate) fn validate_command_with_args(command: &str, args: &[String]) -> Resu
     }
     validate_plain_field(command, 512, "command")?;
     if !(command.eq_ignore_ascii_case("cmd") || command.eq_ignore_ascii_case("cmd.exe")) {
-        return Err("MCP command 不接受 shell 或脚本宿主。".to_string());
+        return Err("MCP 命令不能是 shell 或脚本解释器。".to_string());
     }
     let valid_wrapper = args.len() >= 2
         && args[0].eq_ignore_ascii_case("/c")
@@ -1795,8 +1801,8 @@ fn target_path_binding(path: &Path) -> Result<String, String> {
     let leaf = path
         .file_name()
         .ok_or_else(|| "MCP 配置文件名无效。".to_string())?;
-    let canonical_parent =
-        fs::canonicalize(parent).map_err(|_| "MCP 配置父目录无法绑定到物理位置。".to_string())?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|_| "无法确认 MCP 配置文件夹的实际位置；没有写入。".to_string())?;
     let mut identity = canonical_parent.join(leaf).to_string_lossy().to_string();
     if cfg!(windows) {
         identity.make_ascii_lowercase();
@@ -1873,7 +1879,7 @@ fn derive_target(
                 workspace.ok_or_else(|| "Claude local scope 需要已注册工作区。".to_string())?;
             let (path, display) = context.claude_user_config();
             if !path.is_file() {
-                return Err("Claude local 配置尚不存在；不会创建假的宿主配置。".to_string());
+                return Err("Claude Code 的配置文件还不存在；SkillHub 不会替它新建。".to_string());
             }
             (path, display, Some(workspace.path.clone()))
         }
@@ -1905,7 +1911,7 @@ fn derive_target(
                 None,
             )
         }
-        _ => return Err("MCP Host 与作用域组合不受支持。".to_string()),
+        _ => return Err("这个 AI 工具不支持这种作用域。".to_string()),
     };
     validate_target_parent(&path)?;
     let workspace_id = change.workspace_id.clone();
@@ -5942,5 +5948,31 @@ env_vars = [{ name = "REMOTE_TOKEN", source = "remote" }]
         apply_mcp_plan(&context, &latest.plan_id).unwrap();
         assert!(!latest_path.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// A path outside the home folder with non-ASCII characters (a redirected
+    /// %APPDATA%, a CLAUDE_CONFIG_DIR or a runner under D:\工具) never panics,
+    /// and only a real folder prefix is shown as `~`.
+    #[test]
+    fn home_redaction_never_panics_on_non_ascii_paths_outside_home() {
+        let home = PathBuf::from(r"C:\Users\abcd");
+        for path in [
+            r"D:\用户数据\Claude\claude_desktop_config.json",
+            r"C:\Users\用户\x.json",
+            r"C:\Users\abcde\x.json",
+        ] {
+            let shown = redact_home_path(Path::new(path), &home);
+            assert!(!shown.starts_with('~'), "{path} -> {shown}");
+        }
+        assert_eq!(
+            redact_home_path(Path::new(r"C:\Users\ABCD\.cursor\mcp.json"), &home),
+            "~/.cursor/mcp.json"
+        );
+        assert_eq!(redact_home_path(Path::new(r"C:\Users\abcd"), &home), "~");
+        let chinese_home = PathBuf::from(r"C:\Users\张三");
+        assert_eq!(
+            redact_home_path(Path::new(r"C:\Users\张三\.claude.json"), &chinese_home),
+            "~/.claude.json"
+        );
     }
 }

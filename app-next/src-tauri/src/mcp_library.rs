@@ -519,6 +519,30 @@ impl McpLibraryContext {
     fn home(&self) -> &Path {
         &self.mutation.home_dir
     }
+
+    /// A planning copy in which the environment values `ops` are about to
+    /// write are already visible. A client that receives a literal value
+    /// (inline consent, e.g. Claude Desktop) must get the value the user just
+    /// entered, not the one the registry still holds. Nothing is written.
+    fn with_pending_env(&self, ops: &[EnvOp]) -> McpLibraryContext {
+        let pending = ops
+            .iter()
+            .map(|op| match op {
+                EnvOp::Set { name, value } => (name.clone(), Some(value.clone())),
+                EnvOp::Delete { name } => (name.clone(), None),
+            })
+            .collect::<HashMap<_, _>>();
+        McpLibraryContext {
+            mutation: self.mutation.clone(),
+            db_path: self.db_path.clone(),
+            windows: self.windows,
+            env: Arc::new(mcp_secrets::PendingEnvStore::new(
+                Arc::clone(&self.env),
+                pending,
+            )),
+            app_version: self.app_version.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,6 +1239,39 @@ fn mcp_mutation_secret(value: &str) -> bool {
     engine::has_common_secret_prefix(value) || engine::is_sensitive_assignment(value)
 }
 
+/// The URL with any account part and any query or fragment replaced by
+/// `SECRET_MASK`. Imported remote entries may carry a key there
+/// (`…/mcp?api_key=…`, `https://user:pass@…`); like the scanner, SkillHub
+/// treats both as inline secrets.
+pub(crate) fn masked_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, after) = rest.split_at(authority_end);
+    let mut out = format!("{scheme}://");
+    match authority.rsplit_once('@') {
+        Some((_, host)) => {
+            out.push_str(SECRET_MASK);
+            out.push('@');
+            out.push_str(host);
+        }
+        None => out.push_str(authority),
+    }
+    let path_end = after.find(['?', '#']).unwrap_or(after.len());
+    out.push_str(&after[..path_end]);
+    if path_end < after.len() {
+        out.push('?');
+        out.push_str(SECRET_MASK);
+    }
+    out
+}
+
+/// Whether a URL carries an account part, a query or a fragment.
+fn url_has_secret(url: &str) -> bool {
+    masked_url(url) != url
+}
+
 fn target_display(summary: &ServerSummary) -> String {
     match (&summary.runner, &summary.subject, &summary.host) {
         (_, _, Some(host)) => host.clone(),
@@ -1534,6 +1591,11 @@ fn project(
         }
         Transport::Http | Transport::Sse => {
             let url = spec.url.clone().unwrap_or_default();
+            // An imported URL with a key in its query or account part is an
+            // inline secret: other clients get it only with consent (I6).
+            if url_has_secret(&url) && !spec.secret_arg_clients.contains(&client) {
+                return Err(ProjectError::Blocked("needs-inline-consent"));
+            }
             let mut literal_headers: Vec<(String, String)> = Vec::new();
             let mut header_refs: Vec<(String, String)> = Vec::new();
             let mut bearer_env: Option<String> = None;
@@ -1767,6 +1829,10 @@ fn spec_from_entry(client: ClientId, entry: &Node) -> Result<McpServerSpec, &'st
         spec.url = text("url").or_else(|| text("serverUrl"));
         if spec.url.is_none() {
             return Err("invalid-url");
+        }
+        if spec.url.as_deref().is_some_and(url_has_secret) {
+            // Only the client it came from may keep receiving it as is.
+            spec.secret_arg_clients.push(client);
         }
         let header_key = if client == ClientId::Codex {
             "http_headers"
@@ -3080,6 +3146,9 @@ fn other_clients(connection: &Connection) -> Vec<OtherClient> {
 }
 
 pub(crate) fn library_snapshot(ctx: &McpLibraryContext) -> Result<McpLibrarySnapshot, McpError> {
+    // Read before anything else: a write that finishes while this snapshot is
+    // being built must make it look older, never newer (stale-drop rule).
+    let generation = current_generation();
     let connection = open_db(ctx)?;
     let key = hash_key(ctx)?;
     let servers = load_servers(&connection, false)?;
@@ -3318,7 +3387,7 @@ pub(crate) fn library_snapshot(ctx: &McpLibraryContext) -> Result<McpLibrarySnap
         .collect();
 
     Ok(McpLibrarySnapshot {
-        generation: current_generation(),
+        generation,
         generated_at: iso_from_ns(now_ns()),
         library_initialized,
         clients,
@@ -3658,6 +3727,12 @@ struct EnvBefore {
     name: String,
     value: Option<String>,
     created_by_skillhub: Option<bool>,
+    /// The value the operation wrote (`None` = deleted). Undo restores the
+    /// variable only while it still holds exactly that value.
+    #[serde(default)]
+    after: Option<String>,
+    #[serde(default)]
+    after_recorded: bool,
 }
 
 /// DPAPI-protected (`undo_protected`): library rows, entries and env values
@@ -3940,6 +4015,9 @@ struct PlanItem {
     /// Consent recorded on the row (inline values allowed for this client).
     consent: Option<bool>,
     /// Restore an exact earlier row (undo).
+    /// A second plain-language confirmation for the same item (for
+    /// example inline consent *and* an entry changed outside SkillHub).
+    confirm_also: Option<&'static str>,
     row_override: Option<Option<ClientRow>>,
 }
 
@@ -4278,7 +4356,12 @@ fn execute_plan(
     let item_kinds = plan
         .targets
         .iter()
-        .flat_map(|target| target.items.iter().filter_map(|item| item.confirm))
+        .flat_map(|target| {
+            target
+                .items
+                .iter()
+                .flat_map(|item| item.confirm.into_iter().chain(item.confirm_also))
+        })
         .collect::<Vec<_>>();
     for kind in item_kinds {
         plan.add_kind(kind);
@@ -4429,6 +4512,11 @@ fn execute_plan(
                 name: op.name().to_string(),
                 value: ctx.env.get(op.name()).ok().flatten(),
                 created_by_skillhub: env_var_created_by_skillhub(connection, op.name()),
+                after: match op {
+                    EnvOp::Set { value, .. } => Some(value.clone()),
+                    EnvOp::Delete { .. } => None,
+                },
+                after_recorded: true,
             })
             .collect(),
     };
@@ -4869,7 +4957,10 @@ fn grant_inline(spec: &mut McpServerSpec, client: ClientId) {
             header.inline_clients.push(client);
         }
     }
-    if spec.args.iter().any(|arg| arg.secret) && !spec.secret_arg_clients.contains(&client) {
+    let secret_url = spec.url.as_deref().is_some_and(url_has_secret);
+    if (spec.args.iter().any(|arg| arg.secret) || secret_url)
+        && !spec.secret_arg_clients.contains(&client)
+    {
         spec.secret_arg_clients.push(client);
     }
 }
@@ -4907,11 +4998,13 @@ fn decide_cell(
             desired_enabled: Some(enabled),
             confirm,
             consent: None,
+            confirm_also: None,
             row_override: None,
         })
     };
     if enabled {
         let mut confirm = None;
+        let mut changed_outside = false;
         let mut consent = None;
         let projected = match project(ctx, &working.name, &working.spec, client) {
             Ok(projected) => projected,
@@ -4951,21 +5044,30 @@ fn decide_cell(
                 decided.consent = consent;
                 return CellDecision::Item(decided);
             }
-            if confirm.is_none()
-                && file_hash != written
+            if file_hash != written
                 && !semantic_equal(client, file, &wanted)
                 && !(disabled
                     && canonical_entry(client, file, true)
                         == canonical_entry(client, &wanted, true))
             {
-                confirm = Some("changed-outside");
+                // Overwriting an entry edited outside SkillHub is always
+                // confirmed, also when inline consent is asked at the same
+                // time (I6): both reasons appear in one dialog.
+                changed_outside = true;
             }
         }
         let mut decided = item(
             Some(EntryOp::Upsert(projected)),
             ItemAction::Enable,
-            confirm,
+            if changed_outside {
+                Some("changed-outside")
+            } else {
+                confirm
+            },
         );
+        if changed_outside {
+            decided.confirm_also = confirm;
+        }
         decided.consent = consent;
         CellDecision::Item(decided)
     } else {
@@ -5475,12 +5577,23 @@ fn spec_from_input(
                 .map(str::trim)
                 .filter(|url| !url.is_empty())
                 .ok_or_else(|| McpError::invalid("远程地址方式需要填写网址。"))?;
-            engine::validate_safe_url(url).map_err(|_| {
-                McpError::invalid(
-                    "网址需要以 https:// 或 http:// 开头，不能带 ? 参数、# 片段或账号密码。",
-                )
-            })?;
-            spec.url = Some(url.to_string());
+            // An unchanged stored URL (sent back as is, or in the masked form
+            // the edit drawer shows) keeps the stored value, even when an
+            // imported URL carries a key in its query.
+            let kept = old_remote
+                .and_then(|old| old.url.as_deref())
+                .filter(|stored| url == *stored || url == masked_url(stored));
+            match kept {
+                Some(stored) => spec.url = Some(stored.to_string()),
+                None => {
+                    engine::validate_safe_url(url).map_err(|_| {
+                        McpError::invalid(
+                            "网址需要以 https:// 或 http:// 开头，不能带 ? 参数、# 片段或账号密码。",
+                        )
+                    })?;
+                    spec.url = Some(url.to_string());
+                }
+            }
         }
     }
 
@@ -5578,6 +5691,10 @@ fn spec_from_input(
                         .clone()
                         .filter(|name| !name.trim().is_empty())
                         .or_else(|| previous_header.and_then(|item| item.env_var.clone()))
+                        // Prefill-safe (M1-7): an env secret that references
+                        // a differently named variable (`"KEY": "${OTHER}"`)
+                        // keeps that reference when the edit omits envVar.
+                        .or_else(|| previous_env.and_then(|item| item.env_var.clone()))
                         .unwrap_or_else(|| {
                             if header {
                                 derived_variable(&input.name, &secret.name, bearer)
@@ -5585,6 +5702,11 @@ fn spec_from_input(
                                 secret.name.clone()
                             }
                         });
+                    // The variable lands in client files as `${NAME}` /
+                    // `bearer_token_env_var`: it must be a valid name even
+                    // when no value is saved now.
+                    mcp_secrets::validate_env_name(&variable)
+                        .map_err(|code| secret_error(code, &variable))?;
                     if !inline_requested.is_empty() && inline_requested != previous_inline {
                         build.kinds.push("inline-secret");
                     }
@@ -5971,6 +6093,8 @@ pub(crate) fn add_servers(
             },
         };
         plan.note_server(&record.name);
+        // Projections see the environment values this add is about to set.
+        let planning = ctx.with_pending_env(&plan.env_ops);
         for client in &request.client_ids {
             let place = placement_target(ctx, &states, *client, request.placement.as_ref());
             if !place.writable {
@@ -5988,7 +6112,7 @@ pub(crate) fn add_servers(
             }
             let entry = place.read.entry(&record.name);
             let row = find_row_scoped(&rows, &record.id, *client, place.scope, &place.workspace_id);
-            let mut projected = match project(ctx, &record.name, &record.spec, *client) {
+            let mut projected = match project(&planning, &record.name, &record.spec, *client) {
                 Ok(projected) => projected,
                 Err(ProjectError::Unsupported(reason) | ProjectError::Blocked(reason)) => {
                     plan.skip(*client, place.scope, &record.id, reason);
@@ -6020,6 +6144,7 @@ pub(crate) fn add_servers(
                         desired_enabled: Some(true),
                         confirm: None,
                         consent: Some(server_needs_inline(&record.spec, *client)),
+                        confirm_also: None,
                         row_override: None,
                     });
                     continue;
@@ -6051,6 +6176,7 @@ pub(crate) fn add_servers(
                 desired_enabled: Some(true),
                 confirm,
                 consent: Some(server_needs_inline(&record.spec, *client)),
+                confirm_also: None,
                 row_override: None,
             });
         }
@@ -6090,9 +6216,12 @@ pub(crate) fn add_servers(
 
 /// Re-projects one enabled cell after a spec change (update, secret, file
 /// adoption). Unsupported after a transport switch: the entry is removed.
+/// `planning` sees the environment values this write is about to set; `ctx`
+/// is the state before it (used for the old projection).
 #[allow(clippy::too_many_arguments)]
 fn reproject_cell(
     ctx: &McpLibraryContext,
+    planning: &McpLibraryContext,
     key: &[u8; 32],
     plan: &mut WritePlan,
     old: &ServerRecord,
@@ -6106,7 +6235,7 @@ fn reproject_cell(
     action: ItemAction,
     confirm_kind: &'static str,
 ) {
-    match project(ctx, &new.name, &new.spec, client) {
+    match project(planning, &new.name, &new.spec, client) {
         Ok(mut projected) => {
             if client == ClientId::Codex {
                 projected.codex_enabled = Some(true);
@@ -6142,6 +6271,7 @@ fn reproject_cell(
                     desired_enabled: Some(true),
                     confirm,
                     consent: None,
+                    confirm_also: None,
                     row_override: None,
                 });
         }
@@ -6157,6 +6287,7 @@ fn reproject_cell(
                         desired_enabled: Some(false),
                         confirm: None,
                         consent: None,
+                        confirm_also: None,
                         row_override: None,
                     });
             } else if client == ClientId::Codex && entry.is_some() {
@@ -6170,6 +6301,7 @@ fn reproject_cell(
                         desired_enabled: Some(false),
                         confirm: None,
                         consent: None,
+                        confirm_also: None,
                         row_override: None,
                     });
             } else {
@@ -6194,6 +6326,8 @@ fn reproject_enabled(
     confirm_kind: &'static str,
     skip_clients: &[ClientId],
 ) {
+    // The new projection sees the environment values this write sets.
+    let planning = ctx.with_pending_env(&plan.env_ops);
     let sources = project_sources(ctx);
     for row in rows
         .iter()
@@ -6218,6 +6352,7 @@ fn reproject_enabled(
             }
             reproject_cell(
                 ctx,
+                &planning,
                 key,
                 plan,
                 old,
@@ -6241,6 +6376,7 @@ fn reproject_enabled(
             }
             reproject_cell(
                 ctx,
+                &planning,
                 key,
                 plan,
                 old,
@@ -6404,6 +6540,7 @@ pub(crate) fn remove_server(
                         desired_enabled: Some(false),
                         confirm: None,
                         consent: None,
+                        confirm_also: None,
                         row_override: None,
                     });
             }
@@ -6430,6 +6567,7 @@ pub(crate) fn remove_server(
                     desired_enabled: Some(false),
                     confirm: None,
                     consent: None,
+                    confirm_also: None,
                     row_override: None,
                 });
             }
@@ -6496,11 +6634,21 @@ pub(crate) fn remove_server(
                 desired_enabled: Some(false),
                 confirm: None,
                 consent: None,
+                confirm_also: None,
                 row_override: None,
             });
         }
     }
-    let digest = request_digest(&request);
+    // The "also delete the unused variable" boxes are ticked inside the
+    // confirmation dialog, after the token was issued. The token already
+    // binds the listed candidates (only those can be deleted), so the ticked
+    // subset stays out of the digest: one confirmation, not two.
+    let digest = request_digest(&McpRemoveRequest {
+        server_id: request.server_id.clone(),
+        from: request.from.clone(),
+        delete_env_vars: None,
+        confirm_token: None,
+    });
     execute_plan(
         ctx,
         &connection,
@@ -6729,6 +6877,7 @@ pub(crate) fn resync(
                         desired_enabled: Some(true),
                         confirm,
                         consent: None,
+                        confirm_also: None,
                         row_override: None,
                     });
             } else if let Some(file) = entry {
@@ -6747,6 +6896,7 @@ pub(crate) fn resync(
                             desired_enabled: Some(false),
                             confirm: Some("resync"),
                             consent: None,
+                            confirm_also: None,
                             row_override: None,
                         });
                 } else {
@@ -6765,6 +6915,7 @@ pub(crate) fn resync(
                             desired_enabled: Some(false),
                             confirm: Some("resync"),
                             consent: None,
+                            confirm_also: None,
                             row_override: None,
                         });
                 }
@@ -6867,6 +7018,7 @@ pub(crate) fn resolve_changed_outside(
                             desired_enabled: Some(false),
                             confirm: None,
                             consent: None,
+                            confirm_also: None,
                             row_override: Some(Some(adopted)),
                         });
                 }
@@ -6907,6 +7059,7 @@ pub(crate) fn resolve_changed_outside(
                             desired_enabled: Some(adopted.enabled),
                             confirm: None,
                             consent: None,
+                            confirm_also: None,
                             row_override: Some(Some(adopted)),
                         });
                     let states = client_states(ctx, Some(&connection));
@@ -7023,8 +7176,14 @@ fn build_undo_plan(
             );
         }
     }
-    let blob = load_undo_blob(connection, operation_id)?
+    let mut blob = load_undo_blob(connection, operation_id)?
         .ok_or_else(|| McpError::new("undo-unavailable", "这条记录已经不能撤销。"))?;
+    // A variable changed after the operation (by the user or another program)
+    // is left as it is: undo never overwrites or deletes a value SkillHub did
+    // not write.
+    blob.env_before.retain(|before| {
+        !before.after_recorded || ctx.env.get(&before.name).ok().flatten() == before.after
+    });
     let servers = load_servers(connection, true)?;
     let server_id_for = |name: &str| -> String {
         blob.servers_before
@@ -7049,7 +7208,23 @@ fn build_undo_plan(
             },
         });
     }
-    let mut targets: Vec<UndoTarget> = blob.targets.clone();
+    let mut targets: Vec<UndoTarget> = Vec::new();
+    for target in blob.targets.iter().cloned() {
+        match targets.iter_mut().find(|existing| {
+            existing.client == target.client
+                && existing.scope == target.scope
+                && existing.workspace_id == target.workspace_id
+        }) {
+            // Several transactions on one file (a column change over more
+            // than 64 servers): no single snapshot holds the original bytes,
+            // so that file is restored entry by entry, once.
+            Some(existing) => {
+                existing.snapshot_id = None;
+                existing.applied_sha256.clear();
+            }
+            None => targets.push(target),
+        }
+    }
     for entry in &blob.entries {
         if !targets.iter().any(|target| {
             target.client == entry.client
@@ -7121,6 +7296,7 @@ fn build_undo_plan(
                 desired_enabled: None,
                 confirm: None,
                 consent: None,
+                confirm_also: None,
                 row_override: row_before,
             });
         }
@@ -7129,16 +7305,33 @@ fn build_undo_plan(
             && read.as_ref().is_some_and(|read| {
                 !read.sha256.is_empty() && read.sha256 == undo_target.applied_sha256
             });
-        let target = plan.target_mut(
-            undo_target.client,
-            undo_target.scope,
-            &undo_target.workspace_id,
-            None,
-        );
-        target.items.extend(target_items);
-        target.conflicts.extend(conflicts);
-        if byte_restore {
-            target.restore_snapshot = undo_target.snapshot_id.clone();
+        // One transaction holds at most 64 changes: a larger undo (a column
+        // change over many servers) is split into several, in order.
+        let mut items = target_items.into_iter().peekable();
+        let mut first = true;
+        loop {
+            let target = plan.target_mut(
+                undo_target.client,
+                undo_target.scope,
+                &undo_target.workspace_id,
+                None,
+            );
+            while target.items.len() < 64 {
+                match items.next() {
+                    Some(item) => target.items.push(item),
+                    None => break,
+                }
+            }
+            if first {
+                target.conflicts.append(&mut conflicts);
+                if byte_restore {
+                    target.restore_snapshot = undo_target.snapshot_id.clone();
+                }
+                first = false;
+            }
+            if items.peek().is_none() {
+                break;
+            }
         }
     }
     plan.undo_restore = Some(blob);
@@ -7495,7 +7688,8 @@ pub(crate) fn get_server(
         command: server.spec.command.clone(),
         args,
         cwd: server.spec.cwd.clone(),
-        url: server.spec.url.clone(),
+        // A key in an imported URL's query or account part stays hidden.
+        url: server.spec.url.as_deref().map(masked_url),
         env: server
             .spec
             .env
@@ -7606,7 +7800,12 @@ pub(crate) fn export_json(
                 }
             }
             Transport::Http | Transport::Sse => {
-                entry.insert("url", Node::string(spec.url.clone().unwrap_or_default()));
+                let url = spec.url.clone().unwrap_or_default();
+                let shown = masked_url(&url);
+                if shown != url {
+                    masked += 1;
+                }
+                entry.insert("url", Node::string(shown));
                 let mut headers = ObjectMap::new();
                 for header in &spec.headers {
                     let value = match header.storage {

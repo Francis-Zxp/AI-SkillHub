@@ -7,7 +7,7 @@
 //! process-environment read/write; no child process is started.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub(crate) const MAX_SECRET_VALUE_CHARS: usize = 8192;
 
@@ -230,6 +230,62 @@ impl EnvStore for MemoryEnvStore {
 
     fn include_process_env(&self) -> bool {
         false
+    }
+}
+
+/// A read-only planning view of a store: the values a write is about to set
+/// (or delete) are visible before they are written. Projections that need a
+/// literal value (per-client inline consent) are computed while planning, so
+/// they must see the new value, not the one the registry still holds.
+pub(crate) struct PendingEnvStore {
+    inner: Arc<dyn EnvStore>,
+    /// Upper-cased name → pending value (`None` = about to be deleted).
+    pending: HashMap<String, Option<String>>,
+}
+
+impl PendingEnvStore {
+    pub(crate) fn new(inner: Arc<dyn EnvStore>, pending: HashMap<String, Option<String>>) -> Self {
+        Self {
+            inner,
+            pending: pending
+                .into_iter()
+                .map(|(name, value)| (name.to_ascii_uppercase(), value))
+                .collect(),
+        }
+    }
+}
+
+impl EnvStore for PendingEnvStore {
+    fn get(&self, name: &str) -> Result<Option<String>, ()> {
+        match self.pending.get(&name.to_ascii_uppercase()) {
+            Some(value) => Ok(value.clone()),
+            None => self.inner.get(name),
+        }
+    }
+
+    /// Planning never writes.
+    fn set(&self, _name: &str, _value: &str) -> Result<(), ()> {
+        Err(())
+    }
+
+    fn delete(&self, _name: &str) -> Result<(), ()> {
+        Err(())
+    }
+
+    fn machine_present(&self, name: &str) -> bool {
+        self.inner.machine_present(name)
+    }
+
+    fn machine_get(&self, name: &str) -> Option<String> {
+        self.inner.machine_get(name)
+    }
+
+    fn broadcast(&self) -> bool {
+        false
+    }
+
+    fn include_process_env(&self) -> bool {
+        self.inner.include_process_env()
     }
 }
 

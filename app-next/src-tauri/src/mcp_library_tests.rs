@@ -1908,3 +1908,609 @@ fn undo_is_itself_undoable_and_library_only_add_undoes() {
         .iter()
         .any(|server| server.name == "solo"));
 }
+
+// ---------------------------------------------------------------------------
+// Review fixes (mcp-backend review, 2026-10-08)
+// ---------------------------------------------------------------------------
+
+fn env_secret(name: &str, value: Option<&str>, inline: Option<Vec<ClientId>>) -> McpSecretInput {
+    McpSecretInput {
+        kind: "env".to_string(),
+        name: name.to_string(),
+        env_var: None,
+        header_template: None,
+        value: value.map(str::to_string),
+        paste_value_handle: None,
+        mode: "user_env".to_string(),
+        inline_clients: inline,
+        required: Some(true),
+    }
+}
+
+/// Runs a write; when it asks for confirmation, answers once with its token.
+fn confirmed(
+    fixture: &Fixture,
+    call: impl Fn(Option<String>) -> Result<McpWriteOutcome, McpError>,
+) -> McpWriteOutcome {
+    let first = fixture.write_op(call(None));
+    match &first {
+        McpWriteOutcome::NeedsConfirmation { confirmation } => {
+            fixture.write_op(call(Some(confirmation.confirm_token.clone())))
+        }
+        _ => first,
+    }
+}
+
+/// A client that receives a literal value with inline consent (Claude
+/// Desktop) gets the value being saved — on add, set_secret and update —
+/// never the older value the user store still held while planning.
+#[test]
+fn inline_consented_clients_receive_the_value_being_saved() {
+    let fixture = Fixture::new("inline-pending");
+    fixture.import();
+    let desktop_value =
+        || json_file(&fixture.desktop())["mcpServers"]["brave"]["env"]["BRAVE_API_KEY"].clone();
+    let mut input = stdio_input("brave", "npx", &["-y", "brave-mcp"]);
+    input.secrets = Some(vec![env_secret(
+        "BRAVE_API_KEY",
+        Some("first-value-111"),
+        Some(vec![ClientId::ClaudeDesktop]),
+    )]);
+    let added = confirmed(&fixture, |token| {
+        add_servers(
+            &fixture.ctx,
+            McpAddRequest {
+                candidates: vec![McpAddCandidate {
+                    input: input.clone(),
+                    on_conflict: None,
+                }],
+                client_ids: vec![ClientId::ClaudeCode, ClientId::ClaudeDesktop],
+                placement: None,
+                paste_handle: None,
+                confirm_token: token,
+            },
+        )
+    });
+    let (_, results, _) = done(&added);
+    assert!(
+        results
+            .iter()
+            .any(|result| result.client_id == ClientId::ClaudeDesktop
+                && result.status == "written"),
+        "{}",
+        serde_json::to_string(&added).unwrap()
+    );
+    assert_eq!(desktop_value(), "first-value-111");
+    assert_eq!(
+        json_file(&fixture.claude())["mcpServers"]["brave"]["env"]["BRAVE_API_KEY"],
+        "${BRAVE_API_KEY}"
+    );
+    assert_eq!(fixture.cell("brave", ClientId::ClaudeDesktop).state, "on");
+
+    let id = fixture.server_id("brave");
+    let changed = confirmed(&fixture, |token| {
+        set_secret(
+            &fixture.ctx,
+            McpSetSecretRequest {
+                server_id: id.clone(),
+                name: "BRAVE_API_KEY".to_string(),
+                value: "second-value-222".to_string(),
+                mode: "user_env".to_string(),
+                inline_clients: None,
+                confirm_token: token,
+            },
+        )
+    });
+    done(&changed);
+    assert_eq!(desktop_value(), "second-value-222");
+    assert_eq!(fixture.cell("brave", ClientId::ClaudeDesktop).state, "on");
+
+    let detail = get_server(
+        &fixture.ctx,
+        McpGetServerRequest {
+            server_id: id.clone(),
+        },
+    )
+    .unwrap();
+    let mut edit = stdio_input("brave", "npx", &["-y", "brave-mcp"]);
+    edit.secrets = Some(vec![env_secret(
+        "BRAVE_API_KEY",
+        Some("third-value-333"),
+        Some(vec![ClientId::ClaudeDesktop]),
+    )]);
+    let updated = confirmed(&fixture, |token| {
+        update_server(
+            &fixture.ctx,
+            McpUpdateRequest {
+                server_id: id.clone(),
+                input: edit.clone(),
+                expected_revision: detail.spec_revision,
+                confirm_token: token,
+            },
+        )
+    });
+    done(&updated);
+    assert_eq!(desktop_value(), "third-value-333");
+    assert_eq!(
+        fixture.env.get("BRAVE_API_KEY").unwrap().as_deref(),
+        Some("third-value-333")
+    );
+}
+
+/// An imported remote URL with a key in its query stays hidden in the edit
+/// drawer and the export, other clients need inline consent for it (I3, I6),
+/// and an edit that sends the masked URL back keeps the stored one.
+#[test]
+fn imported_url_with_query_key_is_masked_and_needs_consent_elsewhere() {
+    let fixture = Fixture::new("url-secret");
+    fs::write(
+        fixture.cursor(),
+        r#"{"mcpServers":{"smith":{"url":"https://smith.example.test/mcp?api_key=url-secret-777"}}}"#,
+    )
+    .unwrap();
+    fixture.import();
+    let id = fixture.server_id("smith");
+    let detail = get_server(
+        &fixture.ctx,
+        McpGetServerRequest {
+            server_id: id.clone(),
+        },
+    )
+    .unwrap();
+    let shown = detail.url.clone().unwrap();
+    assert_eq!(
+        shown,
+        format!("https://smith.example.test/mcp?{SECRET_MASK}")
+    );
+    assert!(!serde_json::to_string(&detail)
+        .unwrap()
+        .contains("url-secret-777"));
+    let export = export_json(
+        &fixture.ctx,
+        McpExportRequest {
+            server_ids: None,
+            format: "mcp-servers".to_string(),
+        },
+    )
+    .unwrap();
+    assert!(!export.text.contains("url-secret-777"));
+    assert_eq!(export.masked_secret_count, 1);
+    // Cursor, where it came from, is on; Claude Code needs consent first.
+    assert_eq!(fixture.cell("smith", ClientId::Cursor).state, "on");
+    let claude = fixture.cell("smith", ClientId::ClaudeCode);
+    assert_eq!(
+        (claude.state.as_str(), claude.reason.as_deref()),
+        ("blocked", Some("needs-inline-consent"))
+    );
+    let asked = fixture.write_op(set_cell(
+        &fixture.ctx,
+        McpSetCellRequest {
+            server_id: id.clone(),
+            client_id: ClientId::ClaudeCode,
+            enabled: true,
+            allow_inline: None,
+            confirm_token: None,
+        },
+    ));
+    assert_eq!(confirmation(&asked).kinds, ["inline-secret"]);
+    assert!(!serde_json::to_string(&asked)
+        .unwrap()
+        .contains("url-secret-777"));
+    // An edit that only sets a display name keeps the stored URL.
+    let input = McpServerInput {
+        name: "smith".to_string(),
+        display_name: Some("Smith".to_string()),
+        transport: Transport::Http,
+        command: None,
+        args: None,
+        cwd: None,
+        url: Some(shown),
+        env: None,
+        secrets: None,
+        codex_required: None,
+        source: McpServerSource::Manual,
+    };
+    let outcome = fixture.write_op(update_server(
+        &fixture.ctx,
+        McpUpdateRequest {
+            server_id: id,
+            input,
+            expected_revision: detail.spec_revision,
+            confirm_token: None,
+        },
+    ));
+    assert!(
+        matches!(
+            outcome,
+            McpWriteOutcome::Done { .. } | McpWriteOutcome::Noop { .. }
+        ),
+        "{}",
+        serde_json::to_string(&outcome).unwrap()
+    );
+    assert!(fs::read_to_string(fixture.cursor())
+        .unwrap()
+        .contains("api_key=url-secret-777"));
+    assert_eq!(fixture.cell("smith", ClientId::Cursor).state, "on");
+    assert!(!fs::read_to_string(fixture.claude())
+        .unwrap_or_default()
+        .contains("url-secret-777"));
+}
+
+/// Enabling a client that needs inline consent *and* whose same-name entry
+/// was edited outside SkillHub names both reasons (I6); consent alone never
+/// skips the overwrite question.
+#[test]
+fn inline_consent_and_changed_outside_are_confirmed_together() {
+    let fixture = Fixture::new("both-kinds");
+    fixture.import();
+    let mut input = stdio_input("brave", "npx", &["-y", "brave-mcp"]);
+    input.secrets = Some(vec![env_secret("BRAVE_API_KEY", Some("value-444"), None)]);
+    add(&fixture, input, &[ClientId::ClaudeCode]);
+    let id = fixture.server_id("brave");
+    fs::write(
+        fixture.desktop(),
+        r#"{"mcpServers":{"brave":{"command":"node","args":["mine.js"]}}}"#,
+    )
+    .unwrap();
+    let request = |allow_inline: Option<bool>| McpSetCellRequest {
+        server_id: id.clone(),
+        client_id: ClientId::ClaudeDesktop,
+        enabled: true,
+        allow_inline,
+        confirm_token: None,
+    };
+    let asked = fixture.write_op(set_cell(&fixture.ctx, request(None)));
+    let kinds = &confirmation(&asked).kinds;
+    assert!(
+        kinds.contains(&"changed-outside".to_string())
+            && kinds.contains(&"inline-secret".to_string()),
+        "{kinds:?}"
+    );
+    let consented = fixture.write_op(set_cell(&fixture.ctx, request(Some(true))));
+    assert_eq!(confirmation(&consented).kinds, ["changed-outside"]);
+    assert!(fs::read_to_string(fixture.desktop())
+        .unwrap()
+        .contains("mine.js"));
+}
+
+/// Ticking "also delete the unused variable" inside the removal dialog works
+/// with the token the dialog was opened with: one confirmation, not two.
+#[test]
+fn remove_with_ticked_env_var_needs_one_confirmation() {
+    let fixture = Fixture::new("remove-env");
+    fixture.import();
+    let mut input = stdio_input("brave", "npx", &["-y", "brave-mcp"]);
+    input.secrets = Some(vec![env_secret("BRAVE_API_KEY", Some("value-555"), None)]);
+    add(&fixture, input, &[ClientId::Cursor]);
+    let id = fixture.server_id("brave");
+    let first = fixture.write_op(remove_server(
+        &fixture.ctx,
+        McpRemoveRequest {
+            server_id: id.clone(),
+            from: McpRemoveFrom::Library,
+            delete_env_vars: None,
+            confirm_token: None,
+        },
+    ));
+    let descriptor = confirmation(&first);
+    let listed = descriptor.env_vars.clone().unwrap();
+    assert_eq!(listed[0].name, "BRAVE_API_KEY");
+    let second = fixture.write_op(remove_server(
+        &fixture.ctx,
+        McpRemoveRequest {
+            server_id: id,
+            from: McpRemoveFrom::Library,
+            delete_env_vars: Some(vec!["BRAVE_API_KEY".to_string()]),
+            confirm_token: Some(descriptor.confirm_token.clone()),
+        },
+    ));
+    done(&second);
+    assert_eq!(fixture.env.get("BRAVE_API_KEY").unwrap(), None);
+    assert!(fixture.snapshot().servers.is_empty());
+    assert!(!fs::read_to_string(fixture.cursor())
+        .unwrap()
+        .contains("brave"));
+}
+
+/// Undo restores an environment variable only while it still holds the value
+/// the operation wrote; a later change by the user is kept.
+#[test]
+fn undo_keeps_an_environment_variable_changed_afterwards() {
+    let fixture = Fixture::new("undo-env");
+    fixture.import();
+    let mut input = stdio_input("brave", "npx", &["-y", "brave-mcp"]);
+    input.secrets = Some(vec![env_secret("BRAVE_API_KEY", Some("value-666"), None)]);
+    let outcome = add(&fixture, input, &[ClientId::Cursor]);
+    let (_, _, token) = done(&outcome);
+    fixture.env.set("BRAVE_API_KEY", "changed-by-user").unwrap();
+    let undone = fixture.write_op(undo(
+        &fixture.ctx,
+        McpUndoRequest {
+            undo_token: token.clone().unwrap(),
+        },
+    ));
+    done(&undone);
+    assert_eq!(
+        fixture.env.get("BRAVE_API_KEY").unwrap().as_deref(),
+        Some("changed-by-user")
+    );
+    assert!(fixture.snapshot().servers.is_empty());
+    // An untouched variable SkillHub created is still removed by undo.
+    let mut again = stdio_input("other", "npx", &["-y", "other-mcp"]);
+    again.secrets = Some(vec![env_secret("OTHER_API_KEY", Some("value-667"), None)]);
+    let outcome = add(&fixture, again, &[ClientId::Cursor]);
+    let (_, _, token) = done(&outcome);
+    let undone = fixture.write_op(undo(
+        &fixture.ctx,
+        McpUndoRequest {
+            undo_token: token.clone().unwrap(),
+        },
+    ));
+    done(&undone);
+    assert_eq!(fixture.env.get("OTHER_API_KEY").unwrap(), None);
+}
+
+/// An edit that omits envVar keeps an env secret's differently named
+/// variable (`"KEY": "${OTHER}"`, what the edit drawer sends), and a header
+/// variable name is validated even when no value is saved.
+#[test]
+fn update_keeps_secret_variable_reference_and_validates_header_variables() {
+    let fixture = Fixture::new("envvar-keep");
+    fs::write(
+        fixture.claude(),
+        r#"{"mcpServers":{"brave":{"type":"stdio","command":"npx","args":["-y","brave-mcp"],"env":{"BRAVE_API_KEY":"${MY_BRAVE}"}}}}"#,
+    )
+    .unwrap();
+    fixture.import();
+    let id = fixture.server_id("brave");
+    let detail = get_server(
+        &fixture.ctx,
+        McpGetServerRequest {
+            server_id: id.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(detail.secrets[0].env_var.as_deref(), Some("MY_BRAVE"));
+    let mut input = stdio_input("brave", "npx", &["-y", "brave-mcp"]);
+    input.display_name = Some("Brave".to_string());
+    input.secrets = Some(vec![McpSecretInput {
+        required: Some(false),
+        inline_clients: Some(Vec::new()),
+        ..env_secret("BRAVE_API_KEY", None, None)
+    }]);
+    let outcome = confirmed(&fixture, |token| {
+        update_server(
+            &fixture.ctx,
+            McpUpdateRequest {
+                server_id: id.clone(),
+                input: input.clone(),
+                expected_revision: detail.spec_revision,
+                confirm_token: token,
+            },
+        )
+    });
+    assert!(matches!(
+        outcome,
+        McpWriteOutcome::Done { .. } | McpWriteOutcome::Noop { .. }
+    ));
+    assert_eq!(
+        json_file(&fixture.claude())["mcpServers"]["brave"]["env"]["BRAVE_API_KEY"],
+        "${MY_BRAVE}"
+    );
+    assert_eq!(fixture.cell("brave", ClientId::ClaudeCode).state, "on");
+    let after = get_server(&fixture.ctx, McpGetServerRequest { server_id: id }).unwrap();
+    assert_eq!(after.secrets[0].env_var.as_deref(), Some("MY_BRAVE"));
+
+    let remote = McpServerInput {
+        name: "remote".to_string(),
+        display_name: None,
+        transport: Transport::Http,
+        command: None,
+        args: None,
+        cwd: None,
+        url: Some("https://remote.example.test/mcp".to_string()),
+        env: None,
+        secrets: Some(vec![McpSecretInput {
+            kind: "header".to_string(),
+            name: "Authorization".to_string(),
+            env_var: Some("BAD NAME}".to_string()),
+            header_template: Some("bearer".to_string()),
+            value: None,
+            paste_value_handle: None,
+            mode: "user_env".to_string(),
+            inline_clients: None,
+            required: Some(true),
+        }]),
+        codex_required: None,
+        source: McpServerSource::Manual,
+    };
+    let error = add_servers(
+        &fixture.ctx,
+        McpAddRequest {
+            candidates: vec![McpAddCandidate {
+                input: remote,
+                on_conflict: None,
+            }],
+            client_ids: vec![ClientId::Codex, ClientId::ClaudeCode],
+            placement: None,
+            paste_handle: None,
+            confirm_token: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "secret-name-invalid");
+    assert!(!fs::read_to_string(fixture.codex())
+        .unwrap_or_default()
+        .contains("remote"));
+}
+
+/// A Claude Desktop folder under a non-ASCII path outside the home folder (a
+/// redirected %APPDATA%) never crashes the snapshot, and its path stays
+/// redacted.
+#[test]
+fn snapshot_survives_non_ascii_client_paths_outside_home() {
+    let mut fixture = Fixture::new("non-ascii");
+    let roaming = fixture.root.join("用户数据").join("Roaming");
+    fs::create_dir_all(roaming.join("Claude")).unwrap();
+    fixture.ctx.mutation.app_data_dir = Some(roaming);
+    let snapshot = fixture.snapshot();
+    let desktop = snapshot
+        .clients
+        .iter()
+        .find(|client| client.id == ClientId::ClaudeDesktop)
+        .unwrap();
+    assert!(desktop
+        .config_path_display
+        .ends_with("claude_desktop_config.json"));
+    assert!(!desktop.config_path_display.contains("用户数据"));
+}
+
+/// A column change over more than 64 servers (two transactions on one file)
+/// undoes every entry.
+#[test]
+fn undo_of_a_column_change_over_64_servers_restores_every_entry() {
+    let fixture = Fixture::new("chunked");
+    let mut text = String::new();
+    for index in 0..70 {
+        text.push_str(&format!(
+            "[mcp_servers.s{index:02}]\ncommand = \"uvx\"\nargs = [\"s{index:02}-mcp\"]\nenabled = false\n\n"
+        ));
+    }
+    fs::write(fixture.codex(), &text).unwrap();
+    fixture.import();
+    let outcome = fixture.write_op(set_column(
+        &fixture.ctx,
+        McpSetColumnRequest {
+            client_id: ClientId::Codex,
+            enabled: true,
+            server_ids: None,
+            confirm_token: None,
+        },
+    ));
+    let (_, results, token) = done(&outcome);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| result.status == "written")
+            .count(),
+        2
+    );
+    assert!(!fs::read_to_string(fixture.codex())
+        .unwrap()
+        .contains("enabled = false"));
+    let undone = fixture.write_op(undo(
+        &fixture.ctx,
+        McpUndoRequest {
+            undo_token: token.clone().unwrap(),
+        },
+    ));
+    let (_, results, _) = done(&undone);
+    assert!(
+        results.iter().all(|result| result.status != "failed"),
+        "{}",
+        serde_json::to_string(&undone).unwrap()
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.codex())
+            .unwrap()
+            .matches("enabled = false")
+            .count(),
+        70
+    );
+}
+
+/// The request objects the frontend sends (camelCase, tagged unions, omitted
+/// optionals, and paste candidates sent back with `null`s) deserialize as the
+/// contract shows; unknown fields are refused.
+#[test]
+fn frontend_request_shapes_deserialize() {
+    let remove: McpRemoveRequest = serde_json::from_value(json!({
+        "serverId": "mcps-1", "from": {"kind": "library"}, "deleteEnvVars": ["A"], "confirmToken": "t"
+    }))
+    .unwrap();
+    assert!(matches!(remove.from, McpRemoveFrom::Library));
+    let remove: McpRemoveRequest = serde_json::from_value(json!({
+        "serverId": "mcps-1", "from": {"kind": "client", "clientId": "claude-desktop", "scope": "user"}
+    }))
+    .unwrap();
+    assert!(matches!(
+        remove.from,
+        McpRemoveFrom::Client {
+            client_id: ClientId::ClaudeDesktop,
+            ..
+        }
+    ));
+    let add: McpAddRequest = serde_json::from_value(json!({
+        "candidates": [{
+            "input": {
+                "name": "context7", "transport": "stdio", "command": "npx",
+                "args": ["-y", "@upstash/context7-mcp"],
+                "secrets": [{"kind": "env", "name": "CONTEXT7_API_KEY", "mode": "user_env", "value": "x"}],
+                "source": {"kind": "template", "id": "context7"}
+            },
+            "onConflict": "skip"
+        }],
+        "clientIds": ["codex", "claude-code", "claude-desktop", "cursor"],
+        "placement": {"scope": "local", "workspaceId": "ws-paper"},
+        "pasteHandle": "paste-1"
+    }))
+    .unwrap();
+    assert_eq!(add.client_ids.len(), 4);
+    let update: McpUpdateRequest = serde_json::from_value(json!({
+        "serverId": "mcps-1", "expectedRevision": 3,
+        "input": {
+            "name": "github", "displayName": "GitHub", "transport": "http",
+            "url": "https://api.githubcopilot.com/mcp/", "codexRequired": false,
+            "secrets": [{"kind": "header", "name": "Authorization", "envVar": "GITHUB_PERSONAL_ACCESS_TOKEN",
+                         "headerTemplate": "bearer", "mode": "user_env", "inlineClients": [], "required": true}],
+            "source": {"kind": "import", "clientId": "codex", "scope": "user"}
+        }
+    }))
+    .unwrap();
+    assert_eq!(update.expected_revision, 3);
+    for value in [
+        json!({"serverId": "s", "clientId": "cursor", "enabled": true, "allowInline": true}),
+        json!({"serverId": "s", "clientId": "codex", "enabled": false, "confirmToken": "t"}),
+    ] {
+        serde_json::from_value::<McpSetCellRequest>(value).unwrap();
+    }
+    serde_json::from_value::<McpSetColumnRequest>(
+        json!({"clientId": "cursor", "enabled": true, "serverIds": ["a"]}),
+    )
+    .unwrap();
+    serde_json::from_value::<McpSetRowRequest>(json!({"serverId": "s", "enabled": false})).unwrap();
+    serde_json::from_value::<McpEmptyRequest>(json!({})).unwrap();
+    serde_json::from_value::<McpHistoryRequest>(json!({})).unwrap();
+    serde_json::from_value::<McpImportRequest>(json!({"reason": "onboarding", "clientIds": []}))
+        .unwrap();
+    serde_json::from_value::<McpRollbackRequest>(
+        json!({"legacySnapshotId": "mcp-snapshot-x", "confirmToken": "t"}),
+    )
+    .unwrap();
+    serde_json::from_value::<McpResolveChangeRequest>(
+        json!({"serverId": "s", "clientId": "codex", "take": "file"}),
+    )
+    .unwrap();
+    serde_json::from_value::<McpResolveStuckRequest>(
+        json!({"snapshotId": "mcp-snapshot-x", "action": "keep-current"}),
+    )
+    .unwrap();
+    serde_json::from_value::<McpOpenLocationRequest>(json!({"clientId": "codex"})).unwrap();
+    serde_json::from_value::<McpExportRequest>(json!({"format": "codex-toml"})).unwrap();
+    serde_json::from_value::<McpSetSecretRequest>(json!({
+        "serverId": "s", "name": "N", "value": "v", "mode": "inline", "inlineClients": ["claude-desktop"]
+    }))
+    .unwrap();
+    serde_json::from_value::<McpTestRequest>(json!({"serverId": "s", "previewToken": "p"}))
+        .unwrap();
+    serde_json::from_value::<McpResyncRequest>(json!({})).unwrap();
+    // A paste candidate's input goes back as it came (optional fields null).
+    let candidate_input = stdio_input("memory", "npx", &["-y", "server-memory"]);
+    let echoed = serde_json::to_value(&candidate_input).unwrap();
+    assert!(echoed["cwd"].is_null());
+    serde_json::from_value::<McpServerInput>(echoed).unwrap();
+    assert!(serde_json::from_value::<McpSetCellRequest>(
+        json!({"serverId": "s", "clientId": "codex", "enabled": true, "extra": 1})
+    )
+    .is_err());
+}

@@ -771,11 +771,11 @@ fn run_http_probe(
         server_name: initialized
             .pointer("/serverInfo/name")
             .and_then(Value::as_str)
-            .map(str::to_string),
+            .map(|value| value.chars().take(80).collect()),
         server_version: initialized
             .pointer("/serverInfo/version")
             .and_then(Value::as_str)
-            .map(str::to_string),
+            .map(|value| value.chars().take(80).collect()),
     }
 }
 
@@ -802,8 +802,16 @@ pub(crate) fn run_test(
         tested_at: tested_at.clone(),
         status: outcome.status.to_string(),
         tools_count: outcome.tools_count,
-        server_name: outcome.server_name.clone(),
-        server_version: outcome.server_version.clone(),
+        // Server-reported text is treated like any other message: secret
+        // values and the profile path are redacted.
+        server_name: outcome
+            .server_name
+            .as_deref()
+            .map(|value| redact_message(value, &target.secret_values, &ctx.mutation.home_dir)),
+        server_version: outcome
+            .server_version
+            .as_deref()
+            .map(|value| redact_message(value, &target.secret_values, &ctx.mutation.home_dir)),
         message_code: outcome.message_code.to_string(),
         message: redact_message(
             &outcome.message,

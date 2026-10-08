@@ -1567,12 +1567,18 @@ fn redact_path(path: &Path, home: &Path) -> String {
     }
     let path_text = normalize_path(path);
     let home_text = normalize_path(home);
-    if !home_text.is_empty()
-        && path_text
-            .to_lowercase()
-            .starts_with(&home_text.to_lowercase())
+    // `get` keeps a non-ASCII path from panicking on a byte index inside a
+    // character; the prefix must end at a folder boundary.
+    if let Some(prefix) = path_text
+        .get(..home_text.len())
+        .filter(|_| !home_text.is_empty())
     {
-        return format!("~{}", &path_text[home_text.len()..]);
+        let rest = &path_text[home_text.len()..];
+        if prefix.to_lowercase() == home_text.to_lowercase()
+            && (rest.is_empty() || rest.starts_with('/'))
+        {
+            return format!("~{rest}");
+        }
     }
     "<registered-path>".to_string()
 }

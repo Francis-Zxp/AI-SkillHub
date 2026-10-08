@@ -5131,7 +5131,8 @@ async fn mcp_open_config_location(
 // ============================================================================
 // end v3.3 MCP
 // ============================================================================
-// Strictly read-only. The probe does not execute Codex, PowerShell, npm,
+
+/// Strictly read-only. The probe does not execute Codex, PowerShell, npm,
 /// setup.ps1, cached JavaScript, or the standalone desktop repair utility.
 #[tauri::command]
 async fn scan_codex_plugin_doctor() -> Result<codex_plugin_doctor::CodexPluginDoctorReport, String>
