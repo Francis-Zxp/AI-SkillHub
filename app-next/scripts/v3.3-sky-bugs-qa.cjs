@@ -230,22 +230,28 @@ async function pressLabel(page, index, hold) {
     }
 
     // #42 A new time of day relights the world in place: same canvas, same view.
+    // Needs the top-bar theme menu (3.2.x shell); the v3.3 shell keeps themes
+    // in Settings, which unmounts home, so there the source contract covers it.
     {
       const { context, page, errors } = await open(browser);
-      const before = await page.evaluate(() => {
-        window.__qaCanvas = document.querySelector(".sky-world-canvas");
-        return [...document.querySelectorAll(".sky-island-label")].map(label => label.style.transform).join("|");
-      });
-      await page.locator(".theme-trigger").click();
-      await page.locator(".theme-menu button", { hasText: "天空 · 午后" }).click();
-      await page.waitForTimeout(1500);
-      const after = await page.evaluate(() => ({
-        sameCanvas: window.__qaCanvas === document.querySelector(".sky-world-canvas"),
-        phase: document.querySelector(".sky-islands")?.className.match(/sky-phase-([a-z]+)/)?.[1],
-        status: document.querySelector(".sky-islands")?.getAttribute("data-status"),
-        labels: [...document.querySelectorAll(".sky-island-label")].map(label => label.style.transform).join("|")
-      }));
-      check("#42 a new time of day keeps the world and its view", after.sameCanvas && after.phase === "golden" && after.status === "ready" && after.labels === before, { sameCanvas: after.sameCanvas, phase: after.phase, sameLabels: after.labels === before });
+      if (await page.locator(".theme-trigger").count()) {
+        const before = await page.evaluate(() => {
+          window.__qaCanvas = document.querySelector(".sky-world-canvas");
+          return [...document.querySelectorAll(".sky-island-label")].map(label => label.style.transform).join("|");
+        });
+        await page.locator(".theme-trigger").click();
+        await page.locator(".theme-menu button", { hasText: "天空 · 午后" }).click();
+        await page.waitForTimeout(1500);
+        const after = await page.evaluate(() => ({
+          sameCanvas: window.__qaCanvas === document.querySelector(".sky-world-canvas"),
+          phase: document.querySelector(".sky-islands")?.className.match(/sky-phase-([a-z]+)/)?.[1],
+          status: document.querySelector(".sky-islands")?.getAttribute("data-status"),
+          labels: [...document.querySelectorAll(".sky-island-label")].map(label => label.style.transform).join("|")
+        }));
+        check("#42 a new time of day keeps the world and its view", after.sameCanvas && after.phase === "golden" && after.status === "ready" && after.labels === before, { sameCanvas: after.sameCanvas, phase: after.phase, sameLabels: after.labels === before });
+      } else {
+        console.log("SKIP  #42 browser check: no top-bar theme menu in this shell (node contract covers it)");
+      }
       allErrors.push(...errors);
       await context.close();
     }
