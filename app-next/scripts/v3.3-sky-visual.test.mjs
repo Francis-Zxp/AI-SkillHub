@@ -164,7 +164,7 @@ test("framing: overlay blocks opt in with data-sky-overlay and shift the view do
 test("climate and weather controls: one compact world panel", () => {
   assert.match(archipelago, /className="sky-world-panel" id=\{worldPanelId\} role="dialog"/);
   assert.match(archipelago, /const WEATHER_OPTIONS: Array<"auto" \| SkyWeatherKind> = \["auto", \.\.\.SKY_WEATHER_KINDS\];/);
-  // v3.3.1: weathers combine, so the chips are toggle buttons in a group: one tab stop,
+  // v3.3: weathers combine, so the chips are toggle buttons in a group: one tab stop,
   // arrow keys move, Home/End jump, Space/Enter press; the hint says how they combine.
   assert.match(archipelago, /role="group" aria-labelledby=\{`\$\{worldPanelId\}-weather`\} aria-describedby=\{`\$\{worldPanelId\}-weather-hint`\} onKeyDown=\{onWeatherKey\}/);
   assert.match(archipelago, /aria-pressed=\{weatherPressed\(kind\)\} tabIndex=\{kind === weatherTabStop \? 0 : -1\}/);
