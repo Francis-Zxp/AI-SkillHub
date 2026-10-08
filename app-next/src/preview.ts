@@ -1265,3 +1265,21 @@ export function createPreviewGitRuntime() {
     downloadPageUrl: "https://git-scm.com/download/win"
   };
 }
+
+/* v3.3 MCP commands (docs/v3.3/mcp-contract.md §6.10). The stateful mock lives in its own lazy
+   chunk, src/mcpPreview.ts, so neither the desktop bundle nor this fixture file carries it. */
+export function previewMcp<R>(command: import("./mcp/mcpTypes").McpCommand, request: unknown): Promise<R> {
+  return import("./mcpPreview").then(module => module.previewMcp<R>(command, request));
+}
+
+export function previewMcpSubscribe(cb: (event: import("./mcp/mcpTypes").McpLibraryChangedEvent) => void): Promise<() => void> {
+  return import("./mcpPreview").then(module => module.previewMcpSubscribe(cb));
+}
+
+export function previewMcpTestProgress(cb: (event: import("./mcp/mcpTypes").McpTestProgressEvent) => void): Promise<() => void> {
+  return import("./mcpPreview").then(module => module.previewMcpTestProgress(cb));
+}
+
+export function previewMcpRecipeStatus() {
+  return import("./mcpPreview").then(module => module.previewRecipeStatus());
+}
