@@ -2781,15 +2781,20 @@ fn client_state(
                 read,
             }
         }
-        Err(_) => ClientState {
+        Err(message) => ClientState {
             client,
             detected,
             writable: false,
-            readonly_reason: Some(if detected {
-                "config-unreadable"
-            } else {
-                "client-not-installed"
-            }),
+            // Detected through the AI 工具 page but its config folder does not
+            // exist yet (never started): "not installed here", not "unreadable".
+            // SkillHub never creates that folder (I5).
+            readonly_reason: Some(
+                if !detected || classify_engine_error(&message).code == "client-not-installed" {
+                    "client-not-installed"
+                } else {
+                    "config-unreadable"
+                },
+            ),
             path_display: default_path_display(ctx, client),
             read: empty_read(),
         },

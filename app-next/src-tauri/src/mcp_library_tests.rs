@@ -2645,3 +2645,43 @@ fn optional_secrets_are_not_missing_and_do_not_block_the_test() {
     let preview = serde_json::to_value(&preview).unwrap();
     assert_eq!(preview["missingSecrets"], json!([]));
 }
+
+/// Codex found by the AI 工具 page but never started (no `~/.codex` yet):
+/// its column is "not installed here", never "unreadable", and SkillHub does
+/// not create the folder (I5).
+#[test]
+fn detected_client_without_config_folder_is_not_installed_not_unreadable() {
+    let fixture = Fixture::new("no-codex-dir");
+    fs::remove_dir_all(fixture.home().join(".codex")).unwrap();
+    let connection = open_db(&fixture.ctx).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_adapters (
+                 id TEXT PRIMARY KEY, name TEXT NOT NULL, detected INTEGER NOT NULL);
+             INSERT INTO agent_adapters VALUES ('codex', 'Codex', 1);",
+        )
+        .unwrap();
+    drop(connection);
+    let snapshot = fixture.snapshot();
+    let codex = snapshot
+        .clients
+        .iter()
+        .find(|client| client.id == ClientId::Codex)
+        .unwrap();
+    assert!(codex.detected && !codex.writable);
+    assert_eq!(
+        codex.readonly_reason.as_deref(),
+        Some("client-not-installed")
+    );
+    let outcome = add(
+        &fixture,
+        stdio_input("memory", "npx", &["-y", "server-memory"]),
+        &[ClientId::Codex],
+    );
+    let (_, results, _) = done(&outcome);
+    assert_eq!(
+        results[0].skipped_reason.as_deref(),
+        Some("client-not-installed")
+    );
+    assert!(!fixture.home().join(".codex").exists());
+}

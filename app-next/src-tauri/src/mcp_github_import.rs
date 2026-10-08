@@ -665,7 +665,23 @@ pub(crate) fn parse_github_source(source: &str) -> Result<GithubSource, McpError
     if trimmed.contains(['?', '#', '@', '\\']) || !trimmed.is_ascii() {
         return Err(invalid());
     }
-    let path = if let Some(value) = trimmed.strip_prefix("https://github.com/") {
+    // A copied address often lacks the scheme or carries `www.`; any other
+    // host is still refused (requests only go to GitHub).
+    let path = if let Some(value) = [
+        "https://github.com/",
+        "http://github.com/",
+        "https://www.github.com/",
+        "http://www.github.com/",
+        "github.com/",
+        "www.github.com/",
+    ]
+    .iter()
+    .find_map(|prefix| {
+        trimmed
+            .get(..prefix.len())
+            .filter(|head| head.eq_ignore_ascii_case(prefix))
+            .map(|_| &trimmed[prefix.len()..])
+    }) {
         value
     } else if trimmed.contains("://") {
         return Err(invalid());
@@ -1275,10 +1291,25 @@ mod v33_tests {
                 .form,
             GithubSourceForm::Blob(vec!["main".into(), "docs".into(), "mcp.json".into()])
         );
+        // Addresses copied without the scheme, with `www.` or in another case.
+        for copied in [
+            "github.com/upstash/context7",
+            "www.github.com/upstash/context7",
+            "HTTPS://GitHub.com/upstash/context7/",
+            "http://github.com/upstash/context7",
+        ] {
+            let source = parse_github_source(copied).unwrap();
+            assert_eq!(
+                (source.owner.as_str(), source.repo.as_str()),
+                ("upstash", "context7"),
+                "{copied}"
+            );
+        }
         for bad in [
             "https://github.com/o/r?x=1",
             "https://github.com@evil.example/o/r",
             "https://gitlab.com/o/r",
+            "github.com.evil.example/o/r",
             "o",
             "https://github.com/o/r/issues/1",
         ] {

@@ -4819,14 +4819,24 @@ async fn list_mcp_mutation_targets() -> Result<Vec<mcp_mutation::McpMutationTarg
 // ============================================================================
 
 fn mcp_library_context() -> Result<mcp_library::McpLibraryContext, mcp_library::McpError> {
-    let mutation =
-        mcp_mutation_context().map_err(|message| mcp_library::McpError::new("engine", message))?;
-    let root = resolve_legacy_root().map_err(|_| {
+    let unavailable = || {
         mcp_library::McpError::new(
             "engine",
             "无法确定 AI SkillHub 数据目录；没有改动任何配置。",
         )
+    };
+    // Root and index errors are English developer text: keep them out of the
+    // zh UI and show the plain message instead.
+    let mutation = mcp_mutation_context().map_err(|message| {
+        if message.is_ascii() {
+            unavailable()
+        } else {
+            mcp_library::McpError::new("engine", message)
+        }
     })?;
+    // `mcp_mutation_context` already prepared the user data folder; locating
+    // the root again is enough for the database path.
+    let root = locate_legacy_root().map_err(|_| unavailable())?;
     Ok(mcp_library::McpLibraryContext {
         mutation,
         db_path: database_file(&root),
