@@ -213,3 +213,92 @@ test("memory: pages load on demand and the library keeps one snapshot copy", () 
   assert.match(app, /\{active === "dashboard" && !showOnboarding && \(/, "home and its 3D scene unmount when another page is open");
   assert.doesNotMatch(app, /dashboardVisited/);
 });
+
+/* ---------- review fixes (frontend) ---------- */
+
+const [agentTextSource, shellSource, dashboardSource, homeCss, importSheetSource, agentsSource] = await Promise.all([
+  read("../src/agentText.ts"),
+  read("../src/components/shell.tsx"),
+  read("../src/pages/Dashboard.tsx"),
+  read("../src/pages/home.css"),
+  read("../src/pages/ImportSheet.tsx"),
+  read("../src/pages/Agents.tsx")
+]);
+
+async function loadAgentText() {
+  const stubI18n = `let lang = "zh"; export const getLang = () => lang; export const __setLang = value => { lang = value; };
+    export const t = (key, vars = {}) => key.startsWith("err.") && key !== "err.TARGET_CONFLICT" ? key : \`\${key}\${JSON.stringify(vars)}\`;`;
+  const i18nUrl = `data:text/javascript,${encodeURIComponent(stubI18n)}`;
+  const errorsUrl = `data:text/javascript,${encodeURIComponent(ts.transpileModule(skillErrors, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText)}`;
+  const javascript = ts.transpileModule(agentTextSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText
+    .replace(/from\s+["']\.\/i18n["']/, `from "${i18nUrl}"`)
+    .replace(/from\s+["']\.\/skillErrors["']/, `from "${errorsUrl}"`);
+  const [module, i18nModule] = await Promise.all([import(`data:text/javascript,${encodeURIComponent(javascript)}`), import(i18nUrl)]);
+  return { ...module, setLang: i18nModule.__setLang };
+}
+
+test("review: en and ko rebuild the backend's Chinese sentences; zh keeps them", async () => {
+  const text = await loadAgentText();
+  const agents = [{ id: "antigravity", name: "Antigravity" }, { id: "codex", name: "Codex" }, { id: "coze", name: "扣子" }];
+  const orphan = { code: "AGENT_NOT_INSTALLED", message: "Antigravity 已不在这台电脑上，但入口还在", agentId: "antigravity", unitId: "source-a" };
+  const conflict = { code: "TARGET_CONFLICT", message: "Claude Code 里已有同名的个人技能", agentId: "antigravity", unitId: "source-a" };
+  const codex = { id: "codex", linkedAgentIds: ["coze"], sharedFolderNote: "与 扣子 共用目录" };
+  const cursor = { name: "Cursor", experimental: true, experimentalReason: "SkillHub 能写入并读回", afterSyncHint: "重新打开 Cursor 后生效" };
+  text.setLang("zh");
+  assert.equal(text.problemText(orphan, agents, () => "Pack A"), orphan.message);
+  assert.equal(text.agentSharedNote(codex, agents), "与 扣子 共用目录");
+  assert.equal(text.agentAfterSyncHint(cursor), "重新打开 Cursor 后生效");
+  for (const lang of ["en", "ko"]) {
+    text.setLang(lang);
+    const lines = [
+      text.problemText(orphan, agents, () => "Pack A"),
+      text.problemText(conflict, agents),
+      text.agentSharedNote(codex, agents),
+      text.agentExperimentalReason(cursor),
+      text.agentAfterSyncHint(cursor),
+      text.agentUnsupportedReason("还不支持同步技能"),
+      text.onboardingReason({ statusWord: "not-installed", canDeliver: true, reason: "没在这台电脑上找到" }),
+      text.invalidSkillReason("缺少 name"),
+      text.chipDisabledReason("需要先接管", "Cursor")
+    ];
+    for (const line of lines) assert.doesNotMatch(line, /[一-鿿]{2}/, `${lang}: ${line}`);
+    assert.match(lines[0], /^v33\.problemOrphan.*"pack":"Pack A"/);
+    assert.match(lines[2], /^v33\.sharedWithCoze/);
+  }
+  // Every caller goes through agentText instead of printing the backend field.
+  assert.doesNotMatch(shellSource, /\{problem\.message\}/);
+  assert.doesNotMatch(agentsSource, /\{problem\.message\}|\{agent\.(sharedFolderNote|experimentalReason|afterSyncHint)\}/);
+  for (const key of ["v33.experimentalReason", "v33.afterSyncHint", "v33.problemOrphan", "v33.removeEntry"]) {
+    for (const block of ["export const v33en", "export const v33zh", "export const v33ko"]) {
+      const start = i18nV33.indexOf(block);
+      assert.ok(i18nV33.slice(start, i18nV33.indexOf("\n};", start)).includes(`"${key}":`), `${key} in ${block}`);
+    }
+  }
+});
+
+test("review: a leftover entry in the 问题 list offers 移除入口", () => {
+  assert.match(shellSource, /problem\.code === "AGENT_NOT_INSTALLED" && Boolean\(problem\.unitId && problem\.agentId\)/);
+  assert.match(shellSource, /onClick=\{\(\) => onRemoveEntry\(problem\)\}/);
+  assert.match(app, /onRemoveEntry=\{problem => \{[\s\S]*?setTarget\(problem\.unitId, problem\.agentId, false\)/);
+});
+
+test("review: a closed add sheet cancels its probe and cannot be torn down mid-install", () => {
+  assert.match(importSheetSource, /if \(phaseKindRef\.current !== "installing"\) cleanupProbe\(\);/);
+  for (const action of ["onOpenRow", "onGoAgents"]) {
+    assert.match(importSheetSource, new RegExp(`disabled=\{installing\} onClick=\{${action}\}`), action);
+  }
+  assert.match(importSheetSource, /disabled=\{installing\} onClick=\{\(\) => onOpenMcp\(config\.relativePath\)\}/);
+});
+
+test("review: the home scene's own controls sit under the measured home block", () => {
+  assert.match(dashboardSource, /view\.style\.setProperty\("--home-top-bottom", `\$\{bottom\}px`\)/);
+  for (const selector of [".home-visual-switch", ".atlas-immersive-toggle", ".skill-universe-modes", ".sky-controls", ".sky-heading"]) {
+    const index = homeCss.indexOf(`:not(.dashboard-immersive) .dashboard-hero ${selector}`) >= 0
+      ? homeCss.indexOf(`:not(.dashboard-immersive) .dashboard-hero ${selector}`)
+      : homeCss.indexOf(`:not(.dashboard-immersive) ${selector}`);
+    assert.ok(index >= 0, selector);
+    assert.match(homeCss.slice(index, homeCss.indexOf("}", index)), /var\(--home-top-bottom/, selector);
+  }
+  // 首页场景: 关闭 spans the window without depending on the 3D stylesheet.
+  assert.match(homeCss, /\.v33\.theme-family-atlas\.page-dashboard \.workspace \{ grid-column: 1 \/ -1; grid-row: 1; \}/);
+});

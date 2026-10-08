@@ -116,19 +116,3 @@ export function availableAgents(state: SkillDeliveryState | null | undefined): S
 export function linkedAgentIds(agent: Pick<SkillAgent, "linkedAgentIds">): AgentId[] {
   return agent.linkedAgentIds ?? [];
 }
-
-/** Count of the targets a batch would really change for one agent. */
-export function batchChangeCount(
-  targets: readonly SkillTarget[],
-  unitIds: ReadonlySet<string>,
-  agentId: AgentId,
-  enable: boolean
-): number {
-  let changed = 0;
-  for (const unitId of unitIds) {
-    const target = targets.find(item => item.unitId === unitId && item.agentId === agentId);
-    if (!target) continue;
-    if (enable ? !target.desired && target.status !== "blocked" : target.desired) changed += 1;
-  }
-  return changed;
-}
