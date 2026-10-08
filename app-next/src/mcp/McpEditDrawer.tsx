@@ -188,12 +188,16 @@ export function McpEditDrawer(props: Props) {
 
   function buildInput(): McpServerInput | null {
     if (!detail || !form) return null;
+    // Kept secrets go back exactly as stored: the variable that holds the value (an imported
+    // "GITHUB_TOKEN": "${GH_PAT}" keeps GH_PAT), and "user_env" with no value, which the backend
+    // reads as "keep the stored storage" (library values stay in the library, references stay
+    // references, consented clients stay consented). Sending "inline" here would re-ask for consent.
     const keepSecrets: McpSecretInput[] = detail.secrets.map(secret => ({
       kind: secret.kind,
       name: secret.name,
-      envVar: secret.kind === "header" ? secret.envVar ?? undefined : undefined,
+      envVar: secret.envVar ?? undefined,
       headerTemplate: secret.headerTemplate,
-      mode: secret.storage === "library" ? "inline" : "user_env",
+      mode: "user_env",
       inlineClients: secret.inlineClients,
       required: secret.required
     }));
@@ -210,9 +214,13 @@ export function McpEditDrawer(props: Props) {
       name: detail.name,
       displayName: detail.displayName,
       transport: form.transport,
-      // A local command keeps env secrets, a remote address keeps header secrets; the other kind
-      // would be invalid in the client files after a transport switch (bugs MCP#1, MCP#4).
-      secrets: [...keepSecrets, ...added].filter(secret => (form.transport === "stdio" ? secret.kind === "env" : secret.kind === "header")),
+      // No new key: leave `secrets` out, so every stored key that still applies is kept untouched
+      // (backend: an omitted field keeps the stored value). With new keys, a local command keeps env
+      // secrets and a remote address keeps header secrets; the other kind would be invalid in the
+      // client files after a transport switch (bugs MCP#1, MCP#4).
+      secrets: added.length === 0
+        ? undefined
+        : [...keepSecrets, ...added].filter(secret => (form.transport === "stdio" ? secret.kind === "env" : secret.kind === "header")),
       codexRequired: form.codexRequired,
       source: detail.source
     };

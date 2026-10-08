@@ -102,6 +102,17 @@ function emptySecret(kind: "env" | "header" = "env"): SecretRow {
   };
 }
 
+type AddCandidate = McpAddRequest["candidates"][number];
+
+/**
+ * `onConflict` is set only when the user chose it in the list (跳过 / 覆盖). Left out, the backend
+ * asks in plain language before it replaces a different same-name entry it finds in an AI tool's
+ * file (contract §3.4, I6), instead of silently skipping that tool as "skip" would.
+ */
+export function addCandidate(input: McpServerInput, onConflict?: "skip" | "overwrite"): AddCandidate {
+  return (onConflict ? { input, onConflict } : { input }) as AddCandidate;
+}
+
 function knownWorkspaces(snapshot: McpLibrarySnapshot) {
   const seen = new Map<string, string>();
   for (const row of snapshot.servers) {
@@ -288,9 +299,10 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
 
   const candidateProblems = new Map<string, string>();
   for (const item of sentCandidates) {
+    // The backend refuses the whole batch for one invalid name (dots included), so check them all here.
     const problem = validateServerName(item.choice.name);
     const existing = item.candidate.exists !== "new";
-    if (problem && !existing && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(item.choice.name)) candidateProblems.set(item.group[0].key, `mcp.add.err.name.${problem}`);
+    if (problem) candidateProblems.set(item.group[0].key, `mcp.add.err.name.${problem}`);
     // An existing server keeps its stored keys when a value is left empty.
     if (existing) continue;
     for (const secret of item.candidate.secrets) {
@@ -445,7 +457,11 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
   }
 
   function manualInput(): McpServerInput {
-    const secretInputs: McpSecretInput[] = activeSecrets.map(row => ({
+    // An optional key left empty (context7's CONTEXT7_API_KEY) is not sent at all: a reference to a
+    // variable that does not exist would make the AI tool complain about a missing variable, and the
+    // row would show "需要 API Key" for a key the server does not need. A required key marked
+    // "稍后填写" is still sent, so the row asks for it later.
+    const secretInputs: McpSecretInput[] = activeSecrets.filter(row => row.required || row.value.trim()).map(row => ({
       kind: row.kind,
       name: row.name.trim(),
       envVar: row.kind === "header" ? row.envVar.trim() || undefined : undefined,
@@ -490,14 +506,14 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
     const [scope, workspaceId] = placement === "user" ? ["user", undefined] : placement.split(":");
     const request: McpAddRequest = pasteActive
       ? {
-          candidates: sentCandidates.map(item => ({
-            input: candidateInput(item.candidate, item.choice),
-            onConflict: item.candidate.exists === "new" ? "skip" : item.choice.onConflict
-          })),
+          candidates: sentCandidates.map(item => addCandidate(
+            candidateInput(item.candidate, item.choice),
+            item.candidate.exists === "new" ? undefined : item.choice.onConflict
+          )),
           clientIds: pickedIds,
           pasteHandle: result?.pasteHandle ?? undefined
         }
-      : { candidates: [{ input: manualInput(), onConflict: "skip" }], clientIds: pickedIds };
+      : { candidates: [addCandidate(manualInput())], clientIds: pickedIds };
     if (scope !== "user") request.placement = { scope: scope as McpScope, workspaceId };
     return request;
   }
@@ -687,7 +703,7 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
     if (!choice) return null;
     const candidate = activeCandidate(group);
     const variants = head.variants.length > 0 ? head.variants : candidate.variants;
-    const nameEditable = candidate.nameSuggested || !candidate.nameValid;
+    const nameEditable = candidate.nameSuggested || !candidate.nameValid || validateServerName(candidate.name) !== null;
     const nameProblemKey = attempted ? candidateProblems.get(head.key) : undefined;
     return (
       <li className={`mcp-candidate${choice.include ? "" : " excluded"}`} key={head.key}>
