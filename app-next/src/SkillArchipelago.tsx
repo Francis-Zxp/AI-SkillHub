@@ -444,10 +444,11 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
     </header>
     <div className="sky-controls" ref={controlsRef}>
       {threeD && <>
+      {/* Below 1000 px these show only their glyph: the names stay in aria-label. */}
       <button type="button" className="sky-control-compact" onClick={() => { world.current?.reset(); setQuery(""); setHovered(null); }} title={words.reset} aria-label={words.reset}><span aria-hidden="true">⌖</span><span>{words.reset}</span></button>
-      <button type="button" className="sky-control-compact" aria-pressed={still3d} disabled={reducedMotion} onClick={togglePaused} title={reducedMotion ? sky.reducedMotion : still3d ? words.play : words.pause}><span aria-hidden="true">{still3d ? "▷" : "Ⅱ"}</span><span>{still3d ? words.play : words.pause}</span></button>
-      <button type="button" className="sky-control-compact" aria-pressed={lowPower} onClick={toggleLowPower} title={words.lowPowerHint}><span aria-hidden="true">◐</span><span>{words.lowPower}</span></button>
-      {status !== "fallback" && <button ref={worldToggleRef} type="button" className="sky-control-compact sky-world-toggle" aria-haspopup="dialog" aria-expanded={worldPanel} aria-controls={worldPanel ? worldPanelId : undefined} onClick={() => showPanel("world")} title={sky.worldTitle}><span aria-hidden="true">{WEATHER_GLYPHS[info?.weather ?? "auto"]}</span><span>{sky.world}</span></button>}
+      <button type="button" className="sky-control-compact" aria-pressed={still3d} disabled={reducedMotion} onClick={togglePaused} aria-label={still3d ? words.play : words.pause} title={reducedMotion ? sky.reducedMotion : still3d ? words.play : words.pause}><span aria-hidden="true">{still3d ? "▷" : "Ⅱ"}</span><span>{still3d ? words.play : words.pause}</span></button>
+      <button type="button" className="sky-control-compact" aria-pressed={lowPower} onClick={toggleLowPower} aria-label={words.lowPower} title={words.lowPowerHint}><span aria-hidden="true">◐</span><span>{words.lowPower}</span></button>
+      {status !== "fallback" && <button ref={worldToggleRef} type="button" className="sky-control-compact sky-world-toggle" aria-haspopup="dialog" aria-label={sky.world} aria-expanded={worldPanel} aria-controls={worldPanel ? worldPanelId : undefined} onClick={() => showPanel("world")} title={sky.worldTitle}><span aria-hidden="true">{WEATHER_GLYPHS[info?.weather ?? "auto"]}</span><span>{sky.world}</span></button>}
       <button type="button" aria-expanded={navigation} onClick={() => showPanel("navigation")}>{navigation ? words.collapse : words.browse}<span aria-hidden="true">{navigation ? "−" : "+"}</span></button>
       </>}
       <button type="button" aria-pressed={!sceneOn} onClick={() => setSkySceneEnabled(!sceneOn)} title={words.sceneHint}><span aria-hidden="true">{sceneOn ? "▦" : "◒"}</span><span>{sceneOn ? words.sceneOff : words.sceneOn}</span></button>
