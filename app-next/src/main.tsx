@@ -7,6 +7,7 @@ import "./refinements.css";
 import { App } from "./App";
 import { loadTelemetry } from "./telemetry";
 import { startAppVisibilityRelay } from "./appVisibility";
+import { startLiquidGlass } from "./liquidGlass";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
@@ -16,6 +17,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 
 // Window minimized/background → page events, so heavy views can release memory.
 startAppVisibilityRelay();
+
+// Lens refraction and pointer sheen for the glass chrome (liquid.css).
+startLiquidGlass(document.getElementById("root") as HTMLElement);
 
 // Third-party usage statistics load after first paint and only while the switch is on.
 window.setTimeout(loadTelemetry, 4_000);

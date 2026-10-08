@@ -7,6 +7,10 @@
 .lib-head-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 
 .lib-filters, .lib-folders { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.lib-folders { flex-wrap: nowrap; align-items: flex-start; gap: 10px; }
+/* The user's folders wrap among themselves; 全部 / 未归档 stay at the right of the first line. */
+.lib-folder-group { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.lib-folder-group.system { flex: 0 0 auto; flex-wrap: nowrap; padding-left: 12px; border-left: 1px solid var(--border); }
 .lib-filter, .folder-chip {
   display: inline-flex;
   align-items: center;
@@ -71,7 +75,7 @@
 .lib-list { position: relative; display: block; }
 .lib-row {
   display: grid;
-  grid-template-columns: 14px 18px 24px minmax(0, 1fr) auto auto minmax(0, auto) 30px 32px;
+  grid-template-columns: 14px 18px 24px minmax(0, 1fr) auto auto minmax(0, auto) 32px;
   align-items: center;
   gap: 8px;
   height: 64px;
@@ -91,12 +95,35 @@
 .lib-chevron:hover:not(:disabled) { background: var(--surface-soft); color: var(--text); }
 .lib-chevron .ui-icon { transition: transform var(--duration) var(--ease); }
 .lib-chevron.open .ui-icon { transform: rotate(90deg); }
-.lib-main { display: grid; grid-template-columns: 34px minmax(120px, 230px) minmax(0, 1fr); align-items: center; gap: 10px; min-width: 0; height: 100%; text-align: left; }
-.lib-title { display: grid; min-width: 0; }
-.lib-title strong, .lib-title small, .lib-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lib-title strong { font-size: 14px; }
-.lib-title small { color: var(--text-muted); font-size: 11.5px; }
-.lib-summary { min-width: 0; color: var(--text-soft); font-size: 13px; }
+/* Two lines: name · copy · owner, then the note and the description. */
+.lib-main { display: flex; align-items: center; gap: 12px; min-width: 0; height: 100%; padding-right: 8px; border-radius: 12px; cursor: pointer; text-align: left; outline: none; }
+.lib-main:focus-visible { box-shadow: 0 0 0 2px var(--brand); }
+.lib-text { display: grid; gap: 3px; min-width: 0; flex: 1 1 auto; }
+.lib-line1, .lib-line2 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lib-line1 strong { flex: 0 1 auto; min-width: 4em; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+/* The owner gives way long before the name does. */
+.lib-owner { flex: 0 100 auto; overflow: hidden; color: var(--text-muted); font-size: 11.5px; text-overflow: ellipsis; white-space: nowrap; }
+.lib-copy {
+  display: inline-grid;
+  flex: 0 0 24px;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  opacity: .75;
+  transition: background 140ms var(--ease), color 140ms var(--ease), opacity 140ms var(--ease), transform 160ms cubic-bezier(.34, 1.56, .64, 1);
+}
+.lib-copy .ui-icon { width: 15px; height: 15px; }
+.lib-row:hover .lib-copy, .lib-copy:focus-visible { opacity: 1; }
+.lib-copy:hover { background: color-mix(in srgb, var(--brand) 16%, transparent); color: var(--brand-strong); transform: scale(1.08); }
+.lib-copy:active { transform: scale(.92); }
+.lib-line2 { color: var(--text-soft); font-size: 12.5px; }
+.lib-note { display: inline-flex; flex: 0 1 auto; align-items: center; gap: 5px; min-width: 0; max-width: 62%; overflow: hidden; color: var(--text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.lib-desc { flex: 1 1 0; min-width: 0; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
+.lib-note + .lib-desc::before { content: "·"; margin-right: 8px; color: var(--text-muted); }
+.chip.chip-action { cursor: pointer; border-color: color-mix(in srgb, var(--warning) 45%, transparent); background: var(--warning-soft); color: var(--warning); }
+.chip.chip-action:hover { filter: brightness(1.08); }
 .lib-badges { display: flex; gap: 4px; }
 .target-icons { display: flex; align-items: center; gap: 3px; min-width: 0; }
 .target-icon-wrap { display: inline-flex; align-items: center; }
@@ -112,8 +139,6 @@
 .target-badge.red { background: var(--danger); box-shadow: 0 0 0 2px var(--bg); }
 .target-badge.pause { color: var(--warning); }
 .target-badge.ban { color: var(--danger); }
-.target-link { display: grid; place-items: center; width: 10px; margin: 0 -3px; color: var(--text-muted); }
-.target-link .ui-icon { width: 10px; height: 10px; }
 .target-more { height: 24px; padding: 0 6px; border-radius: 8px; color: var(--text-soft); font-size: 12px; font-weight: 700; }
 
 .lib-child {
@@ -152,19 +177,10 @@
   font-weight: 700;
   pointer-events: none;
 }
-/* The user's note comes first: it is how people tell similar packs apart. */
-.lib-summary.has-note { display: grid; gap: 1px; align-content: center; }
-.lib-note { display: flex; align-items: center; gap: 5px; overflow: hidden; color: var(--text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.lib-note .ui-icon { flex: 0 0 13px; width: 13px; height: 13px; color: var(--brand-strong); }
-.lib-summary.has-note small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.lib-copy { display: grid; place-items: center; width: 30px; height: 30px; }
-.lib-title-note { display: none; }
-/* Narrow windows: the summary column gives way; the note moves under the name (owner hidden). */
+/* Narrow windows: the note keeps its line; ratings give way. */
 @media (max-width: 1180px) {
-  .lib-main { grid-template-columns: 34px minmax(0, 1fr); }
-  .lib-summary, .lib-summary.has-note { display: none; }
-  .lib-title.has-note .lib-owner { display: none; }
-  .lib-title-note { display: block; color: var(--brand-strong); font-weight: 600; }
+  .lib-note { max-width: 100%; }
+  .lib-note + .lib-desc { display: none; }
   .lib-row .star-rating { display: none; }
 }
 

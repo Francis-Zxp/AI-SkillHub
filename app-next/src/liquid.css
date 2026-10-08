@@ -1,0 +1,451 @@
+/* =============================================================
+   Liquid glass (v3.3.1)
+   One material for the app chrome, after Apple's Liquid Glass: a thin tint of
+   the theme's own surface over a blurred, saturated backdrop, a specular rim
+   that is brightest along the top edge, a soft lifted shadow and springy
+   motion. The large surfaces (top bar, rail, bottom bar, scene switch) also
+   bend the backdrop near their rim through a lens filter made for their size
+   (liquidGlass.ts sets --lg-lens; without it the material is unchanged).
+
+   Loaded after styles.css and shell.css. Rules that must beat a page
+   stylesheet (which loads later with its chunk) carry the main.shell.v33
+   prefix.
+   ============================================================= */
+
+@property --lg-sheen {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+/* ---------- material tokens: light themes ---------- */
+main.shell.v33 {
+  --lg-fill: color-mix(in srgb, var(--surface-elevated) 58%, transparent);
+  --lg-fill-strong: color-mix(in srgb, var(--surface-elevated) 80%, transparent);
+  --lg-fill-inner: rgba(255, 255, 255, .42);
+  --lg-fill-hover: rgba(255, 255, 255, .7);
+  --lg-bead: rgba(255, 255, 255, .94);
+  --lg-bead-text: var(--brand-strong);
+  --lg-hairline: rgba(15, 23, 42, .09);
+  --lg-rim-hi: rgba(255, 255, 255, .95);
+  --lg-rim-lo: rgba(255, 255, 255, .38);
+  --lg-glow: rgba(255, 255, 255, .28);
+  --lg-sheen-rgb: 255, 255, 255;
+  --lg-shadow: 0 1px 1px rgba(15, 23, 42, .04), 0 10px 30px rgba(15, 23, 42, .12);
+  --lg-shadow-raised: 0 2px 6px rgba(15, 23, 42, .06), 0 22px 56px rgba(15, 23, 42, .2);
+  --lg-bead-shadow: 0 1px 2px rgba(15, 23, 42, .1), 0 4px 12px rgba(15, 23, 42, .1), inset 0 1px 0 #fff;
+  --lg-blur: 16px;
+  --lg-sat: 185%;
+  --lg-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --lg-out: cubic-bezier(.22, 1, .36, 1);
+  --lg-rim:
+    inset 0 1px 0 var(--lg-rim-hi),
+    inset 1px 0 0 var(--lg-rim-lo),
+    inset -1px 0 0 var(--lg-rim-lo),
+    inset 0 -1px 0 var(--lg-rim-lo),
+    inset 0 0 14px var(--lg-glow),
+    0 0 0 .5px var(--lg-hairline);
+}
+
+/* ---------- material tokens: dark themes ---------- */
+main.shell.v33:is(.theme-dark, .theme-classic-dark, .theme-atlas-dark, .theme-atlas-legacy-dark, .theme-nocturne, .theme-sky-night) {
+  --lg-fill: color-mix(in srgb, var(--surface-elevated) 52%, transparent);
+  --lg-fill-strong: color-mix(in srgb, var(--surface-elevated) 82%, transparent);
+  --lg-fill-inner: rgba(255, 255, 255, .06);
+  --lg-fill-hover: rgba(255, 255, 255, .12);
+  --lg-bead: rgba(255, 255, 255, .17);
+  --lg-bead-text: var(--text);
+  --lg-hairline: rgba(0, 0, 0, .35);
+  --lg-rim-hi: rgba(255, 255, 255, .34);
+  --lg-rim-lo: rgba(255, 255, 255, .09);
+  --lg-glow: rgba(255, 255, 255, .05);
+  --lg-shadow: 0 1px 1px rgba(0, 0, 0, .25), 0 12px 32px rgba(0, 0, 0, .38);
+  --lg-shadow-raised: 0 2px 6px rgba(0, 0, 0, .3), 0 24px 60px rgba(0, 0, 0, .5);
+  --lg-bead-shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 12px rgba(0, 0, 0, .25), inset 0 1px 0 rgba(255, 255, 255, .22);
+}
+
+/* ---------- the material ---------- */
+main.shell.v33 .topbar,
+main.shell.v33 .side-rail::before,
+main.shell.v33 .metric-grid.atlas-touchbar,
+main.shell.v33 .segmented,
+main.shell.v33 .skill-universe-modes,
+main.shell.v33 .sky-controls,
+main.shell.v33 .atlas-immersive-toggle,
+main.shell.v33 .atlas-intro-toggle {
+  border-color: transparent;
+  background:
+    radial-gradient(circle at var(--lg-x, 50%) var(--lg-y, 0%), rgba(var(--lg-sheen-rgb), calc(var(--lg-sheen) * .32)) 0, rgba(var(--lg-sheen-rgb), 0) 70%),
+    var(--lg-fill);
+  box-shadow: var(--lg-rim), var(--lg-shadow);
+  -webkit-backdrop-filter: blur(var(--lg-blur)) saturate(var(--lg-sat));
+  backdrop-filter: var(--lg-lens,) blur(var(--lg-blur)) saturate(var(--lg-sat)) brightness(1.04);
+  transition:
+    --lg-sheen 260ms var(--lg-out),
+    background-color 200ms var(--lg-out),
+    box-shadow 240ms var(--lg-out),
+    transform 380ms var(--lg-spring),
+    color 160ms var(--lg-out);
+}
+main.shell.v33 :is(.topbar, .metric-grid.atlas-touchbar, .segmented, .skill-universe-modes, .sky-controls, .atlas-immersive-toggle, .atlas-intro-toggle)[data-lg-lit],
+main.shell.v33 .side-rail[data-lg-lit]::before { --lg-sheen: 1; }
+main.shell.v33 .side-rail::before { border: 0; inset: 8px 6px; border-radius: 24px; }
+
+/* Thicker glass for things that hold reading: menus, popovers, panels, dialogs, drawers. */
+main.shell.v33 :is(.more-list, .problems-popover, .lang-menu, .theme-menu, .update-results-popover, .mcp-menu, .global-search-results, .toast, .dialog, .drawer, .import-sheet, .mcp-drawer) {
+  border-color: transparent;
+  background: var(--lg-fill-strong);
+  box-shadow: var(--lg-rim), var(--lg-shadow-raised);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  backdrop-filter: blur(28px) saturate(190%);
+}
+main.shell.v33 .drawer-backdrop { background: rgba(10, 14, 24, .22); backdrop-filter: blur(4px) saturate(120%); }
+
+/* Controls inside the bars sit in the glass instead of on top of it. */
+main.shell.v33 .topbar :is(.command-search, .ghost-pill, .icon-button, .sync-indicator, .lang-trigger, .theme-trigger, .update-available-pill) {
+  border-color: transparent;
+  background: var(--lg-fill-inner);
+  box-shadow: inset 0 1px 0 var(--lg-rim-lo), 0 0 0 .5px var(--lg-hairline);
+  transition: background 180ms var(--lg-out), box-shadow 200ms var(--lg-out), transform 320ms var(--lg-spring), color 160ms var(--lg-out);
+}
+main.shell.v33 .topbar :is(.ghost-pill, .icon-button, .sync-indicator, .lang-trigger, .theme-trigger, .update-available-pill):hover:not(:disabled) {
+  background: var(--lg-fill-hover);
+  transform: translateY(-1px);
+}
+main.shell.v33 .topbar .command-search:focus-within {
+  background: var(--lg-fill-hover);
+  box-shadow: inset 0 1px 0 var(--lg-rim-hi), 0 0 0 1.5px color-mix(in srgb, var(--brand) 55%, transparent), 0 0 0 5px color-mix(in srgb, var(--brand) 14%, transparent);
+}
+main.shell.v33 .topbar .command-search kbd { border-color: transparent; background: var(--lg-fill-inner); box-shadow: 0 0 0 .5px var(--lg-hairline); }
+
+/* Primary actions: a lit drop of the theme colour. */
+main.shell.v33 :is(.primary-pill, .atlas-touchbar-actions button:last-child) {
+  border-color: transparent;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--brand-fill, var(--brand-strong)) 80%, #fff) 0%, var(--brand-fill, var(--brand-strong)) 62%);
+  /* Sky themes name their on-brand colour; the Atlas themes pair the brand with the page colour. */
+  color: var(--on-brand, var(--bg));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .42), inset 0 -1px 0 rgba(0, 0, 0, .12), 0 6px 18px color-mix(in srgb, var(--brand) 32%, transparent);
+  transition: transform 340ms var(--lg-spring), box-shadow 220ms var(--lg-out), filter 160ms var(--lg-out);
+}
+main.shell.v33 :is(.primary-pill, .atlas-touchbar-actions button:last-child):hover:not(:disabled) {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(0, 0, 0, .12), 0 10px 24px color-mix(in srgb, var(--brand) 38%, transparent);
+}
+
+/* Press: everything glassy gives a little under the finger. */
+main.shell.v33 :is(.primary-pill, .ghost-pill, .icon-button, .sync-indicator, .segmented button, .sky-controls button, .skill-universe-modes button, .atlas-immersive-toggle, .atlas-intro-toggle, .atlas-touchbar-actions button, .rail-item, .sky-board-card, .folder-chip, .lib-filter):active:not(:disabled) {
+  transform: scale(.96);
+  transition-duration: 90ms;
+}
+
+/* ---------- rail ---------- */
+main.shell.v33 .rail-item { transition: background 200ms var(--lg-out), color 160ms var(--lg-out), box-shadow 220ms var(--lg-out), transform 340ms var(--lg-spring); }
+main.shell.v33 .rail-item:hover { background: var(--lg-fill-inner); }
+main.shell.v33 .rail-item[aria-current="page"] {
+  background: var(--lg-bead);
+  box-shadow: var(--lg-bead-shadow);
+  color: var(--text);
+}
+main.shell.v33 .rail-footer { border-top-color: var(--lg-hairline); }
+
+/* ---------- segmented controls: a bead that slides to the choice (ui.tsx sets --seg-*) ---------- */
+main.shell.v33 .segmented { position: relative; isolation: isolate; border: 0; border-radius: 999px; padding: 4px; gap: 2px; overflow: visible; }
+main.shell.v33 .settings-row .segmented { overflow-x: auto; }
+main.shell.v33 .segmented button { position: relative; z-index: 1; border-radius: 999px; transition: color 200ms var(--lg-out), transform 320ms var(--lg-spring); }
+main.shell.v33 .segmented button.active { background: var(--lg-bead); color: var(--lg-bead-text); box-shadow: var(--lg-bead-shadow); }
+main.shell.v33 .segmented.has-thumb::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  left: 0;
+  width: var(--seg-w, 0);
+  height: var(--seg-h, 0);
+  border-radius: 999px;
+  background: var(--lg-bead);
+  box-shadow: var(--lg-bead-shadow);
+  transform: translate(var(--seg-x, 0), var(--seg-y, 0));
+  transition: transform 460ms var(--lg-spring), width 460ms var(--lg-spring), height 300ms var(--lg-out);
+  pointer-events: none;
+}
+main.shell.v33 .segmented.has-thumb button.active { background: transparent; box-shadow: none; }
+main.shell.v33 .segmented.no-thumb-motion::before { transition: none; }
+/* The theme picker in Settings is a grid of cards, not a capsule. */
+main.shell.v33 .settings-theme-row .segmented { border-radius: var(--radius-lg); }
+main.shell.v33 .settings-theme-row .segmented button,
+main.shell.v33 .settings-theme-row .segmented.has-thumb::before { border-radius: 14px; }
+
+/* ---------- home: one scene toolbar row ----------
+   Left: 群岛 / 星图 / 归纳. Right, ending at the top bar's inner edge: the
+   scene's own controls, then 全屏. Same height, same glass, same top. */
+main.shell.v33.theme-family-atlas.page-dashboard {
+  --scene-bar-top: 88px;
+  --scene-bar-h: 40px;
+  --scene-left: calc(var(--home-rail, 0px) + 24px);
+  --scene-right: 24px;
+  --scene-below: calc(var(--scene-bar-top) + var(--scene-bar-h) + 16px);
+}
+main.shell.v33.dashboard-immersive.theme-family-atlas.page-dashboard { --scene-bar-top: 16px; }
+
+main.shell.v33.theme-family-atlas.page-dashboard .home-visual-switch {
+  top: var(--scene-bar-top);
+  left: var(--scene-left);
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+}
+main.shell.v33.theme-family-atlas.page-dashboard .home-visual-switch .segmented { height: var(--scene-bar-h); }
+main.shell.v33.theme-family-atlas.page-dashboard .home-visual-switch .segmented button {
+  height: calc(var(--scene-bar-h) - 8px);
+  padding: 0 16px;
+  font: 600 calc(13px * var(--ui-text-scale, 1))/1 var(--ui-font);
+}
+
+main.shell.v33.theme-family-atlas.page-dashboard .atlas-immersive-toggle {
+  top: var(--scene-bar-top);
+  right: var(--scene-right);
+  left: auto;
+  width: var(--scene-bar-h);
+  height: var(--scene-bar-h);
+  border-radius: 999px;
+  color: var(--text-soft);
+}
+main.shell.v33.theme-family-atlas.page-dashboard :is(.atlas-immersive-toggle, .atlas-intro-toggle):hover { color: var(--text); transform: translateY(-1px); }
+
+main.shell.v33.theme-family-atlas.page-dashboard .skill-universe-modes {
+  top: var(--scene-bar-top);
+  right: calc(var(--scene-right) + var(--scene-bar-h) + 8px);
+  height: var(--scene-bar-h);
+  padding: 4px;
+  border-radius: 999px;
+}
+main.shell.v33.theme-family-atlas.page-dashboard .skill-universe-modes button {
+  height: calc(var(--scene-bar-h) - 8px);
+  border-radius: 999px;
+  color: var(--text-soft);
+  transition: color 200ms var(--lg-out), background 240ms var(--lg-out), box-shadow 240ms var(--lg-out), transform 320ms var(--lg-spring);
+}
+main.shell.v33.theme-family-atlas.page-dashboard .skill-universe-modes button.active { background: var(--lg-bead); color: var(--lg-bead-text); box-shadow: var(--lg-bead-shadow); }
+
+main.shell.v33.theme-family-atlas.page-dashboard .atlas-intro-toggle {
+  top: var(--scene-bar-top);
+  right: calc(var(--scene-right) + var(--scene-bar-h) + 8px + 258px + 8px);
+  left: auto;
+  width: auto;
+  min-width: 0;
+  height: var(--scene-bar-h);
+  padding: 0 16px;
+  border-radius: 999px;
+  color: var(--text-soft);
+}
+main.shell.v33.theme-family-atlas.page-dashboard .atlas-intro-toggle[aria-pressed="true"] { color: var(--lg-bead-text); }
+
+/* Islands: the six scene buttons share one capsule, like the switch. */
+main.shell.v33.theme-family-atlas.page-dashboard .sky-controls {
+  top: var(--scene-bar-top);
+  right: calc(var(--scene-right) + var(--scene-bar-h) + 8px);
+  height: var(--scene-bar-h);
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 999px;
+  color: var(--text-soft);
+}
+main.shell.v33.theme-family-atlas.page-dashboard .sky-controls button {
+  height: calc(var(--scene-bar-h) - 8px);
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  color: inherit;
+  background: transparent;
+  font: 600 calc(12.5px * var(--ui-text-scale, 1))/1 var(--ui-font);
+  backdrop-filter: none;
+  transition: color 160ms var(--lg-out), background 200ms var(--lg-out), box-shadow 220ms var(--lg-out), transform 320ms var(--lg-spring);
+}
+main.shell.v33.theme-family-atlas.page-dashboard .sky-controls button:hover:not(:disabled) { color: var(--text); background: var(--lg-fill-inner); }
+main.shell.v33.theme-family-atlas.page-dashboard .sky-controls button:is([aria-pressed="true"], [aria-expanded="true"]) {
+  border: 0;
+  background: var(--lg-bead);
+  color: var(--lg-bead-text);
+  box-shadow: var(--lg-bead-shadow);
+}
+main.shell.v33.theme-family-atlas.page-dashboard .sky-controls button span[aria-hidden] { font-size: 15px; line-height: 1; }
+
+/* Everything else on the scene starts under the row. */
+main.shell.v33.theme-family-atlas.page-dashboard .sky-heading { top: var(--scene-below); left: calc(var(--scene-left) + 4px); }
+main.shell.v33.theme-family-atlas.page-dashboard .sky-navigation { top: calc(var(--scene-bar-top) + var(--scene-bar-h) + 10px); }
+main.shell.v33.theme-family-atlas.page-dashboard .home-summary-scene { top: calc(var(--scene-bar-top) + var(--scene-bar-h) + 12px); left: var(--scene-left); right: var(--scene-right); }
+main.shell.v33.theme-family-atlas.page-dashboard .home-summary-scene .skill-showcase {
+  border-color: transparent;
+  border-radius: 24px;
+  background: var(--lg-fill-strong);
+  box-shadow: var(--lg-rim), var(--lg-shadow);
+  backdrop-filter: blur(24px) saturate(185%);
+}
+main.shell.v33.theme-family-atlas.page-dashboard .skill-universe-inspector { top: calc(var(--scene-bar-top) + var(--scene-bar-h) + 12px); right: var(--scene-right); }
+main.shell.v33.theme-family-atlas.page-dashboard .workspace-body > .operation-banner { top: calc(var(--scene-bar-top) - 9px); }
+main.shell.v33.dashboard-immersive.theme-family-atlas.page-dashboard .workspace-body > .operation-banner { top: 6px; }
+
+/* Narrow windows: the switch and the scene buttons keep one row (glyphs only). */
+@media (max-width: 1000px) {
+  main.shell.v33.theme-family-atlas.page-dashboard .sky-controls button { padding: 0 10px; }
+  main.shell.v33.theme-family-atlas.page-dashboard .atlas-intro-toggle { width: var(--scene-bar-h); padding: 0; }
+  main.shell.v33.theme-family-atlas.page-dashboard .atlas-intro-toggle span { display: none; }
+  main.shell.v33.theme-family-atlas.page-dashboard .atlas-intro-toggle { right: calc(var(--scene-right) + var(--scene-bar-h) + 8px + 238px + 8px); }
+  main.shell.v33.theme-family-atlas.page-dashboard .skill-universe-modes { width: 238px; grid-template-columns: 62px 58px minmax(0, 1fr); }
+}
+@media (max-width: 820px) {
+  main.shell.v33.theme-family-atlas.page-dashboard { --scene-bar-top: 84px; --scene-left: 14px; --scene-right: 14px; }
+  main.shell.v33.dashboard-immersive.theme-family-atlas.page-dashboard { --scene-bar-top: 14px; }
+}
+
+/* ---------- bottom bar ----------
+   Placed here, not only in HomeScene.css: that file loads with the 3D scenes, so
+   归纳 opened first used to show a different, boxed bar. */
+main.shell.v33.theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar {
+  left: calc(50% + var(--home-rail, 0px) / 2);
+  width: calc(100% - var(--home-rail, 0px) - 24px);
+  bottom: max(12px, env(safe-area-inset-bottom));
+  border: 0;
+}
+main.shell.v33.theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar .metric { border: 0; background: transparent; box-shadow: none; }
+main.shell.v33.theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar .metric {
+  transition: background 200ms var(--lg-out), transform 340ms var(--lg-spring);
+}
+main.shell.v33.theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar .metric:hover { background: var(--lg-fill-inner); }
+main.shell.v33.theme-family-atlas.page-dashboard .atlas-touchbar-actions { border-left-color: var(--lg-hairline); }
+main.shell.v33.theme-family-atlas.page-dashboard .atlas-touchbar-actions button:not(:last-child) {
+  background: var(--lg-fill-inner);
+  box-shadow: inset 0 1px 0 var(--lg-rim-lo), 0 0 0 .5px var(--lg-hairline);
+}
+main.shell.v33.theme-family-atlas.page-dashboard .atlas-touchbar-actions button:not(:last-child):hover:not(:disabled) { background: var(--lg-fill-hover); }
+
+/* Full screen: the compact 3.2.x bar, centred, never stretched across the window. */
+main.shell.v33.dashboard-immersive.theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar {
+  left: 50%;
+  width: min(1060px, calc(100% - 48px));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  padding: 4px;
+  border-radius: 22px;
+}
+main.shell.v33.dashboard-immersive.theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar .metric { min-height: 46px; padding: 4px 10px; }
+main.shell.v33.dashboard-immersive.theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar .metric strong { font-size: calc(21px * var(--ui-text-scale, 1)); }
+main.shell.v33.dashboard-immersive.theme-family-atlas.page-dashboard .atlas-touchbar-actions { grid-auto-columns: minmax(78px, auto); }
+main.shell.v33.dashboard-immersive.theme-family-atlas.page-dashboard .atlas-touchbar-actions button { border-radius: 16px; }
+
+/* ---------- 简洁分类 (simple view): every card the same size ---------- */
+main.shell.v33.theme-family-atlas.page-dashboard .sky-board {
+  top: calc(var(--scene-below) + 82px);
+  right: var(--scene-right);
+  bottom: calc(var(--touchbar-reserve, 98px) + 24px);
+  left: var(--scene-left);
+}
+@media (max-height: 750px) {
+  main.shell.v33.theme-family-atlas.page-dashboard .sky-board { top: var(--scene-below); }
+}
+.sky-board { grid-auto-rows: auto; }
+.sky-board > [role="listitem"] { display: flex; min-width: 0; }
+.sky-board-card {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 108px;
+  isolation: isolate;
+}
+main.shell.v33 .sky-board-card {
+  border-color: transparent;
+  background:
+    radial-gradient(circle at var(--lg-x, 50%) var(--lg-y, 0%), rgba(var(--lg-sheen-rgb), calc(var(--lg-sheen) * .4)) 0, rgba(var(--lg-sheen-rgb), 0) 70%),
+    var(--lg-fill-strong);
+  color: var(--text);
+  box-shadow: var(--lg-rim), var(--lg-shadow);
+  -webkit-backdrop-filter: blur(14px) saturate(180%);
+  backdrop-filter: blur(14px) saturate(180%);
+  transition: --lg-sheen 260ms var(--lg-out), transform 380ms var(--lg-spring), box-shadow 240ms var(--lg-out);
+}
+main.shell.v33 .sky-board-card[data-lg-lit] { --lg-sheen: 1; }
+main.shell.v33 .sky-board-card:hover { transform: translateY(-3px); box-shadow: var(--lg-rim), var(--lg-shadow-raised); }
+.sky-board-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The bar shows the island's share; the track keeps every card's bottom edge alike. */
+.sky-board-card i { margin-top: auto; }
+.sky-board-card::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  right: 16px;
+  bottom: 18px;
+  left: 16px;
+  height: 4px;
+  border-radius: 4px;
+  background: currentColor;
+  opacity: .1;
+}
+main.shell.v33 .sky-board-card i { background: var(--brand); }
+
+/* ---------- progress: one hue, the theme's own ---------- */
+main.shell.v33 .operation-banner i {
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--brand) 55%, transparent) 0%, var(--brand) 70%, color-mix(in srgb, var(--brand) 70%, #fff) 100%);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--brand) 45%, transparent);
+  overflow: hidden;
+}
+main.shell.v33 .operation-banner i::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, .55) 50%, transparent 100%);
+  transform: translateX(-100%);
+  animation: lg-progress-sheen 1.6s var(--lg-out) infinite;
+}
+main.shell.v33.theme-family-atlas.page-dashboard .workspace-body > .operation-banner { background: color-mix(in srgb, var(--brand) 14%, transparent); border-radius: 3px; overflow: hidden; }
+@keyframes lg-progress-sheen { to { transform: translateX(100%); } }
+
+/* ---------- folder chips and filters on the library page ---------- */
+main.shell.v33 :is(.folder-chip, .lib-filter) { transition: background 180ms var(--lg-out), color 160ms var(--lg-out), box-shadow 220ms var(--lg-out), transform 320ms var(--lg-spring); }
+
+/* ---------- menus open with a little give ---------- */
+main.shell.v33 :is(.lang-menu, .theme-menu, .problems-popover, .more-list, .sky-world-panel) {
+  transform-origin: top right;
+  animation: lg-pop 260ms var(--lg-spring);
+}
+@keyframes lg-pop {
+  from { opacity: 0; transform: translateY(-4px) scale(.96); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------- islands: the scene's panels use the same material ---------- */
+main.shell.v33 :is(.sky-world-panel, .sky-navigation, .sky-credits) {
+  border-color: transparent;
+  color: var(--text);
+  background: var(--lg-fill-strong);
+  box-shadow: var(--lg-rim), var(--lg-shadow-raised);
+  -webkit-backdrop-filter: blur(24px) saturate(185%);
+  backdrop-filter: blur(24px) saturate(185%);
+  border-radius: 18px;
+}
+main.shell.v33 .sky-island-label {
+  border-color: transparent;
+  color: var(--text);
+  background: var(--lg-fill-strong);
+  box-shadow: var(--lg-rim), 0 4px 14px rgba(15, 23, 42, .14);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  backdrop-filter: blur(12px) saturate(180%);
+  border-radius: 12px;
+}
+main.shell.v33 .sky-island-label:is(.is-hovered, :hover) {
+  border-color: transparent;
+  background: var(--lg-bead);
+  box-shadow: var(--lg-rim), 0 0 0 1.5px color-mix(in srgb, var(--brand) 60%, transparent), 0 8px 20px rgba(15, 23, 42, .18);
+}
+main.shell.v33 .sky-caption span { background: var(--lg-fill); -webkit-backdrop-filter: blur(10px) saturate(170%); backdrop-filter: blur(10px) saturate(170%); border-radius: 999px; padding: 4px 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  main.shell.v33 *,
+  main.shell.v33 *::before,
+  main.shell.v33 *::after { transition-duration: 1ms !important; animation-duration: 1ms !important; animation-iteration-count: 1 !important; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  main.shell.v33 { --lg-fill: var(--surface-elevated); --lg-fill-strong: var(--surface-elevated); }
+}

@@ -79,7 +79,12 @@ test("light themes never paint the star map backdrop as a grey shadow", () => {
   assert.ok(atmosphere.length > 0);
   assert.doesNotMatch(atmosphere, /fillRect\(0, 0/);
   assert.match(atmosphere, /lightTheme \? 0\.95 : 1/);
-  assert.match(atmosphere, /lightTheme \? 0\.06 : 0\.11/);
+  // The centred glow: every light-theme stop is fainter than its dark-theme twin.
+  for (const [light, dark] of atmosphere.matchAll(/lightTheme \? (0\.\d+) : (0\.\d+)/g).map(match => [Number(match[1]), Number(match[2])])) {
+    if (light === 0.95) continue;
+    assert.ok(light < dark, `light ${light} should stay below dark ${dark}`);
+    assert.ok(light <= 0.12, `light-theme glow ${light} reads as a smudge`);
+  }
   // (v3.3: the great-circle strokes are built once per palette.)
   assert.match(atmosphere, /context\.strokeStyle = front \? palette\.gridFront : palette\.gridBack;/);
   assert.match(universe, /gridFront: `\$\{base\.grid\}\$\{lightTheme \? 0\.2 : 0\.17\}\)`/);

@@ -356,8 +356,34 @@ export function SegmentedToggle<T extends string>({
   value: T;
   label?: string;
 }) {
+  const groupRef = useRef<HTMLDivElement | null>(null);
+  // The selection bead slides to the chosen segment (liquid.css .segmented.has-thumb::before).
+  // It appears in place the first time and only animates on later changes.
+  useLayoutEffect(() => {
+    const group = groupRef.current;
+    if (!group) return;
+    const place = () => {
+      const active = group.querySelector<HTMLElement>("button.active");
+      if (!active || active.offsetWidth === 0) {
+        group.classList.remove("has-thumb");
+        return;
+      }
+      group.style.setProperty("--seg-x", `${active.offsetLeft}px`);
+      group.style.setProperty("--seg-y", `${active.offsetTop}px`);
+      group.style.setProperty("--seg-w", `${active.offsetWidth}px`);
+      group.style.setProperty("--seg-h", `${active.offsetHeight}px`);
+      if (!group.classList.contains("has-thumb")) {
+        group.classList.add("has-thumb", "no-thumb-motion");
+        window.requestAnimationFrame(() => group.classList.remove("no-thumb-motion"));
+      }
+    };
+    place();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    observer?.observe(group);
+    return () => observer?.disconnect();
+  }, [value, options]);
   return (
-    <div className="segmented" role="radiogroup" aria-label={label}>
+    <div className="segmented" ref={groupRef} role="radiogroup" aria-label={label}>
       {options.map(option => (
         <button
           aria-checked={option.value === value}

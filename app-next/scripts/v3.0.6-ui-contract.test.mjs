@@ -71,9 +71,11 @@ test("universe starts from a bounded real cache and promotes to the SQLite model
 test("star map backdrop: star field, soft core, session-random meteors, dashed sphere outlines", () => {
   assert.match(universe, /const STAR_FIELD = createStarField\(\)/);
   assert.match(universe, /const GREAT_CIRCLES: Array<\[Point3, Point3\]>/);
-  // One soft core gives the sphere volume; no wide aura sprite or dust.
+  // v3.3.1: a glow centred in the sphere plus a faint limb at its rim give it volume
+  // (3.2.10 look); still no wide aura sprite or dust.
   const backdrop = universe.slice(universe.indexOf('function drawUniverseBackdrop('), universe.indexOf('function drawUniverseAtmosphere('));
-  assert.equal((backdrop.match(/createRadialGradient\(/g) ?? []).length, 1);
+  assert.equal((backdrop.match(/createRadialGradient\(/g) ?? []).length, 2);
+  assert.match(backdrop, /createRadialGradient\(centerX, centerY, 0, centerX, centerY, radius \* 1\.05\)/);
   assert.doesNotMatch(universe, /AURA_SPRITES|DUST_PARTICLES/);
   // Meteor count and size differ every session.
   assert.match(universe, /const METEOR_SESSION_SEED = randomSessionSeed\(\);/);

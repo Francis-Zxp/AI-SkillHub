@@ -66,8 +66,6 @@
 /* Outranks the dashboard hero's paragraph rules. */
 .dashboard-hero .sky-islands .sky-empty p, .sky-islands .sky-empty p { font-size: 14px; line-height: 1.7; color: inherit; margin: 12px auto 20px; max-width: 48ch; }
 .sky-loading { position: absolute; bottom: 145px; left: 32px; font-size: 12px; }
-.browser-preview-shell .sky-heading, .browser-preview-shell .sky-controls { top: 211px; }
-.browser-preview-shell .sky-navigation, .browser-preview-shell .sky-world-panel { top: 260px; }
 @media (min-width: 2100px) { .sky-heading { top: 160px; left: 45px; } .sky-island-label { max-width: 300px; padding: 10px 17px; } .sky-island-label strong { font-size: 16px; } .sky-island-label > span { font-size: 12px; } .sky-controls button { font-size: 14px; } }
 @media (max-width: 1000px) { .sky-heading { left: 22px; } .sky-controls { right: 20px; gap: 4px; } .sky-controls button { padding: 8px; } .sky-controls .sky-control-compact span:last-child { display: none; } .sky-island-label { padding: 5px 8px; max-width: 155px; } .sky-island-label strong { font-size: 12px; } .sky-island-label > span { font-size: 11px; } }
 @media (max-height: 750px) { .sky-heading { top: 146px; } .sky-heading p { display: none; } .sky-controls { top: 144px; } .sky-caption { bottom: 98px; } .sky-navigation, .sky-world-panel { top: 187px; } .sky-navigation { bottom: 128px; } }

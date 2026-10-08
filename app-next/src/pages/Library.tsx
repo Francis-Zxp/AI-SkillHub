@@ -296,24 +296,7 @@ export function Library({
       </div>
 
       <div className="lib-folders" role="toolbar" aria-label={t("v33.foldersLabel")}>
-        <FolderChip
-          active={folderId === "all"}
-          count={counts.skills}
-          dropId="all"
-          label={t("v33.folderAll")}
-          onClick={() => onSelectFolder("all")}
-          over={drag?.over === "all"}
-          testId="folder-chip-all"
-        />
-        <FolderChip
-          active={folderId === "unfiled"}
-          count={chipCounts.get("unfiled") ?? 0}
-          dropId="unfiled"
-          label={t("v33.folderUnfiled")}
-          onClick={() => onSelectFolder("unfiled")}
-          over={drag?.over === "unfiled"}
-          testId="folder-chip-unfiled"
-        />
+        <div className="lib-folder-group">
         {folders.map(folder => (
           <FolderChip
             active={folderId === folder.id}
@@ -357,6 +340,27 @@ export function Library({
         <button className="folder-chip add" data-testid="folder-chip-new" onClick={() => setFolderDialog({ mode: "create" })} type="button">
           <Icon name="add" /> {t("v33.folderNew")}
         </button>
+        </div>
+        <div className="lib-folder-group system" aria-label={t("v33.foldersSystem")}>
+        <FolderChip
+          active={folderId === "all"}
+          count={counts.skills}
+          dropId="all"
+          label={t("v33.folderAll")}
+          onClick={() => onSelectFolder("all")}
+          over={drag?.over === "all"}
+          testId="folder-chip-all"
+        />
+        <FolderChip
+          active={folderId === "unfiled"}
+          count={chipCounts.get("unfiled") ?? 0}
+          dropId="unfiled"
+          label={t("v33.folderUnfiled")}
+          onClick={() => onSelectFolder("unfiled")}
+          over={drag?.over === "unfiled"}
+          testId="folder-chip-unfiled"
+        />
+        </div>
       </div>
 
       {selected.size > 0 && (
@@ -672,24 +676,51 @@ function LibraryRowView({
       >
         {expandable && <Icon name="chevron" />}
       </button>
-      <button className="lib-main" onClick={() => onOpen()} type="button">
+      {/* Line 1: name, copy (right after the name, where the eye already is), owner.
+          Line 2: the user's own note across the full width, then the description. */}
+      <div
+        aria-label={t("v33.openRow", { name })}
+        className="lib-main"
+        onClick={() => onOpen()}
+        onKeyDown={event => {
+          if (event.target !== event.currentTarget) return;
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onOpen();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+      >
         <span className="lib-avatar" style={{ "--avatar-hue": avatarHue(name) } as CSSProperties} aria-hidden="true">
           {name.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 1).toUpperCase() || "?"}
         </span>
-        <span className={note ? "lib-title has-note" : "lib-title"}>
-          <strong>{name}</strong>
-          <small className="lib-owner">{ownerOf(row)}</small>
-          {note && <small className="lib-title-note">{note}</small>}
-        </span>
-        {note ? (
-          <span className="lib-summary has-note">
-            <span className="lib-note" title={note}><Icon name="edit" />{note}</span>
-            <small>{rowSummary(row)}</small>
+        <span className="lib-text">
+          <span className="lib-line1">
+            <strong>{name}</strong>
+            {callName && (
+              <button
+                aria-label={t("v33.copyInvocationOf", { name: callName })}
+                className="lib-copy"
+                data-testid={`library-row-copy-${row.key}`}
+                onClick={event => {
+                  event.stopPropagation();
+                  void copyTextToClipboard(callName, t("v33.copiedName", { name: callName }));
+                }}
+                title={`${t("v33.copyInvocation")} · ${callName}`}
+                type="button"
+              >
+                <Icon name="copy" />
+              </button>
+            )}
+            <small className="lib-owner">{ownerOf(row)}</small>
           </span>
-        ) : (
-          <span className="lib-summary">{rowSummary(row)}</span>
-        )}
-      </button>
+          <span className="lib-line2">
+            {note && <span className="lib-note" title={note}><Icon name="edit" />{note}</span>}
+            <span className="lib-desc">{rowSummary(row)}</span>
+          </span>
+        </span>
+      </div>
       <span className="lib-badges">
         {row.kind === "prompt" ? (
           <span className="chip chip-prompt">{t("v33.promptChip")}</span>
@@ -700,14 +731,27 @@ function LibraryRowView({
         )}
         {state.update && <span className="chip chip-update">{t("v33.updateChip")}</span>}
         {state.problem && <span className="chip chip-problem">{t("v33.problemChip")}</span>}
+        {/* Only packs a person can turn back on: reference-only (prompt-only) packs have nothing
+            to enable, and a broken manifest is reported as a problem instead. */}
+        {row.unit && !row.unit.libraryEnabled && (row.unit.libraryOnlyReason === "security-review" || row.unit.libraryOnlyReason === "disabled-by-user") && (
+          <button
+            className="chip chip-action"
+            data-testid={`library-row-enable-${row.key}`}
+            onClick={() => onOpen("overview")}
+            title={row.unit.libraryOnlyReason === "security-review" ? t("v33.reviewAndEnable") : t("v33.packOffHint")}
+            type="button"
+          >
+            {row.unit.libraryOnlyReason === "security-review" ? t("v33.packNeedsReview") : t("v33.packOff")}
+          </button>
+        )}
       </span>
       <StarRating compact label={t("v33.rating")} onChange={onRate} value={rating} />
       <span className="target-icons" aria-label={t("v33.syncedTo")}>
-        {shown.map((target, index) => {
+        {shown.map(target => {
           const agent = agents.find(item => item.id === target.agentId);
           const view = targetIconView(target, row.unit?.libraryOnlyReason ?? "");
-          const linkedNext = target.agentId === "codex" && shown[index + 1]?.agentId === "coze";
-          const tip = t(view.tooltipKey, { tool: agent?.name ?? target.agentId, message: targetErrorText(target.error) });
+          const shared = (target.agentId === "codex" || target.agentId === "coze") && shown.some(item => item.agentId === (target.agentId === "codex" ? "coze" : "codex"));
+          const tip = t(view.tooltipKey, { tool: agent?.name ?? target.agentId, message: targetErrorText(target.error) }) + (shared ? ` · ${t("v33.sharedFolder")}` : "");
           return (
             <span className="target-icon-wrap" key={target.agentId}>
               <button
@@ -729,7 +773,6 @@ function LibraryRowView({
                 {view.look === "red" && <i className="target-badge red" aria-hidden="true" />}
                 {view.look === "blocked" && <i className="target-badge ban" aria-hidden="true"><Icon name="ban" /></i>}
               </button>
-              {linkedNext && <i className="target-link" title={t("v33.sharedFolder")} aria-hidden="true"><Icon name="link" /></i>}
             </span>
           );
         })}
@@ -737,20 +780,6 @@ function LibraryRowView({
           <button className="target-more" onClick={() => onOpen("overview")} title={t("v33.moreTools", { n: hidden })} type="button">+{hidden}</button>
         )}
       </span>
-      {callName ? (
-        <button
-          aria-label={t("v33.copyInvocationOf", { name: callName })}
-          className="icon-action lib-copy"
-          data-testid={`library-row-copy-${row.key}`}
-          onClick={() => void copyTextToClipboard(callName, t("v33.copiedName", { name: callName }))}
-          title={`${t("v33.copyInvocation")} · ${callName}`}
-          type="button"
-        >
-          <Icon name="copy" />
-        </button>
-      ) : (
-        <span className="lib-copy" aria-hidden="true" />
-      )}
       <MoreMenu
         items={[
           { key: "open", label: t("v33.details"), onSelect: () => onOpen("overview"), icon: "info" },

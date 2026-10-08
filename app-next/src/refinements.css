@@ -4,7 +4,6 @@
 .home-visual-switch button[aria-pressed="true"] { background: var(--brand-fill, var(--brand)); color: var(--on-brand, var(--bg)); }
 .islands-home .dashboard-hero-inner { display: none; }
 .theme-family-atlas.page-dashboard:not(.dashboard-immersive) .islands-home .atlas-immersive-toggle { top: 100px; right: 24px; }
-.browser-preview-shell.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .islands-home .atlas-immersive-toggle { top: 166px; }
 .theme-family-atlas .atlas-library-stage { grid-template-columns: 202px minmax(0, 1fr); }
 .theme-family-atlas .atlas-library-filter-deck { min-height: 0; align-self: start; }
 .theme-family-atlas .atlas-filter-meter { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; padding: 18px 16px; }

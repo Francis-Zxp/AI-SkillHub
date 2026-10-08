@@ -78,8 +78,6 @@
   backdrop-filter: none;
 }
 
-.browser-preview-shell.page-dashboard .skill-universe-modes { top: 166px; }
-.browser-preview-shell.page-dashboard .skill-universe-inspector { top: 210px; }
 
 .skill-universe-modes button {
   min-width: 62px;

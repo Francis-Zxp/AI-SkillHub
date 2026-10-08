@@ -17,7 +17,7 @@ import { Icon } from "../icons";
 import { CountUp, ParticleField } from "../effects";
 import { getLang, t } from "../i18n";
 import { localizedSkillDescription } from "../localizedDescriptions";
-import type { SkillCounts } from "../skillCounts";
+import { buildLibraryRows, rowSkillsInFolder, type SkillCounts } from "../skillCounts";
 import type { LegacySnapshot, LegacySummary, SkillAgent, SkillCard, SkillDeliveryState, SourceCard, SourcePopularityCard } from "../types";
 import {
   type ThemeName,
@@ -393,7 +393,8 @@ function SkillShowcase({
   onOpenLibrary: () => void;
   snapshot: LegacySnapshot | null;
 }) {
-  const skills = snapshot?.skills ?? [];
+  // The same skills the library and the bottom bar count: a pack's generated entry is not one.
+  const skills = useMemo(() => buildLibraryRows(snapshot).flatMap(row => rowSkillsInFolder(row, undefined)), [snapshot]);
   const sources = snapshot?.sources ?? [];
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphRef = useRef<SkillGraphRuntime | null>(null);
