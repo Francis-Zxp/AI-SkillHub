@@ -18,8 +18,10 @@ import {
   outcomeToast,
   parseTimestamp,
   rememberAck,
+  sameConfirmation,
   sanitizeServerName,
   serverMatchesQuery,
+  skippedLines,
   sortIssues,
   splitCommandLine,
   targetLine,
@@ -112,7 +114,14 @@ test("F3 Origin detection runs only on a click, never on mount (bug #23, M0-11)"
   const clickCallers = [...recipeCard.matchAll(/onClick=\{[^}]*?detect\(/gs)].length;
   assert.ok(clickCallers >= 2 && callers >= clickCallers, `${clickCallers}/${callers}`);
   // Writing goes through the MCP library (one confirmation path, per-client results) …
-  assert.match(recipeCard, /onAdd\(\{\s*candidates: \[\{\s*input: \{ name: "origin", transport: "stdio", command: current\.runtimePython, args: \["-m", "origin_mcp"\], source: \{ kind: "recipe", id: "origin-mcp" \} \}/);
+  assert.match(recipeCard, /return \{ name: "origin", transport: "stdio", command: runtimePython, args: \[\.\.\.ORIGIN_ARGS\], source: \{ kind: "recipe", id: "origin-mcp" \} \};/);
+  // … never with "skip": against the real backend that leaves a listed origin untouched and writes
+  // nothing (noop), which is exactly bug #24 again. A listed origin with this runtime is switched on
+  // in the new tools; another Python is replaced only after a plain "yes" in the card.
+  assert.doesNotMatch(recipeCard, /onConflict: "skip"/);
+  assert.match(recipeCard, /outcome = await onEnable\(originRow\.id, selected\);/);
+  assert.match(recipeCard, /if \(!matchesRecipe\(stored, current\.runtimePython\)\) \{\s*setReplaceAsk\(current\);/);
+  assert.match(recipeCard, /onClick=\{\(\) => void connect\(replaceAsk, true\)\}/);
   // … and client chips come from the snapshot and stay visible after connecting (bugs #24, MCP#9).
   assert.match(recipeCard, /snapshot\?\.clients \?\? \[\]/);
   assert.match(recipeCard, /originRow\?\.cells\.find/);
@@ -242,8 +251,11 @@ test("page rules: one write at a time, generation guard, no polling while hidden
   for (const [name, source] of Object.entries(code)) assert.doesNotMatch(source, /setInterval\(/, `${name} polls`);
   // busy → one automatic retry after 1 s (contract §3.5).
   assert.match(page, /if \(error\.code !== "busy"\) throw error;\s*await delay\(1000\);/);
-  // Confirmations only come from the backend's needs-confirmation outcome.
-  assert.match(page, /if \(outcome\.kind === "needs-confirmation"\) \{\s*const next = await askConfirm\(outcome\.confirmation\);/);
+  // Confirmations only come from the backend's needs-confirmation outcome. A confirmed call that
+  // comes back with the same question under a fresh token (the token binds deleteEnvVars ticked in
+  // the dialog) is accepted once without asking again; anything that changed is asked again.
+  assert.match(page, /if \(outcome\.kind === "needs-confirmation"\) \{[\s\S]*?if \(approved && answer && sameConfirmation\(approved, outcome\.confirmation\)\) \{[\s\S]*?const next = await askConfirm\(outcome\.confirmation\);/);
+  assert.match(page, /approved = null;\s*continue;/);
   // Results appear where the user is: a fixed toast stack and the cell itself (brief §7 #4).
   assert.match(mcp["mcp.css"], /\.mcp-toast-stack \{\s*position: fixed;/);
 });
@@ -345,7 +357,7 @@ test("outcome toasts, errors and history read as plain language", () => {
     summary: { kind: "enable", serverNames: ["context7"], clientIds: ["codex"], failedClientIds: [], envVarNames: [] },
     results: [{ clientId: "codex", scope: "user", serverIds: ["id"], status: "written", restartHint: true }]
   };
-  assert.deepEqual(outcomeToast(done, t), { tone: "ok", text: "已在 Codex 启用 context7", failed: [], restartClients: ["codex"] });
+  assert.deepEqual(outcomeToast(done, t), { tone: "ok", text: "已在 Codex 启用 context7", failed: [], skipped: [], restartClients: ["codex"] });
   const partial = {
     ...done,
     summary: { ...done.summary, clientIds: ["codex", "cursor"], failedClientIds: ["cursor"] },
@@ -365,4 +377,152 @@ test("outcome toasts, errors and history read as plain language", () => {
   assert.equal(testText({ status: "runner-missing", testedAt: "", stale: false, messageCode: "runner-missing" }, t, 0, "uvx"), "启动失败：找不到 uvx");
   assert.deepEqual(sortIssues([{ id: "a", kind: "unimported", action: "import" }, { id: "b", kind: "write-failed", action: "retry" }]).map(item => item.id), ["b", "a"]);
   assert.deepEqual(rememberAck(["x@1", "y@1"], testAckKey("x", 1)), ["y@1", "x@1"]);
+});
+
+// ---------- review fixes (v33/mcp-frontend-reviewed) ----------
+
+test("every dynamic i18n key the page builds exists in zh, en and ko", () => {
+  const types = mcp["mcpTypes.ts"];
+  const union = (name, end) => {
+    const start = types.indexOf(`export type ${name}`);
+    return [...types.slice(start, types.indexOf(end, start + 10)).matchAll(/"([a-z0-9_-]+)"/g)].map(match => match[1]);
+  };
+  const field = (typeName, fieldName) => {
+    const start = types.indexOf(`export type ${typeName}`);
+    const body = types.slice(start, types.indexOf("\n};", start));
+    const line = body.split("\n").find(item => new RegExp(`\\b${fieldName}\\??:`).test(item)) ?? "";
+    return [...line.replace(/\/\/.*$/, "").matchAll(/"([a-z0-9_-]+)"/g)].map(match => match[1]);
+  };
+  const families = {
+    "mcp.err.": union("McpErrorCode", "export type McpError ="),
+    "mcp.reason.": [...union("McpReadonlyReason", "export type McpClient ="), ...union("McpCellReason", "export type McpCell =")],
+    "mcp.skip.": union("McpSkipReason", "export type McpCandidate"),
+    "mcp.issue.": union("McpIssueKind", "export type McpIssue ="),
+    "mcp.issue.action.": field("McpIssue", "action").concat(["retry", "open-file-location", "fill-secret", "review-change", "import", "resolve-stuck", "allow-inline", "resync"]),
+    "mcp.test.phase.": field("McpTestProgressEvent", "phase"),
+    "mcp.test.status.": union("McpTestStatus", "export type McpTestSummary"),
+    "mcp.history.": union("McpOperationKind", "export type McpOperationSummary"),
+    "mcp.toast.": union("McpOperationKind", "export type McpOperationSummary"),
+    "mcp.format.": union("McpPasteFormat", "export type McpSkipReason"),
+    "mcp.add.warn.": field("McpCandidate", "warnings"),
+    "mcp.field.": field("McpConfirmationItem", "changedFields"),
+    "mcp.action.": field("McpConfirmationItem", "action"),
+    "mcp.import.status.": ["ok", "missing", "jsonc-readonly", "parse-failed", "too-large", "unreadable"],
+    "mcp.history.unavailable.": field("McpHistoryEntry", "undoUnavailableReason"),
+    "mcp.cell.": union("McpCellState", "export type McpCellReason"),
+    "mcp.template.": union("McpTemplateId", "export type McpTemplate =")
+  };
+  const keys = union("McpConfirmationKind", "export type McpConfirmationItem").flatMap(kind => [`mcp.confirm.${kind}.title`, `mcp.confirm.${kind}.body`]);
+  for (const reason of ["transport", "readonly", "not-installed", "name"]) keys.push(`mcp.add.unavailable.${reason}`, `mcp.add.unavailableShort.${reason}`, `mcp.add.partial.${reason}`);
+  for (const scope of ["user", "project", "local"]) keys.push(`mcp.scope.${scope}Short`);
+  for (const variant of ["", ".removed", ".added"]) {
+    keys.push(`mcp.resolve.title${variant}`);
+    for (const part of ["takeFile", "takeFileHint", "takeLibrary", "takeLibraryHint"]) keys.push(`mcp.resolve${variant}.${part}`);
+  }
+  for (const [prefix, values] of Object.entries(families)) {
+    assert.ok(values.length > 0, `${prefix} enum is empty`);
+    for (const value of new Set(values)) keys.push(prefix + value);
+  }
+  const zh = dictionary("zh");
+  const en = dictionary("en");
+  const ko = dictionary("ko");
+  for (const key of keys) for (const [lang, map] of [["zh", zh], ["en", en], ["ko", ko]]) assert.ok(map.has(key), `${lang} misses ${key}`);
+});
+
+test("opening the page and its drawers only reads (I1): effects call read commands only", () => {
+  // Commands that never start a process and never write a client file.
+  const allowed = new Set(["snapshot", "importFromClients", "templates", "getServer", "history", "parsePaste", "onLibraryChanged", "onTestProgress"]);
+  const helpers = { refresh: "McpPage.tsx", load: "McpEditDrawer.tsx", runParse: "McpAddSheet.tsx" };
+  const helperCalls = name => {
+    const source = code[helpers[name]];
+    const start = source.search(new RegExp(`(?:const ${name} = useCallback\\(async|async function ${name}\\()`));
+    assert.ok(start >= 0, `${name} not found`);
+    return source.slice(start, source.indexOf("\n  }", start));
+  };
+  for (const [name, source] of Object.entries(code)) {
+    for (const body of effectBodies(source)) {
+      const reached = [body, ...Object.keys(helpers).filter(helper => new RegExp(`\\b${helper}\\(`).test(body)).map(helperCalls)].join("\n");
+      for (const match of reached.matchAll(/mcpApi\.(\w+)\(/g)) assert.ok(allowed.has(match[1]), `${name}: an effect reaches mcpApi.${match[1]}`);
+      assert.doesNotMatch(reached, /openConfigLocation|openExternalUrl|detect_mcp_recipe|install_mcp_recipe|verify_mcp_recipe|prepare_origin_bridge/, name);
+    }
+  }
+  // The automatic import on first visit is the documented read-only one (SQLite only).
+  assert.match(code["McpPage.tsx"], /mcpApi\.importFromClients\(\{ reason: "first-run" \}\)/);
+});
+
+test("the edit drawer keeps stored keys exactly: no secrets sent unless a key was added", () => {
+  const drawer = code["McpEditDrawer.tsx"];
+  // A kept key goes back with the variable that holds it, for env keys too ("GITHUB_TOKEN": "${GH_PAT}").
+  assert.match(drawer, /const keepSecrets: McpSecretInput\[\] = detail\.secrets\.map\(secret => \(\{\s*kind: secret\.kind,\s*name: secret\.name,\s*envVar: secret\.envVar \?\? undefined,/);
+  // "user_env" without a value means "keep where it is stored"; "inline" would re-ask for consent.
+  assert.match(drawer, /headerTemplate: secret\.headerTemplate,\s*mode: "user_env",/);
+  assert.match(drawer, /secrets: added\.length === 0\s*\? undefined/);
+});
+
+test("the add sheet asks before replacing and never sends an empty optional key", () => {
+  const sheet = code["McpAddSheet.tsx"];
+  // onConflict only from the user's 跳过/覆盖 choice; otherwise the backend asks (I6).
+  assert.doesNotMatch(sheet, /input: manualInput\(\), onConflict/);
+  assert.doesNotMatch(sheet, /exists === "new" \? "skip"/);
+  assert.match(sheet, /candidates: \[addCandidate\(manualInput\(\)\)\]/);
+  assert.match(sheet, /item\.candidate\.exists === "new" \? undefined : item\.choice\.onConflict/);
+  // An optional key left empty is not turned into a dangling reference.
+  assert.match(sheet, /activeSecrets\.filter\(row => row\.required \|\| row\.value\.trim\(\)\)/);
+  // One invalid name would fail the whole batch in the backend, so every sent name is checked.
+  assert.match(sheet, /const problem = validateServerName\(item\.choice\.name\);\s*const existing = item\.candidate\.exists !== "new";\s*if \(problem\) candidateProblems\.set/);
+});
+
+test("skipped clients are named in the toast, and the same confirmation is not asked twice", () => {
+  const tr = (key, vars = {}) => {
+    const table = {
+      "mcp.list.sep": "、",
+      "mcp.toast.add": "已添加 {servers} 到 {clients}",
+      "mcp.toast.nothingWritten.add": "已把 {servers} 加进列表，但没有写入任何 AI 工具",
+      "mcp.toast.skipKept": "{client} 里已有同名的不同配置，保持原样",
+      "mcp.toast.skipSep": "：",
+      "mcp.reason.needs-inline-consent": "{client} 不支持引用环境变量，需要你同意后才写入密钥",
+      "mcp.reason.transport-unsupported": "{client} 不支持这种连接方式",
+      "mcp.reason.config-unreadable": "读不到 {client} 的配置文件",
+      "mcp.reason.codex-structured-env": "这一项用了 SkillHub 暂不支持的写法，保持只读",
+      "mcp.err.backendDetail": "zh",
+      "mcp.err.invalid-input": "填写的内容有误，请检查后再试。"
+    };
+    let text = table[key] ?? key;
+    for (const [name, value] of Object.entries(vars)) text = text.split(`{${name}}`).join(String(value));
+    return text;
+  };
+  const results = [
+    { clientId: "codex", scope: "user", serverIds: ["s"], status: "written", restartHint: true },
+    { clientId: "claude-desktop", scope: "user", serverIds: ["s"], status: "skipped", skippedReason: "needs-inline-consent", restartHint: false },
+    { clientId: "cursor", scope: "user", serverIds: ["s"], status: "skipped", skippedReason: "transport-unsupported", restartHint: false },
+    { clientId: "claude-code", scope: "user", serverIds: ["s"], status: "skipped", skippedReason: "codex-structured-env", restartHint: false }
+  ];
+  assert.deepEqual(skippedLines(results, tr).map(line => line.text), [
+    "Claude Desktop 不支持引用环境变量，需要你同意后才写入密钥",
+    "Claude Code：这一项用了 SkillHub 暂不支持的写法，保持只读"
+  ]);
+  const done = { kind: "done", operationId: "op", undoToken: "op", generation: 3, results, summary: { kind: "add", serverNames: ["notion"], clientIds: ["codex"], failedClientIds: [], envVarNames: [] } };
+  const toast = outcomeToast(done, tr);
+  assert.equal(toast.tone, "warn");
+  assert.equal(toast.text, "已添加 notion 到 Codex");
+  const onlySkipped = { ...done, results: [{ clientId: "codex", scope: "user", serverIds: ["s"], status: "skipped", skippedReason: "entry-added-outside", restartHint: false }], summary: { ...done.summary, clientIds: [] } };
+  assert.equal(outcomeToast(onlySkipped, tr).text, "已把 notion 加进列表，但没有写入任何 AI 工具");
+  assert.deepEqual(outcomeToast(onlySkipped, tr).skipped.map(line => line.text), ["Codex 里已有同名的不同配置，保持原样"]);
+  // invalid-input keeps the backend's exact zh reason (e.g. which field) in the zh UI.
+  assert.equal(errorText({ code: "invalid-input", message: "工作目录需要是完整的文件夹路径。" }, tr), "工作目录需要是完整的文件夹路径。");
+  assert.equal(errorText({ code: "invalid-input", message: "工作目录需要是完整的文件夹路径。" }, (key, vars) => (key === "mcp.err.backendDetail" ? "en" : tr(key, vars))), "填写的内容有误，请检查后再试。");
+  const confirmation = { kinds: ["remove-from-library"], confirmToken: "a", items: [], envVars: [{ name: "GH", exists: true, createdBySkillHub: true, action: "delete" }], undoable: true };
+  assert.equal(sameConfirmation(confirmation, { ...confirmation, confirmToken: "b" }), true);
+  assert.equal(sameConfirmation(confirmation, { ...confirmation, confirmToken: "b", envVars: [] }), false);
+});
+
+test("the preview mock follows the backend's add and token rules", () => {
+  // Tokens bind the request; "skip" on a listed server writes nothing; a missing onConflict on a
+  // listed server is name-taken; an unlisted name in a client file asks overwrite-different.
+  assert.match(mcpPreview, /function tokenOk\(request: \{ confirmToken\?: string \}\) \{[\s\S]*?token\.endsWith\(`-\$\{requestDigest\(request\)\}`\)/);
+  assert.match(mcpPreview, /if \(existing && !candidate\.onConflict\) throw mcpError\("name-taken"/);
+  assert.match(mcpPreview, /if \(conflicts\.length > 0 && !tokenOk\(request\)\) return nextConfirm\(request, \["overwrite-different"\], conflicts\);/);
+  assert.match(mcpPreview, /if \(existing && candidate\.onConflict === "skip"\) \{\s*for \(const clientId of request\.clientIds\) results\.push\(result\(clientId, \[existing\.id\], "skipped", \{ skippedReason: "entry-added-outside" \}\)\);/);
+  // Omitted secrets on update keep the stored keys.
+  assert.match(mcpPreview, /if \(request\.input\.secrets === undefined\) \{/);
 });

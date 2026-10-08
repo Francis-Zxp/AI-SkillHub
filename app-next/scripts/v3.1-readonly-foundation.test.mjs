@@ -87,7 +87,8 @@ test("optional MCP mutation module is gated, reversible and never starts a serve
 });
 
 test("v3.3 MCP library modules never start a process (contract I1)", async () => {
-  for (const name of ["mcp_library.rs", "mcp_paste.rs", "mcp_secrets.rs", "mcp_json_doc.rs", "mcp_templates.rs"]) {
+  // mcp_probe.rs is the one place that may start a server: the user-clicked test (contract §3.10).
+  for (const name of ["mcp_library.rs", "mcp_paste.rs", "mcp_secrets.rs", "mcp_json_doc.rs", "mcp_templates.rs", "mcp_github_import.rs"]) {
     const source = await readFile(new URL(`../src-tauri/src/${name}`, import.meta.url), "utf8").catch(error => {
       if (error?.code === "ENOENT") return "";
       throw error;

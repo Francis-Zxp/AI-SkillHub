@@ -351,6 +351,89 @@ async function shot(page, name) {
       await handoff.close();
     });
 
+    // ---------- review regressions (v33/mcp-frontend-reviewed) ----------
+
+    await check("17 editing an imported server keeps its key reference (NAME → ${OTHER})", async () => {
+      await page.locator(".mcp-name", { hasText: /^notion$/ }).click();
+      let drawer = page.locator(".mcp-drawer");
+      await drawer.waitFor();
+      await drawer.getByText("NOTION_API_KEY", { exact: false }).first().waitFor();
+      await drawer.getByRole("button", { name: "添加参数" }).click();
+      await drawer.getByRole("textbox", { name: "参数 3" }).fill("--verbose");
+      await drawer.getByRole("button", { name: /保存并同步到/ }).click();
+      await page.locator(".mcp-toast", { hasText: "已保存 notion" }).waitFor({ timeout: 6000 });
+      await drawer.waitFor({ state: "detached" });
+      await page.locator(".mcp-name", { hasText: /^notion$/ }).click();
+      drawer = page.locator(".mcp-drawer");
+      await drawer.waitFor();
+      await drawer.locator(".mcp-secret-status").first().waitFor();
+      const text = await drawer.locator(".mcp-secret-status").first().innerText();
+      assert.match(text, /NOTION_API_KEY/, text);
+      await shot(page, "17-edit-keeps-reference");
+      await page.keyboard.press("Escape");
+      await drawer.waitFor({ state: "detached" });
+    });
+
+    await check("18 deleting with its env var ticked finishes after one confirmation", async () => {
+      await page.getByRole("button", { name: "context7 的更多操作" }).click();
+      await page.getByRole("menuitem", { name: "删除" }).click();
+      const dialog = page.getByRole("dialog", { name: "删除 context7？" });
+      await dialog.waitFor();
+      await dialog.getByRole("checkbox", { name: /同时删除不再使用的环境变量 CONTEXT7_API_KEY/ }).check();
+      await shot(page, "18-delete-env");
+      await dialog.getByRole("button", { name: "删除", exact: true }).click();
+      await page.locator(".mcp-toast", { hasText: "已删除 context7" }).waitFor({ timeout: 6000 });
+      assert.equal(await page.getByRole("dialog", { name: "删除 context7？" }).count(), 0, "asked twice");
+      await page.waitForFunction(() => ![...document.querySelectorAll(".mcp-name")].some(node => node.textContent === "context7"));
+    });
+
+    await check("19 a template's optional key left empty is not added as a missing key", async () => {
+      await page.locator(".mcp-head").getByRole("button", { name: "添加 MCP", exact: true }).click();
+      await page.locator(".mcp-template-chip", { hasText: "context7" }).click();
+      const submit = page.locator(".mcp-sheet-foot").getByRole("button", { name: /添加到 \d 个 AI 工具/ });
+      await submit.waitFor();
+      await submit.click();
+      await page.locator(".mcp-toast", { hasText: "已添加 context7" }).waitFor({ timeout: 6000 });
+      const row = page.locator("tr", { has: page.locator(".mcp-name", { hasText: /^context7$/ }) });
+      await row.waitFor();
+      assert.equal(await row.locator(".mcp-key-chip").count(), 0, "optional key shown as missing");
+    });
+
+    await check("20 Origin card switches the listed origin on in more tools (bug #24)", async () => {
+      const discover = await context.newPage();
+      discover.on("pageerror", error => pageErrors.push(error.message));
+      await open(discover, "?view=connections&mcpTab=discover&mcpInitialized=1");
+      await discover.getByRole("button", { name: "检查这台电脑" }).click();
+      await discover.locator(".recipe-hosts").waitFor({ timeout: 6000 });
+      await discover.locator(".recipe-actions .primary-action", { hasText: /接入 \d 个 AI 工具/ }).click();
+      // The listed origin was edited by hand in Codex: overwriting it is a plain-language question.
+      const dialog = discover.getByRole("dialog", { name: "origin 在 Codex 里被手动改过" });
+      await dialog.waitFor({ timeout: 6000 });
+      await dialog.getByRole("button", { name: "覆盖" }).click();
+      await discover.locator(".mcp-toast", { hasText: /启用 origin/ }).waitFor({ timeout: 6000 });
+      await discover.waitForFunction(() => document.querySelectorAll(".recipe-hosts label.connected").length >= 2, null, { timeout: 6000 });
+      await shot(discover, "20-origin-second-tool");
+      await discover.close();
+    });
+
+    await check("21 a manual add asks before replacing a same-name entry found in a tool's file", async () => {
+      const manual = await context.newPage();
+      manual.on("pageerror", error => pageErrors.push(error.message));
+      await open(manual, "?view=connections&mcpInitialized=1");
+      await manual.locator(".mcp-head").getByRole("button", { name: "添加 MCP", exact: true }).click();
+      const sheet = manual.locator(".mcp-sheet");
+      await sheet.waitFor();
+      await sheet.getByRole("textbox", { name: "名称" }).fill("sqlite");
+      await sheet.getByRole("textbox", { name: "命令或地址" }).fill("uvx mcp-server-sqlite");
+      await sheet.locator(".mcp-sheet-foot").getByRole("button", { name: /添加到 \d 个 AI 工具/ }).click();
+      const dialog = manual.getByRole("dialog", { name: "覆盖 Cursor 里同名的 sqlite？" });
+      await dialog.waitFor({ timeout: 6000 });
+      await shot(manual, "21-manual-overwrite-ask");
+      await dialog.getByRole("button", { name: "覆盖" }).click();
+      await manual.locator(".mcp-toast", { hasText: "已添加 sqlite" }).waitFor({ timeout: 6000 });
+      await manual.close();
+    });
+
     await check("16 no page errors", async () => {
       assert.deepEqual(pageErrors, []);
     });

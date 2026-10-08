@@ -337,6 +337,26 @@ function seed(): MockState {
       cells: cellsFor({}),
       projectBindings: [],
       updatedAt: minutesAgo(9000)
+    },
+    {
+      // Imported from Claude Code as "NOTION_TOKEN": "${NOTION_API_KEY}": the key lives in a variable
+      // SkillHub did not create, under another name. Editing must keep that reference.
+      id: "mcps-notion",
+      name: "notion",
+      displayName: "notion",
+      transport: "stdio",
+      command: "npx",
+      args: [{ value: "-y", masked: false }, { value: "@notionhq/notion-mcp-server", masked: false }],
+      env: [],
+      secrets: [{ kind: "env", name: "NOTION_TOKEN", envVar: "NOTION_API_KEY", storage: "external", present: true, inlineClients: [], createdBySkillHub: false, required: true }],
+      codexRequired: false,
+      source: { kind: "import", clientId: "claude-code", scope: "user" },
+      meta: {},
+      specRevision: 1,
+      test: null,
+      cells: cellsFor({ "claude-code": cell("on"), "claude-desktop": cell("blocked", { reason: "needs-inline-consent" }) }),
+      projectBindings: [],
+      updatedAt: minutesAgo(9500)
     }
   ];
   const large = previewLargeCount();
@@ -547,7 +567,8 @@ function toRow(server: MockServer): McpServerRow {
       projectCount: value.projectCount
     };
   });
-  const missingSecretCount = server.secrets.filter(secret => secret.required && !secret.present).length;
+  // As in the backend: every key without a value counts, optional ones too.
+  const missingSecretCount = server.secrets.filter(secret => !secret.present).length;
   const issueCount = cells.filter(item => item.state === "error" || item.state === "changed-outside" || item.state === "blocked").length + missingSecretCount;
   return {
     id: server.id,
@@ -599,7 +620,7 @@ function issues(): McpIssue[] {
       if (value.windowsFixAvailable) list.push({ id: `wx-${server.id}-${clientId}`, kind: "windows-fix", clientId, serverId: server.id, serverName: server.name, action: "resync" });
       if (value.outOfDate) list.push({ id: `od-${server.id}-${clientId}`, kind: "out-of-date", clientId, serverId: server.id, serverName: server.name, action: "resync" });
     }
-    if (server.secrets.some(secret => secret.required && !secret.present)) {
+    if (server.secrets.some(secret => !secret.present)) {
       list.push({ id: `ms-${server.id}`, kind: "missing-secret", serverId: server.id, serverName: server.name, action: "fill-secret" });
     }
   }
@@ -656,17 +677,30 @@ function emit(reason: McpLibraryChangedEvent["reason"], operationId: string | nu
   }, 0);
 }
 
-function nextConfirm(kinds: McpConfirmationKind[], items: McpConfirmationItem[], extra: Partial<McpConfirmation> = {}): McpWriteOutcome {
+/** Like the backend's request digest: everything the caller sent except the token itself. */
+function requestDigest(request: unknown): string {
+  const copy = { ...((request ?? {}) as Record<string, unknown>) };
+  delete copy.confirmToken;
+  const text = JSON.stringify(copy);
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) hash = (Math.imul(hash, 31) + text.charCodeAt(index)) | 0;
+  return (hash >>> 0).toString(36);
+}
+
+// Tokens are bound to the request, as in mcp_library.rs: a confirmed call that changes anything
+// (for example the env vars ticked in the dialog) gets a fresh confirmation instead of a write.
+function nextConfirm(request: unknown, kinds: McpConfirmationKind[], items: McpConfirmationItem[], extra: Partial<McpConfirmation> = {}): McpWriteOutcome {
   const current = db();
   current.confirmCounter += 1;
   return {
     kind: "needs-confirmation",
-    confirmation: { kinds, confirmToken: `preview-confirm-${current.confirmCounter}`, items, undoable: true, ...extra }
+    confirmation: { kinds, confirmToken: `preview-confirm-${current.confirmCounter}-${requestDigest(request)}`, items, undoable: true, ...extra }
   };
 }
 
-function tokenOk(token: string | undefined) {
-  return typeof token === "string" && token.startsWith("preview-confirm-");
+function tokenOk(request: { confirmToken?: string }) {
+  const token = request.confirmToken;
+  return typeof token === "string" && token.startsWith("preview-confirm-") && token.endsWith(`-${requestDigest(request)}`);
 }
 
 function beginOperation(kind: McpOperationKind, serverNames: string[], touched: string[]): MockOperation {
@@ -761,16 +795,17 @@ function setCell(request: { serverId: string; clientId: McpClientId; enabled: bo
   const server = findServer(request.serverId);
   const value = server.cells[request.clientId];
   if (value.state === "unsupported" || value.state === "readonly") return { kind: "noop", reason: "nothing-selected" };
-  if (value.state === "changed-outside" && !tokenOk(request.confirmToken)) {
-    return nextConfirm(["changed-outside"], [confirmItem(server, request.clientId, request.enabled ? "update" : "disable")]);
+  if (value.state === "changed-outside" && !tokenOk(request)) {
+    return nextConfirm(request, ["changed-outside"], [confirmItem(server, request.clientId, request.enabled ? "update" : "disable")]);
   }
-  if (request.enabled && needsInlineConsent(server, request.clientId) && !request.allowInline) {
-    return nextConfirm(["inline-secret"], [confirmItem(server, request.clientId, "enable")]);
+  const consented = Boolean(request.allowInline) || tokenOk(request);
+  if (request.enabled && needsInlineConsent(server, request.clientId) && !consented) {
+    return nextConfirm(request, ["inline-secret"], [confirmItem(server, request.clientId, "enable")]);
   }
   if (request.enabled && value.state === "on") return { kind: "noop", reason: "already-in-state" };
   if (!request.enabled && value.state === "off") return { kind: "noop", reason: "already-in-state" };
   const operation = beginOperation(request.enabled ? "enable" : "disable", [server.name], [`${server.name}:${request.clientId}`]);
-  const outcome = applyCell(server, request.clientId, request.enabled, request.allowInline);
+  const outcome = applyCell(server, request.clientId, request.enabled, consented);
   return finishOperation(operation, [outcome]);
 }
 
@@ -815,8 +850,8 @@ function setRow(request: { serverId: string; enabled: boolean; clientIds?: McpCl
   });
   if (ids.length === 0) return { kind: "noop", reason: "already-in-state" };
   const outside = ids.filter(clientId => server.cells[clientId].state === "changed-outside");
-  if (outside.length > 0 && !tokenOk(request.confirmToken)) {
-    return nextConfirm(["changed-outside"], outside.map(clientId => confirmItem(server, clientId, request.enabled ? "update" : "disable")));
+  if (outside.length > 0 && !tokenOk(request)) {
+    return nextConfirm(request, ["changed-outside"], outside.map(clientId => confirmItem(server, clientId, request.enabled ? "update" : "disable")));
   }
   const operation = beginOperation(request.enabled ? "enable" : "disable", [server.name], ids.map(clientId => `${server.name}:${clientId}`));
   const results = ids.map(clientId => applyCell(server, clientId, request.enabled));
@@ -903,7 +938,7 @@ function suggestName(input: { command?: string; args?: string[]; url?: string })
   return sanitizeServerName(base) || "server";
 }
 
-function candidateFrom(name: string | null, raw: RawServer, format: McpPasteFormat, key: string, skipped: McpPasteResult["skipped"], vault: { used: boolean }): McpCandidate | null {
+function candidateFrom(name: string | null, raw: RawServer, format: McpPasteFormat, key: string, skipped: McpPasteResult["skipped"], vault: { used: boolean }, renamed = false): McpCandidate | null {
   let command: string | undefined;
   let args: string[] = [];
   let url: string | undefined;
@@ -1017,12 +1052,16 @@ function candidateFrom(name: string | null, raw: RawServer, format: McpPasteForm
       existing.args.map(arg => arg.value).join("\u0000") === (input.args ?? []).join("\u0000") && (existing.url ?? "") === (input.url ?? "");
     exists = same ? "same" : "different";
     differsIn = same ? [] : CLIENT_ORDER.filter(clientId => existing.cells[clientId].presentInFile);
+  } else {
+    // Not in the list, but an AI tool's file already has this name (compared with client files too).
+    differsIn = db().unimported.filter(entry => entry.name.toLowerCase() === label.toLowerCase()).map(entry => entry.clientId);
+    if (differsIn.length > 0) exists = "different";
   }
   return {
     key,
     name: label,
-    nameSuggested: name === null,
-    nameValid: validateServerName(label) === null || (existing !== undefined),
+    nameSuggested: name === null || renamed,
+    nameValid: validateServerName(label) === null,
     input,
     targetDisplay: targetDisplay({ transport, command, args: args.map(value => ({ value, masked: false })), url }),
     exists,
@@ -1127,11 +1166,19 @@ function parsePaste(text: string): McpPasteResult {
   if (format === "unrecognized") return { format, pasteHandle: null, candidates: [], skipped: [], notices: [] };
   const candidates: McpCandidate[] = [];
   entries.slice(0, 24).forEach((entry, index) => {
-    if (entry.name !== null && validateServerName(entry.name) !== null && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(entry.name)) {
-      skipped.push({ name: entry.name, reason: "invalid-name" });
-      return;
+    // As mcp_paste::normalize_name: an invalid name ("team.docs") becomes a suggested one ("team-docs").
+    let name = entry.name;
+    let renamed = false;
+    if (name !== null && validateServerName(name) !== null) {
+      const sanitized = sanitizeServerName(name);
+      if (validateServerName(sanitized) !== null) {
+        skipped.push({ name, reason: "invalid-name" });
+        return;
+      }
+      name = sanitized;
+      renamed = true;
     }
-    const candidate = candidateFrom(entry.name, entry.raw, format as McpPasteFormat, `c${index}`, skipped, vault);
+    const candidate = candidateFrom(name, entry.raw, format as McpPasteFormat, `c${index}`, skipped, vault, renamed);
     if (candidate) candidates.push(candidate);
   });
   return {
@@ -1193,7 +1240,7 @@ function serverFromInput(input: McpServerInput, id: string): MockServer {
   const secrets: MockSecret[] = (input.secrets ?? []).map(secret => ({
     kind: secret.kind,
     name: secret.name,
-    envVar: secret.kind === "header" ? secret.envVar ?? null : secret.mode === "inline" ? null : secret.name,
+    envVar: secret.kind === "header" ? secret.envVar ?? null : secret.mode === "inline" ? null : secret.envVar ?? secret.name,
     headerTemplate: secret.kind === "header" ? secret.headerTemplate ?? "raw" : undefined,
     storage: secret.mode === "inline" ? "library" : "user_env",
     present: Boolean((secret.value && secret.value.trim()) || secret.pasteValueHandle),
@@ -1236,21 +1283,52 @@ function validateInput(input: McpServerInput): void {
   }
 }
 
-function addServers(request: { candidates: Array<{ input: McpServerInput; onConflict: "skip" | "overwrite" }>; clientIds: McpClientId[]; confirmToken?: string; pasteHandle?: string }): McpWriteOutcome {
+/**
+ * Same conflict rules as mcp_library::add_servers:
+ * - a same-name library server needs onConflict: "skip" leaves it untouched (nothing written for it),
+ *   "overwrite" replaces it, missing → name-taken;
+ * - a different same-name entry only in a client file (here: `unimported`): "skip" skips that client,
+ *   "overwrite" replaces it, missing → a plain-language overwrite-different confirmation.
+ */
+function addServers(request: { candidates: Array<{ input: McpServerInput; onConflict?: "skip" | "overwrite" }>; clientIds: McpClientId[]; confirmToken?: string; pasteHandle?: string }): McpWriteOutcome {
   if (request.candidates.length === 0) return { kind: "noop", reason: "nothing-selected" };
+  const conflicts: McpConfirmationItem[] = [];
   for (const candidate of request.candidates) {
     validateInput(candidate.input);
     const problem = validateServerName(candidate.input.name);
+    if (problem && problem !== "taken") throw mcpError("invalid-name", "名称只能用字母、数字、下划线或短横线，最长 64 个字符，并以字母或数字开头。", { params: { name: candidate.input.name } });
     const existing = live().find(server => server.name.toLowerCase() === candidate.input.name.toLowerCase());
-    if (problem && problem !== "taken" && !existing) throw mcpError("invalid-name", "名称只能用字母、数字、- 和 _，最长 64 个字符。", { params: { name: candidate.input.name } });
+    if (existing && !candidate.onConflict) throw mcpError("name-taken", `已经有一个叫 ${candidate.input.name} 的 MCP。`, { params: { name: candidate.input.name } });
+    if (!existing && !candidate.onConflict) {
+      for (const entry of db().unimported) {
+        if (entry.name.toLowerCase() !== candidate.input.name.toLowerCase() || !request.clientIds.includes(entry.clientId)) continue;
+        const draft = serverFromInput(candidate.input, "draft");
+        conflicts.push({
+          clientId: entry.clientId,
+          clientLabel: CLIENT_LABEL[entry.clientId],
+          scope: "user",
+          serverName: candidate.input.name,
+          action: "update",
+          before: { transport: "stdio", targetDisplay: "uvx · mcp-server-sqlite · +2 个参数", envNames: [], headerNames: [], argCount: 3 },
+          after: entryPreview(draft),
+          changedFields: ["command", "args"]
+        });
+      }
+    }
   }
+  if (conflicts.length > 0 && !tokenOk(request)) return nextConfirm(request, ["overwrite-different"], conflicts);
   const operation = beginOperation("add", [], []);
   const added: MockServer[] = [];
+  const results: McpClientResult[] = [];
+  const skipFile = new Map<string, McpClientId[]>();
   for (const candidate of request.candidates) {
     const existing = live().find(server => server.name.toLowerCase() === candidate.input.name.toLowerCase());
     if (existing && candidate.onConflict === "skip") {
-      added.push(existing);
+      for (const clientId of request.clientIds) results.push(result(clientId, [existing.id], "skipped", { skippedReason: "entry-added-outside" }));
       continue;
+    }
+    if (candidate.onConflict === "skip") {
+      skipFile.set(candidate.input.name.toLowerCase(), db().unimported.filter(entry => entry.name.toLowerCase() === candidate.input.name.toLowerCase()).map(entry => entry.clientId));
     }
     if (existing) {
       const replacement = serverFromInput(candidate.input, existing.id);
@@ -1264,18 +1342,22 @@ function addServers(request: { candidates: Array<{ input: McpServerInput; onConf
       added.push(server);
     }
   }
-  const results: McpClientResult[] = [];
   for (const clientId of request.clientIds) {
     const ok: string[] = [];
-    let skippedReason: McpCellReason | undefined;
     for (const server of added) {
+      if (skipFile.get(server.name.toLowerCase())?.includes(clientId)) {
+        results.push(result(clientId, [server.id], "skipped", { skippedReason: "entry-added-outside" }));
+        continue;
+      }
       const outcome = applyCell(server, clientId, true);
-      if (outcome.status === "skipped") skippedReason = outcome.skippedReason;
+      if (outcome.status === "skipped") results.push(outcome);
       else ok.push(server.id);
     }
     if (ok.length > 0) results.push(result(clientId, ok, "written"));
-    else results.push(result(clientId, added.map(server => server.id), "skipped", { skippedReason }));
   }
+  if (added.length === 0) return { kind: "noop", reason: "nothing-selected" };
+  // A written same-name file entry now belongs to the list.
+  db().unimported = db().unimported.filter(entry => !added.some(server => server.name.toLowerCase() === entry.name.toLowerCase() && results.some(item => item.clientId === entry.clientId && item.status === "written")));
   operation.serverNames = added.map(server => server.name);
   operation.touched = added.flatMap(server => request.clientIds.map(clientId => `${server.name}:${clientId}`));
   return finishOperation(operation, results);
@@ -1287,19 +1369,28 @@ function updateServer(request: { serverId: string; input: McpServerInput; expect
   if (request.input.name !== server.name) throw mcpError("invalid-input", "名称不能修改。");
   validateInput(request.input);
   const outside = CLIENT_ORDER.filter(clientId => server.cells[clientId].state === "changed-outside");
-  if (outside.length > 0 && !tokenOk(request.confirmToken)) {
-    return nextConfirm(["changed-outside"], outside.map(clientId => confirmItem(server, clientId, "update")));
+  if (outside.length > 0 && !tokenOk(request)) {
+    return nextConfirm(request, ["changed-outside"], outside.map(clientId => confirmItem(server, clientId, "update")));
   }
   const operation = beginOperation("update", [server.name], CLIENT_ORDER.map(clientId => `${server.name}:${clientId}`));
   const previousArgs = server.args;
   const next = serverFromInput(request.input, server.id);
   next.args = (request.input.args ?? []).map((value, index) =>
     value === SECRET_MASK && previousArgs[index]?.masked ? { ...previousArgs[index] } : { value, masked: false });
+  // Omitted secrets keep every stored key that still fits the transport (backend: prefill-safe update).
+  if (request.input.secrets === undefined) {
+    next.secrets = server.secrets.filter(secret => (next.transport === "stdio" ? secret.kind === "env" : secret.kind === "header")).map(secret => ({ ...secret, inlineClients: [...secret.inlineClients] }));
+  }
   next.secrets = next.secrets.map(secret => {
     const previous = server.secrets.find(item => item.kind === secret.kind && item.name === secret.name);
     const typed = (request.input.secrets ?? []).find(item => item.kind === secret.kind && item.name === secret.name);
     const hasValue = Boolean(typed?.value?.trim() || typed?.pasteValueHandle);
-    return { ...secret, present: hasValue || Boolean(previous?.present), createdBySkillHub: previous?.createdBySkillHub ?? true };
+    // A kept key keeps where its value lives (no value sent = keep). The variable comes from the
+    // request exactly as in spec_from_input: an env key without envVar falls back to its own name,
+    // so a client that drops envVar would break an imported "NAME": "${OTHER}" here too.
+    const fromRequest = typed ? typed.envVar ?? (secret.kind === "header" ? previous?.envVar ?? null : secret.name) : previous?.envVar ?? null;
+    const kept = previous && !hasValue ? { storage: previous.storage, envVar: fromRequest } : {};
+    return { ...secret, ...kept, present: hasValue || Boolean(previous?.present), createdBySkillHub: previous?.createdBySkillHub ?? true };
   });
   const enabled = CLIENT_ORDER.filter(clientId => ["on", "error", "changed-outside", "blocked"].includes(server.cells[clientId].state));
   next.cells = server.cells;
@@ -1327,17 +1418,17 @@ function removeServer(request: { serverId: string; from: { kind: "library" } | {
   const server = findServer(request.serverId);
   if (request.from.kind === "client") {
     const clientId = request.from.clientId;
-    if (!tokenOk(request.confirmToken)) return nextConfirm(["remove-from-client"], [confirmItem(server, clientId, "remove", entryPreview(server))]);
+    if (!tokenOk(request)) return nextConfirm(request, ["remove-from-client"], [confirmItem(server, clientId, "remove", entryPreview(server))]);
     const operation = beginOperation("remove", [server.name], [`${server.name}:${clientId}`]);
     server.cells[clientId] = offCell();
     return finishOperation(operation, [result(clientId, [server.id], "written")]);
   }
   const inFiles = CLIENT_ORDER.filter(clientId => server.cells[clientId].presentInFile);
-  if (!tokenOk(request.confirmToken)) {
+  if (!tokenOk(request)) {
     const envVars = server.secrets
       .filter(secret => secret.envVar && secret.createdBySkillHub && secret.storage === "user_env")
       .map(secret => ({ name: secret.envVar as string, exists: secret.present, createdBySkillHub: true, action: "delete" as const }));
-    return nextConfirm(["remove-from-library"], inFiles.map(clientId => confirmItem(server, clientId, "remove", entryPreview(server))), { envVars });
+    return nextConfirm(request, ["remove-from-library"], inFiles.map(clientId => confirmItem(server, clientId, "remove", entryPreview(server))), { envVars });
   }
   const operation = beginOperation("remove", [server.name], inFiles.map(clientId => `${server.name}:${clientId}`));
   operation.envVarNames = [...(request.deleteEnvVars ?? [])];
@@ -1364,7 +1455,7 @@ function undo(request: { undoToken: string }): McpWriteOutcome {
 function rollback(request: { operationId?: string; legacySnapshotId?: string; confirmToken?: string }): McpWriteOutcome {
   const operation = db().operations.find(item => (request.operationId && item.id === request.operationId) || (request.legacySnapshotId && item.legacySnapshotId === request.legacySnapshotId));
   if (!operation || operation.undone) throw mcpError("undo-unavailable", "这一步已经撤销过了。");
-  if (!tokenOk(request.confirmToken)) {
+  if (!tokenOk(request)) {
     const items: McpConfirmationItem[] = operation.clientIds.map(clientId => ({
       clientId,
       clientLabel: CLIENT_LABEL[clientId],
@@ -1373,7 +1464,7 @@ function rollback(request: { operationId?: string; legacySnapshotId?: string; co
       action: operation.kind === "add" || operation.kind === "enable" ? "remove" : operation.kind === "disable" || operation.kind === "remove" ? "add" : "update",
       changedFields: []
     }));
-    return nextConfirm(["rollback"], items);
+    return nextConfirm(request, ["rollback"], items);
   }
   if (!operation.before) {
     // Seeded history entries carry no before-state; the preview just marks them undone.
@@ -1391,11 +1482,11 @@ function setSecret(request: { serverId: string; name: string; value: string; mod
   const value = request.value.trim();
   if (!value || value.length > 8192 || /[\r\n\0]/.test(value)) throw mcpError("secret-value-invalid", "密钥需要 1 到 8192 个字符，不能有换行。");
   const envVar = secret.envVar ?? secret.name;
-  if (request.mode === "user_env" && !db().envCreated.has(envVar) && !secret.createdBySkillHub && !tokenOk(request.confirmToken) && envVar === "OPENAI_API_KEY") {
-    return nextConfirm(["overwrite-env-var"], [], { envVars: [{ name: envVar, exists: true, createdBySkillHub: false, action: "set" }] });
+  if (request.mode === "user_env" && !db().envCreated.has(envVar) && !secret.createdBySkillHub && !tokenOk(request) && envVar === "OPENAI_API_KEY") {
+    return nextConfirm(request, ["overwrite-env-var"], [], { envVars: [{ name: envVar, exists: true, createdBySkillHub: false, action: "set" }] });
   }
-  if (request.mode === "inline" && !tokenOk(request.confirmToken)) {
-    return nextConfirm(["inline-secret"], CLIENT_ORDER.filter(clientId => server.cells[clientId].state === "on").map(clientId => confirmItem(server, clientId, "update")));
+  if (request.mode === "inline" && !tokenOk(request)) {
+    return nextConfirm(request, ["inline-secret"], CLIENT_ORDER.filter(clientId => server.cells[clientId].state === "on").map(clientId => confirmItem(server, clientId, "update")));
   }
   const operation = beginOperation("secret", [server.name], [`${server.name}:secret`]);
   secret.present = true;
@@ -1420,7 +1511,7 @@ const INSTALL_HINTS = {
 
 function testPreview(serverId: string): McpTestPreview {
   const server = findServer(serverId);
-  const missingSecrets = server.secrets.filter(secret => secret.required && !secret.present).map(secret => secret.envVar ?? secret.name);
+  const missingSecrets = server.secrets.filter(secret => !secret.present).map(secret => secret.name);
   if (server.transport !== "stdio") {
     let url: string | null = null;
     try {
@@ -1591,8 +1682,8 @@ function resync(request: { clientIds?: McpClientId[]; serverIds?: string[]; conf
   }
   if (targets.length === 0) return { kind: "noop", reason: "already-in-state" };
   const outside = targets.filter(item => item.server.cells[item.clientId].state === "changed-outside");
-  if (outside.length > 0 && !tokenOk(request.confirmToken)) {
-    return nextConfirm(["resync"], outside.map(item => confirmItem(item.server, item.clientId, "update")));
+  if (outside.length > 0 && !tokenOk(request)) {
+    return nextConfirm(request, ["resync"], outside.map(item => confirmItem(item.server, item.clientId, "update")));
   }
   const operation = beginOperation("resync", unique(targets.map(item => item.server.name)), targets.map(item => `${item.server.name}:${item.clientId}`));
   const results = targets.map(item => applyCell(item.server, item.clientId, true));
@@ -1602,10 +1693,10 @@ function resync(request: { clientIds?: McpClientId[]; serverIds?: string[]; conf
 function resolveChange(request: { serverId: string; clientId: McpClientId; take: "file" | "library"; confirmToken?: string }): McpWriteOutcome {
   const server = findServer(request.serverId);
   if (server.cells[request.clientId].state !== "changed-outside") return { kind: "noop", reason: "already-in-state" };
-  if (!tokenOk(request.confirmToken)) {
-    if (request.take === "library") return nextConfirm(["changed-outside"], [confirmItem(server, request.clientId, "update")]);
+  if (!tokenOk(request)) {
+    if (request.take === "library") return nextConfirm(request, ["changed-outside"], [confirmItem(server, request.clientId, "update")]);
     const others = CLIENT_ORDER.filter(clientId => clientId !== request.clientId && server.cells[clientId].state === "on");
-    return nextConfirm(["resync"], others.map(clientId => confirmItem(server, clientId, "update")));
+    return nextConfirm(request, ["resync"], others.map(clientId => confirmItem(server, clientId, "update")));
   }
   const operation = beginOperation("resolve", [server.name], [`${server.name}:${request.clientId}`]);
   if (request.take === "file") {
@@ -1634,7 +1725,7 @@ function templates(): McpTemplate[] {
       docsUrl: "https://github.com/upstash/context7"
     }),
     base("fetch", { transport: "stdio", command: "uvx", args: ["mcp-server-fetch"] }),
-    base("filesystem", { transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", ""] }, {
+    base("filesystem", { transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem"] }, {
       params: [{ key: "allowedPath", kind: "folder", required: true, argIndex: 2 }]
     }),
     base("memory", { transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-memory"] }),
