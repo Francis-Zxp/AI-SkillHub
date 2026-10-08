@@ -3979,6 +3979,29 @@ fn run_atomic_replace_test_hook(target: &Path) {
     }
 }
 
+/// Test-only: turns a committed snapshot back into an interrupted one (as if
+/// the app stopped between the write and the commit record).
+#[cfg(test)]
+pub(crate) fn mark_snapshot_interrupted_for_test(context: &McpMutationContext, snapshot_id: &str) {
+    let path = snapshot_manifest_path(context, snapshot_id).unwrap();
+    let mut manifest: SnapshotManifest = read_protected_journal(&path).unwrap();
+    manifest.state = "applying".to_string();
+    write_replaceable_protected_journal(&path, &manifest).unwrap();
+}
+
+/// Test-only: the ids of every snapshot directory in the private store.
+#[cfg(test)]
+pub(crate) fn snapshot_ids_for_test(context: &McpMutationContext) -> Vec<String> {
+    fs::read_dir(snapshots_dir(context))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 pub(crate) fn install_atomic_replace_test_hook(target: PathBuf, bytes: Vec<u8>) {
     *ATOMIC_REPLACE_TEST_HOOK

@@ -4880,6 +4880,16 @@ where
     T: Send + 'static,
     F: FnOnce(&mcp_library::McpLibraryContext) -> Result<T, mcp_library::McpError> + Send + 'static,
 {
+    mcp_run_write_with(true, task).await
+}
+
+/// `recover`: finish interrupted transactions first (every write except
+/// "保留现在的文件", which must keep the current files exactly as they are).
+async fn mcp_run_write_with<T, F>(recover: bool, task: F) -> Result<T, mcp_library::McpError>
+where
+    T: Send + 'static,
+    F: FnOnce(&mcp_library::McpLibraryContext) -> Result<T, mcp_library::McpError> + Send + 'static,
+{
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = acquire_mcp_mutation_guard_bounded()?;
         let context = mcp_library_context()?;
@@ -4887,7 +4897,9 @@ where
             .map_err(|_| {
                 mcp_library::McpError::new("busy", "另一个 AI SkillHub 正在修改 MCP 配置，请稍候。")
             })?;
-        mcp_library::prepare_write(&context)?;
+        if recover {
+            mcp_library::prepare_write(&context)?;
+        }
         task(&context)
     })
     .await
@@ -5028,12 +5040,22 @@ mcp_write_command!(
     mcp_library::resolve_changed_outside,
     "write"
 );
-mcp_write_command!(
-    mcp_resolve_stuck_transaction,
-    mcp_library::McpResolveStuckRequest,
-    mcp_library::resolve_stuck_transaction,
-    "write"
-);
+
+/// "保留现在的文件" for an interrupted write: runs under both locks but
+/// without crash recovery first, so the current files stay exactly as the
+/// user chose to keep them (recovery would restore the earlier bytes).
+#[tauri::command]
+async fn mcp_resolve_stuck_transaction(
+    app: tauri::AppHandle,
+    request: mcp_library::McpResolveStuckRequest,
+) -> Result<mcp_library::McpWriteOutcome, mcp_library::McpError> {
+    let outcome = mcp_run_write_with(false, move |context| {
+        mcp_library::resolve_stuck_transaction(context, request)
+    })
+    .await?;
+    mcp_emit_changed(&app, &outcome, "write");
+    Ok(outcome)
+}
 
 #[tauri::command]
 async fn mcp_parse_paste(

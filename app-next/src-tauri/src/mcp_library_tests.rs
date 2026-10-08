@@ -2514,3 +2514,134 @@ fn frontend_request_shapes_deserialize() {
     )
     .is_err());
 }
+
+/// I1: the modules behind opening the page, the snapshot, import, paste,
+/// GitHub import, templates, secrets and config writes never start a process
+/// (only `mcp_probe`, after a user click, and "打开文件位置" may).
+#[test]
+fn page_open_import_and_parse_modules_never_start_a_process() {
+    let forbidden = [concat!("Command", "::new"), concat!(".spa", "wn(")];
+    for (name, source) in [
+        ("mcp_center.rs", include_str!("mcp_center.rs")),
+        ("mcp_mutation.rs", include_str!("mcp_mutation.rs")),
+        ("mcp_library.rs", include_str!("mcp_library.rs")),
+        ("mcp_paste.rs", include_str!("mcp_paste.rs")),
+        ("mcp_secrets.rs", include_str!("mcp_secrets.rs")),
+        ("mcp_json_doc.rs", include_str!("mcp_json_doc.rs")),
+        ("mcp_templates.rs", include_str!("mcp_templates.rs")),
+        ("mcp_github_import.rs", include_str!("mcp_github_import.rs")),
+    ] {
+        for pattern in forbidden {
+            assert!(!source.contains(pattern), "{name} contains {pattern}");
+        }
+    }
+    // Runner and client detection read files and the registry only.
+    let where_exe = concat!("\"where", ".exe\"");
+    for (name, source) in [
+        ("mcp_library.rs", include_str!("mcp_library.rs")),
+        ("mcp_probe.rs", include_str!("mcp_probe.rs")),
+    ] {
+        assert!(!source.contains(where_exe), "{name} runs where.exe");
+    }
+}
+
+/// "保留现在的文件" keeps the current bytes of a stuck transaction's target
+/// and stops listing it; later writes are not blocked.
+#[test]
+fn keeping_current_files_resolves_a_stuck_transaction_without_restoring() {
+    let fixture = Fixture::new("stuck");
+    fixture.import();
+    let outcome = add(
+        &fixture,
+        stdio_input("memory", "npx", &["-y", "server-memory"]),
+        &[ClientId::Cursor],
+    );
+    done(&outcome);
+    // Simulate an interrupted transaction: mark the committed manifest as
+    // still applying, then edit the file outside SkillHub.
+    assert!(
+        engine::list_legacy_snapshots(&fixture.ctx.mutation).is_empty(),
+        "v3.3 snapshots are not legacy"
+    );
+    let ids = engine::snapshot_ids_for_test(&fixture.ctx.mutation);
+    assert_eq!(ids.len(), 1);
+    // The app stopped after the write but before the commit record: the file
+    // holds the new bytes, which the user chooses to keep.
+    let edited = fs::read_to_string(fixture.cursor()).unwrap();
+    assert!(edited.contains("memory"));
+    engine::mark_snapshot_interrupted_for_test(&fixture.ctx.mutation, &ids[0]);
+    let listed = fixture.snapshot().stuck_transactions;
+    assert_eq!(listed.len(), 1);
+    // Resolve without running recovery first (the command's write runner
+    // skips prepare_write for this action).
+    let resolved = resolve_stuck_transaction(
+        &fixture.ctx,
+        McpResolveStuckRequest {
+            snapshot_id: listed[0].snapshot_id.clone(),
+            action: "keep-current".to_string(),
+        },
+    )
+    .unwrap();
+    done(&resolved);
+    assert_eq!(fs::read_to_string(fixture.cursor()).unwrap(), edited);
+    assert!(fixture.snapshot().stuck_transactions.is_empty());
+    // Recovery before the next write leaves the kept file alone.
+    prepare_write(&fixture.ctx).unwrap();
+    assert_eq!(fs::read_to_string(fixture.cursor()).unwrap(), edited);
+}
+
+/// A reference with a default (`${NAME:-value}`) is imported as written, so
+/// the cell is "on" right after import and the default survives re-writes.
+#[test]
+fn import_keeps_references_with_defaults_as_written() {
+    let fixture = Fixture::new("ref-default");
+    fs::write(
+        fixture.cursor(),
+        r#"{"mcpServers":{"api":{"command":"node","args":["api.js"],"env":{"API_URL":"${API_URL:-https://api.example.test}","API_TOKEN":"${env:API_TOKEN}"}}}}"#,
+    )
+    .unwrap();
+    fixture.import();
+    assert_eq!(fixture.cell("api", ClientId::Cursor).state, "on");
+    let detail = get_server(
+        &fixture.ctx,
+        McpGetServerRequest {
+            server_id: fixture.server_id("api"),
+        },
+    )
+    .unwrap();
+    assert!(
+        detail
+            .env
+            .iter()
+            .any(|item| item.name == "API_URL"
+                && item.value == "${API_URL:-https://api.example.test}")
+    );
+    // The plain reference is a secret the server needs.
+    let token = detail
+        .secrets
+        .iter()
+        .find(|secret| secret.name == "API_TOKEN")
+        .unwrap();
+    assert!(token.required);
+    assert_eq!(fixture.snapshot().servers[0].missing_secret_count, 1);
+}
+
+/// An optional key (context7's CONTEXT7_API_KEY) that is not set is neither
+/// "missing" in the matrix nor a reason to refuse the connection test.
+#[test]
+fn optional_secrets_are_not_missing_and_do_not_block_the_test() {
+    let fixture = Fixture::new("optional");
+    fixture.import();
+    let mut input = stdio_input("context7", "npx", &["-y", "@upstash/context7-mcp"]);
+    input.secrets = Some(vec![McpSecretInput {
+        required: Some(false),
+        ..env_secret("CONTEXT7_API_KEY", None, None)
+    }]);
+    add(&fixture, input, &[ClientId::Cursor]);
+    let row = fixture.snapshot().servers[0].clone();
+    assert_eq!(row.missing_secret_count, 0);
+    assert!(!row.secrets[0].present);
+    let preview = crate::mcp_probe::test_preview(&fixture.ctx, &row.id).unwrap();
+    let preview = serde_json::to_value(&preview).unwrap();
+    assert_eq!(preview["missingSecrets"], json!([]));
+}

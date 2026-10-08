@@ -1820,7 +1820,7 @@ fn spec_from_entry(client: ClientId, entry: &Node) -> Result<McpServerSpec, &'st
                         env_var: None,
                         value: None,
                         inline_clients: Vec::new(),
-                        required: false,
+                        required: true,
                     });
                 }
             }
@@ -1855,7 +1855,7 @@ fn spec_from_entry(client: ClientId, entry: &Node) -> Result<McpServerSpec, &'st
                         storage: SecretStorage::External,
                         value: None,
                         inline_clients: Vec::new(),
-                        required: false,
+                        required: true,
                     });
                 }
             }
@@ -1867,7 +1867,7 @@ fn spec_from_entry(client: ClientId, entry: &Node) -> Result<McpServerSpec, &'st
                     storage: SecretStorage::External,
                     value: None,
                     inline_clients: Vec::new(),
-                    required: false,
+                    required: true,
                 });
             }
         }
@@ -1881,8 +1881,17 @@ fn spec_from_entry(client: ClientId, entry: &Node) -> Result<McpServerSpec, &'st
     Ok(spec)
 }
 
+/// The variable of a plain `${NAME}` / `${env:NAME}` reference. A reference
+/// with a default (`${NAME:-value}`) is kept as written instead: turning it
+/// into `${NAME}` would drop the default the user configured.
+fn plain_reference(value: &str) -> Option<&str> {
+    (!value.contains(":-"))
+        .then(|| crate::mcp_center::env_reference_name(value))
+        .flatten()
+}
+
 fn env_from_value(client: ClientId, name: &str, value: &str) -> SpecEnv {
-    if let Some(variable) = crate::mcp_center::env_reference_name(value) {
+    if let Some(variable) = plain_reference(value) {
         return SpecEnv {
             name: name.to_string(),
             secret: true,
@@ -1890,10 +1899,13 @@ fn env_from_value(client: ClientId, name: &str, value: &str) -> SpecEnv {
             env_var: (variable != name).then(|| variable.to_string()),
             value: None,
             inline_clients: Vec::new(),
-            required: false,
+            // A configured secret is needed by the server.
+            required: true,
         };
     }
-    let secret = mcp_paste::name_looks_secret(name) || engine::has_common_secret_prefix(value);
+    let expression = crate::mcp_center::env_reference_name(value).is_some();
+    let secret = !expression
+        && (mcp_paste::name_looks_secret(name) || engine::has_common_secret_prefix(value));
     SpecEnv {
         name: name.to_string(),
         secret,
@@ -1905,7 +1917,7 @@ fn env_from_value(client: ClientId, name: &str, value: &str) -> SpecEnv {
         env_var: None,
         value: Some(value.to_string()),
         inline_clients: if secret { vec![client] } else { Vec::new() },
-        required: false,
+        required: secret,
     }
 }
 
@@ -1920,7 +1932,7 @@ fn header_from_value(client: ClientId, name: &str, value: &str) -> SpecHeader {
     } else {
         HeaderTemplate::Raw
     };
-    if let Some(variable) = crate::mcp_center::env_reference_name(rest) {
+    if let Some(variable) = plain_reference(rest) {
         return SpecHeader {
             name: name.to_string(),
             template,
@@ -1928,7 +1940,7 @@ fn header_from_value(client: ClientId, name: &str, value: &str) -> SpecHeader {
             storage: SecretStorage::External,
             value: None,
             inline_clients: Vec::new(),
-            required: false,
+            required: true,
         };
     }
     SpecHeader {
@@ -1938,7 +1950,7 @@ fn header_from_value(client: ClientId, name: &str, value: &str) -> SpecHeader {
         storage: SecretStorage::Library,
         value: Some(rest.to_string()),
         inline_clients: vec![client],
-        required: false,
+        required: true,
     }
 }
 
@@ -3194,7 +3206,11 @@ pub(crate) fn library_snapshot(ctx: &McpLibraryContext) -> Result<McpLibrarySnap
             cells.push(cell);
         }
         let secrets = secret_statuses(ctx, Some(&connection), &server.spec);
-        let missing_secret_count = secrets.iter().filter(|secret| !secret.present).count();
+        // An optional key (context7's CONTEXT7_API_KEY) is not "missing".
+        let missing_secret_count = secrets
+            .iter()
+            .filter(|secret| secret.required && !secret.present)
+            .count();
         let issues_before = issues.len();
         for cell in &cells {
             let issue = |kind: &str, action: &str| McpIssue {
@@ -8424,7 +8440,8 @@ pub(crate) fn test_environment(
         };
         match value {
             Some(value) => env.push((item.name.clone(), value)),
-            None if item.secret => missing.push(item.name.clone()),
+            // An optional secret that is not set does not block the test.
+            None if item.secret && item.required => missing.push(item.name.clone()),
             None => {}
         }
     }
@@ -8451,7 +8468,8 @@ pub(crate) fn test_headers(
                 headers.push((header.name.clone(), format!("Bearer {value}")))
             }
             Some(value) => headers.push((header.name.clone(), value)),
-            None => missing.push(header.name.clone()),
+            None if header.required => missing.push(header.name.clone()),
+            None => {}
         }
     }
     (headers, missing)
