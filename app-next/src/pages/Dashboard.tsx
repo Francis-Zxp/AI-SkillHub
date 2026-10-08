@@ -154,7 +154,7 @@ export function Dashboard({
 
   return (
     <div className="view dashboard-view home-v33" ref={viewRef}>
-      <div className="home-top" ref={homeTopRef}>
+      <div className="home-top" ref={homeTopRef} data-sky-overlay>
       <section className="home-metrics" aria-label={t("v33.homeMetrics")}>
         <Metric
           icon="agent"
@@ -271,7 +271,7 @@ export function Dashboard({
       <section className={`dashboard-hero glow-card${sceneVisual === "off" ? " scene-off" : ""}${atlasMode && (!atlasIntroVisible || sceneVisual === "islands") ? " intro-collapsed" : ""}${sceneVisual === "islands" ? " islands-home" : " universe-home"}`}>
         {sceneVisual === "islands" && (
           <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
-            <SkillArchipelago visible centered lightTheme={isLightTheme(theme)} phase={theme.startsWith("sky-") ? (theme.slice(4) as SkyPhase) : isLightTheme(theme) ? "noon" : "night"} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} snapshot={snapshot} />
+            <SkillArchipelago visible centered lightTheme={isLightTheme(theme)} phase={theme.startsWith("sky-") ? (theme.slice(4) as SkyPhase) : isLightTheme(theme) ? "noon" : "night"} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} onAdd={() => onAdd()} snapshot={snapshot} />
           </Suspense>
         )}
         {sceneVisual === "universe" && (
