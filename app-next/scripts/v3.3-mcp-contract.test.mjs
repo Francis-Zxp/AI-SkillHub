@@ -457,6 +457,8 @@ test("the edit drawer keeps stored keys exactly: no secrets sent unless a key wa
   // "user_env" without a value means "keep where it is stored"; "inline" would re-ask for consent.
   assert.match(drawer, /headerTemplate: secret\.headerTemplate,\s*mode: "user_env",/);
   assert.match(drawer, /secrets: added\.length === 0\s*\? undefined/);
+  // cwd is always sent: omitted would keep a stored folder the user just cleared.
+  assert.match(drawer, /cwd: form\.cwd\.trim\(\),/);
 });
 
 test("the add sheet asks before replacing and never sends an empty optional key", () => {

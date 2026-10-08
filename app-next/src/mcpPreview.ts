@@ -1377,6 +1377,8 @@ function updateServer(request: { serverId: string; input: McpServerInput; expect
   const next = serverFromInput(request.input, server.id);
   next.args = (request.input.args ?? []).map((value, index) =>
     value === SECRET_MASK && previousArgs[index]?.masked ? { ...previousArgs[index] } : { value, masked: false });
+  // Prefill-safe update (backend note 4): an omitted cwd keeps the stored one, "" clears it.
+  if (next.transport === "stdio") next.cwd = request.input.cwd === undefined ? server.cwd : request.input.cwd.trim() || undefined;
   // Omitted secrets keep every stored key that still fits the transport (backend: prefill-safe update).
   if (request.input.secrets === undefined) {
     next.secrets = server.secrets.filter(secret => (next.transport === "stdio" ? secret.kind === "env" : secret.kind === "header")).map(secret => ({ ...secret, inlineClients: [...secret.inlineClients] }));

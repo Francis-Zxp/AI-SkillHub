@@ -232,7 +232,8 @@ export function McpEditDrawer(props: Props) {
         ...base,
         command,
         args,
-        cwd: form.cwd.trim() || undefined,
+        // Always sent: an omitted cwd keeps the stored one (prefill-safe update), "" clears it.
+        cwd: form.cwd.trim(),
         env: form.env.filter(row => row.name.trim()).map(row => ({ name: row.name.trim(), value: row.value }))
       };
     }
