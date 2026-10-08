@@ -2533,11 +2533,9 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<Deliver
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let detail = [stdout.trim(), stderr.trim()]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
+        // I-10: keep the script's own message, never the PowerShell error
+        // record's script position block (`At …ps1:12 char:5`, `+ …`).
+        let detail = script_error_lines(&format!("{stdout}\n{stderr}"));
         let detail = if detail.chars().count() > 1600 {
             detail.chars().take(1600).collect::<String>()
         } else {
@@ -2578,6 +2576,25 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<Deliver
     }
     skill_delivery::record_agent_results(connection, &results)?;
     Ok(DeliveryRun::Completed { results })
+}
+
+/// The meaningful lines of a failed PowerShell run: blank lines and the error
+/// record's position block (`At C:\…\Manage-AgentSkillLinks.ps1:12 char:5`,
+/// `+ throw …`, `~~~`, `+ CategoryInfo …`, `+ FullyQualifiedErrorId …`) are
+/// dropped (I-10).
+fn script_error_lines(output: &str) -> String {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            !line.is_empty()
+                && !line.starts_with('+')
+                && !line.chars().all(|c| c == '~' || c == ' ')
+                && !(line.starts_with("At ") && line.contains(".ps1:"))
+                && !line.starts_with("所在位置")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// I-1 for every caller of the link step (rollback, connect, delete …), not
@@ -28974,21 +28991,10 @@ mod tests {
         fs::create_dir_all(active.join("alpha")).unwrap();
         fs::create_dir_all(shared.join("mine")).unwrap();
         fs::create_dir_all(shared.join("beta")).unwrap();
-        fs::write(
-            shared.join("mine/SKILL.md"),
-            "---
-name: mine
----
-",
-        )
-        .unwrap();
+        fs::write(shared.join("mine/SKILL.md"), "---\nname: mine\n---\n").unwrap();
         fs::write(
             shared.join("beta/SKILL.md"),
-            "---
-name: beta
----
-<!-- AI SkillHub shared-skill v1 sha256:00 -->
-",
+            "---\nname: beta\n---\n<!-- AI SkillHub shared-skill v1 sha256:00 -->\n",
         )
         .unwrap();
         // Every link into the active catalog is SkillHub's.
@@ -29064,5 +29070,28 @@ name: beta
         assert_eq!(enabled("cursor"), None);
         drop(connection);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn link_script_errors_keep_the_message_not_the_script_position() {
+        // I-10: no PowerShell position block in errors or delivery events.
+        let record = "WARNING: Legacy shared catalog preserved: x\n\
+            Agent Skill allowlist contains 3 entries, but none match a valid active Skill.\n\
+            At C:\\Users\\u\\AppData\\Local\\SkillHub\\runtime\\Manage-AgentSkillLinks.ps1:378 char:5\n\
+            +     throw \"Agent Skill allowlist contains $($unionNames.Count) entries\"\n\
+            +     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n\
+                + CategoryInfo          : OperationStopped: (Agent Skill...:String) [], RuntimeException\n\
+                + FullyQualifiedErrorId : Agent Skill allowlist contains 3 entries\n\
+            所在位置 行:1 字符: 1\n";
+        let detail = script_error_lines(record);
+        assert_eq!(
+            detail,
+            "WARNING: Legacy shared catalog preserved: x\n\
+             Agent Skill allowlist contains 3 entries, but none match a valid active Skill."
+        );
+        assert_eq!(
+            skillhub_error::classify_legacy_error(&format!("AI 工具链接同步失败：{detail}")).code,
+            "DELIVERY_POLICY_INVALID"
+        );
     }
 }
