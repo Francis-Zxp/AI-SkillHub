@@ -3713,8 +3713,7 @@ fn agent_delivery_links_are_healthy_for_plan_excluding(
         match recipient.action {
             skill_delivery::RecipientAction::Skip => {}
             skill_delivery::RecipientAction::Release => {
-                if recipient_holds_skillhub_links(&recipient.path, &[&active_root, &link_root], &[])
-                {
+                if recipient_holds_skillhub_links(&recipient.path, &active_root, &link_root, &[]) {
                     return Ok(false);
                 }
             }
@@ -3729,8 +3728,7 @@ fn agent_delivery_links_are_healthy_for_plan_excluding(
                     }
                     let ours = external_skills::is_link(&entry)
                         && delivery_link_target(&entry).is_some_and(|target| {
-                            skill_delivery::path_is_under(&target, &link_root)
-                                || skill_delivery::path_is_under(&target, &active_root)
+                            skillhub_link_target(name, &target, &active_root, &link_root)
                         });
                     if !ours {
                         // A personal folder or external link with this name is
@@ -3746,7 +3744,8 @@ fn agent_delivery_links_are_healthy_for_plan_excluding(
                 }
                 if recipient_holds_skillhub_links(
                     &recipient.path,
-                    &[&active_root, &link_root],
+                    &active_root,
+                    &link_root,
                     &recipient.names,
                 ) {
                     return Ok(false);
@@ -3808,9 +3807,14 @@ fn agent_delivery_links_are_healthy_for_plan_excluding(
     ))
 }
 
-/// True when `folder` still holds a SkillHub reparse point (target under one of
-/// `link_roots`) whose name is not in `keep`. Read only.
-fn recipient_holds_skillhub_links(folder: &Path, link_roots: &[&Path], keep: &[String]) -> bool {
+/// True when `folder` still holds a SkillHub reparse point
+/// ([`skillhub_link_target`]) whose name is not in `keep`. Read only.
+fn recipient_holds_skillhub_links(
+    folder: &Path,
+    active_root: &Path,
+    link_root: &Path,
+    keep: &[String],
+) -> bool {
     let Ok(entries) = fs::read_dir(folder) else {
         return false;
     };
@@ -3819,12 +3823,31 @@ fn recipient_holds_skillhub_links(folder: &Path, link_roots: &[&Path], keep: &[S
         let name = entry.file_name().to_string_lossy().to_string();
         external_skills::is_link(&path)
             && !keep.iter().any(|kept| kept.eq_ignore_ascii_case(&name))
-            && delivery_link_target(&path).is_some_and(|target| {
-                link_roots
-                    .iter()
-                    .any(|root| skill_delivery::path_is_under(&target, root))
-            })
+            && delivery_link_target(&path)
+                .is_some_and(|target| skillhub_link_target(&name, &target, active_root, link_root))
     })
+}
+
+/// I-2, the same rule as `Test-SkillHubLinkTarget` in Manage-AgentSkillLinks.ps1:
+/// every link into the active catalog is SkillHub's. A link into the shared
+/// Coze/Codex folder (codex-legacy) is SkillHub's only when it is the alias
+/// SkillHub makes, `<name>` -> `<shared>/<name>`, and that target is gone or is
+/// SkillHub's generated entry. A user's own link to a personal skill is not.
+fn skillhub_link_target(name: &str, target: &Path, active_root: &Path, link_root: &Path) -> bool {
+    if skill_delivery::path_is_under(target, active_root) {
+        return true;
+    }
+    if delivery_paths_equal(link_root, active_root)
+        || !skill_delivery::path_is_under(target, link_root)
+        || !delivery_paths_equal(target, &link_root.join(name))
+    {
+        return false;
+    }
+    if fs::symlink_metadata(target).is_err() {
+        return true;
+    }
+    fs::read_to_string(target.join("SKILL.md"))
+        .is_ok_and(|text| text.contains("<!-- AI SkillHub shared-skill v1 sha256:"))
 }
 
 fn agent_delivery_is_current(root: &Path, connection: &Connection) -> Result<bool, String> {
@@ -28865,6 +28888,84 @@ mod tests {
         assert_eq!(entry["url"], "https://github.com/anthropics/skills.git");
         let policy = sparse_scope::ScopePolicy::from_config(Some(&written), "skills--anthropics");
         assert_eq!(policy.explicit_paths, Some(vec!["skills/pdf".to_string()]));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn legacy_codex_links_into_the_shared_folder_are_ours_only_as_our_alias() {
+        // I-2: mirrors Test-SkillHubLinkTarget in Manage-AgentSkillLinks.ps1.
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-link-owner-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let active = root.join("skills");
+        let shared = root.join("home").join(".agents").join("skills");
+        fs::create_dir_all(active.join("alpha")).unwrap();
+        fs::create_dir_all(shared.join("mine")).unwrap();
+        fs::create_dir_all(shared.join("beta")).unwrap();
+        fs::write(
+            shared.join("mine/SKILL.md"),
+            "---
+name: mine
+---
+",
+        )
+        .unwrap();
+        fs::write(
+            shared.join("beta/SKILL.md"),
+            "---
+name: beta
+---
+<!-- AI SkillHub shared-skill v1 sha256:00 -->
+",
+        )
+        .unwrap();
+        // Every link into the active catalog is SkillHub's.
+        assert!(skillhub_link_target(
+            "alpha",
+            &active.join("alpha"),
+            &active,
+            &shared
+        ));
+        // Our alias to a generated entry, or to one that is already gone.
+        assert!(skillhub_link_target(
+            "beta",
+            &shared.join("beta"),
+            &active,
+            &shared
+        ));
+        assert!(skillhub_link_target(
+            "gone",
+            &shared.join("gone"),
+            &active,
+            &shared
+        ));
+        // A user's link to their personal skill, or under another name.
+        assert!(!skillhub_link_target(
+            "mine",
+            &shared.join("mine"),
+            &active,
+            &shared
+        ));
+        assert!(!skillhub_link_target(
+            "my-alias",
+            &shared.join("mine"),
+            &active,
+            &shared
+        ));
+        // Outside both roots, and the shared rule never applies to plain tools.
+        assert!(!skillhub_link_target(
+            "x",
+            &root.join("elsewhere"),
+            &active,
+            &shared
+        ));
+        assert!(!skillhub_link_target(
+            "beta",
+            &shared.join("beta"),
+            &active,
+            &active
+        ));
         let _ = fs::remove_dir_all(root);
     }
 }

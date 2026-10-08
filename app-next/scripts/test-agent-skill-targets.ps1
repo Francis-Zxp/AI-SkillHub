@@ -197,6 +197,35 @@ try {
   ) $presence
   Assert-True ((Recipient $report 'claude').outcome -eq 'failed' -and -not (Test-Path -LiteralPath (Join-Path $testRoot 'not-claude'))) 'mismatched recipient path is refused'
 
+  # I-2 for the Codex legacy folder in shared mode: only the aliases SkillHub
+  # makes (<name> -> .agents\skills\<name>, generated or gone) are SkillHub's.
+  # A user's own link to a personal skill in .agents\skills is never removed.
+  $agentsSkills = Join-Path $fixtureHome '.agents\skills'
+  $legacyCodex = Join-Path $fixtureHome '.codex\skills'
+  New-Item -ItemType Directory -Force -Path (Join-Path $agentsSkills 'mine'), (Join-Path $agentsSkills 'beta'), $legacyCodex | Out-Null
+  [IO.File]::WriteAllText((Join-Path $agentsSkills 'mine\SKILL.md'), "---`nname: mine`ndescription: Personal.`n---")
+  [IO.File]::WriteAllText((Join-Path $agentsSkills 'beta\SKILL.md'), "---`nname: beta`ndescription: Generated.`n---`n<!-- AI SkillHub shared-skill v1 sha256:00 -->`n")
+  New-Item -ItemType Junction -Path (Join-Path $legacyCodex 'beta') -Target (Join-Path $agentsSkills 'beta') | Out-Null
+  # An alias whose generated entry is already gone (Rust removed it first).
+  New-Item -ItemType Directory -Force -Path (Join-Path $agentsSkills 'alpha') | Out-Null
+  New-Item -ItemType Junction -Path (Join-Path $legacyCodex 'alpha') -Target (Join-Path $agentsSkills 'alpha') | Out-Null
+  Remove-Item -LiteralPath (Join-Path $agentsSkills 'alpha') -Force
+  New-Item -ItemType Junction -Path (Join-Path $legacyCodex 'mine') -Target (Join-Path $agentsSkills 'mine') | Out-Null
+  New-Item -ItemType Junction -Path (Join-Path $legacyCodex 'my-alias') -Target (Join-Path $agentsSkills 'mine') | Out-Null
+  $env:AI_SKILLHUB_REAL_SHARED_SKILLS = $agentsSkills
+  $report = Invoke-Targets @('alpha', 'beta', 'gamma') @(
+    [PSCustomObject]@{ id = 'codex-legacy'; action = 'deliver'; path = $legacyCodex; linkRoot = $agentsSkills; names = @('beta') }
+  ) @('-SimulateCodexPresent')
+  Assert-True ((Recipient $report 'codex-legacy').outcome -eq 'ok') 'legacy Codex deliver ok'
+  Assert-True ((Linked $legacyCodex) -join ',' -eq 'beta,mine,my-alias') 'legacy Codex keeps personal links and drops only our stale alias'
+  $report = Invoke-Targets @('alpha', 'beta', 'gamma') @(
+    [PSCustomObject]@{ id = 'codex-legacy'; action = 'release'; path = $legacyCodex; linkRoot = $agentsSkills; names = @() }
+  )
+  Assert-True ((Recipient $report 'codex-legacy').outcome -eq 'released') 'legacy Codex release outcome'
+  Assert-True ((Linked $legacyCodex) -join ',' -eq 'mine,my-alias') 'legacy Codex release keeps the user''s own links'
+  Assert-True ([IO.File]::ReadAllText((Join-Path $agentsSkills 'mine\SKILL.md')).Contains('Personal.')) 'personal skill untouched'
+  $env:AI_SKILLHUB_REAL_SHARED_SKILLS = ''
+
   # (g) Without the targets variable the 3.2.18 behaviour is unchanged.
   $env:AI_SKILLHUB_AGENT_SKILL_TARGETS = ''
   $legacyHome = Join-Path $testRoot 'legacy-home'

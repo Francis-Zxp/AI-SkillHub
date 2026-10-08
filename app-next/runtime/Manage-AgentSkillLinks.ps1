@@ -493,6 +493,31 @@ function Sync-LegacySharedCatalog {
   if (Test-Path -LiteralPath $backupRoot) { Write-Step "Shared catalog migration backup: $backupRoot" }
 }
 
+# v3.3 (I-2): is this reparse point one SkillHub created? Every link into the
+# active catalog is ours. A link into the shared Coze/Codex folder (codex-legacy
+# compatibility) is ours only when it is the alias SkillHub makes, <name> ->
+# <shared>\<name>, and that target is gone or is SkillHub's generated entry. A
+# user's own link to their personal skill there is never removed or replaced.
+function Test-SkillHubLinkTarget([string]$Name, [string]$Target, [string]$LinkSourceRoot) {
+  if ([string]::IsNullOrWhiteSpace($Target)) { return $false }
+  if (Test-UnderRoot $Target $Shared) { return $true }
+  if ([string]::IsNullOrWhiteSpace($LinkSourceRoot) -or
+      (Convert-ToFullPath $LinkSourceRoot).TrimEnd('\', '/') -ieq (Convert-ToFullPath $Shared).TrimEnd('\', '/') -or
+      -not (Test-UnderRoot $Target $LinkSourceRoot)) {
+    return $false
+  }
+  $expected = (Convert-ToFullPath (Join-Path $LinkSourceRoot $Name)).TrimEnd('\', '/')
+  if ((Convert-ToFullPath $Target).TrimEnd('\', '/') -ine $expected) { return $false }
+  if ($null -eq (Get-PathItemNoFollow $Target)) { return $true }
+  $manifest = Join-Path $Target 'SKILL.md'
+  if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { return $false }
+  try {
+    return ([IO.File]::ReadAllText($manifest, [Text.Encoding]::UTF8)).Contains('<!-- AI SkillHub shared-skill v1 sha256:')
+  } catch {
+    return $false
+  }
+}
+
 # v3.3 targets mode. Links exactly $Names (plus personal entries already
 # there). A same-name entry that is not our reparse point is recorded as a
 # conflict and left untouched: never moved, never deleted (I-2).
@@ -535,7 +560,7 @@ function Sync-TargetSkillDirectory(
     $item = Get-Item -LiteralPath $existing.FullName -Force
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { continue }
     $target = [string]$item.Target
-    if (((Test-UnderRoot $target $Shared) -or (Test-UnderRoot $target $LinkSourceRoot)) -and -not $wantedNames.ContainsKey($item.Name)) {
+    if ((Test-SkillHubLinkTarget $item.Name $target $LinkSourceRoot) -and -not $wantedNames.ContainsKey($item.Name)) {
       Remove-ReparsePointPath $item.FullName
       $Entries.Add([PSCustomObject]@{ name = $item.Name; state = 'removed'; detail = '' }) | Out-Null
     }
@@ -553,7 +578,7 @@ function Sync-TargetSkillDirectory(
           $linked.Add([PSCustomObject]@{ Name = $skill.Name; State = 'unchanged' }) | Out-Null
           continue
         }
-        if (-not ((Test-UnderRoot $currentTarget $Shared) -or (Test-UnderRoot $currentTarget $LinkSourceRoot))) {
+        if (-not (Test-SkillHubLinkTarget $skill.Name $currentTarget $LinkSourceRoot)) {
           $Entries.Add([PSCustomObject]@{ name = $skill.Name; state = 'conflict'; detail = 'external-link' }) | Out-Null
           continue
         }
@@ -625,7 +650,7 @@ function Remove-TargetSkillLinks([string]$RecipientSkillsRoot, [string]$LinkSour
     $item = Get-Item -LiteralPath $existing.FullName -Force
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { continue }
     $target = [string]$item.Target
-    if ((Test-UnderRoot $target $Shared) -or ($LinkSourceRoot -and (Test-UnderRoot $target $LinkSourceRoot))) {
+    if (Test-SkillHubLinkTarget $item.Name $target $LinkSourceRoot) {
       Remove-ReparsePointPath $item.FullName
       $Entries.Add([PSCustomObject]@{ name = $item.Name; state = 'removed'; detail = '' }) | Out-Null
     }
