@@ -25,7 +25,7 @@ test("sources installed without Git are refreshed from GitHub during a full sync
   assert.match(backend, /fn refresh_single_snapshot_source\(/);
   assert.match(
     backend,
-    /let snapshot_refresh = refresh_snapshot_github_sources\(&root, &connection\);\s*\n\s*write_snapshot_refresh_report\(&root, &snapshot_refresh\)\?;\s*\n\s*run_skillhub_script\(&root\)\?;/
+    /let snapshot_refresh = refresh_snapshot_github_sources\(&root, &connection\);\s*\n\s*write_snapshot_refresh_report\(&root, &snapshot_refresh\)\?;\s*\n(?:\s*write_disabled_child_skills\(&root, &connection\)\?;\s*\n)?\s*run_skillhub_script\(&root\)\?;/
   );
   assert.match(backend, /stage_github_source_import_via_codeload_with_control\(&plan, &staged_path, &control\)/);
 });

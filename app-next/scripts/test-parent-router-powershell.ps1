@@ -230,6 +230,32 @@ try {
     }
   }
 
+  # v3.3 bug #18: a child whose own switch is off leaves its parent's child
+  # list in the PowerShell builder too (the full update publishes its output).
+  # Rust writes lower-case, forward-slash absolute SKILL.md paths.
+  $disabledList = Join-Path $state 'disabled-child-skills.json'
+  $codexVariant = Join-Path $sources 'PaperSpine\dist\codex\skills\paper-spine\SKILL.md'
+  $disabledFiles = @(([IO.Path]::GetFullPath($codexVariant) -replace '\\', '/').ToLowerInvariant())
+  [IO.File]::WriteAllText($disabledList, ([ordered]@{ version = 1; skillFiles = $disabledFiles } | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
+  $previousDisabled = $env:AI_SKILLHUB_DISABLED_CHILD_SKILLS
+  $env:AI_SKILLHUB_CONFIG_PATH = $configPath
+  $env:AI_SKILLHUB_STATE = $state
+  $env:AI_SKILLHUB_REPORTS = $reports
+  $env:AI_SKILLHUB_DISABLED_CHILD_SKILLS = $disabledList
+  try {
+    & $powerShellHost -NoProfile -ExecutionPolicy Bypass -File $runtimeScript -NoPull
+    if ($LASTEXITCODE -ne 0) { throw "SkillHub.ps1 with a disabled child exited with $LASTEXITCODE" }
+  } finally {
+    $env:AI_SKILLHUB_CONFIG_PATH = $previousConfig
+    $env:AI_SKILLHUB_STATE = $previousState
+    $env:AI_SKILLHUB_REPORTS = $previousReports
+    $env:AI_SKILLHUB_DISABLED_CHILD_SKILLS = $previousDisabled
+  }
+  $spineAfter = [IO.File]::ReadAllText($spinePath, [Text.UTF8Encoding]::new($false))
+  if ($spineAfter.Contains('dist/codex/skills/paper-spine/SKILL.md')) { throw 'A disabled child is still listed by its parent router.' }
+  if (-not $spineAfter.Contains('src/skill/SKILL.md')) { throw 'The enabled sibling was dropped together with the disabled child.' }
+  Write-Host 'PASS: a disabled child leaves its parent router (bug #18).'
+
   Write-Host "PASS: PowerShell $powerShellVersion generates and activates recipient-compatible parent names."
 } finally {
   if (Test-Path -LiteralPath $fixture) {

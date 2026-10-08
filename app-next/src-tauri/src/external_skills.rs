@@ -15,9 +15,9 @@ const MAX_DOCUMENT_BYTES: u64 = 256 * 1024;
 pub(crate) struct ExternalAgentSkillInventory {
     generated_at: String,
     roots: Vec<ExternalSkillRoot>,
-    skills: Vec<ExternalAgentSkill>,
-    warnings: Vec<String>,
-    truncated: bool,
+    pub(crate) skills: Vec<ExternalAgentSkill>,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) truncated: bool,
 }
 
 #[derive(Serialize)]
@@ -33,18 +33,18 @@ struct ExternalSkillRoot {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ExternalAgentSkill {
-    id: String,
-    name: String,
-    description: String,
-    path: String,
-    canonical_path: String,
-    agent_id: String,
-    agent_name: String,
-    scope: String,
-    storage_kind: String,
-    managed: bool,
-    can_import: bool,
+pub(crate) struct ExternalAgentSkill {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) path: String,
+    pub(crate) canonical_path: String,
+    pub(crate) agent_id: String,
+    pub(crate) agent_name: String,
+    pub(crate) scope: String,
+    pub(crate) storage_kind: String,
+    pub(crate) managed: bool,
+    pub(crate) can_import: bool,
 }
 
 #[derive(Serialize)]
@@ -219,8 +219,12 @@ fn scan_roots(roots: Vec<ScanRoot>, managed_roots: &[PathBuf]) -> ExternalAgentS
                                 .unwrap_or_else(|| folder_name.into_owned());
                             let description =
                                 frontmatter_value(&content, "description").unwrap_or_default();
+                            // Coze/Codex shared mode turns delivered entries into real
+                            // wrapper directories under ~/.agents/skills; those are ours
+                            // too, not external Skills (bug #19).
                             let managed =
-                                managed_roots.iter().any(|base| canonical.starts_with(base));
+                                managed_roots.iter().any(|base| canonical.starts_with(base))
+                                    || crate::shared_skill_catalog::is_managed_entry(&canonical);
                             let linked =
                                 is_link(&path) || path.ancestors().take(depth + 1).any(is_link);
                             result.skills.push(ExternalAgentSkill {
@@ -322,7 +326,7 @@ fn scan_roots(roots: Vec<ScanRoot>, managed_roots: &[PathBuf]) -> ExternalAgentS
     result
 }
 
-fn display_path(path: &Path) -> String {
+pub(crate) fn display_path(path: &Path) -> String {
     let value = path.to_string_lossy();
     if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{unc}")
@@ -346,7 +350,7 @@ pub(crate) fn is_link(path: &Path) -> bool {
     }
 }
 
-fn read_document(directory: &Path) -> Result<String, String> {
+pub(crate) fn read_document(directory: &Path) -> Result<String, String> {
     let canonical_dir = directory
         .canonicalize()
         .map_err(|_| "Skill 文件夹已不可读。")?;
@@ -369,7 +373,7 @@ fn read_document(directory: &Path) -> Result<String, String> {
     String::from_utf8(bytes).map_err(|_| "SKILL.md 不是 UTF-8 文本，未进行自动转码。".into())
 }
 
-fn frontmatter_value(content: &str, key: &str) -> Option<String> {
+pub(crate) fn frontmatter_value(content: &str, key: &str) -> Option<String> {
     let mut lines = content.trim_start_matches('\u{feff}').lines();
     if lines.next()?.trim() != "---" {
         return None;
@@ -517,6 +521,34 @@ mod tests {
             .iter()
             .all(|skill| skill.managed && !skill.can_import));
         assert_ne!(report.skills[0].id, report.skills[1].id);
+    }
+
+    #[test]
+    fn coze_shared_wrapper_entries_are_managed_not_importable() {
+        // bug #19: generated ~/.agents/skills wrappers are SkillHub's own entries.
+        let fixture = Fixture::new();
+        let original = fixture.skill("active/paper-review");
+        let shared = fixture.0.join("home/.agents/skills");
+        crate::shared_skill_catalog::sync(
+            &shared,
+            &[("paper-review".into(), original.join("SKILL.md"))],
+        )
+        .unwrap();
+        fixture.skill("home/.agents/skills/personal");
+        let report = scan_roots(vec![root("codex", "Codex", "global", shared)], &[]);
+        assert_eq!(report.skills.len(), 2);
+        let wrapper = report
+            .skills
+            .iter()
+            .find(|skill| skill.path.ends_with("paper-review"))
+            .unwrap();
+        assert!(wrapper.managed && !wrapper.can_import);
+        let personal = report
+            .skills
+            .iter()
+            .find(|skill| skill.path.ends_with("personal"))
+            .unwrap();
+        assert!(!personal.managed && personal.can_import);
     }
 
     #[test]

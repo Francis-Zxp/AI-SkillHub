@@ -388,17 +388,22 @@ fn relative_references(text: &str) -> Vec<String> {
     references
 }
 
-fn percent_decode(value: &str) -> String {
+/// Decodes `%XX` escapes from bytes only. Slicing `value` at computed byte
+/// offsets panicked when `%` was followed by a multi-byte character (`50%折扣`).
+pub(crate) fn percent_decode(value: &str) -> String {
     if !value.contains('%') {
         return value.to_string();
+    }
+    fn hex(byte: u8) -> Option<u8> {
+        (byte as char).to_digit(16).map(|digit| digit as u8)
     }
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' && index + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(&value[index + 1..index + 3], 16) {
-                decoded.push(byte);
+            if let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2])) {
+                decoded.push(high * 16 + low);
                 index += 3;
                 continue;
             }
@@ -1255,6 +1260,19 @@ mod tests {
         assert!(!tree.has_root_skill());
         assert!(tree.contains_dir("skills/first/scripts"));
         assert!(HeadTree::from_paths(["SKILL.md", "docs/a.md"]).has_root_skill());
+    }
+
+    #[test]
+    fn percent_decode_never_panics_on_non_ascii_after_percent() {
+        // bug #21: `%` followed by a multi-byte character used to slice inside it.
+        assert_eq!(percent_decode("../docs/50%折扣.md"), "../docs/50%折扣.md");
+        assert_eq!(percent_decode("../a/%a折.md"), "../a/%a折.md");
+        assert_eq!(percent_decode("%E6%8A%98"), "折");
+        assert_eq!(percent_decode("a%20b%2"), "a b%2");
+        assert_eq!(percent_decode("%zz"), "%zz");
+        // Chinese prose with a boundary `../` reaching `%<CJK>` must not crash.
+        let references = relative_references("参见../docs/50%折扣说明.md里的内容");
+        assert!(references.iter().all(|reference| !reference.is_empty()));
     }
 
     #[test]

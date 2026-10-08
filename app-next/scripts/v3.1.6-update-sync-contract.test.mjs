@@ -81,8 +81,10 @@ test("core sync is single-flight and follows with a lightweight popularity refre
 test("full sync publishes once while local mutations still generate parents before publish", () => {
   const fullStart = backend.indexOf("fn run_skillhub_sync_blocking(");
   const fullEnd = backend.indexOf("fn ensure_agent_skill_delivery_blocking", fullStart);
-  const localStart = backend.indexOf("fn sync_local_sources_to_agents(");
-  const localEnd = backend.indexOf("fn run_skillhub_script(", localStart);
+  // v3.3: local mutations reach the AI tools through the queued full job,
+  // which still generates parents before it publishes.
+  const localStart = backend.indexOf("fn reconcile_agent_skill_delivery_run(");
+  const localEnd = backend.indexOf("fn finalize_agent_skill_delivery(", localStart);
   const fullSync = backend.slice(fullStart, fullEnd);
   const localSync = backend.slice(localStart, localEnd);
   assert.ok(fullStart >= 0 && fullEnd > fullStart);

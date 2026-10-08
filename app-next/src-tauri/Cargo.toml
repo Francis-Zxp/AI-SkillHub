@@ -21,6 +21,8 @@ uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# v3.3 skills-backend: native folder/.zip picker, called from Rust only (no dialog:* capability).
+tauri-plugin-dialog = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
 rusqlite = { version = "0.32", features = ["bundled"] }

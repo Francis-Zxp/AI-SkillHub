@@ -178,6 +178,27 @@ pub(crate) fn ensure_schema(connection: &Connection) -> Result<(), String> {
             )
             .map_err(|error| format!("Cannot extend source governance schema: {error}"))?;
     }
+    // v3.3 (I-5): when the user confirmed the review of a flagged pack. Lives
+    // next to the scan it confirms; `record_security_scan` clears it whenever
+    // a new scan reports a different result.
+    let has_review_column = connection
+        .prepare("PRAGMA table_info(source_security_state)")
+        .and_then(|mut statement| {
+            let names = statement
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(names.iter().any(|name| name == "review_confirmed_at"))
+        })
+        .map_err(|error| format!("Cannot inspect source security schema: {error}"))?;
+    if !has_review_column {
+        connection
+            .execute(
+                "ALTER TABLE source_security_state
+                 ADD COLUMN review_confirmed_at TEXT NOT NULL DEFAULT ''",
+                [],
+            )
+            .map_err(|error| format!("Cannot add security review column: {error}"))?;
+    }
     Ok(())
 }
 
@@ -795,11 +816,25 @@ pub(crate) fn refresh_status(
     )
 }
 
-pub(crate) fn prepare_sync_backups(root: &Path, connection: &Connection) -> Result<(), String> {
+/// A Git source whose current revision could not be read (unborn HEAD after an
+/// interrupted clone, empty repository …). The source is skipped and reported;
+/// it never aborts the whole sync (bug: unresolvable HEAD).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RevisionWarning {
+    pub folder: String,
+    pub message: String,
+}
+
+/// Returns one plain warning per Git source whose revision could not be read.
+pub(crate) fn prepare_sync_backups(
+    root: &Path,
+    connection: &Connection,
+) -> Result<Vec<RevisionWarning>, String> {
     ensure_schema(connection)?;
     write_pin_manifest(root, connection)?;
     let sources = read_sources(connection)?;
     let timestamp = super::unix_timestamp_string();
+    let mut warnings = Vec::new();
     for source in sources {
         let folder = source_folder_name(&source.local_path, &source.name);
         let Some(path) = resolve_source_path(root, &source.local_path, &folder) else {
@@ -818,7 +853,13 @@ pub(crate) fn prepare_sync_backups(root: &Path, connection: &Connection) -> Resu
             .map_err(|error| format!("Cannot read source pin before sync: {error}"))?
             .unwrap_or(0)
             != 0;
-        let revision = git_revision(&path)?;
+        let revision = match git_revision(&path) {
+            Ok(revision) => revision,
+            Err(error) => {
+                warnings.push(unreadable_revision_warning(&folder, &source.name, &error));
+                continue;
+            }
+        };
         if !pinned {
             create_version_backup(connection, &source, &folder, &path, &revision, &timestamp)?;
         }
@@ -830,11 +871,24 @@ pub(crate) fn prepare_sync_backups(root: &Path, connection: &Connection) -> Resu
             if pinned { "pinned" } else { "ready" },
         )?;
     }
-    Ok(())
+    Ok(warnings)
 }
 
-pub(crate) fn refresh_local_revisions(root: &Path, connection: &Connection) -> Result<(), String> {
+fn unreadable_revision_warning(folder: &str, source_name: &str, error: &str) -> RevisionWarning {
+    let detail = error.lines().next().unwrap_or_default().trim();
+    let detail = detail.chars().take(160).collect::<String>();
+    RevisionWarning {
+        folder: folder.to_string(),
+        message: format!("{source_name}：无法读取当前 Git 版本，已跳过这个技能包（{detail}）"),
+    }
+}
+
+pub(crate) fn refresh_local_revisions(
+    root: &Path,
+    connection: &Connection,
+) -> Result<Vec<RevisionWarning>, String> {
     ensure_schema(connection)?;
+    let mut warnings = Vec::new();
     for source in read_sources(connection)? {
         let folder = source_folder_name(&source.local_path, &source.name);
         let Some(path) = resolve_source_path(root, &source.local_path, &folder) else {
@@ -843,7 +897,13 @@ pub(crate) fn refresh_local_revisions(root: &Path, connection: &Connection) -> R
         if !is_git_repository(&path) {
             continue;
         }
-        let revision = git_revision(&path)?;
+        let revision = match git_revision(&path) {
+            Ok(revision) => revision,
+            Err(error) => {
+                warnings.push(unreadable_revision_warning(&folder, &source.name, &error));
+                continue;
+            }
+        };
         let pinned = connection
             .query_row(
                 "SELECT pinned FROM source_governance WHERE source_id = ?1",
@@ -862,7 +922,7 @@ pub(crate) fn refresh_local_revisions(root: &Path, connection: &Connection) -> R
             if pinned { "pinned" } else { "ready" },
         )?;
     }
-    Ok(())
+    Ok(warnings)
 }
 
 pub(crate) fn rollback_latest(
@@ -1071,6 +1131,21 @@ pub(crate) fn record_security_scan(
     } else {
         "unknown"
     };
+    let previous = connection
+        .query_row(
+            "SELECT scan_status, high_findings, medium_findings
+             FROM source_security_state WHERE source_id = ?1",
+            params![source_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read source security evidence: {error}"))?;
     connection
         .execute(
             "INSERT INTO source_security_state (
@@ -1095,6 +1170,20 @@ pub(crate) fn record_security_scan(
             ],
         )
         .map_err(|error| format!("Cannot persist source security evidence: {error}"))?;
+    // I-5: a confirmed review covers exactly the result the user saw. A scan
+    // with a different result needs a fresh confirmation before the pack can
+    // be enabled again.
+    let unchanged = previous.is_some_and(|(status, high, medium)| {
+        status == scan_status && high == high_findings as i64 && medium == medium_findings as i64
+    });
+    if !unchanged {
+        connection
+            .execute(
+                "UPDATE source_security_state SET review_confirmed_at = '' WHERE source_id = ?1",
+                params![source_id],
+            )
+            .map_err(|error| format!("Cannot reset security review: {error}"))?;
+    }
     Ok(())
 }
 
@@ -1688,6 +1777,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_new_scan_result_needs_a_fresh_security_review() {
+        // I-5: a confirmation covers only the result the user saw.
+        let connection = Connection::open_in_memory().expect("database should open");
+        let confirmed = |connection: &Connection| -> String {
+            connection
+                .query_row(
+                    "SELECT review_confirmed_at FROM source_security_state WHERE source_id = 'pack'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        record_security_scan(&connection, "pack", "review", 10, 0, 2).unwrap();
+        connection
+            .execute(
+                "UPDATE source_security_state SET review_confirmed_at = 'user:1' WHERE source_id = 'pack'",
+                [],
+            )
+            .unwrap();
+        // The same result again (an already-managed re-import) keeps it.
+        record_security_scan(&connection, "pack", "review", 12, 0, 2).unwrap();
+        assert_eq!(confirmed(&connection), "user:1");
+        // New findings clear it, so enabling asks again.
+        record_security_scan(&connection, "pack", "review", 12, 1, 2).unwrap();
+        assert_eq!(confirmed(&connection), "");
+    }
+
+    #[test]
     fn symref_listing_yields_the_remote_default_branch() {
         let listing =
             "ref: refs/heads/trunk\tHEAD\n0123456789abcdef0123456789abcdef01234567\tHEAD\n";
@@ -1782,6 +1899,32 @@ mod tests {
             source_type: "skill".to_string(),
             local_path: repo.display().to_string(),
         }
+    }
+
+    #[test]
+    fn unborn_head_source_is_skipped_with_a_warning_not_a_failed_sync() {
+        // bug: an interrupted clone leaves `.git` with an unborn HEAD; every
+        // full sync used to abort with a raw `git rev-parse` message.
+        let root = std::env::temp_dir().join(format!(
+            "skillhub-unborn-head-test-{}",
+            super::super::unix_timestamp_string()
+        ));
+        let repo = root
+            .join("app-next")
+            .join("data")
+            .join("github_sources")
+            .join("sample-source");
+        fs::create_dir_all(&repo).expect("repo folder");
+        run(&repo, &["init", "--quiet"]);
+        let connection = Connection::open_in_memory().expect("database should open");
+        insert_source(&connection, &root);
+        let warnings = prepare_sync_backups(&root, &connection).expect("sync must continue");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].folder, "sample-source");
+        assert!(warnings[0].message.contains("Sample Source"));
+        let warnings = refresh_local_revisions(&root, &connection).expect("refresh continues");
+        assert_eq!(warnings.len(), 1);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

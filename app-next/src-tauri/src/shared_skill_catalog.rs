@@ -16,11 +16,50 @@ enum Change {
     Remove(PathBuf),
 }
 
+/// A same-name entry that SkillHub did not create (or that the user edited).
+/// It is left untouched and reported instead of failing the whole folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SharedConflict {
+    pub name: String,
+    pub path: PathBuf,
+    /// "personal-folder" | "external-link" | "not-a-folder"
+    pub kind: &'static str,
+    /// The existing SKILL.md bytes hash equals the original's.
+    pub same_content: bool,
+}
+
+/// Per-entry outcome of one shared-folder sync. Entries that cannot be written
+/// are skipped with a plain reason; they never block the other entries.
+#[derive(Clone, Debug, Default)]
+pub struct SharedSyncReport {
+    pub written: Vec<String>,
+    pub unchanged: Vec<String>,
+    pub removed: Vec<String>,
+    pub conflicts: Vec<SharedConflict>,
+    /// (name, reason) for entries whose original manifest is unreadable.
+    pub skipped: Vec<(String, String)>,
+}
+
 /// Entries contain a safe directory name and the original absolute SKILL.md path.
-pub fn sync(root: &Path, entries: &[(String, PathBuf)]) -> Result<(), String> {
-    let changes = plan(root, entries)?;
+pub fn sync(root: &Path, entries: &[(String, PathBuf)]) -> Result<SharedSyncReport, String> {
+    let (changes, mut report) = plan(root, entries)?;
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
-    apply_changes(changes)
+    for change in &changes {
+        match change {
+            Change::Write(path, _) => report.written.push(entry_name(path)),
+            Change::Remove(path) => report.removed.push(entry_name(path)),
+        }
+    }
+    apply_changes(changes)?;
+    Ok(report)
+}
+
+fn entry_name(manifest: &Path) -> String {
+    manifest
+        .parent()
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_default()
 }
 
 fn apply_changes(changes: Vec<Change>) -> Result<(), String> {
@@ -61,7 +100,7 @@ fn apply_changes(changes: Vec<Change>) -> Result<(), String> {
 
 /// False also covers an absent compatibility catalog or changed upstream metadata.
 pub fn verify(root: &Path, entries: &[(String, PathBuf)]) -> bool {
-    root.is_dir() && plan(root, entries).is_ok_and(|changes| changes.is_empty())
+    root.is_dir() && plan(root, entries).is_ok_and(|(changes, _)| changes.is_empty())
 }
 
 // Shared host directories may also contain skills installed outside SkillHub.
@@ -76,17 +115,29 @@ pub fn sync_shared(
     root: &Path,
     entries: &[(String, PathBuf)],
     managed_source_root: &Path,
-) -> Result<(), String> {
-    let changes = plan_shared(root, entries, managed_source_root)?;
+) -> Result<SharedSyncReport, String> {
+    let (changes, mut report) = plan_shared(root, entries, managed_source_root)?;
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
     for change in changes {
         check_directory(root)?;
         match change {
-            SharedChange::Manifest(change) => apply_changes(vec![change])?,
+            SharedChange::Manifest(change) => {
+                match &change {
+                    Change::Write(path, _) => report.written.push(entry_name(path)),
+                    Change::Remove(path) => report.removed.push(entry_name(path)),
+                }
+                apply_changes(vec![change])?
+            }
             SharedChange::Migrate(path, content) => {
                 migrate_link(&path, &content, managed_source_root, |from, to| {
                     fs::rename(from, to)
                 })?;
+                report.written.push(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                );
             }
             SharedChange::RemoveLink(path) => {
                 if !managed_link(&path, managed_source_root) {
@@ -96,19 +147,39 @@ pub fn sync_shared(
                     ));
                 }
                 remove_directory_link(&path).map_err(|e| e.to_string())?;
+                report.removed.push(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                );
             }
         }
     }
-    Ok(())
+    Ok(report)
 }
 
+/// True when nothing is left to write. Same-name personal entries are conflicts,
+/// not pending changes, so they do not make the folder unhealthy.
 pub fn verify_shared(
     root: &Path,
     entries: &[(String, PathBuf)],
     managed_source_root: &Path,
 ) -> bool {
     root.is_dir()
-        && plan_shared(root, entries, managed_source_root).is_ok_and(|plan| plan.is_empty())
+        && plan_shared(root, entries, managed_source_root).is_ok_and(|(plan, _)| plan.is_empty())
+}
+
+fn same_manifest_bytes(entry: &Path, original_manifest: &Path) -> bool {
+    match (
+        read_manifest(&entry.join("SKILL.md")),
+        read_manifest(original_manifest),
+    ) {
+        (Ok(left), Ok(right)) => {
+            Sha256::digest(left.as_bytes()) == Sha256::digest(right.as_bytes())
+        }
+        _ => false,
+    }
 }
 
 /// `path` is an entry directory, not its SKILL.md. Links never count as entries.
@@ -133,11 +204,21 @@ fn shared_manifest(path: &Path) -> Result<Option<String>, String> {
     check_managed_manifest(&manifest)
 }
 
+fn valid_entry_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_)))
+        && components.next().is_none()
+        && !name.ends_with(['.', ' '])
+        && !name
+            .chars()
+            .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
+}
+
 fn plan_shared(
     root: &Path,
     entries: &[(String, PathBuf)],
     managed_source_root: &Path,
-) -> Result<Vec<SharedChange>, String> {
+) -> Result<(Vec<SharedChange>, SharedSyncReport), String> {
     if !root.is_absolute()
         || !managed_source_root.is_absolute()
         || paths_equal(root, managed_source_root)
@@ -147,20 +228,21 @@ fn plan_shared(
     check_directory(root)?;
     let mut names = BTreeSet::new();
     let mut changes = Vec::new();
+    let mut report = SharedSyncReport::default();
     for (name, source) in entries {
-        let mut components = Path::new(name).components();
-        if !matches!(components.next(), Some(Component::Normal(_)))
-            || components.next().is_some()
-            || name.ends_with(['.', ' '])
-            || name
-                .chars()
-                .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
-            || !names.insert(name.to_lowercase())
-        {
+        // A bad name is a policy error: fail closed before anything is written.
+        if !valid_entry_name(name) || !names.insert(name.to_lowercase()) {
             return Err("Invalid or duplicate shared Skill name".into());
         }
         let path = root.join(name);
-        let content = wrapper(name, source)?;
+        let content = match wrapper(name, source) {
+            Ok(content) => content,
+            Err(reason) => {
+                // One unreadable original must not block every other entry.
+                report.skipped.push((name.clone(), reason));
+                continue;
+            }
+        };
         match fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 changes.push(SharedChange::Manifest(Change::Write(
@@ -172,25 +254,40 @@ fn plan_shared(
                 changes.push(SharedChange::Migrate(path, content));
             }
             Ok(metadata) if metadata.is_dir() && !is_link(&path)? => {
-                let existing = shared_manifest(&path)?.ok_or_else(|| {
-                    format!(
-                        "Personal Skill with the same name preserved: {}",
-                        path.display()
-                    )
-                })?;
-                if existing != content {
-                    changes.push(SharedChange::Manifest(Change::Write(
-                        path.join("SKILL.md"),
-                        content,
-                    )));
+                // Only our intact sealed manifest may be replaced. A personal
+                // folder or an edited copy is reported and left untouched.
+                match shared_manifest(&path) {
+                    Ok(Some(existing)) => {
+                        if existing != content {
+                            changes.push(SharedChange::Manifest(Change::Write(
+                                path.join("SKILL.md"),
+                                content,
+                            )));
+                        } else {
+                            report.unchanged.push(name.clone());
+                        }
+                    }
+                    _ => report.conflicts.push(SharedConflict {
+                        name: name.clone(),
+                        same_content: same_manifest_bytes(&path, source),
+                        path,
+                        kind: "personal-folder",
+                    }),
                 }
             }
-            _ => {
-                return Err(format!(
-                    "Personal Skill or external link with the same name preserved: {}",
-                    path.display()
-                ))
-            }
+            Ok(metadata) => report.conflicts.push(SharedConflict {
+                name: name.clone(),
+                same_content: metadata.is_dir() && same_manifest_bytes(&path, source),
+                kind: if is_link(&path).unwrap_or(false) {
+                    "external-link"
+                } else if metadata.is_dir() {
+                    "personal-folder"
+                } else {
+                    "not-a-folder"
+                },
+                path,
+            }),
+            Err(error) => return Err(error.to_string()),
         }
     }
     if root.exists() {
@@ -204,7 +301,8 @@ fn plan_shared(
                 changes.push(SharedChange::RemoveLink(path));
             } else if entry.file_type().map_err(|e| e.to_string())?.is_dir()
                 && !is_link(&path)?
-                && shared_manifest(&path)?.is_some()
+                // An edited copy of our manifest is no longer ours: keep it.
+                && matches!(shared_manifest(&path), Ok(Some(_)))
             {
                 changes.push(SharedChange::Manifest(Change::Remove(
                     path.join("SKILL.md"),
@@ -212,7 +310,7 @@ fn plan_shared(
             }
         }
     }
-    Ok(changes)
+    Ok((changes, report))
 }
 
 fn paths_equal(left: &Path, right: &Path) -> bool {
@@ -319,32 +417,36 @@ fn migrate_link(
     })
 }
 
-fn plan(root: &Path, entries: &[(String, PathBuf)]) -> Result<Vec<Change>, String> {
+fn plan(
+    root: &Path,
+    entries: &[(String, PathBuf)],
+) -> Result<(Vec<Change>, SharedSyncReport), String> {
     if !root.is_absolute() {
         return Err("Shared Skills directory must be absolute".into());
     }
     check_directory(root)?;
     let mut names = BTreeSet::new();
     let mut changes = Vec::new();
+    let mut report = SharedSyncReport::default();
     for (name, source) in entries {
-        let mut components = Path::new(name).components();
-        if !matches!(components.next(), Some(Component::Normal(_)))
-            || components.next().is_some()
-            || name.ends_with(['.', ' '])
-            || name
-                .chars()
-                .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
-            || !names.insert(name.to_lowercase())
-        {
+        if !valid_entry_name(name) || !names.insert(name.to_lowercase()) {
             return Err("Invalid or duplicate shared Skill name".into());
         }
         let directory = root.join(name);
         check_directory(&directory)?;
         let target = directory.join("SKILL.md");
         let existing = check_managed_manifest(&target)?;
-        let content = wrapper(name, source)?;
+        let content = match wrapper(name, source) {
+            Ok(content) => content,
+            Err(reason) => {
+                report.skipped.push((name.clone(), reason));
+                continue;
+            }
+        };
         if existing.as_deref() != Some(&content) {
             changes.push(Change::Write(target, content));
+        } else {
+            report.unchanged.push(name.clone());
         }
     }
     if root.exists() {
@@ -363,7 +465,7 @@ fn plan(root: &Path, entries: &[(String, PathBuf)]) -> Result<Vec<Change>, Strin
             }
         }
     }
-    Ok(changes)
+    Ok((changes, report))
 }
 
 fn check_directory(path: &Path) -> Result<(), String> {
@@ -434,11 +536,20 @@ fn wrapper(fallback_name: &str, source: &Path) -> Result<String, String> {
     if !source.is_absolute() || source.file_name().is_none_or(|name| name != "SKILL.md") {
         return Err("Original Skill must be an absolute SKILL.md path".into());
     }
-    let original = read_manifest(source)?;
-    let name = field(&original, "name").unwrap_or_else(|| fallback_name.to_string());
+    let original = read_manifest(source)
+        .map_err(|error| format!("{fallback_name}: SKILL.md 无法读取（{error}）"))?;
+    let name = field(&original, "name")
+        .or_else(|| lenient_field(&original, "name"))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| fallback_name.to_string());
+    // Accept everything the PowerShell and Rust delivery validators accept
+    // (`[Beta] …`, Windows paths in quotes, indented keys, trailing comments).
+    // A strict YAML failure here used to block delivery to every AI tool.
     let description = field(&original, "description")
         .filter(|s| !s.trim().is_empty())
-        .ok_or("Original Skill has no usable description")?;
+        .or_else(|| lenient_field(&original, "description"))
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| format!("Skill {name}"));
     let source_path = source.to_string_lossy().replace('\\', "/");
     let parent = source
         .parent()
@@ -485,6 +596,53 @@ fn field(text: &str, key: &str) -> Option<String> {
         return (!raw.starts_with(['&', '*', '!', '[', '{'])).then(|| raw.to_string());
     }
     None
+}
+
+/// Forgiving frontmatter read used only when the strict parser fails: the
+/// first `key:` line (indentation allowed), quotes trimmed, plus indented
+/// continuation lines, with a trailing ` # comment` removed from plain values.
+fn lenient_field(text: &str, key: &str) -> Option<String> {
+    let mut lines = text.trim_start_matches('\u{feff}').lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    let frontmatter = lines
+        .take_while(|line| line.trim() != "---")
+        .take(256)
+        .collect::<Vec<_>>();
+    let prefix = format!("{key}:");
+    let (index, raw) = frontmatter.iter().enumerate().find_map(|(index, line)| {
+        line.trim_start()
+            .strip_prefix(&prefix)
+            .map(|raw| (index, raw.trim()))
+    })?;
+    let indent = frontmatter[index].len() - frontmatter[index].trim_start().len();
+    let continuation = frontmatter[index + 1..]
+        .iter()
+        .take_while(|line| line.trim().is_empty() || line.len() - line.trim_start().len() > indent)
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let mut value = if raw.is_empty() || raw.starts_with(['|', '>']) {
+        continuation.join(" ")
+    } else if let Some(quote) = raw.chars().next().filter(|c| *c == '"' || *c == '\'') {
+        let inner = &raw[1..];
+        match inner.find(quote) {
+            Some(end) => inner[..end].to_string(),
+            None => {
+                let mut parts = vec![inner.to_string()];
+                parts.extend(continuation.iter().map(|line| line.to_string()));
+                parts.join(" ").trim_end_matches(quote).to_string()
+            }
+        }
+    } else {
+        let plain = raw.split(" #").next().unwrap_or(raw).trim().to_string();
+        let mut parts = vec![plain];
+        parts.extend(continuation.iter().map(|line| line.to_string()));
+        parts.join(" ")
+    };
+    value = value.trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 #[cfg(test)]
@@ -657,12 +815,18 @@ mod tests {
             ("new-skill".into(), entries[0].1.clone()),
             entries[0].clone(),
         ];
-        assert!(sync_shared(&root, &pending, &source_root).is_err());
-        assert!(!root.join("new-skill").exists());
+        // v3.3: a same-name personal entry is a conflict for that entry only;
+        // the other entries are still delivered and nothing personal is touched.
+        let report = sync_shared(&root, &pending, &source_root).unwrap();
+        assert!(root.join("new-skill").join("SKILL.md").is_file());
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(report.conflicts[0].kind, "personal-folder");
+        assert!(!report.conflicts[0].same_content);
         assert_eq!(
             fs::read_to_string(target.join("SKILL.md")).unwrap(),
             "my own skill"
         );
+        assert!(verify_shared(&root, &pending, &source_root));
         fs::remove_file(target.join("SKILL.md")).unwrap();
         fs::remove_dir(&target).unwrap();
         // Even another directory inside the managed root is not the exact target.
@@ -670,7 +834,9 @@ mod tests {
         fs::create_dir_all(&other).unwrap();
         fs::write(other.join("SKILL.md"), "other original").unwrap();
         directory_link(&target, &other);
-        assert!(sync_shared(&root, &entries, &source_root).is_err());
+        let report = sync_shared(&root, &entries, &source_root).unwrap();
+        assert_eq!(report.conflicts.len(), 1);
+        assert_eq!(report.conflicts[0].kind, "external-link");
         assert!(is_link(&target).unwrap());
         assert_eq!(
             fs::read_to_string(other.join("SKILL.md")).unwrap(),
@@ -691,8 +857,12 @@ mod tests {
         let generated = fs::read_to_string(target.join("SKILL.md")).unwrap();
         assert!(generated.contains("new figures"));
         fs::write(target.join("SKILL.md"), format!("{generated}my edit")).unwrap();
-        assert!(sync_shared(&root, &[], &source_root).is_err());
-        assert!(sync_shared(&root, &entries, &source_root).is_err());
+        // An edited copy is no longer ours: never removed, reported as a conflict.
+        let report = sync_shared(&root, &[], &source_root).unwrap();
+        assert!(report.removed.is_empty());
+        let report = sync_shared(&root, &entries, &source_root).unwrap();
+        assert_eq!(report.conflicts.len(), 1);
+        assert!(report.written.is_empty());
         assert!(fs::read_to_string(target.join("SKILL.md"))
             .unwrap()
             .ends_with("my edit"));
@@ -705,6 +875,77 @@ mod tests {
             "keep"
         );
         assert!(verify_shared(&root, &[], &source_root));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn shared_catalog_lenient_description_and_conflict_skip() {
+        // bug #15: descriptions the strict parser rejected blocked every client.
+        let (base, root, source_root, _) = shared_fixture();
+        let cases = [
+            (
+                "beta",
+                "---\nname: beta\ndescription: [Beta] Draws charts\n---\n",
+                "[Beta] Draws charts",
+            ),
+            (
+                "windows",
+                "---\nname: windows\ndescription: \"Reads C:\\Users\\data\"\n---\n",
+                "Reads C:\\Users\\data",
+            ),
+            (
+                "multi",
+                "---\nname: multi\ndescription: \"first line\n  second line\"\n---\n",
+                "first line second line",
+            ),
+            (
+                "comment",
+                "---\nname: comment\ndescription: \"x\" # note\n---\n",
+                "x",
+            ),
+            (
+                "indented",
+                "---\n  name: indented\n  description: plain text\n---\n",
+                "plain text",
+            ),
+            ("empty", "---\nname: empty\n---\nBody\n", "Skill empty"),
+        ];
+        let mut entries = Vec::new();
+        for (name, body, _) in &cases {
+            let manifest = source_root.join(name).join("SKILL.md");
+            fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+            fs::write(&manifest, body).unwrap();
+            entries.push((name.to_string(), manifest));
+        }
+        // An unreadable original is skipped by name; the rest still deliver.
+        let broken = source_root.join("broken").join("SKILL.md");
+        fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        fs::write(&broken, [0xff, 0xfe, 0x00]).unwrap();
+        entries.push(("broken".into(), broken));
+        // A personal same-name folder is a conflict, not a failure.
+        let personal = root.join("personal-clash");
+        fs::create_dir_all(&personal).unwrap();
+        fs::write(personal.join("SKILL.md"), "---\nname: mine\n---\n").unwrap();
+        let clash_original = source_root.join("personal-clash").join("SKILL.md");
+        fs::create_dir_all(clash_original.parent().unwrap()).unwrap();
+        fs::write(&clash_original, "---\nname: mine\n---\n").unwrap();
+        entries.push(("personal-clash".into(), clash_original));
+
+        let report = sync_shared(&root, &entries, &source_root).unwrap();
+        assert_eq!(report.skipped.len(), 1);
+        assert_eq!(report.skipped[0].0, "broken");
+        assert_eq!(report.conflicts.len(), 1);
+        assert!(report.conflicts[0].same_content);
+        for (name, _, expected) in &cases {
+            let generated = fs::read_to_string(root.join(name).join("SKILL.md")).unwrap();
+            let description = field(&generated, "description").unwrap();
+            assert_eq!(&description, expected, "{name}");
+        }
+        assert_eq!(
+            fs::read_to_string(personal.join("SKILL.md")).unwrap(),
+            "---\nname: mine\n---\n"
+        );
+        assert!(!root.join("broken").exists());
         fs::remove_dir_all(base).unwrap();
     }
 

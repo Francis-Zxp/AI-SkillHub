@@ -3,7 +3,11 @@
   [string]$HomePath = '',
   [switch]$SimulateCodexPresent,
   [switch]$SimulateClaudePresent,
-  [switch]$SimulateOpenAIDesktopPresent
+  [switch]$SimulateOpenAIDesktopPresent,
+  [switch]$SimulateCursorPresent,
+  [switch]$SimulateGeminiPresent,
+  [switch]$SimulateWorkBuddyPresent,
+  [switch]$SimulateAntigravityPresent
 )
 
 $ErrorActionPreference = 'Stop'
@@ -289,6 +293,7 @@ function Get-ClaudeDesktopCodeExecutable([string]$RoamingRoot, [string]$LocalRoo
 }
 
 function Test-AntigravityPresent {
+  if ($SimulateAntigravityPresent) { return $true }
   if (Get-AgentCliExecutable 'antigravity' -Isolated:$IsolatedHome) { return $true }
   $localData = if ($IsolatedHome) { Join-Path $EffectiveHome 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
   return [bool](Get-AgentDesktopExecutable $localData @('Antigravity', 'Antigravity (User)') @('Antigravity.exe') @('Antigravity') -Isolated:$IsolatedHome)
@@ -297,7 +302,24 @@ function Test-AntigravityPresent {
 function Test-WorkBuddyPresent {
   $localData = if ($IsolatedHome) { Join-Path $EffectiveHome 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
   $script:WorkBuddyExecutable = Get-WorkBuddyExecutable $localData -Isolated:$IsolatedHome
+  if ($SimulateWorkBuddyPresent) { return $true }
   return -not [string]::IsNullOrWhiteSpace($script:WorkBuddyExecutable)
+}
+
+# v3.3 experimental plain-folder recipients. A pre-existing ~/.cursor or
+# ~/.gemini folder alone is never install evidence (I-12).
+function Test-CursorPresent {
+  if ($SimulateCursorPresent) { return $true }
+  if (Get-AgentCliExecutable 'cursor' -Isolated:$IsolatedHome) { return $true }
+  $localData = if ($IsolatedHome) { Join-Path $EffectiveHome 'AppData\Local' } else { [Environment]::GetFolderPath('LocalApplicationData') }
+  return [bool](Get-AgentDesktopExecutable $localData @('Cursor') @('Cursor.exe') @('cursor', 'Cursor') -Isolated:$IsolatedHome)
+}
+
+function Test-GeminiCliPresent {
+  if ($SimulateGeminiPresent) { return $true }
+  if (Get-AgentCliExecutable 'gemini' -Isolated:$IsolatedHome) { return $true }
+  $roaming = if ($IsolatedHome) { Join-Path $EffectiveHome 'AppData\Roaming' } else { [Environment]::GetFolderPath('ApplicationData') }
+  return (Test-Path -LiteralPath (Join-Path $roaming 'npm\gemini.cmd') -PathType Leaf)
 }
 
 $allSkillDirsWithManifest = @(Get-ChildItem -LiteralPath $Shared -Force -Directory |
@@ -334,6 +356,49 @@ if (-not [string]::IsNullOrWhiteSpace($allowlistPath)) {
 } else {
   $activeSkillDirs = @($allActiveSkillDirs)
 }
+$TargetsPath = [Environment]::GetEnvironmentVariable('AI_SKILLHUB_AGENT_SKILL_TARGETS')
+$DeliveryReportPath = [Environment]::GetEnvironmentVariable('AI_SKILLHUB_DELIVERY_REPORT')
+$TargetsMode = -not [string]::IsNullOrWhiteSpace($TargetsPath)
+$KnownTargetRecipients = @('claude', 'workbuddy', 'antigravity', 'codex', 'codex-legacy', 'cursor', 'gemini-cli')
+$TargetRecipients = @()
+$TargetSharedNames = @()
+if ($TargetsMode) {
+  if (-not (Test-Path -LiteralPath $TargetsPath -PathType Leaf)) {
+    throw "Agent Skill targets file does not exist: $TargetsPath"
+  }
+  $targetsDocument = [IO.File]::ReadAllText($TargetsPath, [Text.UTF8Encoding]::new($false)) | ConvertFrom-Json
+  if ([int]$targetsDocument.version -ne 1) {
+    throw 'Agent Skill targets file has an unsupported version. Existing AI tool links were preserved.'
+  }
+  $unionNames = @{}
+  foreach ($name in @($targetsDocument.union)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$name)) { $unionNames[[string]$name] = $true }
+  }
+  $activeSkillDirs = @($allActiveSkillDirs | Where-Object { $unionNames.ContainsKey($_.Name) })
+  if ($unionNames.Count -gt 0 -and $activeSkillDirs.Count -eq 0) {
+    throw "Agent Skill allowlist contains $($unionNames.Count) entries, but none match a valid active Skill. Existing AI tool links were preserved."
+  }
+  foreach ($recipient in @($targetsDocument.recipients)) {
+    $recipientId = [string]$recipient.id
+    $recipientAction = [string]$recipient.action
+    if ($KnownTargetRecipients -notcontains $recipientId) {
+      throw "Agent Skill targets name an unknown AI tool: $recipientId. Existing AI tool links were preserved."
+    }
+    if (@('deliver', 'release', 'skip') -notcontains $recipientAction) {
+      throw "Agent Skill targets use an unknown action: $recipientAction. Existing AI tool links were preserved."
+    }
+    foreach ($name in @($recipient.names)) {
+      if (-not [string]::IsNullOrWhiteSpace([string]$name) -and -not $unionNames.ContainsKey([string]$name)) {
+        throw "Agent Skill allowlist contains no entry $name requested for $recipientId. Existing AI tool links were preserved."
+      }
+    }
+    $TargetRecipients += $recipient
+  }
+  if ($null -ne $targetsDocument.shared) {
+    $TargetSharedNames = @(@($targetsDocument.shared.names) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
+  }
+}
+
 $activeSkillNames = @{}
 foreach ($skill in $activeSkillDirs) {
   $activeSkillNames[$skill.Name] = $true
@@ -426,6 +491,170 @@ function Sync-LegacySharedCatalog {
     }
   }
   if (Test-Path -LiteralPath $backupRoot) { Write-Step "Shared catalog migration backup: $backupRoot" }
+}
+
+# v3.3 (I-2): is this reparse point one SkillHub created? Every link into the
+# active catalog is ours. A link into the shared Coze/Codex folder (codex-legacy
+# compatibility) is ours only when it is the alias SkillHub makes, <name> ->
+# <shared>\<name>, and that target is gone or is SkillHub's generated entry. A
+# user's own link to their personal skill there is never removed or replaced.
+function Test-SkillHubLinkTarget([string]$Name, [string]$Target, [string]$LinkSourceRoot) {
+  if ([string]::IsNullOrWhiteSpace($Target)) { return $false }
+  if (Test-UnderRoot $Target $Shared) { return $true }
+  if ([string]::IsNullOrWhiteSpace($LinkSourceRoot) -or
+      (Convert-ToFullPath $LinkSourceRoot).TrimEnd('\', '/') -ieq (Convert-ToFullPath $Shared).TrimEnd('\', '/') -or
+      -not (Test-UnderRoot $Target $LinkSourceRoot)) {
+    return $false
+  }
+  $expected = (Convert-ToFullPath (Join-Path $LinkSourceRoot $Name)).TrimEnd('\', '/')
+  if ((Convert-ToFullPath $Target).TrimEnd('\', '/') -ine $expected) { return $false }
+  if ($null -eq (Get-PathItemNoFollow $Target)) { return $true }
+  $manifest = Join-Path $Target 'SKILL.md'
+  if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) { return $false }
+  try {
+    return ([IO.File]::ReadAllText($manifest, [Text.Encoding]::UTF8)).Contains('<!-- AI SkillHub shared-skill v1 sha256:')
+  } catch {
+    return $false
+  }
+}
+
+# v3.3 targets mode. Links exactly $Names (plus personal entries already
+# there). A same-name entry that is not our reparse point is recorded as a
+# conflict and left untouched: never moved, never deleted (I-2).
+function Sync-TargetSkillDirectory(
+  [string]$RecipientSkillsRoot,
+  [string]$LinkSourceRoot,
+  [string[]]$Names,
+  $Entries,
+  # Only 'Skip' exists: a same-name entry that is not ours is never replaced.
+  [ValidateSet('Skip')][string]$ConflictPolicy = 'Skip'
+) {
+  $rootItem = Get-PathItemNoFollow $RecipientSkillsRoot
+  if ($null -ne $rootItem) {
+    if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+      $rootTarget = [string]$rootItem.Target
+      if ([string]::IsNullOrWhiteSpace($rootTarget) -or
+          (Convert-ToFullPath $rootTarget) -ne (Convert-ToFullPath $Shared)) {
+        throw "Recipient Skills root is an external link and was preserved: $RecipientSkillsRoot"
+      }
+      Remove-ReparsePointPath $RecipientSkillsRoot
+    } elseif (-not $rootItem.PSIsContainer) {
+      throw "Recipient Skills path is not a directory and was preserved: $RecipientSkillsRoot"
+    }
+  }
+  New-Item -ItemType Directory -Force -Path $RecipientSkillsRoot | Out-Null
+  $wantedNames = @{}
+  foreach ($name in @($Names)) { if (-not [string]::IsNullOrWhiteSpace($name)) { $wantedNames[$name] = $true } }
+  $wanted = @($activeSkillDirs | Where-Object { $wantedNames.ContainsKey($_.Name) })
+
+  foreach ($oldName in @('AI_global_skills')) {
+    $oldItem = Get-PathItemNoFollow (Join-Path $RecipientSkillsRoot $oldName)
+    if ($null -ne $oldItem -and ($oldItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -and
+        (([string]$oldItem.Target -eq $Shared) -or (Test-UnderRoot ([string]$oldItem.Target) $Shared))) {
+      Remove-ReparsePointPath $oldItem.FullName
+    }
+  }
+
+  foreach ($existing in @(Get-ChildItem -LiteralPath $RecipientSkillsRoot -Force -Directory -ErrorAction SilentlyContinue)) {
+    if ($existing.Name -eq '.system') { continue }
+    $item = Get-Item -LiteralPath $existing.FullName -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { continue }
+    $target = [string]$item.Target
+    if ((Test-SkillHubLinkTarget $item.Name $target $LinkSourceRoot) -and -not $wantedNames.ContainsKey($item.Name)) {
+      Remove-ReparsePointPath $item.FullName
+      $Entries.Add([PSCustomObject]@{ name = $item.Name; state = 'removed'; detail = '' }) | Out-Null
+    }
+  }
+
+  $linked = New-Object System.Collections.Generic.List[object]
+  foreach ($skill in $wanted) {
+    $target = Join-Path $LinkSourceRoot $skill.Name
+    $dest = Join-Path $RecipientSkillsRoot $skill.Name
+    $item = Get-PathItemNoFollow $dest
+    if ($null -ne $item) {
+      if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        $currentTarget = [string]$item.Target
+        if ($currentTarget -eq $target) {
+          $linked.Add([PSCustomObject]@{ Name = $skill.Name; State = 'unchanged' }) | Out-Null
+          continue
+        }
+        if (-not (Test-SkillHubLinkTarget $skill.Name $currentTarget $LinkSourceRoot)) {
+          $Entries.Add([PSCustomObject]@{ name = $skill.Name; state = 'conflict'; detail = 'external-link' }) | Out-Null
+          continue
+        }
+        Remove-ReparsePointPath $dest
+      } else {
+        $kind = if ($item.PSIsContainer) { 'personal-folder' } else { 'not-a-folder' }
+        $Entries.Add([PSCustomObject]@{ name = $skill.Name; state = 'conflict'; detail = $kind }) | Out-Null
+        continue
+      }
+    }
+    New-Item -ItemType Junction -Path $dest -Target $target | Out-Null
+    $linked.Add([PSCustomObject]@{ Name = $skill.Name; State = 'linked' }) | Out-Null
+  }
+
+  # Post-write verification runs only for the names actually linked.
+  foreach ($result in $linked) {
+    $deliveredDirectory = Join-Path $RecipientSkillsRoot $result.Name
+    $problem = ''
+    $deliveredSkillMd = Join-Path $deliveredDirectory 'SKILL.md'
+    if (-not (Test-Path -LiteralPath $deliveredSkillMd -PathType Leaf)) {
+      $problem = '没有可读的 SKILL.md'
+    } else {
+      $body = [System.IO.File]::ReadAllText($deliveredSkillMd, [System.Text.Encoding]::UTF8)
+      if ($body.Contains('[ROUTER-HUB]')) {
+        $declaredCount = 0
+        foreach ($line in ($body -split "`r?`n")) {
+          if ($line -notmatch '^\s*-\s+\[CHILD-SKILL\]') { continue }
+          $match = [regex]::Match($line, '来源文件：`([^`]+)`')
+          if (-not $match.Success) { $problem = '父 Skill 子项声明格式无效'; break }
+          $declaredCount++
+          $declaredPath = [string]$match.Groups[1].Value
+          $slashPath = $declaredPath -replace '\\', '/'
+          if (-not [IO.Path]::IsPathRooted($declaredPath) -or $slashPath -match '(^|/)\.\.?(?:/|$)') { $problem = '父 Skill 子项路径不是安全绝对路径'; break }
+          $resolvedChild = Convert-ToFullPath $declaredPath
+          if (-not (Test-UnderRoot $resolvedChild $SourceRoot)) { $problem = '父 Skill 子项越过受管来源目录'; break }
+          if (-not (Test-Path -LiteralPath $resolvedChild -PathType Leaf)) { $problem = '父 Skill 子项文件不可读'; break }
+          try { [System.IO.File]::OpenRead($resolvedChild).Dispose() } catch { $problem = '父 Skill 子项文件不可读'; break }
+        }
+        if (-not $problem -and $declaredCount -lt 1) { $problem = '父 Skill 没有声明任何可调用子项' }
+      }
+    }
+    if ($problem) {
+      $Entries.Add([PSCustomObject]@{ name = $result.Name; state = 'invalid-manifest'; detail = $problem }) | Out-Null
+    } else {
+      $Entries.Add([PSCustomObject]@{ name = $result.Name; state = $result.State; detail = '' }) | Out-Null
+    }
+  }
+}
+
+# v3.3 release: remove only reparse points that point into SkillHub's own
+# folders. Never creates the folder and never touches anything else.
+function Remove-TargetSkillLinks([string]$RecipientSkillsRoot, [string]$LinkSourceRoot, $Entries) {
+  $rootItem = Get-PathItemNoFollow $RecipientSkillsRoot
+  if ($null -eq $rootItem) { return }
+  if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    $rootTarget = [string]$rootItem.Target
+    if (-not [string]::IsNullOrWhiteSpace($rootTarget) -and (Convert-ToFullPath $rootTarget) -eq (Convert-ToFullPath $Shared)) {
+      Remove-ReparsePointPath $RecipientSkillsRoot
+      $Entries.Add([PSCustomObject]@{ name = '(root)'; state = 'removed'; detail = '' }) | Out-Null
+      return
+    }
+    # A root that links elsewhere was never written by SkillHub (deliver
+    # refuses it), so there is nothing of ours to release. Leave it alone and
+    # do not report a failure for a tool the user did not take over.
+    return
+  }
+  if (-not $rootItem.PSIsContainer) { return }
+  foreach ($existing in @(Get-ChildItem -LiteralPath $RecipientSkillsRoot -Force -Directory -ErrorAction SilentlyContinue)) {
+    $item = Get-Item -LiteralPath $existing.FullName -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { continue }
+    $target = [string]$item.Target
+    if (Test-SkillHubLinkTarget $item.Name $target $LinkSourceRoot) {
+      Remove-ReparsePointPath $item.FullName
+      $Entries.Add([PSCustomObject]@{ name = $item.Name; state = 'removed'; detail = '' }) | Out-Null
+    }
+  }
 }
 
 function Sync-ManagedSkillDirectory([string]$RecipientSkillsRoot, [string]$LinkSourceRoot = $Shared, [switch]$PreserveConflicts) {
@@ -545,6 +774,126 @@ $codexCodePresent = Test-CodexCodePresent
 $openAIDesktopPresent = Test-OpenAIDesktopPresent
 $codexPresent = $codexCodePresent -or $openAIDesktopPresent
 $recipientFailures = [System.Collections.Generic.List[string]]::new()
+
+function Get-TargetRecipientPresence([string]$Id) {
+  switch ($Id) {
+    'claude' { return $claudePresent }
+    'workbuddy' { return $workbuddyPresent }
+    'antigravity' { return $antigravityPresent }
+    'codex' { return $codexPresent }
+    'codex-legacy' { return $codexPresent }
+    'cursor' { return (Test-CursorPresent) }
+    'gemini-cli' { return (Test-GeminiCliPresent) }
+  }
+  return $false
+}
+
+function Get-TargetRecipientExpectedPath([string]$Id) {
+  switch ($Id) {
+    'claude' { return $claudePath }
+    'workbuddy' { return (Join-Path (Get-WorkBuddyConfigRoot $EffectiveHome $WorkBuddyExecutable -Isolated:$IsolatedHome) 'skills') }
+    'antigravity' { return $antigravityPath }
+    'codex' { return (Join-Path $EffectiveHome '.agents\skills') }
+    'codex-legacy' { return (Join-Path $EffectiveHome '.codex\skills') }
+    'cursor' { return (Join-Path $EffectiveHome '.cursor\skills') }
+    'gemini-cli' { return (Join-Path $EffectiveHome '.gemini\skills') }
+  }
+  return ''
+}
+
+if ($TargetsMode) {
+  # Per-recipient results; one failing recipient never stops the others and
+  # never makes the script exit non-zero (rule 4). Only the global checks
+  # above fail closed.
+  $reportRecipients = New-Object System.Collections.Generic.List[object]
+  if ($RealSharedSkillsRoot) {
+    $activeSkillNames = @{}
+    foreach ($name in $TargetSharedNames) { $activeSkillNames[$name] = $true }
+    try {
+      Sync-LegacySharedCatalog
+    } catch {
+      Write-Warning ('Legacy shared catalog preserved: ' + $_.Exception.Message)
+    }
+  }
+  foreach ($recipient in $TargetRecipients) {
+    $id = [string]$recipient.id
+    $action = [string]$recipient.action
+    $path = [string]$recipient.path
+    $entries = New-Object System.Collections.Generic.List[object]
+    $outcome = 'skipped'
+    $errorText = ''
+    try {
+      if ($action -eq 'skip') {
+        $outcome = 'skipped'
+      } else {
+        $expected = Get-TargetRecipientExpectedPath $id
+        if ([string]::IsNullOrWhiteSpace($path) -or -not [IO.Path]::IsPathRooted($path) -or
+            [string]::IsNullOrWhiteSpace($expected) -or
+            (Convert-ToFullPath $path).TrimEnd('\', '/') -ne (Convert-ToFullPath $expected).TrimEnd('\', '/')) {
+          throw "Recipient path does not match the AI tool's skills folder and was not touched: $path"
+        }
+        $linkRoot = if (-not [string]::IsNullOrWhiteSpace([string]$recipient.linkRoot)) { [string]$recipient.linkRoot } else { $Shared }
+        $linkRootIsShared = $RealSharedSkillsRoot -and
+          ((Convert-ToFullPath $linkRoot).TrimEnd('\', '/') -eq $RealSharedSkillsRoot.TrimEnd('\', '/'))
+        if ($linkRoot -ne $Shared -and -not $linkRootIsShared) {
+          if ($action -eq 'deliver') {
+            throw "Recipient link root is not a SkillHub folder and was not used: $linkRoot"
+          }
+          # Releasing only ever removes links into SkillHub's own folders.
+          $linkRoot = $Shared
+        }
+        if ($action -eq 'release') {
+          Remove-TargetSkillLinks $path $linkRoot $entries
+          $outcome = 'released'
+        } elseif (-not (Get-TargetRecipientPresence $id)) {
+          # I-12: never create the folder of a tool without install evidence.
+          $outcome = 'skipped-not-installed'
+        } elseif ($recipient.shared -eq $true) {
+          # Shared Coze/Codex folder: Rust wrote the real entries; verify only.
+          foreach ($name in @($recipient.names)) {
+            $entryPath = Join-Path $path $name
+            if (Test-SharedSkillManifest $entryPath (Join-Path $Shared $name)) {
+              $entries.Add([PSCustomObject]@{ name = [string]$name; state = 'unchanged'; detail = '' }) | Out-Null
+            } elseif ($null -ne (Get-PathItemNoFollow $entryPath)) {
+              $entries.Add([PSCustomObject]@{ name = [string]$name; state = 'conflict'; detail = 'personal-folder' }) | Out-Null
+            } else {
+              $entries.Add([PSCustomObject]@{ name = [string]$name; state = 'invalid-manifest'; detail = 'missing' }) | Out-Null
+            }
+          }
+          $outcome = 'ok'
+        } else {
+          Sync-TargetSkillDirectory $path $linkRoot @($recipient.names) $entries -ConflictPolicy Skip
+          $outcome = 'ok'
+        }
+        if ($outcome -eq 'ok' -and @($entries | Where-Object { $_.state -in @('conflict', 'invalid-manifest') }).Count -gt 0) {
+          $outcome = 'partial'
+        }
+      }
+    } catch {
+      $outcome = 'failed'
+      $errorText = $_.Exception.Message
+    }
+    $reportRecipients.Add([PSCustomObject]@{
+      id = $id
+      path = $path
+      action = $action
+      outcome = $outcome
+      error = $errorText
+      entries = [object[]]$entries.ToArray()
+    }) | Out-Null
+  }
+  if (-not [string]::IsNullOrWhiteSpace($DeliveryReportPath)) {
+    Write-JsonUtf8 $DeliveryReportPath ([PSCustomObject]@{
+      version = 1
+      generatedAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+      recipients = [object[]]$reportRecipients.ToArray()
+    }) 6
+  }
+  if (-not $Quiet) {
+    $reportRecipients | Select-Object id, action, outcome, error | Format-Table -AutoSize
+  }
+  exit 0
+}
 
 if ($RealSharedSkillsRoot) {
   foreach ($skill in $activeSkillDirs) {

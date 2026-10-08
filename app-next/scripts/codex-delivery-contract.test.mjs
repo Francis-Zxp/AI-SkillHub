@@ -59,29 +59,34 @@ test("startup verifies delivery without repeating the full Agent diagnostics sca
   assert.match(rust, /fn delivery_fingerprint_is_authoritative/);
   assert.match(rust, /!stored\.is_empty\(\) && stored == expected/);
   assert.doesNotMatch(rust, /stored\.is_empty\(\) && agent_delivery_links_are_healthy/);
+  // v3.3: routers, dispatchers and the no-pull script run first; the link
+  // step, health check and fingerprint live in finalize + verify_link_step.
   const localDelivery = rust.slice(
-    rust.indexOf("fn sync_local_sources_to_agents"),
-    rust.indexOf("fn reconcile_agent_skill_delivery")
+    rust.indexOf("fn reconcile_agent_skill_delivery_run("),
+    rust.indexOf("fn finalize_agent_skill_delivery(")
   );
+  assert.ok(localDelivery.length > 0);
   assert.doesNotMatch(localDelivery, /run_diagnostics_export_script/);
   assert.doesNotMatch(localDelivery, /write_agent_delivery_fingerprint/);
   const reconcile = rust.slice(
-    rust.indexOf("fn reconcile_agent_skill_delivery"),
-    rust.indexOf("fn run_skillhub_script", rust.indexOf("fn reconcile_agent_skill_delivery"))
+    rust.indexOf("fn finalize_agent_skill_delivery_run("),
+    rust.indexOf("fn finish_external_delivery(")
   );
   const scanIndex = reconcile.indexOf("scan_legacy_snapshot_under_write_guard");
   const freshDatabaseIndex = reconcile.indexOf("open_index_database", scanIndex);
   const recipientIndex = reconcile.indexOf("run_agent_link_script", freshDatabaseIndex);
-  const healthIndex = reconcile.indexOf("agent_delivery_links_are_healthy", recipientIndex);
-  const markerIndex = reconcile.indexOf("write_agent_delivery_fingerprint", healthIndex);
+  const verifyIndex = reconcile.indexOf("verify_link_step", recipientIndex);
   assert.ok(scanIndex >= 0 && scanIndex < freshDatabaseIndex);
-  assert.ok(freshDatabaseIndex < recipientIndex && recipientIndex < healthIndex);
-  assert.ok(healthIndex < markerIndex);
-  const promotion = rust.slice(
-    rust.indexOf("fn promote_staged_source_import"),
-    rust.indexOf("fn write_source_import_promotion_report")
-  );
-  assert.match(promotion, /reconcile_agent_skill_delivery/);
+  assert.ok(freshDatabaseIndex < recipientIndex && recipientIndex < verifyIndex);
+  const verify = rust.slice(rust.indexOf("fn verify_link_step("), rust.indexOf("fn shared_skill_catalog_root("));
+  const healthIndex = verify.indexOf("agent_delivery_links_are_healthy");
+  const markerIndex = verify.indexOf("write_agent_delivery_fingerprint", healthIndex);
+  assert.ok(healthIndex >= 0 && healthIndex < markerIndex);
+  // v3.3 (I-4): an import only rebuilds the index inline; delivery is queued.
+  const promotionStart = rust.indexOf("async fn promote_staged_source_import(");
+  const promotion = rust.slice(promotionStart, rust.indexOf("#[tauri::command]", promotionStart));
+  assert.match(promotion, /delivery_queue::request\(delivery_queue::Depth::Full, "install", false\)/);
+  assert.doesNotMatch(promotion, /reconcile_agent_skill_delivery\(/);
   assert.match(i18n, /选择来源查看调用方式/);
   assert.doesNotMatch(i18n, /ChatGPT 输入 @/);
   assert.match(app, /return \/\^\[\\\/@\$\]\//);

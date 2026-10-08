@@ -24,9 +24,10 @@ test("public snapshot scans share the fail-fast background write guard", () => {
 test("standalone tag saves cannot interleave with snapshot replacement", () => {
   const skillTags = section("fn set_skill_tags(", "fn set_source_tags(");
   const sourceTags = section("fn set_source_tags(", "fn delete_managed_source(");
-  assert.match(skillTags, /acquire_background_write_guard\("Skill 标签保存"\)/);
+  // v3.3: user saves wait (bounded) for a running delivery job's guard.
+  assert.match(skillTags, /acquire_user_write_guard\("Skill 标签保存"\)/);
   assert.match(skillTags, /load_indexed_snapshot_under_write_guard\(\)/);
-  assert.match(sourceTags, /acquire_background_write_guard\("来源标签保存"\)/);
+  assert.match(sourceTags, /acquire_user_write_guard\("来源标签保存"\)/);
   assert.match(sourceTags, /load_indexed_snapshot_under_write_guard\(\)/);
 });
 
