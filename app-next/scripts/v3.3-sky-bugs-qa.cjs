@@ -111,7 +111,9 @@ async function pressLabel(page, index, hold) {
       const { context, page, errors } = await open(browser, { storage: { "skillhub-sky-weather": "storm", "skillhub-sky-low-power": "0" } });
       await page.evaluate(() => { localStorage.setItem("skillhub-sky-weather", "storm"); });
       await page.locator(".sky-world-toggle").click();
-      await page.locator(".sky-weather-options button").nth(4).click();
+      // Weather chips are toggles: press storm only if it is not on already.
+      const storm = page.locator('.sky-weather-options [data-weather="storm"]');
+      if ((await storm.getAttribute("aria-pressed")) !== "true") await storm.click();
       await page.keyboard.press("Escape");
       await page.waitForTimeout(1500);
       const normal = await page.evaluate(() => document.querySelector(".sky-scene-host").skyWorldStats());

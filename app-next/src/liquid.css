@@ -474,3 +474,17 @@ main.shell.v33 .sky-reroll {
   box-shadow: inset 0 1px 0 var(--lg-rim-lo), 0 0 0 .5px var(--lg-hairline);
 }
 main.shell.v33 .sky-reroll:hover:not(:disabled) { background: var(--lg-fill-hover); }
+
+/* ---------- arrivals: drawers slide in on a soft spring, dialogs pop ---------- */
+main.shell.v33 .drawer { animation: lg-drawer-in 460ms var(--lg-out); }
+@keyframes lg-drawer-in {
+  from { opacity: 0; transform: translateX(32px) scale(.985); }
+  60% { opacity: 1; }
+  to { opacity: 1; transform: none; }
+}
+main.shell.v33 :is(.dialog, .import-sheet) { transform-origin: 50% 40%; animation: lg-pop 320ms var(--lg-spring); }
+main.shell.v33 .drawer-backdrop { animation: backdrop-in 240ms var(--lg-out); }
+
+/* Rows answer the pointer with a soft wash instead of a hard swap. */
+main.shell.v33 .lib-row { transition: background 200ms var(--lg-out), box-shadow 240ms var(--lg-out); }
+main.shell.v33 .lib-row:hover:not(.selected) { background: color-mix(in srgb, var(--brand) 5%, var(--lg-fill-inner)); }
