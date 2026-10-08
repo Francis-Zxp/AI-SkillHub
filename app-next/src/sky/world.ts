@@ -7,7 +7,7 @@
 // WebGL and must release every GPU resource, listener and frame.
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import type { SkyWeatherKind, SkyWeatherSetting } from "../skyScene";
+import type { SkyWeatherMix, SkyWeatherSetting } from "../skyScene";
 import { loadSkyLibrary, releaseSharedGpuListeners } from "./assets";
 import type { ModelTemplate, SkyLibrary } from "./assets";
 import { assignThemes, planIsland, themeTone } from "./biomes";
@@ -53,7 +53,7 @@ export type SkyWorldInfo = {
   seed: number;
   climates: Record<string, ClimateId>;
   setting: SkyWeatherSetting;
-  weather: SkyWeatherKind;
+  weather: SkyWeatherMix;
 };
 
 export type SkyWorldOptions = {

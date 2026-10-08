@@ -7,7 +7,8 @@
 // At most two draw calls: the particles and the deck. The frame update only
 // eases numbers and writes uniforms; colours are parsed once per palette.
 import * as THREE from "three";
-import type { SkyWeatherKind } from "../skyScene";
+import type { SkyWeatherKind, SkyWeatherMix } from "../skyScene";
+import { SKY_PRECIPITATION, weatherKinds } from "../skyScene";
 import type { SkyPalette } from "./materials";
 import { SHARED_UNIFORMS, cloudMaterial, phaseFilter } from "./materials";
 import { SKY_DIRECTIONS } from "./palettes";
@@ -53,6 +54,22 @@ const LOOKS: Record<SkyWeatherKind, Look> = {
   aurora: { ...CLEAR, aurora: 1, wind: 0.9 }
 };
 
+/** Light, fog and range scale together; everything else takes the strongest weather. */
+const MULTIPLIED = new Set<keyof Look>(["sun", "hemi", "fogNear", "fogFar"]);
+
+/** One look for a mix of weathers, e.g. rain under a rainbow. */
+function lookOf(kinds: readonly SkyWeatherKind[]): Look {
+  if (kinds.length === 1) return LOOKS[kinds[0]] ?? CLEAR;
+  const result: Look = { ...CLEAR };
+  for (const kind of kinds) {
+    const look = LOOKS[kind] ?? CLEAR;
+    for (const key of LOOK_KEYS) result[key] = MULTIPLIED.has(key) ? result[key] * look[key] : Math.max(result[key], look[key]);
+  }
+  // A rainbow needs sunlight: a heavy sky fades it.
+  result.rainbow *= 1 - Math.min(0.7, result.dim);
+  return result;
+}
+
 const PARTICLES: Record<SkyWeatherKind, Particles> = {
   clear: "none", cloudy: "none", rain: "rain", storm: "rain", snow: "snow", fog: "none", rainbow: "none", petals: "petals", aurora: "none"
 };
@@ -86,8 +103,9 @@ export type WeatherOptions = {
 };
 
 export type Weather = {
-  kind: () => SkyWeatherKind;
-  setKind: (kind: SkyWeatherKind, instant?: boolean) => void;
+  /** The weather mix drawn now, e.g. "rain+rainbow". */
+  kind: () => SkyWeatherMix;
+  setKind: (kind: SkyWeatherMix, instant?: boolean) => void;
   setPalette: (palette: SkyPalette) => void;
   /** The fog range the camera framing wants before weather. */
   setFogRange: (near: number, far: number) => void;
@@ -268,13 +286,16 @@ function deckGeometry(slots: Array<{ center: THREE.Vector3; size: [number, numbe
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
-export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: SkyPalette, kind: SkyWeatherKind, options: WeatherOptions): Weather {
+export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: SkyPalette, kind: SkyWeatherMix, options: WeatherOptions): Weather {
   const { targets } = options;
   let currentPalette = palette;
-  let currentKind: SkyWeatherKind = kind;
+  let currentKind: SkyWeatherMix = kind;
+  let kinds = weatherKinds(kind);
+  // The mix's one precipitation (if any) drives the particles; a storm adds lightning.
+  let precipitation: SkyWeatherKind = kinds.find(value => SKY_PRECIPITATION.includes(value)) ?? "clear";
   let lowPower = options.lowPower;
-  const look: Look = { ...LOOKS[kind] };
-  let goal: Look = LOOKS[kind];
+  let goal: Look = lookOf(kinds);
+  const look: Look = { ...goal };
   const fogRange = { near: palette.fogNear, far: palette.fogFar };
 
   // Particles: one geometry sized for the heaviest weather, one material.
@@ -363,13 +384,13 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
   // Whether the current look has been written to the scene at all.
   let applied = false;
 
-  const particleKind = () => PARTICLES[currentKind];
+  const particleKind = () => PARTICLES[precipitation];
   const configureParticles = () => {
     const type = particleKind();
     const uniforms = particleMaterial.uniforms;
     particles.visible = type !== "none";
     if (type === "none") return;
-    const full = currentKind === "storm" ? STORM_RAIN : COUNTS[type];
+    const full = precipitation === "storm" ? STORM_RAIN : COUNTS[type];
     particleGeo.setDrawRange(0, Math.max(1, Math.round(full * (lowPower ? 0.4 : 1))));
     uniforms.uKind.value = type === "rain" ? 0 : type === "snow" ? 1 : 2;
     const night = currentPalette.night;
@@ -387,8 +408,8 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
     // Petals near the camera stay petal sized instead of filling the view.
     uniforms.uMaxSize.value = type === "petals" ? 44 : 96;
     if (type === "rain") {
-      uniforms.uSize.value = home * (currentKind === "storm" ? 0.016 : 0.011);
-      uniforms.uSpeed.value = home * (currentKind === "storm" ? 1.25 : 0.95);
+      uniforms.uSize.value = home * (precipitation === "storm" ? 0.016 : 0.011);
+      uniforms.uSpeed.value = home * (precipitation === "storm" ? 1.25 : 0.95);
       uniforms.uDrift.value = home * 0.05;
       uniforms.uWobble.value = 0;
       uniforms.uFlutter.value = 0;
@@ -445,15 +466,18 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
     SHARED_UNIFORMS.uRain.value = look.rain;
   };
 
-  const setKind = (next: SkyWeatherKind, instant = false) => {
-    const previous = PARTICLES[currentKind];
-    currentKind = LOOKS[next] ? next : "clear";
-    goal = LOOKS[currentKind];
+  const setKind = (next: SkyWeatherMix, instant = false) => {
+    const previous = PARTICLES[precipitation];
+    kinds = weatherKinds(next);
+    if (!kinds.length) kinds = ["clear"];
+    currentKind = kinds.join("+") as SkyWeatherMix;
+    precipitation = kinds.find(value => SKY_PRECIPITATION.includes(value)) ?? "clear";
+    goal = lookOf(kinds);
     configureParticles();
     frameParticles();
     if (instant) Object.assign(look, goal);
     // A new particle kind fades in from nothing rather than swapping shape.
-    else if (previous !== PARTICLES[currentKind]) look.particles = 0;
+    else if (previous !== PARTICLES[precipitation]) look.particles = 0;
     // The first flash of a new storm comes a few seconds in, never at once.
     nextFlash = sceneTime + 2 + flashRandom() * 4;
     apply(0);
@@ -502,7 +526,7 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
         look[key] = Math.abs(value - goal[key]) > 1e-3 ? value : goal[key];
       }
       let flash = 0;
-      if (currentKind === "storm" && animating && !options.reducedMotion()) {
+      if (precipitation === "storm" && animating && !options.reducedMotion()) {
         if (time >= nextFlash) {
           flashAt = time;
           nextFlash = time + 6 + flashRandom() * 8;

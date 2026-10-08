@@ -213,17 +213,32 @@ async function pressLabel(page, index, hold) {
       await page.locator(".sky-world-toggle").focus();
       await page.keyboard.press("Enter");
       await page.waitForTimeout(200);
-      const opened = await page.evaluate(() => ({ role: document.activeElement?.getAttribute("role"), checked: document.activeElement?.getAttribute("aria-checked"), stops: document.querySelectorAll('.sky-weather-options [tabindex="0"]').length }));
+      const opened = await page.evaluate(() => ({ pressed: document.activeElement?.getAttribute("aria-pressed"), stops: document.querySelectorAll('.sky-weather-options [tabindex="0"]').length }));
+      // Arrow keys move between the chips; Space presses one (weathers are toggles now).
       await page.keyboard.press("ArrowRight");
+      await page.waitForTimeout(150);
+      await page.keyboard.press("Space");
       await page.waitForTimeout(300);
-      const moved = await page.evaluate(() => ({ focused: document.activeElement?.getAttribute("data-weather"), checked: document.querySelector('.sky-weather-options [aria-checked="true"]')?.getAttribute("data-weather"), stored: localStorage.getItem("skillhub-sky-weather") }));
+      const pressedNow = () => page.evaluate(() => ({ focused: document.activeElement?.getAttribute("data-weather"), pressed: [...document.querySelectorAll('.sky-weather-options [aria-pressed="true"]')].map(button => button.getAttribute("data-weather")).join("+"), stored: localStorage.getItem("skillhub-sky-weather"), drawn: document.querySelector(".sky-scene-host")?.dataset.weather }));
+      const moved = await pressedNow();
+      // Weathers combine: rain under a rainbow; a new precipitation replaces the old one.
+      await page.locator('.sky-weather-options [data-weather="clear"]').click();
+      await page.locator('.sky-weather-options [data-weather="rain"]').click();
+      await page.locator('.sky-weather-options [data-weather="rainbow"]').click();
+      await page.waitForTimeout(1200);
+      const mixed = await pressedNow();
+      await page.locator('.sky-weather-options [data-weather="snow"]').click();
+      await page.waitForTimeout(300);
+      const replaced = await pressedNow();
       await page.keyboard.press("End");
       const end = await page.evaluate(() => document.activeElement?.getAttribute("data-weather"));
       await page.keyboard.press("Escape");
       await page.waitForTimeout(200);
       const closed = await page.evaluate(() => ({ panel: Boolean(document.querySelector(".sky-world-panel")), focusOnToggle: document.activeElement?.classList.contains("sky-world-toggle") }));
-      check("world panel: focus lands on the checked weather, one tab stop", opened.role === "radio" && opened.checked === "true" && opened.stops === 1, opened);
-      check("world panel: arrow keys move and choose; End jumps to the last available", moved.focused === moved.checked && moved.checked === moved.stored && moved.checked !== "clear" && end === "petals", { ...moved, end });
+      check("world panel: focus lands on the pressed weather, one tab stop", opened.pressed === "true" && opened.stops === 1, opened);
+      check("world panel: arrow keys move, Space presses; End jumps to the last available", moved.focused === "cloudy" && moved.pressed === "cloudy" && moved.stored === "cloudy" && end === "petals", { ...moved, end });
+      check("weathers combine: rain + rainbow is stored and drawn", mixed.pressed === "rain+rainbow" && mixed.stored === "rain+rainbow" && mixed.drawn === "rain+rainbow", mixed);
+      check("a new precipitation replaces the old one: snow takes rain's place", replaced.stored === "snow+rainbow" && replaced.pressed === "snow+rainbow", replaced);
       check("world panel: Escape closes it and focus returns to its button", !closed.panel && closed.focusOnToggle, closed);
       allErrors.push(...errors);
       await context.close();

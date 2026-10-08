@@ -3,7 +3,8 @@
 // i18n.ts so the scene work never collides with the shared dictionary. The
 // language is read the way i18n.ts stores it: the saved choice, then the
 // document language it sets, then the browser's.
-import type { SkyWeatherKind, SkyWeatherSetting } from "../skyScene";
+import type { SkyWeatherKind, SkyWeatherMix } from "../skyScene";
+import { weatherKinds } from "../skyScene";
 import type { ClimateId } from "./climates";
 
 export type SkyLang = "zh" | "en" | "ko";
@@ -31,6 +32,8 @@ type Words = {
   auto: string;
   autoNow: (name: string) => string;
   weathers: Record<SkyWeatherKind, string>;
+  /** How weathers combine, under the weather heading. */
+  weatherMixHint: string;
   auroraNight: string;
   reroll: string;
   rerollHint: string;
@@ -65,6 +68,7 @@ const WORDS: Record<SkyLang, Words> = {
     auto: "自动",
     autoNow: name => `自动 · ${name}`,
     weathers: { clear: "晴天", cloudy: "多云", rain: "小雨", storm: "雷雨", snow: "下雪", fog: "起雾", rainbow: "彩虹", petals: "落花", aurora: "极光" },
+    weatherMixHint: "可以叠加多种天气；小雨、雷雨、下雪、落花同时只选一种。",
     auroraNight: "极光只在夜晚出现",
     reroll: "🎲 换一个世界",
     rerollHint: "随机换一套岛屿气候和自动天气",
@@ -89,6 +93,7 @@ const WORDS: Record<SkyLang, Words> = {
     auto: "Auto",
     autoNow: name => `Auto · ${name}`,
     weathers: { clear: "Clear", cloudy: "Cloudy", rain: "Light rain", storm: "Thunderstorm", snow: "Snow", fog: "Mist", rainbow: "Rainbow", petals: "Falling petals", aurora: "Aurora" },
+    weatherMixHint: "Pick several to combine; rain, storm, snow and petals one at a time.",
     auroraNight: "Aurora appears only at night",
     reroll: "🎲 New world",
     rerollHint: "Re-roll the island climates and the automatic weather",
@@ -113,6 +118,7 @@ const WORDS: Record<SkyLang, Words> = {
     auto: "자동",
     autoNow: name => `자동 · ${name}`,
     weathers: { clear: "맑음", cloudy: "흐림", rain: "가랑비", storm: "뇌우", snow: "눈", fog: "옅은 안개", rainbow: "무지개", petals: "꽃잎", aurora: "오로라" },
+    weatherMixHint: "여러 날씨를 함께 고를 수 있어요. 비·뇌우·눈·꽃잎은 한 번에 하나만.",
     auroraNight: "오로라는 밤에만 나타납니다",
     reroll: "🎲 새 세계",
     rerollHint: "섬 기후와 자동 날씨를 다시 무작위로 정합니다",
@@ -137,7 +143,7 @@ export function skyWords(lang: SkyLang = skyLang()): Words {
 }
 
 /** Glyph per weather for the compact control (text presentation). */
-export const WEATHER_GLYPHS: Record<SkyWeatherSetting, string> = {
+export const WEATHER_GLYPHS: Record<"auto" | SkyWeatherKind, string> = {
   auto: "◌",
   clear: "☀︎",
   cloudy: "☁︎",
@@ -149,3 +155,15 @@ export const WEATHER_GLYPHS: Record<SkyWeatherSetting, string> = {
   petals: "✿",
   aurora: "✧"
 };
+
+/** The glyph for a mix: its most distinctive weather (the last in canonical order). */
+export function weatherGlyph(mix: SkyWeatherMix | "auto"): string {
+  if (mix === "auto") return WEATHER_GLYPHS.auto;
+  const kinds = weatherKinds(mix);
+  return WEATHER_GLYPHS[kinds[kinds.length - 1] ?? "clear"];
+}
+
+/** A mix by name, e.g. "小雨 + 彩虹". */
+export function weatherMixName(words: { weathers: Record<SkyWeatherKind, string> }, mix: SkyWeatherMix): string {
+  return weatherKinds(mix).map(kind => words.weathers[kind]).join(" + ");
+}

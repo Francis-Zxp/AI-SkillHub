@@ -28,13 +28,13 @@ const climates = load("sky/climates.ts", { "./noise": noise });
 const terrain = load("sky/terrain.ts", { three: THREE, "./noise": noise });
 const biomes = load("sky/biomes.ts", { "./terrain": terrain, "./noise": noise });
 const layout = load("sky/layout.ts", { "./noise": noise });
-const weatherPlan = load("sky/weatherPlan.ts", { "./noise": noise });
 const scene = load("skyScene.ts");
+const weatherPlan = load("sky/weatherPlan.ts", { "./noise": noise, "../skyScene": scene });
 // Island counts use the shared counting rule (skillCounts.ts, from the v3.3
 // Skills track) once both lines are merged; without it the model stands alone.
 const hasSharedCounts = fs.existsSync(path.join(__dirname, "../src/skillCounts.ts"));
 const model = load("skyIslandModel.ts", hasSharedCounts ? { "./skillCounts": load("skillCounts.ts") } : {});
-const i18n = load("sky/skyI18n.ts");
+const i18n = load("sky/skyI18n.ts", { "../skyScene": scene });
 
 const { CLIMATES, CLIMATE_IDS, assignClimates, layoutNeighbours, climateCounts } = climates;
 const view = { pitch: 22, heightSpread: 4.5, aspect: 2.6 };
@@ -255,6 +255,32 @@ test("auto weather follows the climates and the hour", () => {
   assert.equal(weatherPlan.resolveWeather("rain", 1, new Date(), "noon"), "rain");
 });
 
+test("weathers combine: one precipitation at a time, 自动 and 晴天 stand alone", () => {
+  const { toggleWeather, weatherKinds, weatherMix } = scene;
+  assert.deepEqual([...weatherKinds("rainbow+rain+bogus")], ["rain", "rainbow"]);
+  assert.deepEqual([...weatherKinds("clear+fog")], ["fog"]);
+  assert.equal(weatherMix(["rain", "snow", "fog"]), "rain+fog");
+  assert.equal(weatherMix([]), "clear");
+  assert.equal(toggleWeather("auto", "rain"), "rain");
+  assert.equal(toggleWeather("rain", "rainbow"), "rain+rainbow");
+  assert.equal(toggleWeather("rain+rainbow", "snow"), "snow+rainbow");
+  assert.equal(toggleWeather("snow+rainbow", "snow"), "rainbow");
+  assert.equal(toggleWeather("rainbow", "rainbow"), "clear");
+  assert.equal(toggleWeather("rain+rainbow", "clear"), "clear");
+  assert.equal(toggleWeather("clear", "fog"), "fog");
+  assert.equal(toggleWeather("rain+fog", "auto"), "auto");
+  // Aurora only at night, also inside a mix.
+  assert.equal(weatherPlan.resolveWeather("snow+aurora", 1, new Date(), "noon"), "snow");
+  assert.equal(weatherPlan.resolveWeather("snow+aurora", 1, new Date(), "night"), "snow+aurora");
+  for (const lang of ["zh", "en", "ko"]) {
+    const words = i18n.skyWords(lang);
+    assert.ok(words.weatherMixHint);
+    assert.equal(i18n.weatherMixName(words, "rain+rainbow"), `${words.weathers.rain} + ${words.weathers.rainbow}`);
+  }
+  assert.equal(i18n.weatherGlyph("rain+rainbow"), i18n.WEATHER_GLYPHS.rainbow);
+  assert.equal(i18n.weatherGlyph("auto"), i18n.WEATHER_GLYPHS.auto);
+});
+
 test("the world seed follows the ISO week until re-rolled", () => {
   assert.equal(scene.isoWeekKey(new Date(2026, 9, 7)), "2026-W41");
   assert.equal(scene.isoWeekKey(new Date(2021, 0, 3)), "2020-W53");
@@ -312,7 +338,7 @@ test("Chinese and Korean island text does not mix in English words", () => {
     const words = i18n.skyWords(lang);
     const samples = [
       words.skills(13), words.prompts(2), words.categories(5), words.summary(5, 13), words.basis, words.empty, words.emptyHint,
-      words.addSource, words.openLibrary, words.world, words.worldTitle, words.weather, words.auto, words.reroll, words.climates,
+      words.addSource, words.openLibrary, words.world, words.worldTitle, words.weather, words.auto, words.reroll, words.climates, words.weatherMixHint,
       ...Object.values(words.weathers), ...Object.values(words.climateNames)
     ];
     for (const text of samples) assert.doesNotMatch(text, latin, `${lang}: "${text}"`);

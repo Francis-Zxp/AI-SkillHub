@@ -93,11 +93,11 @@
 .is-light .sky-weather-options button { background: #2c64a60d; }
 .sky-weather-options button:hover:not(:disabled) { background: #ffffff1f; }
 .is-light .sky-weather-options button:hover:not(:disabled) { background: #2c64a61f; }
-.sky-weather-options button[aria-checked="true"] { border-color: #f2b866; background: #f2b86624; }
-.is-light .sky-weather-options button[aria-checked="true"] { border-color: #2c64a6; background: #2c64a61a; }
+.sky-weather-options button[aria-pressed="true"] { border-color: #f2b866; background: #f2b86624; }
+.is-light .sky-weather-options button[aria-pressed="true"] { border-color: #2c64a6; background: #2c64a61a; }
 .sky-weather-options button:disabled { opacity: .45; cursor: not-allowed; }
-.sky-phase-dawn .sky-weather-options button[aria-checked="true"] { border-color: #c96f4a; background: #c96f4a1a; }
-.sky-phase-golden .sky-weather-options button[aria-checked="true"] { border-color: #c8662c; background: #c8662c1a; }
+.sky-phase-dawn .sky-weather-options button[aria-pressed="true"] { border-color: #c96f4a; background: #c96f4a1a; }
+.sky-phase-golden .sky-weather-options button[aria-pressed="true"] { border-color: #c8662c; background: #c8662c1a; }
 .sky-phase-dawn .sky-reroll { border-color: #c96f4a66; background: #c96f4a14; }
 .sky-phase-golden .sky-reroll { border-color: #c8662c66; background: #c8662c14; }
 .sky-reroll { width: 100%; margin-top: 10px; padding: 8px 10px; border: 1px solid #f2b86680; border-radius: 8px; color: inherit; background: #f2b8661f; font: inherit; font-weight: 600; cursor: pointer; }

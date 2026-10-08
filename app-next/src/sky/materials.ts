@@ -685,16 +685,10 @@ export function skyDomeMaterial(palette: SkyPalette) {
       varying vec3 vDirection;
       varying vec3 vView;
       ${NOISE_GLSL}
-      vec3 rainbowBand(float t) {
-        // Seven soft bands, red outside to violet inside.
-        vec3 bands[7];
-        bands[0] = vec3(0.93, 0.28, 0.32); bands[1] = vec3(0.98, 0.58, 0.25); bands[2] = vec3(0.99, 0.88, 0.35);
-        bands[3] = vec3(0.45, 0.82, 0.4); bands[4] = vec3(0.32, 0.66, 0.95); bands[5] = vec3(0.38, 0.42, 0.88); bands[6] = vec3(0.62, 0.42, 0.86);
-        float x = clamp(t, 0.0, 0.999) * 6.0;
-        int i = int(floor(x));
-        vec3 a = bands[0], b = bands[1];
-        for (int k = 0; k < 6; k++) if (k == i) { a = bands[k]; b = bands[k + 1]; }
-        return mix(a, b, smoothstep(0.3, 0.7, fract(x)));
+      // A continuous spectrum, red (t = 0) to violet (t = 1): no bands, no seams.
+      vec3 rainbowSpectrum(float t) {
+        vec3 c = 0.5 + 0.5 * cos(6.28318 * (clamp(t, 0.0, 1.0) * 0.8 - vec3(0.0, 0.33, 0.67)));
+        return mix(c, vec3(1.0), 0.12);
       }
       void main() {
         float h = vDirection.y;
@@ -715,12 +709,21 @@ export function skyDomeMaterial(palette: SkyPalette) {
         // like anything at the horizon.
         float azimuth = atan(view.x, -view.z);
         if (uRainbow > 0.001) {
+          // A soft primary bow whose colours melt into each other and into the
+          // sky (feathered edges, no bands), a faint secondary bow with the
+          // colours reversed, and the slightly brighter sky inside the arc.
           vec3 axis = normalize(vec3(0.0, -0.84, -1.0));
           float angle = acos(clamp(dot(view, axis), -1.0, 1.0));
-          float t = (0.5 - angle) / 0.05;
-          float arc = smoothstep(0.0, 0.18, t) * (1.0 - smoothstep(0.82, 1.0, t));
-          float legs = smoothstep(-0.78, -0.42, view.y);
-          sky = mix(sky, rainbowBand(t), arc * legs * uRainbow * 0.42);
+          float legs = smoothstep(-0.86, -0.36, view.y);
+          float t = (0.5 - angle) / 0.075;
+          float primary = smoothstep(-0.25, 0.22, t) * (1.0 - smoothstep(0.7, 1.2, t));
+          float inner = smoothstep(1.0, 1.6, t) * (1.0 - smoothstep(1.6, 5.5, t));
+          float t2 = (angle - 0.565) / 0.085;
+          float secondary = smoothstep(-0.25, 0.25, t2) * (1.0 - smoothstep(0.7, 1.2, t2));
+          float strength = legs * uRainbow;
+          sky += vec3(inner * 0.05 * strength);
+          sky = mix(sky, rainbowSpectrum(t2), secondary * 0.16 * strength);
+          sky = mix(sky, rainbowSpectrum(t), primary * 0.5 * strength);
         }
         if (uAurora > 0.001) {
           // Ribbons: a wavy lower hem, soft folds, faint rays, and gaps

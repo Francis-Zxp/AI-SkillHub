@@ -163,11 +163,13 @@ test("framing: overlay blocks opt in with data-sky-overlay and shift the view do
 
 test("climate and weather controls: one compact world panel", () => {
   assert.match(archipelago, /className="sky-world-panel" id=\{worldPanelId\} role="dialog"/);
-  assert.match(archipelago, /const WEATHER_OPTIONS: SkyWeatherSetting\[\] = \["auto", \.\.\.SKY_WEATHER_KINDS\];/);
-  // A real radio group: one tab stop, arrow keys move and choose, Home/End.
-  assert.match(archipelago, /role="radiogroup" aria-labelledby=\{`\$\{worldPanelId\}-weather`\} onKeyDown=\{onWeatherKey\}/);
-  assert.match(archipelago, /tabIndex=\{kind === weatherFocus \? 0 : -1\}/);
+  assert.match(archipelago, /const WEATHER_OPTIONS: Array<"auto" \| SkyWeatherKind> = \["auto", \.\.\.SKY_WEATHER_KINDS\];/);
+  // v3.3.1: weathers combine, so the chips are toggle buttons in a group: one tab stop,
+  // arrow keys move, Home/End jump, Space/Enter press; the hint says how they combine.
+  assert.match(archipelago, /role="group" aria-labelledby=\{`\$\{worldPanelId\}-weather`\} aria-describedby=\{`\$\{worldPanelId\}-weather-hint`\} onKeyDown=\{onWeatherKey\}/);
+  assert.match(archipelago, /aria-pressed=\{weatherPressed\(kind\)\} tabIndex=\{kind === weatherTabStop \? 0 : -1\}/);
   assert.match(body(archipelago, "const onWeatherKey = "), /ArrowRight[\s\S]*ArrowLeft[\s\S]*Home[\s\S]*End/);
+  assert.match(archipelago, /const next = toggleWeather\(weatherSetting, chip\);/);
   assert.match(archipelago, /aria-controls=\{worldPanel \? worldPanelId : undefined\}/);
   // Hovering an island names its climate in a tag above its label.
   assert.match(archipelago, /className="sky-island-climate" aria-hidden="true"/);
@@ -177,7 +179,7 @@ test("climate and weather controls: one compact world panel", () => {
   assert.match(archipelago, /title=\{climate \? `\$\{island\.name\} · \$\{climate\}` : island\.name\}/);
   // Weather is shader-driven and small: at most two extra draw calls.
   assert.match(weather, /drawCalls: \(\) => \(particles\.visible \? 1 : 0\) \+ \(deck\.visible \? 1 : 0\)/);
-  assert.match(weather, /if \(currentKind === "storm" && animating && !options\.reducedMotion\(\)\)/);
+  assert.match(weather, /if \(precipitation === "storm" && animating && !options\.reducedMotion\(\)\)/);
 });
 
 test("memory: each character draws once; star-map colours and labels allocate nothing per call", () => {

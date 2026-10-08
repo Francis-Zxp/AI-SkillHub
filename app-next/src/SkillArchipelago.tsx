@@ -6,12 +6,12 @@ import { buildSkyIslands, demoSkyIslands } from "./skyIslandModel";
 import type { SkyWorld, SkyWorldInfo, SkyWorldView } from "./sky/world";
 import type { SkillUniverseProps } from "./SkillUniverse";
 import { CLIMATES, climateCounts } from "./sky/climates";
-import { WEATHER_GLYPHS, skyWords } from "./sky/skyI18n";
+import { WEATHER_GLYPHS, skyWords, weatherGlyph, weatherMixName } from "./sky/skyI18n";
 import {
   APP_BACKGROUND_EVENT, APP_HIDDEN_EVENT, APP_VISIBLE_EVENTS, SKY_SCENE_EVENT as SCENE_EVENT, SKY_WEATHER_KINDS, appHiddenFromEvent, probeGraphics, readSetting,
-  rerollWorld, setSkySceneEnabled, setSkyWeatherSetting, skySceneEnabled, skyWeatherSetting, worldSeed, writeSetting
+  rerollWorld, setSkySceneEnabled, setSkyWeatherSetting, skySceneEnabled, skyWeatherSetting, toggleWeather, weatherKinds, worldSeed, writeSetting
 } from "./skyScene";
-import type { SkyWeatherSetting } from "./skyScene";
+import type { SkyWeatherKind, SkyWeatherSetting } from "./skyScene";
 import "./SkillArchipelago.css";
 
 export type SkyPhase = "dawn" | "noon" | "golden" | "night";
@@ -36,7 +36,7 @@ const ASSET_CREDITS = [
 ];
 
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
-const WEATHER_OPTIONS: SkyWeatherSetting[] = ["auto", ...SKY_WEATHER_KINDS];
+const WEATHER_OPTIONS: Array<"auto" | SkyWeatherKind> = ["auto", ...SKY_WEATHER_KINDS];
 
 
 /** Out of sight this long, the 3D world sleeps: a still image stays on screen
@@ -375,7 +375,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   // closes on Escape (focus back on its button) or a click elsewhere.
   useEffect(() => {
     if (!worldPanel) return;
-    worldPanelRef.current?.querySelector<HTMLButtonElement>('[role="radio"][tabindex="0"]')?.focus();
+    worldPanelRef.current?.querySelector<HTMLButtonElement>('.sky-weather-options [tabindex="0"]')?.focus();
   }, [worldPanel]);
   useEffect(() => {
     if (!worldPanel) return;
@@ -406,22 +406,28 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
     writeSetting("skillhub-sky-paused", value ? "0" : "1");
     return !value;
   });
-  const chooseWeather = (value: SkyWeatherSetting) => {
-    setSkyWeatherSetting(value);
-    setWeatherSetting(value);
+  // Weathers combine (rain under a rainbow, snow with aurora…); 自动 and 晴天 stand alone and
+  // one precipitation replaces another (skyScene.toggleWeather).
+  const chooseWeather = (chip: "auto" | SkyWeatherKind) => {
+    const next = toggleWeather(weatherSetting, chip);
+    setSkyWeatherSetting(next);
+    setWeatherSetting(next);
   };
-  // The weather choices are one radio group: Tab reaches the checked one,
-  // arrow keys move and choose (aurora only at night), Home/End jump.
-  const weatherAvailable = (kind: SkyWeatherSetting) => kind !== "aurora" || timeOfDay === "night";
-  const weatherFocus: SkyWeatherSetting = weatherAvailable(weatherSetting) ? weatherSetting : "auto";
+  const weatherPressed = (chip: "auto" | SkyWeatherKind) => chip === "auto" ? weatherSetting === "auto" : weatherSetting !== "auto" && weatherKinds(weatherSetting).includes(chip);
+  // One tab stop: Tab reaches the first pressed chip, arrow keys move between chips
+  // (aurora only at night), Home/End jump, Space or Enter presses.
+  const weatherAvailable = (kind: "auto" | SkyWeatherKind) => kind !== "aurora" || timeOfDay === "night";
+  const weatherFocus = WEATHER_OPTIONS.find(kind => weatherAvailable(kind) && weatherPressed(kind)) ?? "auto";
+  const [weatherCursor, setWeatherCursor] = useState<"auto" | SkyWeatherKind | null>(null);
+  const weatherTabStop = weatherCursor && weatherAvailable(weatherCursor) ? weatherCursor : weatherFocus;
   const onWeatherKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const choices = WEATHER_OPTIONS.filter(weatherAvailable);
-    const index = Math.max(0, choices.indexOf(weatherFocus));
+    const index = Math.max(0, choices.indexOf(weatherTabStop));
     const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
     const next = event.key === "Home" ? choices[0] : event.key === "End" ? choices[choices.length - 1] : step ? choices[(index + step + choices.length) % choices.length] : null;
     if (!next) return;
     event.preventDefault();
-    chooseWeather(next);
+    setWeatherCursor(next);
     event.currentTarget.querySelector<HTMLButtonElement>(`[data-weather="${next}"]`)?.focus();
   };
   const reroll = () => {
@@ -438,7 +444,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   const climateOf = (id: string) => (info?.climates[id] ? sky.climateNames[info.climates[id]] : "");
   const still3d = paused || reducedMotion;
   const legend = info ? climateCounts(info.climates) : [];
-  const weatherName = info ? sky.weathers[info.weather] : "";
+  const weatherName = info ? weatherMixName(sky, info.weather) : "";
 
   const maxWeight = Math.max(1, ...islands.map(island => island.weight));
   const threeD = islands.length > 0 && status !== "off";
@@ -453,7 +459,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
       <button type="button" className="sky-control-compact" onClick={() => { world.current?.reset(); setQuery(""); setHovered(null); }} title={words.reset} aria-label={words.reset}><span aria-hidden="true">⌖</span><span>{words.reset}</span></button>
       <button type="button" className="sky-control-compact" aria-pressed={still3d} disabled={reducedMotion} onClick={togglePaused} aria-label={still3d ? words.play : words.pause} title={reducedMotion ? sky.reducedMotion : still3d ? words.play : words.pause}><span aria-hidden="true">{still3d ? "▷" : "Ⅱ"}</span><span>{still3d ? words.play : words.pause}</span></button>
       <button type="button" className="sky-control-compact" aria-pressed={lowPower} onClick={toggleLowPower} aria-label={words.lowPower} title={words.lowPowerHint}><span aria-hidden="true">◐</span><span>{words.lowPower}</span></button>
-      {status !== "fallback" && <button ref={worldToggleRef} type="button" className="sky-control-compact sky-world-toggle" aria-haspopup="dialog" aria-label={sky.world} aria-expanded={worldPanel} aria-controls={worldPanel ? worldPanelId : undefined} onClick={() => showPanel("world")} title={sky.worldTitle}><span aria-hidden="true">{WEATHER_GLYPHS[info?.weather ?? "auto"]}</span><span>{sky.world}</span></button>}
+      {status !== "fallback" && <button ref={worldToggleRef} type="button" className="sky-control-compact sky-world-toggle" aria-haspopup="dialog" aria-label={sky.world} aria-expanded={worldPanel} aria-controls={worldPanel ? worldPanelId : undefined} onClick={() => showPanel("world")} title={sky.worldTitle}><span aria-hidden="true">{weatherGlyph(info?.weather ?? "auto")}</span><span>{sky.world}</span></button>}
       <button type="button" aria-expanded={navigation} onClick={() => showPanel("navigation")}>{navigation ? words.collapse : words.browse}<span aria-hidden="true">{navigation ? "−" : "+"}</span></button>
       </>}
       <button type="button" aria-pressed={!sceneOn} onClick={() => setSkySceneEnabled(!sceneOn)} title={words.sceneHint}><span aria-hidden="true">{sceneOn ? "▦" : "◒"}</span><span>{sceneOn ? words.sceneOff : words.sceneOn}</span></button>
@@ -461,11 +467,12 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
     {worldPanel && threeD && status !== "fallback" && <div className="sky-world-panel" id={worldPanelId} role="dialog" aria-label={sky.worldTitle} ref={worldPanelRef}
       style={worldPanelTop === null ? undefined : { top: worldPanelTop, maxHeight: `calc(100% - ${worldPanelTop + 110}px)` }}>
       <h3 id={`${worldPanelId}-weather`}>{sky.weather}</h3>
-      <div className="sky-weather-options" role="radiogroup" aria-labelledby={`${worldPanelId}-weather`} onKeyDown={onWeatherKey}>
+      <p className="sky-weather-hint" id={`${worldPanelId}-weather-hint`}>{sky.weatherMixHint}</p>
+      <div className="sky-weather-options" role="group" aria-labelledby={`${worldPanelId}-weather`} aria-describedby={`${worldPanelId}-weather-hint`} onKeyDown={onWeatherKey}>
         {WEATHER_OPTIONS.map(kind => {
           const disabled = !weatherAvailable(kind);
           const name = kind === "auto" ? (weatherSetting === "auto" && weatherName ? sky.autoNow(weatherName) : sky.auto) : sky.weathers[kind];
-          return <button key={kind} type="button" role="radio" data-weather={kind} aria-checked={weatherSetting === kind} tabIndex={kind === weatherFocus ? 0 : -1}
+          return <button key={kind} type="button" data-weather={kind} aria-pressed={weatherPressed(kind)} tabIndex={kind === weatherTabStop ? 0 : -1} onFocus={() => setWeatherCursor(kind)}
             disabled={disabled} title={disabled ? sky.auroraNight : name} className={kind === "auto" ? "is-auto" : undefined} onClick={() => chooseWeather(kind)}>
             <span aria-hidden="true">{WEATHER_GLYPHS[kind]}</span><span>{name}</span>
           </button>;

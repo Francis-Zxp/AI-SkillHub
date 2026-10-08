@@ -24,7 +24,45 @@ export function appHiddenFromEvent(event: Event): boolean {
  * and the time of day; anything else pins that weather. */
 export const SKY_WEATHER_KINDS = ["clear", "cloudy", "rain", "storm", "snow", "fog", "rainbow", "petals", "aurora"] as const;
 export type SkyWeatherKind = (typeof SKY_WEATHER_KINDS)[number];
-export type SkyWeatherSetting = "auto" | SkyWeatherKind;
+/** One weather, or several joined by "+" in SKY_WEATHER_KINDS order (e.g. "rain+rainbow"). */
+export type SkyWeatherMix = SkyWeatherKind | `${SkyWeatherKind}+${string}`;
+export type SkyWeatherSetting = "auto" | SkyWeatherMix;
+
+/** Rain, storm, snow and petals share the scene's one particle system: a mix holds at most one. */
+export const SKY_PRECIPITATION: readonly SkyWeatherKind[] = ["rain", "storm", "snow", "petals"];
+
+/** The weathers in a mix: known ones only, in canonical order, one precipitation, and
+ * "clear" only on its own. */
+export function weatherKinds(mix: string): SkyWeatherKind[] {
+  const wanted = new Set(mix.split("+"));
+  const kinds: SkyWeatherKind[] = [];
+  let precipitation = false;
+  for (const kind of SKY_WEATHER_KINDS) {
+    if (!wanted.has(kind)) continue;
+    if (SKY_PRECIPITATION.includes(kind)) {
+      if (precipitation) continue;
+      precipitation = true;
+    }
+    kinds.push(kind);
+  }
+  return kinds.length > 1 ? kinds.filter(kind => kind !== "clear") : kinds;
+}
+
+/** Canonical mix string for a list of weathers ("clear" when empty). */
+export function weatherMix(kinds: readonly SkyWeatherKind[]): SkyWeatherMix {
+  const list = weatherKinds(kinds.join("+"));
+  return (list.length ? list.join("+") : "clear") as SkyWeatherMix;
+}
+
+/** The setting after a weather chip is pressed: 自动 and 晴天 stand alone; any other
+ * weather joins or leaves the mix, and a precipitation replaces the one before. */
+export function toggleWeather(setting: SkyWeatherSetting, chip: "auto" | SkyWeatherKind): SkyWeatherSetting {
+  if (chip === "auto" || chip === "clear") return chip;
+  const current = setting === "auto" ? [] : weatherKinds(setting).filter(kind => kind !== "clear");
+  if (current.includes(chip)) return weatherMix(current.filter(kind => kind !== chip));
+  const replaces = SKY_PRECIPITATION.includes(chip);
+  return weatherMix([...current.filter(kind => !(replaces && SKY_PRECIPITATION.includes(kind))), chip]);
+}
 
 type Graphics = { webgl: boolean; weak: boolean };
 let graphicsProbe: Graphics | null = null;
@@ -107,7 +145,8 @@ export function rerollWorld(): number {
 
 export function skyWeatherSetting(): SkyWeatherSetting {
   const saved = readSetting(WEATHER_SETTING);
-  return saved && (SKY_WEATHER_KINDS as readonly string[]).includes(saved) ? (saved as SkyWeatherKind) : "auto";
+  // A single weather (3.3.0) reads as a mix of one.
+  return saved && saved !== "auto" && weatherKinds(saved).length ? weatherMix(weatherKinds(saved)) : "auto";
 }
 
 export function setSkyWeatherSetting(value: SkyWeatherSetting) {

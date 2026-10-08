@@ -142,7 +142,7 @@ const hostData = page => page.evaluate(() => {
       await page.waitForTimeout(1500);
       const after = await hostData(page);
       await shot(page, "ui-after-reroll-golden");
-      await page.click(".sky-weather-options button[aria-checked] >> nth=4");
+      await page.click(".sky-weather-options button[aria-pressed] >> nth=4");
       await page.waitForTimeout(1500);
       const pinned = await hostData(page);
       report.push({ name: "ui-reroll", climatesBefore: before.climates, climatesAfter: after.climates, seed: await page.evaluate(() => localStorage.getItem("skillhub-sky-world-seed")), pinnedWeather: pinned.weather, storedWeather: await page.evaluate(() => localStorage.getItem("skillhub-sky-weather")), errors });

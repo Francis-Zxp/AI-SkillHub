@@ -1,6 +1,7 @@
 // Which weather the archipelago shows. Pure logic, shared by the scene and
 // the React controls (the "auto" chip names the weather it resolved to).
-import type { SkyWeatherKind, SkyWeatherSetting } from "../skyScene";
+import type { SkyWeatherKind, SkyWeatherMix, SkyWeatherSetting } from "../skyScene";
+import { weatherKinds, weatherMix } from "../skyScene";
 import type { ClimateId } from "./climates";
 import { hashString, seededRandom } from "./noise";
 
@@ -44,8 +45,8 @@ export function autoWeather(seed: number, date: Date, phase: SkyPhaseName, clima
   return entries.length ? entries[entries.length - 1][0] : "clear";
 }
 
-/** The weather actually drawn: auto resolved, and aurora only at night. */
-export function resolveWeather(setting: SkyWeatherSetting, seed: number, date: Date, phase: SkyPhaseName, climates: ClimateId[] = []): SkyWeatherKind {
-  const kind = setting === "auto" ? autoWeather(seed, date, phase, climates) : setting;
-  return kind === "aurora" && phase !== "night" ? "clear" : kind;
+/** The weather actually drawn: auto resolved, a chosen mix as chosen, aurora only at night. */
+export function resolveWeather(setting: SkyWeatherSetting, seed: number, date: Date, phase: SkyPhaseName, climates: ClimateId[] = []): SkyWeatherMix {
+  const kinds = setting === "auto" ? [autoWeather(seed, date, phase, climates)] : weatherKinds(setting);
+  return weatherMix(kinds.filter(kind => kind !== "aurora" || phase === "night"));
 }

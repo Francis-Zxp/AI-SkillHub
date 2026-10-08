@@ -449,3 +449,28 @@ main.shell.v33 .sky-caption span { background: var(--lg-fill); -webkit-backdrop-
 @media (prefers-reduced-transparency: reduce) {
   main.shell.v33 { --lg-fill: var(--surface-elevated); --lg-fill-strong: var(--surface-elevated); }
 }
+
+/* ---------- weather panel: chips are toggles that combine ---------- */
+main.shell.v33 .sky-weather-hint { margin: -2px 0 8px; color: var(--text-muted); font-size: 11.5px; line-height: 1.45; }
+main.shell.v33 .sky-weather-options button {
+  border: 0;
+  border-radius: 10px;
+  background: var(--lg-fill-inner);
+  box-shadow: inset 0 1px 0 var(--lg-rim-lo), 0 0 0 .5px var(--lg-hairline);
+  transition: background 180ms var(--lg-out), color 160ms var(--lg-out), box-shadow 220ms var(--lg-out), transform 320ms var(--lg-spring);
+}
+main.shell.v33 .sky-weather-options button:hover:not(:disabled) { background: var(--lg-fill-hover); }
+main.shell.v33 .sky-weather-options button[aria-pressed="true"] {
+  border: 0;
+  background: color-mix(in srgb, var(--brand) 16%, var(--lg-bead));
+  color: var(--lg-bead-text);
+  box-shadow: var(--lg-bead-shadow), 0 0 0 1.5px color-mix(in srgb, var(--brand) 55%, transparent);
+}
+main.shell.v33 .sky-weather-options button:active:not(:disabled) { transform: scale(.96); transition-duration: 90ms; }
+main.shell.v33 .sky-reroll {
+  border: 0;
+  border-radius: 12px;
+  background: var(--lg-fill-inner);
+  box-shadow: inset 0 1px 0 var(--lg-rim-lo), 0 0 0 .5px var(--lg-hairline);
+}
+main.shell.v33 .sky-reroll:hover:not(:disabled) { background: var(--lg-fill-hover); }
