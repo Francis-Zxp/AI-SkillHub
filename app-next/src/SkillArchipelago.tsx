@@ -327,13 +327,18 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
         }
         const image = new Image();
         image.src = url;
+        let swapped = false;
         const swap = () => {
-          if (cancelled) return;
+          if (cancelled || swapped) return;
+          swapped = true;
           stillRef.current = url;
           setStill(url);
           setAsleep(true);
         };
         image.decode().then(swap, swap);
+        // decode() settles in a minimised window too (checked); this is only
+        // a backstop so the GPU is never kept waiting on it.
+        window.setTimeout(swap, 1_500);
       });
     }, appBackground && visible && !pageHidden && !appHidden ? BACKGROUND_SLEEP_MS : SLEEP_AFTER_MS);
     return () => {
