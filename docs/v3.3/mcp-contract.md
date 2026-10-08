@@ -1631,3 +1631,23 @@ Rewrite or retire the old suites:
 - A project registration shortcut (M2-5).
 - Relaunching apps (M2-6).
 - Anything that weakens the skills security gate or changes the default expansion of the skill tree (DECISIONS.md:149).
+
+---
+
+## 9. Backend implementation notes (mcp-backend, 2026-10-08)
+
+These clarify how the backend implements the contract. Nothing here changes a request or response shape in §3.2.
+
+1. **Hash vs. meaning (§1.4, §4.6).** The stored cell hash keeps a Windows `cmd /c` wrapper, so a Claude entry written without it can be told apart and offered as `windowsFixAvailable`. Semantic comparison (`semantic_equal_ignoring_cmd_wrap`, import "merged") unwraps both sides.
+2. **Disable keeps the whole entry.** Turning off a JSON client stores the removed entry (DPAPI, inside the spec, for that client only). Re-enabling writes it back field for field and in the same key order, with the managed keys re-projected from the library.
+3. **Codex documents.** The current file only has to parse (older versions wrote `env_http_headers = {}` / `required = false`; a write cleans those up). Every entry a write touches is checked strictly for its transport before and after the atomic write. `validate_codex_mcp_config` is the strict whole-document check.
+4. **Prefill-safe updates (M1-7).** In `mcp_update_server`, an omitted `args`, `cwd`, `env`, `secrets`, `displayName` or `codexRequired` keeps the stored value; `cwd: ""` clears it. A `SECRET_MASK` argument, or an argument equal to the stored one at the same index, keeps the stored argument.
+5. **Add conflicts.** `onConflict` omitted with a same-name library server → `name-taken`. `"skip"` leaves that server untouched (results `skipped`, reason `entry-added-outside`); a same-name, different entry in a client file with `"skip"` skips that client. `"overwrite"` counts as the confirmation and also re-projects the other enabled clients.
+6. **Transport switch to an unsupported client.** After an update, a JSON client that no longer supports the transport (for example Claude Desktop and a remote server) has its entry removed and the cell turns off; Codex gets `enabled = false`.
+7. **Onboarding without import.** `mcp_import_from_clients({reason:"onboarding", clientIds: []})` sets `libraryInitialized` without importing anything.
+8. **Undo results.** Restored targets report `status:"undone"`. Entries changed after the operation are reported as a separate `failed` result with `error.code:"undo-conflict"` (`params.server` lists the names); the other clients still undo. Undo operations are themselves undoable.
+9. **History.** Pre-3.3 snapshots appear as `kind:"legacy"` with `operationId:"legacy-<id>"` and `legacySnapshotId`; roll them back with `mcp_rollback({legacySnapshotId})`.
+10. **Arguments `cmd` interprets.** If an argument of an npx-family command contains `& | < > ^ % " ( ) !`, the Claude entry is written without `cmd /c` instead of handing those characters to the shell.
+11. **Opener allow-list.** `capabilities/default.json` now also allows the install-guide URLs (§3.10) and the template docs/help URLs (§3.7), so "安装指引" opens in the browser instead of falling back to copy.
+12. **Legacy listing.** `list_mcp_rollback_snapshots` no longer takes the in-process write guard (bug MCP#10); stuck manifests never make it fail (bug MCP#2).
+13. **Tests never touch the real machine.** Library tests use a temp home and an in-memory environment store; scanner tests do not read the registry; R25 (`real_hkcu_roundtrip`) stays `#[ignore]` and uses a unique `SKH_TEST_ONLY_…` name with cleanup.
