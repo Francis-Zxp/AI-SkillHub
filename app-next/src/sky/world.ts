@@ -464,10 +464,17 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
         }
       }
     }
-    const openGround = (x: number, z: number) =>
-      plan.shape.normalizedDistance(x, z) < 0.78 && !plan.shape.isInsidePond(x, z, 0.5) && plan.shape.pathWeight(x, z) < 0.2 &&
-      plan.shape.featureWeight(x, z) < 0.3 &&
-      plan.shape.pads.every(pad => Math.hypot(x - pad.x, z - pad.z) > pad.radius + 0.6);
+    // Asked by walking animals every frame: no callbacks (nothing to collect).
+    const pads = plan.shape.pads;
+    const openGround = (x: number, z: number) => {
+      if (plan.shape.normalizedDistance(x, z) >= 0.78 || plan.shape.isInsidePond(x, z, 0.5) || plan.shape.pathWeight(x, z) >= 0.2 ||
+        plan.shape.featureWeight(x, z) >= 0.3) return false;
+      for (let index = 0; index < pads.length; index++) {
+        const pad = pads[index];
+        if (Math.hypot(x - pad.x, z - pad.z) <= pad.radius + 0.6) return false;
+      }
+      return true;
+    };
     for (const animal of lively ? plan.animals : []) {
       const gltf = library.animals.get(animal.name);
       if (!gltf) continue;
@@ -1433,7 +1440,8 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       renderer.dispose();
       renderer.forceContextLoss();
       canvas.remove();
-      delete (options.host as HostWithStats).skyWorldStats;
+      // A re-roll disposes the old world after its successor took the host.
+      if ((options.host as HostWithStats).skyWorldStats === world.stats) delete (options.host as HostWithStats).skyWorldStats;
       // Shared uniforms are not reset here: a successor world may already
       // own them (a re-roll disposes the old world after the new one is up).
     }

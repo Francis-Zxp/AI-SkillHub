@@ -187,7 +187,10 @@ export class IslandShape {
 
   rimRadius(theta: number): number {
     let factor = 1;
-    for (const harmonic of this.harmonics) factor += harmonic.amplitude * Math.sin(harmonic.k * theta + harmonic.phase);
+    for (let index = 0; index < this.harmonics.length; index++) {
+      const harmonic = this.harmonics[index];
+      factor += harmonic.amplitude * Math.sin(harmonic.k * theta + harmonic.phase);
+    }
     const relative = theta - this.elongAngle;
     const ellipse = 1 / Math.sqrt((Math.cos(relative) / this.elongation) ** 2 + Math.sin(relative) ** 2);
     return this.radius * factor * (0.82 + 0.18 * ellipse);
@@ -220,13 +223,16 @@ export class IslandShape {
 
   heightAt(x: number, z: number): number {
     let height = this.baseHeight(x, z);
-    for (const pad of this.pads) {
+    // Walking animals call this every frame: index loops, no iterators.
+    for (let index = 0; index < this.pads.length; index++) {
+      const pad = this.pads[index];
       const level = pad.level ?? (pad.level = this.baseHeight(pad.x, pad.z));
       const distance = Math.hypot(x - pad.x, z - pad.z);
       const weight = 1 - smoothstep(pad.radius, pad.radius + Math.max(0.8, pad.radius * 0.6), distance);
       height += (level - height) * weight;
     }
-    for (const pond of this.ponds) {
+    for (let index = 0; index < this.ponds.length; index++) {
+      const pond = this.ponds[index];
       const level = this.pondLevel(pond);
       const distance = Math.hypot(x - pond.x, z - pond.z) / pond.radius;
       if (distance < 1.35) {
@@ -239,7 +245,6 @@ export class IslandShape {
         if (distance < 1) height = Math.min(height, basin);
       }
     }
-    // Walking animals call this every frame: plain indexing, no destructuring.
     for (let index = 0; index < this.channels.length; index++) {
       const channel = this.channels[index];
       const ax = channel.from[0], az = channel.from[1], bx = channel.to[0], bz = channel.to[1];
@@ -257,12 +262,15 @@ export class IslandShape {
     return pond.level;
   }
 
-  /** 0..1 worn-path weight. */
+  /** 0..1 worn-path weight. Walking animals ask every frame: plain
+   * indexing, no destructuring or callbacks (nothing to collect). */
   pathWeight(x: number, z: number): number {
     let weight = 0;
-    for (const path of this.paths) {
+    for (let line = 0; line < this.paths.length; line++) {
+      const path = this.paths[line];
       for (let index = 1; index < path.points.length; index++) {
-        const [ax, az] = path.points[index - 1], [bx, bz] = path.points[index];
+        const from = path.points[index - 1], to = path.points[index];
+        const ax = from[0], az = from[1], bx = to[0], bz = to[1];
         const dx = bx - ax, dz = bz - az;
         const t = THREE.MathUtils.clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
         const distance = Math.hypot(x - (ax + dx * t), z - (az + dz * t));
@@ -274,13 +282,18 @@ export class IslandShape {
   }
 
   isInsidePond(x: number, z: number, margin = 0): boolean {
-    return this.ponds.some(pond => Math.hypot(x - pond.x, z - pond.z) < pond.radius + margin) ||
-      this.channels.some(channel => {
-        const [ax, az] = channel.from, [bx, bz] = channel.to;
-        const dx = bx - ax, dz = bz - az;
-        const t = THREE.MathUtils.clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0, 1);
-        return Math.hypot(x - ax - dx * t, z - az - dz * t) < channel.width * 0.6 + margin;
-      });
+    for (let index = 0; index < this.ponds.length; index++) {
+      const pond = this.ponds[index];
+      if (Math.hypot(x - pond.x, z - pond.z) < pond.radius + margin) return true;
+    }
+    for (let index = 0; index < this.channels.length; index++) {
+      const channel = this.channels[index];
+      const ax = channel.from[0], az = channel.from[1], bx = channel.to[0], bz = channel.to[1];
+      const dx = bx - ax, dz = bz - az;
+      const t = THREE.MathUtils.clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0, 1);
+      if (Math.hypot(x - ax - dx * t, z - az - dz * t) < channel.width * 0.6 + margin) return true;
+    }
+    return false;
   }
 
   /** Cliff height under the grass lip. */
