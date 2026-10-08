@@ -20983,6 +20983,12 @@ fn resolve_github_ref(clone_url: &str, git_ref: &str, subpath: &str) -> (String,
     }
     let mut command = Command::new("git");
     command.args(["ls-remote", "--heads", "--tags", clone_url]);
+    // Only a hint for splitting `/tree/<a>/<b>`: it may fail quietly, but it
+    // must never pop up a credential prompt (GitHub answers 401 for a repo
+    // that does not exist). The clone itself keeps the user's Git setup.
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never");
     let Ok(output) = command_output_with_timeout(
         &mut command,
         Duration::from_secs(20),
