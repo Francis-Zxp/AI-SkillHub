@@ -8,6 +8,7 @@ import {
   type PointerEvent,
   lazy,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
@@ -119,6 +120,9 @@ export function Dashboard({
     }
   });
   const [dismissedAgents, setDismissedAgents] = useState<string[]>(() => readDismissedAgents());
+  const viewRef = useRef<HTMLDivElement | null>(null);
+  const homeTopRef = useRef<HTMLDivElement | null>(null);
+  useHomeTopInset(viewRef, homeTopRef);
   const agents = delivery?.agents ?? [];
   const installedDeliverable = agents.filter(agent => agent.installed && agent.canDeliver);
   const taken = installedDeliverable.filter(agent => agent.takeover).length;
@@ -149,8 +153,8 @@ export function Dashboard({
   };
 
   return (
-    <div className="view dashboard-view home-v33">
-      <div className="home-top">
+    <div className="view dashboard-view home-v33" ref={viewRef}>
+      <div className="home-top" ref={homeTopRef}>
       <section className="home-metrics" aria-label={t("v33.homeMetrics")}>
         <Metric
           icon="agent"
@@ -368,6 +372,39 @@ export function Dashboard({
       </section>
     </div>
   );
+}
+
+/**
+ * In the scene themes the home block (numbers · card · 添加) floats over the top of the scene, so
+ * the scene's own controls (群岛/星图/关闭, full screen, star-map modes, the islands' heading and
+ * buttons) must start below it. Its height changes with the window width (the numbers wrap into
+ * two rows), the text size and the language, so the bottom edge is measured and published as
+ * --home-top-bottom on the page; home.css positions the controls from it.
+ */
+function useHomeTopInset(viewRef: React.RefObject<HTMLDivElement | null>, homeTopRef: React.RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    const homeTop = homeTopRef.current;
+    if (!view || !homeTop) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const bottom = Math.round(homeTop.getBoundingClientRect().bottom - view.getBoundingClientRect().top);
+      if (bottom > 0) view.style.setProperty("--home-top-bottom", `${bottom}px`);
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(measure);
+    };
+    measure();
+    const observer = new ResizeObserver(schedule);
+    observer.observe(homeTop);
+    window.addEventListener("resize", schedule);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", schedule);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [viewRef, homeTopRef]);
 }
 
 function ActivityTimeline({ snapshot }: { snapshot: LegacySnapshot | null }) {
