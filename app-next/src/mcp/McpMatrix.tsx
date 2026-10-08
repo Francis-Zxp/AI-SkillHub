@@ -2,7 +2,7 @@
 // Wide layout: a <table> with a sticky header. Narrow layout (< 760 px of page width): one card
 // per server with a row of client chips. More than 200 rows are windowed against the page scroll.
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
 import type { McpCell, McpClient, McpClientId, McpServerRow, McpTestProgressEvent } from "./mcpTypes";
 import { cellFor, cellReasonText, cellStateText, columnStats, targetLine, testText, testTone } from "./mcpLogic";
 import { Glyph, MenuButton, Spinner, t } from "./mcpUi";
@@ -162,13 +162,14 @@ function StatusDot({ row, phase }: { row: McpServerRow; phase?: McpTestProgressE
     );
   }
   const tone = testTone(row.test, row.missingSecretCount);
-  const text = testText(row.test, t, row.missingSecretCount);
+  const text = testText(row.test, t, row.missingSecretCount, row.target.runner);
   return <span aria-label={text} className={`mcp-status-dot tone-${tone}`} role="img" title={text} />;
 }
 
 function NameBlock({ row, phase, handlers, busy }: { row: McpServerRow; phase?: McpTestProgressEvent["phase"]; handlers: MatrixHandlers; busy: boolean }) {
   const tone = testTone(row.test, row.missingSecretCount);
-  const showText = tone !== "untested" || (phase && phase !== "done");
+  // The key chip already says "需要 API Key"; the text only repeats a real test result.
+  const showText = Boolean(row.test && !row.test.stale) || Boolean(phase && phase !== "done");
   return (
     <div className="mcp-name-block">
       <div className="mcp-name-line">
@@ -184,7 +185,7 @@ function NameBlock({ row, phase, handlers, busy }: { row: McpServerRow; phase?: 
         </MenuButton>
       </div>
       <div className="mcp-target-line">
-        {showText && <span className={`mcp-test-text tone-${tone}`}>{phase && phase !== "done" ? t(`mcp.test.phase.${phase}`) : testText(row.test, t, row.missingSecretCount)}</span>}
+        {showText && <span className={`mcp-test-text tone-${tone}`}>{phase && phase !== "done" ? t(`mcp.test.phase.${phase}`) : testText(row.test, t, row.missingSecretCount, row.target.runner)}</span>}
         <span className="mcp-target" title={targetLine(row.target, t)}>{targetLine(row.target, t)}</span>
         {row.missingSecretCount > 0 && (
           <button className="mcp-key-chip" onClick={() => handlers.onEdit(row, "secret")} type="button">
@@ -196,7 +197,7 @@ function NameBlock({ row, phase, handlers, busy }: { row: McpServerRow; phase?: 
   );
 }
 
-function useWindowedRange(enabled: boolean, count: number, anchor: React.RefObject<HTMLElement | null>) {
+function useWindowedRange(enabled: boolean, count: number, anchor: RefObject<HTMLElement | null>) {
   const [range, setRange] = useState({ start: 0, end: Math.min(count, 60) });
   useEffect(() => {
     if (!enabled) return;
@@ -334,11 +335,11 @@ export function McpMatrix(props: Props) {
                 >
                   <span className="mcp-col-label">
                     {!client.writable && <Glyph name="lock" />}
-                    {client.label}
+                    <span className="mcp-col-text">{client.label}</span>
                     {client.restartNeeded && <span className="mcp-restart-dot" title={t("mcp.col.restart", { client: client.label })} />}
+                    <Glyph className="mcp-col-chevron" name="chevron" />
                   </span>
                   <span className="mcp-col-count">{t("mcp.col.count", { on: stats.on, total: stats.total })}</span>
-                  <Glyph className="mcp-col-chevron" name="chevron" />
                 </MenuButton>
               </th>
             );

@@ -64,6 +64,8 @@ const McpDiscover = lazy(() => import("./McpDiscover"));
 export const OPEN_MCP_ADD_EVENT = "ai-skillhub-open-mcp-add";
 const TEST_ACK_STORAGE_KEY = "ai-skillhub-mcp-test-ack-v1";
 const NARROW_WIDTH = 760;
+// Issues that have no cell or chip of their own in the matrix stay visible without expanding.
+const PINNED_ISSUES = new Set<McpIssue["kind"]>(["stuck-transaction", "client-unwritable", "interrupted"]);
 
 export type McpPageProps = {
   runtimeAvailable?: boolean;
@@ -133,7 +135,6 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
   const [resolveChange, setResolveChange] = useState<{ row: McpServerRow; clientId: McpClientId } | null>(null);
   const [testDialog, setTestDialog] = useState<{ preview: McpTestPreview; serverName: string } | null>(null);
   const [report, setReport] = useState<McpImportReport | null>(null);
-  const [firstRunNotice, setFirstRunNotice] = useState<McpImportReport | null>(null);
   const [toasts, setToasts] = useState<McpToastItem[]>([]);
   const [pending, setPending] = useState<ReadonlySet<string>>(() => new Set());
   const [testing, setTesting] = useState<ReadonlyMap<string, McpTestProgressEvent["phase"]>>(() => new Map());
@@ -185,8 +186,13 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
         try {
           const result = await enqueue(() => mcpApi.importFromClients({ reason: "first-run" }));
           if (!disposed) {
-            setFirstRunNotice(result);
             await refresh();
+            // Non-blocking notice: a toast, so the first visit does not push the matrix down.
+            pushToast({
+              tone: "ok",
+              text: result.added.length > 0 ? t("mcp.import.firstRun", { n: result.added.length }) : t("mcp.import.firstRunNone"),
+              actions: [{ label: t("mcp.import.view"), run: () => setReport(result) }]
+            });
           }
         } catch (raw) {
           firstRunImportStarted = false;
@@ -367,7 +373,7 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
     }
     if (outcome.undoToken && summary.kind !== "undo" && summary.kind !== "rollback" && summary.kind !== "import") {
       const token = outcome.undoToken;
-      actions.push({ label: t("mcp.toast.undo"), primary: actions.length === 0, run: () => void undo(token) });
+      actions.push({ label: t("mcp.toast.undoAction"), primary: actions.length === 0, run: () => void undo(token) });
     }
     if (summary.kind === "add" && summary.serverNames.length === 1 && toast.tone !== "error") {
       const name = summary.serverNames[0];
@@ -474,7 +480,6 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
     try {
       const result = await enqueue(() => withBusyRetry(() => mcpApi.importFromClients({ reason: "user" })));
       setReport(result);
-      setFirstRunNotice(null);
       await refresh();
     } catch (raw) {
       pushError(toMcpError(raw));
@@ -528,7 +533,8 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
         return;
       }
       const summary = { status: result.status, toolsCount: result.toolsCount, testedAt: result.testedAt, stale: false, messageCode: result.messageCode };
-      const text = result.status === "failed" ? testFailureText(result.messageCode, t) : testText(summary, t);
+      const runner = testPreview.runner?.name ?? null;
+      const text = result.status === "failed" ? testFailureText(result.messageCode, t, runner) : testText(summary, t, 0, runner);
       const actions: McpToastAction[] = [];
       if (result.status === "needs-secret") actions.push({ label: t("mcp.row.fill"), run: () => setEditing({ serverId, focus: "secret" }) });
       pushToast({
@@ -617,7 +623,11 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
     void dismissTick;
     return snapshot ? sortIssues(snapshot.issues).filter(issue => !dismissedIssues.has(issue.id)) : [];
   }, [snapshot, dismissTick]);
-  const visibleIssues = issuesOpen ? issues : issues.slice(0, 2);
+  const pinnedIssues = issues.filter(issue => PINNED_ISSUES.has(issue.kind));
+  const dismissIssue = (issue: McpIssue) => {
+    dismissedIssues.add(issue.id);
+    setDismissTick(value => value + 1);
+  };
   const searchActive = query.trim().length > 0;
   const editingRow = editing ? snapshot?.servers.find(row => row.id === editing.serverId) : undefined;
 
@@ -658,50 +668,33 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
             <span>{t("mcp.help.secrets")}</span>
             <span>{t("mcp.help.undo")}</span>
           </HelpTip>
+          <div aria-label={t("mcp.tabs.label")} className="mcp-tabs" role="tablist">
+            <button aria-controls="mcp-panel-mine" aria-selected={tab === "mine"} className={tab === "mine" ? "active" : ""} id="mcp-tab-mine" onClick={() => setTab("mine")} role="tab" type="button">
+              {t("mcp.tabs.mine")}
+            </button>
+            <button aria-controls="mcp-panel-discover" aria-selected={tab === "discover"} className={tab === "discover" ? "active" : ""} id="mcp-tab-discover" onClick={() => setTab("discover")} role="tab" type="button">
+              {t("mcp.tabs.discover")}
+            </button>
+          </div>
           {preview && <span className="mcp-tag" title={t("mcp.preview.note")}>{t("mcp.preview.badge")}</span>}
         </div>
+        {tab === "mine" && snapshot && (
+          <p className="mcp-summary">
+            <span className="mcp-summary-counts">
+              {t("mcp.summary.servers", { n: snapshot.servers.length })}
+              <span aria-hidden="true"> · </span>
+              {t("mcp.summary.clients", { n: columns.length })}
+            </span>
+            {issues.length > 0 && (
+              <button aria-controls="mcp-issue-list" aria-expanded={issuesOpen} className="mcp-issue-count" onClick={() => setIssuesOpen(value => !value)} type="button">
+                <Glyph name="warn" /> {t("mcp.summary.issues", { n: issues.length })}
+                <Glyph className={issuesOpen ? "open" : ""} name="chevron" />
+              </button>
+            )}
+          </p>
+        )}
         <div className="mcp-head-actions">
-          <button className="mcp-btn quiet" disabled={importing} onClick={() => void runImport()} type="button">
-            {importing ? <Spinner /> : <Glyph name="import" />} {t("mcp.header.import")}
-          </button>
-          <button className="mcp-btn solid" onClick={() => {
-            setTab("mine");
-            openAdd({});
-          }} type="button">
-            <Glyph name="plus" /> {t("mcp.header.add")}
-          </button>
-          <MenuButton items={headerMenu} label={t("mcp.header.more")} title={t("mcp.header.more")}>
-            <Glyph name="more" />
-          </MenuButton>
-        </div>
-      </header>
-
-      <div aria-label={t("mcp.tabs.label")} className="mcp-tabs" role="tablist">
-        <button aria-controls="mcp-panel-mine" aria-selected={tab === "mine"} className={tab === "mine" ? "active" : ""} id="mcp-tab-mine" onClick={() => setTab("mine")} role="tab" type="button">
-          {t("mcp.tabs.mine")}
-          {snapshot && <span className="mcp-tab-count">{snapshot.servers.length}</span>}
-        </button>
-        <button aria-controls="mcp-panel-discover" aria-selected={tab === "discover"} className={tab === "discover" ? "active" : ""} id="mcp-tab-discover" onClick={() => setTab("discover")} role="tab" type="button">
-          {t("mcp.tabs.discover")}
-        </button>
-      </div>
-
-      {firstRunNotice && (
-        <div className="mcp-notice" role="status">
-          <Glyph name="check" />
-          <span>
-            {firstRunNotice.added.length > 0
-              ? t("mcp.import.firstRun", { n: firstRunNotice.added.length })
-              : t("mcp.import.firstRunNone")}
-          </span>
-          <button className="mcp-link" onClick={() => setReport(firstRunNotice)} type="button">{t("mcp.import.view")}</button>
-          <button aria-label={t("mcp.common.close")} className="mcp-icon-button small" onClick={() => setFirstRunNotice(null)} type="button"><Glyph name="close" /></button>
-        </div>
-      )}
-
-      {tab === "mine" ? (
-        <section aria-labelledby="mcp-tab-mine" className="mcp-panel" id="mcp-panel-mine" role="tabpanel">
-          <div className="mcp-toolbar">
+          {tab === "mine" && (
             <label className="mcp-search">
               <Glyph name="search" />
               <span className="sr-only">{t("mcp.search.label")}</span>
@@ -718,51 +711,31 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
                 value={query}
               />
             </label>
-            {snapshot && (
-              <p className="mcp-summary">
-                <span>{t("mcp.summary.servers", { n: snapshot.servers.length })}</span>
-                <span aria-hidden="true">·</span>
-                <span>{t("mcp.summary.clients", { n: columns.length })}</span>
-                {issues.length > 0 && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <button aria-expanded={issuesOpen} className="mcp-issue-count" onClick={() => setIssuesOpen(value => !value)} type="button">
-                      <Glyph name="warn" /> {t("mcp.summary.issues", { n: issues.length })}
-                    </button>
-                  </>
-                )}
-              </p>
-            )}
-          </div>
+          )}
+          <button className="mcp-btn quiet mcp-import-button" disabled={importing} onClick={() => void runImport()} title={t("mcp.header.import")} type="button">
+            {importing ? <Spinner /> : <Glyph name="import" />} <span className="mcp-btn-text">{t("mcp.header.import")}</span>
+          </button>
+          <button className="mcp-btn solid" onClick={() => {
+            setTab("mine");
+            openAdd({});
+          }} type="button">
+            <Glyph name="plus" /> {t("mcp.header.add")}
+          </button>
+          <MenuButton items={headerMenu} label={t("mcp.header.more")} title={t("mcp.header.more")}>
+            <Glyph name="more" />
+          </MenuButton>
+        </div>
+      </header>
 
-          {issues.length > 0 && snapshot && (
-            <ul aria-label={t("mcp.issues.label")} className="mcp-issues">
-              {visibleIssues.map(issue => (
-                <li className={`mcp-issue kind-${issue.kind}`} key={issue.id}>
-                  <Glyph name={issue.kind === "missing-secret" ? "key" : issue.kind === "windows-fix" || issue.kind === "out-of-date" ? "refresh" : "warn"} />
-                  <span className="mcp-issue-text">{issueText(issue, snapshot, t)}</span>
-                  {issue.action !== "none" && (
-                    <button className="mcp-btn small quiet" onClick={() => runIssue(issue)} type="button">{t(`mcp.issue.action.${issue.action}`)}</button>
-                  )}
-                  <button
-                    aria-label={t("mcp.issues.dismiss")}
-                    className="mcp-icon-button small"
-                    onClick={() => {
-                      dismissedIssues.add(issue.id);
-                      setDismissTick(value => value + 1);
-                    }}
-                    title={t("mcp.issues.dismiss")}
-                    type="button"
-                  >
-                    <Glyph name="close" />
-                  </button>
-                </li>
+      {tab === "mine" ? (
+        <section aria-labelledby="mcp-tab-mine" className="mcp-panel" id="mcp-panel-mine" role="tabpanel">
+          {/* Issues are also visible in place (cell states, the key chip). The strip lists them on demand;
+              the few that have no cell of their own stay pinned so they are never missed. */}
+          {snapshot && (issuesOpen ? issues : pinnedIssues).length > 0 && (
+            <ul aria-label={t("mcp.issues.label")} className="mcp-issues" id="mcp-issue-list">
+              {(issuesOpen ? issues : pinnedIssues).map(issue => (
+                <IssueLine issue={issue} key={issue.id} onAction={runIssue} onDismiss={dismissIssue} snapshot={snapshot} />
               ))}
-              {issues.length > visibleIssues.length && (
-                <li className="mcp-issue more">
-                  <button className="mcp-link" onClick={() => setIssuesOpen(true)} type="button">{t("mcp.issues.more", { n: issues.length - visibleIssues.length })}</button>
-                </li>
-              )}
             </ul>
           )}
 
@@ -964,6 +937,36 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
 
       <McpToastStack items={toasts} onDismiss={dismissToast} />
     </div>
+  );
+}
+
+/** One issue with exactly one action (S1-9) and a per-session dismiss. `inline` renders it in the status line. */
+function IssueLine({
+  issue,
+  snapshot,
+  inline = false,
+  onAction,
+  onDismiss
+}: {
+  issue: McpIssue;
+  snapshot: McpLibrarySnapshot;
+  inline?: boolean;
+  onAction: (issue: McpIssue) => void;
+  onDismiss: (issue: McpIssue) => void;
+}) {
+  const Tag = inline ? "div" : "li";
+  const text = issueText(issue, snapshot, t);
+  return (
+    <Tag className={`mcp-issue kind-${issue.kind}${inline ? " inline" : ""}`}>
+      <Glyph name={issue.kind === "missing-secret" ? "key" : issue.kind === "windows-fix" || issue.kind === "out-of-date" ? "refresh" : "warn"} />
+      <span className="mcp-issue-text" title={text}>{text}</span>
+      {issue.action !== "none" && (
+        <button className="mcp-btn small quiet" onClick={() => onAction(issue)} type="button">{t(`mcp.issue.action.${issue.action}`)}</button>
+      )}
+      <button aria-label={t("mcp.issues.dismiss")} className="mcp-icon-button small" onClick={() => onDismiss(issue)} title={t("mcp.issues.dismiss")} type="button">
+        <Glyph name="close" />
+      </button>
+    </Tag>
   );
 }
 

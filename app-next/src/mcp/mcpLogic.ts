@@ -296,14 +296,16 @@ export function testTone(test: McpTestSummary | null, missingSecretCount = 0): T
   return "failed";
 }
 
-export function testText(test: McpTestSummary | null, t: Translate, missingSecretCount = 0): string {
+export function testText(test: McpTestSummary | null, t: Translate, missingSecretCount = 0, runner: string | null = null): string {
   if (!test || test.stale) return missingSecretCount > 0 ? t("mcp.test.status.needs-secret") : t("mcp.test.untested");
   if (test.status === "ok") return t("mcp.test.okTools", { n: test.toolsCount ?? 0 });
-  if (test.status === "failed") return testFailureText(test.messageCode, t);
+  if (test.status === "failed") return testFailureText(test.messageCode, t, runner);
+  if (test.status === "runner-missing" && runner) return t("mcp.test.runnerMissingNamed", { runner });
   return t(`mcp.test.status.${test.status}`);
 }
 
-export function testFailureText(messageCode: string, t: Translate): string {
+export function testFailureText(messageCode: string, t: Translate, runner: string | null = null): string {
+  if (messageCode === "runner-missing" && runner) return t("mcp.test.runnerMissingNamed", { runner });
   const known = ["runner-missing", "needs-secret", "exit-early", "timeout", "http-401", "http-404", "invalid-response"];
   return known.includes(messageCode) ? t(`mcp.test.msg.${messageCode}`) : t("mcp.test.status.failed");
 }
