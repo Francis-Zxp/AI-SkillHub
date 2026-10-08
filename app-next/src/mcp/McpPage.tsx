@@ -152,6 +152,7 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
   const toastId = useRef(0);
   const addKey = useRef(0);
   const mounted = useRef(true);
+  const pendingConfirm = useRef<((answer: ConfirmAnswer | null) => void) | null>(null);
   const testingRef = useRef(testing);
   testingRef.current = testing;
 
@@ -236,6 +237,9 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
       unlistenChanged?.();
       unlistenProgress?.();
       document.removeEventListener("visibilitychange", onVisibility);
+      // Leaving the page cancels an open confirmation so the write queue never waits forever.
+      pendingConfirm.current?.(null);
+      pendingConfirm.current = null;
     };
     // Mount-only wiring.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -301,7 +305,10 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
   }
 
   function askConfirm(confirmation: McpConfirmation): Promise<ConfirmAnswer | null> {
-    return new Promise(resolve => setConfirm({ confirmation, resolve }));
+    return new Promise(resolve => {
+      pendingConfirm.current = resolve;
+      setConfirm({ confirmation, resolve });
+    });
   }
 
   function markPending(keys: string[], on: boolean) {
@@ -361,16 +368,21 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
     let text = toast.text;
     if (toast.tone === "ok" && summary.kind === "add" && summary.clientIds.length === 0) text = t("mcp.toast.add.noClient", { servers: summary.serverNames.join(t("mcp.list.sep")) });
     const actions: McpToastAction[] = [];
-    const desired = !(summary.kind === "disable" || summary.kind === "remove");
-    for (const failed of outcome.results.filter(item => item.status === "failed")) {
+    // A failed client is retried by writing the same desired state again; failed undo, rollback or
+    // removal cannot be "retried" that way, so they point to the file instead.
+    const retryable = ["add", "enable", "disable", "update", "resync", "resolve", "secret"].includes(summary.kind);
+    const desired = summary.kind !== "disable";
+    for (const failed of outcome.results.filter(item => item.status === "failed").slice(0, 2)) {
       const clientId = failed.clientId;
       const serverIds = failed.serverIds;
-      actions.push({
-        label: t("mcp.toast.retryClient", { client: clientLabel(clientId, clients) }),
-        run: () => {
-          for (const serverId of serverIds) void setCell(serverId, clientId, desired);
-        }
-      });
+      actions.push(retryable
+        ? {
+            label: t("mcp.toast.retryClient", { client: clientLabel(clientId, clients) }),
+            run: () => {
+              for (const serverId of serverIds) void setCell(serverId, clientId, desired);
+            }
+          }
+        : { label: `${clientLabel(clientId, clients)} · ${t("mcp.col.openLocation")}`, run: () => void openLocation(clientId) });
     }
     const changedSomething = outcome.results.some(item => item.status === "written" || item.status === "undone") || outcome.results.length === 0;
     if (outcome.undoToken && changedSomething && summary.kind !== "undo" && summary.kind !== "rollback" && summary.kind !== "import") {
@@ -948,6 +960,7 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
           onAnswer={answer => {
             const current = confirm;
             setConfirm(null);
+            pendingConfirm.current = null;
             current.resolve(answer);
           }}
         />

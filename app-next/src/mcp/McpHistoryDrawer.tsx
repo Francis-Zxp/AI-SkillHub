@@ -37,7 +37,9 @@ export function McpHistoryDrawer({
     return () => {
       cancelled = true;
     };
-  }, [generation, clients]);
+    // Refetch when the library changed; client labels may lag one render, which is harmless.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generation]);
 
   const now = new Date();
 

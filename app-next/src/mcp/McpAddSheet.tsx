@@ -266,11 +266,13 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
   const includedCandidates = groups
     .map(group => ({ group, candidate: activeCandidate(group), choice: choices[group[0].key] }))
     .filter(item => item.choice?.include);
+  // "跳过" leaves a same-name, different server exactly as it is: it is not sent at all.
+  const sentCandidates = includedCandidates.filter(item => !(item.candidate.exists === "different" && item.choice.onConflict === "skip"));
 
   const transportsInPlay: McpTransport[] = pasteActive
-    ? [...new Set(includedCandidates.map(item => item.candidate.input.transport))]
+    ? [...new Set(sentCandidates.map(item => item.candidate.input.transport))]
     : [transport];
-  const nameInPlay = pasteActive ? includedCandidates.map(item => item.choice.name).join(",") : name;
+  const nameInPlay = pasteActive ? sentCandidates.map(item => item.choice.name).join(",") : name;
 
   const availability = clients.map(client => {
     const options = transportsInPlay.map(value => clientAvailability(client, value, nameInPlay));
@@ -281,14 +283,16 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
   const pickedIds = (picked ?? defaultPicked).filter(id => availability.find(item => item.client.id === id)?.available);
   const targetCount = pickedIds.length;
 
-  const hasSecrets = pasteActive ? includedCandidates.some(item => item.candidate.secrets.length > 0) : activeSecrets.length > 0;
+  const hasSecrets = pasteActive ? sentCandidates.some(item => item.candidate.secrets.length > 0) : activeSecrets.length > 0;
   const desktopNeedsConsent = hasSecrets && pickedIds.includes("claude-desktop");
 
   const candidateProblems = new Map<string, string>();
-  for (const item of includedCandidates) {
+  for (const item of sentCandidates) {
     const problem = validateServerName(item.choice.name);
     const existing = item.candidate.exists !== "new";
     if (problem && !existing && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(item.choice.name)) candidateProblems.set(item.group[0].key, `mcp.add.err.name.${problem}`);
+    // An existing server keeps its stored keys when a value is left empty.
+    if (existing) continue;
     for (const secret of item.candidate.secrets) {
       const typed = item.choice.values[secret.name] ?? "";
       const replacing = item.choice.replace[secret.name];
@@ -296,10 +300,10 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
       if (!typed.trim() && !item.choice.later[secret.name]) candidateProblems.set(`${item.group[0].key}:${secret.name}`, "mcp.add.err.secretValue");
     }
   }
-  const pasteValid = includedCandidates.length > 0 && candidateProblems.size === 0;
+  const pasteValid = sentCandidates.length > 0 && candidateProblems.size === 0;
 
   const replacedCount = includedCandidates.filter(item => item.candidate.exists === "different" && item.choice.onConflict === "overwrite").length;
-  const addCount = includedCandidates.filter(item => !(item.candidate.exists !== "new" && item.choice.onConflict === "skip")).length;
+  const addCount = sentCandidates.length;
 
   const dirty = Boolean(pasteText.trim() || name.trim() || target.trim() || secrets.some(row => row.value) || envRows.length > 0);
 
@@ -486,7 +490,7 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
     const [scope, workspaceId] = placement === "user" ? ["user", undefined] : placement.split(":");
     const request: McpAddRequest = pasteActive
       ? {
-          candidates: includedCandidates.map(item => ({
+          candidates: sentCandidates.map(item => ({
             input: candidateInput(item.candidate, item.choice),
             onConflict: item.candidate.exists === "new" ? "skip" : item.choice.onConflict
           })),
@@ -1070,7 +1074,7 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
           <div className="mcp-foot-actions">
             {submitError && <span className="mcp-field-error" role="alert">{submitError}</span>}
             <button className="mcp-btn quiet" disabled={submitting} onClick={requestClose} type="button">{t("mcp.common.cancel")}</button>
-            <button className="mcp-btn solid" disabled={submitting || (!pasteActive && !manualOpen && !templateId)} onClick={() => void submit()} ref={submitRef} type="button">
+            <button className="mcp-btn solid" disabled={submitting || (!pasteActive && !manualOpen && !templateId) || (pasteActive && sentCandidates.length === 0)} onClick={() => void submit()} ref={submitRef} type="button">
               {submitting ? <Spinner /> : <Glyph name="plus" />} {submitLabel}
             </button>
           </div>
