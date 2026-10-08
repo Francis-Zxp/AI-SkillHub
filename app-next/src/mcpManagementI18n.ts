@@ -535,7 +535,26 @@ const zh: Dictionary = {
   "mcp.list.sep": "、",
   "mcp.list.more": "{items} 等另外 {n} 个",
   "mcp.resolve.takeLibraryHint": "把 {client} 里这一项改回列表里的版本。",
-  "mcp.resolve.takeFileHint": "把 {client} 里的写法存进列表，并同步给其他已启用的 AI 工具。"
+  "mcp.resolve.takeFileHint": "把 {client} 里的写法存进列表，并同步给其他已启用的 AI 工具。",
+  "mcp.err.backendDetail": "zh",
+  "mcp.toast.skippedUnknown": "{client} 没有写入",
+  "mcp.toast.skipKept": "{client} 里已有同名的不同配置，保持原样",
+  "mcp.toast.skipSep": "：",
+  "mcp.toast.nothingWritten": "{servers} 没有写入任何 AI 工具",
+  "mcp.toast.nothingWritten.add": "已把 {servers} 加进列表，但没有写入任何 AI 工具",
+  "mcp.toast.failedAll.undo": "没能撤销 {client} 里的改动：{reason}",
+  "mcp.toast.partial.undo": "已撤销 {ok} 个，{failed} 个没有撤销（{client}：{reason}）",
+  "mcp.toast.noop.add": "没有需要写入的改动，各 AI 工具保持原样",
+  "mcp.resolve.title.removed": "{server} 在 {client} 里被删掉了",
+  "mcp.resolve.title.added": "{server} 是在 {client} 里手动加上的",
+  "mcp.resolve.removed.takeFile": "保持删掉",
+  "mcp.resolve.removed.takeFileHint": "不改动 {client} 的文件，在列表里把它记为未启用。",
+  "mcp.resolve.removed.takeLibrary": "重新写回",
+  "mcp.resolve.removed.takeLibraryHint": "按列表里的版本，把这一项写回 {client}。",
+  "mcp.resolve.added.takeFile": "收进列表",
+  "mcp.resolve.added.takeFileHint": "把 {client} 里的写法存进列表并记为已启用；其他已启用的 AI 工具会跟着更新。",
+  "mcp.resolve.added.takeLibrary": "从 {client} 拿掉",
+  "mcp.resolve.added.takeLibraryHint": "从 {client} 的配置里拿掉这一项，列表里保持未启用。"
 };
 
 const en: Dictionary = {
@@ -1039,7 +1058,26 @@ const en: Dictionary = {
   "mcp.list.sep": ", ",
   "mcp.list.more": "{items} and {n} more",
   "mcp.resolve.takeLibraryHint": "Put this entry in {client} back to the version in your list.",
-  "mcp.resolve.takeFileHint": "Keep what {client} has, save it to your list and sync it to your other AI tools."
+  "mcp.resolve.takeFileHint": "Keep what {client} has, save it to your list and sync it to your other AI tools.",
+  "mcp.err.backendDetail": "en",
+  "mcp.toast.skippedUnknown": "{client} was not written",
+  "mcp.toast.skipKept": "{client} already has a different entry with this name; it was left as is",
+  "mcp.toast.skipSep": ": ",
+  "mcp.toast.nothingWritten": "{servers} was not written to any AI tool",
+  "mcp.toast.nothingWritten.add": "Added {servers} to your list, but no AI tool was written",
+  "mcp.toast.failedAll.undo": "Could not undo the change in {client}: {reason}",
+  "mcp.toast.partial.undo": "Undid {ok}, {failed} not undone ({client}: {reason})",
+  "mcp.toast.noop.add": "Nothing to write; your AI tools stay as they are",
+  "mcp.resolve.title.removed": "{server} was deleted in {client}",
+  "mcp.resolve.title.added": "{server} was added by hand in {client}",
+  "mcp.resolve.removed.takeFile": "Keep it deleted",
+  "mcp.resolve.removed.takeFileHint": "Leave {client}'s file alone and mark it off in your list.",
+  "mcp.resolve.removed.takeLibrary": "Write it back",
+  "mcp.resolve.removed.takeLibraryHint": "Write your list's version of this entry back into {client}.",
+  "mcp.resolve.added.takeFile": "Add it to your list",
+  "mcp.resolve.added.takeFileHint": "Save {client}'s version in your list and mark it on; other AI tools that use it follow.",
+  "mcp.resolve.added.takeLibrary": "Remove it from {client}",
+  "mcp.resolve.added.takeLibraryHint": "Take this entry out of {client}'s config; it stays off in your list."
 };
 
 const ko: Dictionary = {
@@ -1543,7 +1581,26 @@ const ko: Dictionary = {
   "mcp.list.sep": ", ",
   "mcp.list.more": "{items} 외 {n}개",
   "mcp.resolve.takeLibraryHint": "{client}의 이 항목을 목록의 버전으로 되돌립니다.",
-  "mcp.resolve.takeFileHint": "{client}의 내용을 목록에 저장하고 켜 둔 다른 AI 도구에도 동기화합니다."
+  "mcp.resolve.takeFileHint": "{client}의 내용을 목록에 저장하고 켜 둔 다른 AI 도구에도 동기화합니다.",
+  "mcp.err.backendDetail": "ko",
+  "mcp.toast.skippedUnknown": "{client}에는 쓰지 않았습니다",
+  "mcp.toast.skipKept": "{client}에 같은 이름의 다른 설정이 있어 그대로 두었습니다",
+  "mcp.toast.skipSep": ": ",
+  "mcp.toast.nothingWritten": "{servers}을(를) 어떤 AI 도구에도 쓰지 않았습니다",
+  "mcp.toast.nothingWritten.add": "{servers}을(를) 목록에 추가했지만 AI 도구에는 쓰지 않았습니다",
+  "mcp.toast.failedAll.undo": "{client}의 변경을 되돌리지 못했습니다: {reason}",
+  "mcp.toast.partial.undo": "{ok}개 되돌림, {failed}개는 되돌리지 못함 ({client}: {reason})",
+  "mcp.toast.noop.add": "쓸 변경이 없어 AI 도구는 그대로입니다",
+  "mcp.resolve.title.removed": "{client}에서 {server}이(가) 삭제되었습니다",
+  "mcp.resolve.title.added": "{server}은(는) {client}에서 직접 추가되었습니다",
+  "mcp.resolve.removed.takeFile": "삭제된 채로 두기",
+  "mcp.resolve.removed.takeFileHint": "{client}의 파일은 그대로 두고 목록에서 꺼짐으로 표시합니다.",
+  "mcp.resolve.removed.takeLibrary": "다시 쓰기",
+  "mcp.resolve.removed.takeLibraryHint": "목록의 버전으로 이 항목을 {client}에 다시 씁니다.",
+  "mcp.resolve.added.takeFile": "목록에 넣기",
+  "mcp.resolve.added.takeFileHint": "{client}의 설정을 목록에 저장하고 켜짐으로 표시합니다. 이 MCP를 쓰는 다른 AI 도구도 함께 바뀝니다.",
+  "mcp.resolve.added.takeLibrary": "{client}에서 빼기",
+  "mcp.resolve.added.takeLibraryHint": "{client}의 설정에서 이 항목을 빼고 목록에서는 꺼진 상태로 둡니다."
 };
 
 const dictionaries: Record<Lang, Dictionary> = { en, zh, ko };

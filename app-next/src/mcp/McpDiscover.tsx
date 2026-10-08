@@ -2,7 +2,7 @@
 // the built-in templates, and GitHub import. Browsing this tab never starts a process and never
 // fetches anything until the user presses a button.
 import { useEffect, useState } from "react";
-import type { McpAddRequest, McpLibrarySnapshot, McpTemplate, McpTemplateId } from "./mcpTypes";
+import type { McpAddRequest, McpClientId, McpLibrarySnapshot, McpTemplate, McpTemplateId } from "./mcpTypes";
 import { mcpApi } from "./mcpApi";
 import { McpRecipeCard } from "../McpRecipeCard";
 import type { AddSubmitResult } from "./McpAddSheet";
@@ -16,6 +16,7 @@ export default function McpDiscover({
   onAddTemplate,
   onGithub,
   onAdd,
+  onEnable,
   onOpenUrl,
   onOpenExisting,
   focusRecipe
@@ -25,6 +26,8 @@ export default function McpDiscover({
   onAddTemplate: (id: McpTemplateId) => void;
   onGithub: (source: string) => Promise<boolean>;
   onAdd: (request: McpAddRequest) => Promise<AddSubmitResult>;
+  /** Turns a library server on in more AI tools (the Origin card when origin is already listed). */
+  onEnable: (serverId: string, clientIds: McpClientId[]) => Promise<AddSubmitResult>;
   onOpenUrl: (url: string) => void;
   /** Opens the edit drawer of a library server with this name (templates already added). */
   onOpenExisting: (name: string) => void;
@@ -59,7 +62,7 @@ export default function McpDiscover({
       <section aria-labelledby="mcp-discover-recipes" className="mcp-discover-section">
         <h3 id="mcp-discover-recipes">{t("mcp.discover.verified")}</h3>
         <p className="mcp-muted small">{t("mcp.discover.verifiedHint")}</p>
-        <McpRecipeCard onAdd={onAdd} runtimeAvailable={runtimeAvailable} snapshot={snapshot} />
+        <McpRecipeCard onAdd={onAdd} onEnable={onEnable} runtimeAvailable={runtimeAvailable} snapshot={snapshot} />
       </section>
 
       <section aria-labelledby="mcp-discover-templates" className="mcp-discover-section">

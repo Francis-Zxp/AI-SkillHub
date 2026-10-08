@@ -1,8 +1,12 @@
 // Origin one-click recipe, shown in MCP → 发现 → "已验证一键安装" (contract §6.8, M0-11).
 // - Collapsed by default. Detection (which starts reg/tasklist/python) runs only after a click on
 //   "检查这台电脑" or on expanding the card, never on mount (bug #23).
-// - Writing to AI tools goes through the shared MCP library command (mcp_add_servers) and its
-//   plain-language confirmation; the client list comes from the read-only snapshot (bug MCP#10).
+// - Writing to AI tools goes through the shared MCP library and its plain-language confirmations;
+//   the client list comes from the read-only snapshot (bug MCP#10):
+//     origin not in the list yet → mcp_add_servers (the backend asks before replacing a different
+//       same-name entry it finds in a client file);
+//     origin listed with this runtime → mcp_set_row for the newly ticked tools only;
+//     origin listed with another Python → ask here first, then add with onConflict "overwrite".
 // - Client chips stay visible after connecting, so origin can be added to a second tool (bug #24),
 //   and their state is re-derived from the snapshot whenever the library changes (bug MCP#9).
 import { invoke } from "@tauri-apps/api/core";
@@ -10,7 +14,8 @@ import { useMemo, useState } from "react";
 import { getLang } from "./i18n";
 import type { Lang } from "./i18n";
 import { Icon } from "./icons";
-import type { McpAddRequest, McpClientId, McpLibrarySnapshot } from "./mcp/mcpTypes";
+import { mcpApi } from "./mcp/mcpApi";
+import type { McpAddRequest, McpClientId, McpLibrarySnapshot, McpServerDetail, McpServerInput } from "./mcp/mcpTypes";
 import type { AddSubmitResult } from "./mcp/McpAddSheet";
 import "./McpRecipeCard.css";
 
@@ -50,7 +55,34 @@ type Props = {
   snapshot: McpLibrarySnapshot | null;
   /** Adds origin to the chosen AI tools through the MCP library (shared confirmation and toasts). */
   onAdd: (request: McpAddRequest) => Promise<AddSubmitResult>;
+  /** Switches the listed origin on in more AI tools (mcp_set_row), without touching its config. */
+  onEnable: (serverId: string, clientIds: McpClientId[]) => Promise<AddSubmitResult>;
 };
+
+const ORIGIN_ARGS = ["-m", "origin_mcp"];
+
+function recipeInput(runtimePython: string): McpServerInput {
+  return { name: "origin", transport: "stdio", command: runtimePython, args: [...ORIGIN_ARGS], source: { kind: "recipe", id: "origin-mcp" } };
+}
+
+function samePath(left: string, right: string) {
+  const norm = (value: string) => value.trim().replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return norm(left) === norm(right);
+}
+
+/** True when the listed origin already starts this recipe's runtime with `-m origin_mcp`. */
+function matchesRecipe(detail: McpServerDetail, runtimePython: string) {
+  return detail.transport === "stdio"
+    && samePath(detail.command ?? "", runtimePython)
+    && detail.args.length === ORIGIN_ARGS.length
+    && detail.args.every((arg, index) => !arg.masked && arg.value === ORIGIN_ARGS[index]);
+}
+
+/** Recipe commands reject with a zh string; MCP library commands reject with { code, message }. */
+function errorMessage(reason: unknown): string {
+  if (reason && typeof reason === "object" && "message" in reason) return String((reason as { message: unknown }).message);
+  return String(reason);
+}
 
 async function recipeCommand(command: "detect_mcp_recipe" | "install_mcp_recipe" | "verify_mcp_recipe" | "prepare_origin_bridge", runtimeAvailable: boolean): Promise<RecipeStatus> {
   if (!runtimeAvailable) {
@@ -60,7 +92,7 @@ async function recipeCommand(command: "detect_mcp_recipe" | "install_mcp_recipe"
   return invoke<RecipeStatus>(command);
 }
 
-export function McpRecipeCard({ runtimeAvailable, snapshot, onAdd }: Props) {
+export function McpRecipeCard({ runtimeAvailable, snapshot, onAdd, onEnable }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [status, setStatus] = useState<RecipeStatus | null>(null);
   const [phase, setPhase] = useState<Phase>("");
@@ -68,6 +100,8 @@ export function McpRecipeCard({ runtimeAvailable, snapshot, onAdd }: Props) {
   const [showDetails, setShowDetails] = useState(false);
   const [chosen, setChosen] = useState<McpClientId[] | null>(null);
   const [copied, setCopied] = useState(-1);
+  // The listed origin starts another Python: replacing it needs a plain "yes" first (I6).
+  const [replaceAsk, setReplaceAsk] = useState<RecipeStatus | null>(null);
 
   // Stdio-capable, writable AI tools from the snapshot; their origin state comes from the library row.
   const originRow = snapshot?.servers.find(row => row.name.toLowerCase() === "origin") ?? null;
@@ -87,32 +121,43 @@ export function McpRecipeCard({ runtimeAvailable, snapshot, onAdd }: Props) {
     try {
       setStatus(await recipeCommand("detect_mcp_recipe", runtimeAvailable));
     } catch (reason) {
-      setError(String(reason));
+      setError(errorMessage(reason));
     } finally {
       setPhase("");
     }
   }
 
-  async function connect(current: RecipeStatus) {
+  async function connect(current: RecipeStatus, replace = false) {
     if (selected.length === 0) {
       setError(rt("chooseHost"));
       return;
     }
     setPhase("applying");
     setError("");
+    setReplaceAsk(null);
     try {
-      const outcome = await onAdd({
-        candidates: [{
-          input: { name: "origin", transport: "stdio", command: current.runtimePython, args: ["-m", "origin_mcp"], source: { kind: "recipe", id: "origin-mcp" } },
-          onConflict: "skip"
-        }],
-        clientIds: selected
-      });
+      let outcome: AddSubmitResult;
+      if (originRow && !replace) {
+        // "skip" would leave a listed origin untouched and write nothing (backend: noop), so a listed
+        // origin with the same runtime is simply switched on in the newly ticked tools.
+        const stored = await mcpApi.getServer(originRow.id);
+        if (!matchesRecipe(stored, current.runtimePython)) {
+          setReplaceAsk(current);
+          setPhase("");
+          return;
+        }
+        outcome = await onEnable(originRow.id, selected);
+      } else {
+        // onConflict omitted: a different same-name entry in a client file gets the backend's
+        // plain-language overwrite question; "overwrite" only after the user said yes above.
+        const candidate = replace ? { input: recipeInput(current.runtimePython), onConflict: "overwrite" as const } : { input: recipeInput(current.runtimePython) };
+        outcome = await onAdd({ candidates: [candidate], clientIds: selected } as McpAddRequest);
+      }
       setChosen(null);
       setPhase("");
       if (outcome.status === "done" && runtimeAvailable) await verify();
     } catch (reason) {
-      setError(String(reason));
+      setError(errorMessage(reason));
       setPhase("");
     }
   }
@@ -127,7 +172,7 @@ export function McpRecipeCard({ runtimeAvailable, snapshot, onAdd }: Props) {
       if (notConnected.length > 0 && selected.length > 0) await connect(installed);
       else await verify();
     } catch (reason) {
-      setError(String(reason));
+      setError(errorMessage(reason));
       setPhase("");
       await detect(false);
     }
@@ -139,7 +184,7 @@ export function McpRecipeCard({ runtimeAvailable, snapshot, onAdd }: Props) {
     try {
       setStatus(await recipeCommand("verify_mcp_recipe", runtimeAvailable));
     } catch (reason) {
-      setError(String(reason));
+      setError(errorMessage(reason));
     } finally {
       setPhase("");
     }
@@ -151,7 +196,7 @@ export function McpRecipeCard({ runtimeAvailable, snapshot, onAdd }: Props) {
     try {
       setStatus(await recipeCommand("prepare_origin_bridge", runtimeAvailable));
     } catch (reason) {
-      setError(String(reason));
+      setError(errorMessage(reason));
       await detect(false);
     } finally {
       setPhase("");
@@ -266,6 +311,19 @@ export function McpRecipeCard({ runtimeAvailable, snapshot, onAdd }: Props) {
           )}
 
           {(error || status?.failure) && <p className="recipe-error" role="alert">{error || status?.failure}</p>}
+
+          {replaceAsk && (
+            <div aria-label={rt("replace.title")} className="recipe-replace" role="group">
+              <p>
+                <strong>{rt("replace.title")}</strong>
+                {connectedLabels.length > 0 ? rt("replace.bodyConnected", { clients: connectedLabels.join(rt("sep")) }) : rt("replace.body")}
+              </p>
+              <div className="recipe-actions">
+                <button className="primary-action" disabled={busy} onClick={() => void connect(replaceAsk, true)} type="button">{rt("replace.confirm")}</button>
+                <button className="ghost-action" disabled={busy} onClick={() => setReplaceAsk(null)} type="button">{rt("replace.cancel")}</button>
+              </div>
+            </div>
+          )}
 
           {status && clientOptions.length > 0 && (
             <fieldset className="recipe-hosts">
@@ -398,7 +456,12 @@ const zh: Dictionary = {
   "phase.detecting": "检测中…",
   "phase.installing": "正在下载并安装…",
   "phase.applying": "正在写入…",
-  "phase.verifying": "正在验证…"
+  "phase.verifying": "正在验证…",
+  "replace.title": "列表里的 origin 用的是另一个 Python。",
+  "replace.body": "改用 SkillHub 为 Origin 装好的这个运行环境吗？可以撤销。",
+  "replace.bodyConnected": "改用 SkillHub 为 Origin 装好的这个运行环境，并同步到已接入的 {clients} 吗？可以撤销。",
+  "replace.confirm": "改用这个",
+  "replace.cancel": "保持原样"
 };
 
 const en: Dictionary = {
@@ -472,7 +535,12 @@ const en: Dictionary = {
   "phase.detecting": "Checking…",
   "phase.installing": "Downloading and installing…",
   "phase.applying": "Writing…",
-  "phase.verifying": "Verifying…"
+  "phase.verifying": "Verifying…",
+  "replace.title": "The origin in your list starts a different Python.",
+  "replace.body": "Switch it to the runtime SkillHub set up for Origin? You can undo this.",
+  "replace.bodyConnected": "Switch it to the runtime SkillHub set up for Origin and update {clients} too? You can undo this.",
+  "replace.confirm": "Use this one",
+  "replace.cancel": "Keep it"
 };
 
 const ko: Dictionary = {
@@ -546,7 +614,12 @@ const ko: Dictionary = {
   "phase.detecting": "확인 중…",
   "phase.installing": "다운로드 및 설치 중…",
   "phase.applying": "쓰는 중…",
-  "phase.verifying": "확인 중…"
+  "phase.verifying": "확인 중…",
+  "replace.title": "목록의 origin은 다른 Python을 사용합니다.",
+  "replace.body": "SkillHub가 Origin용으로 준비한 실행 환경으로 바꿀까요? 되돌릴 수 있습니다.",
+  "replace.bodyConnected": "SkillHub가 Origin용으로 준비한 실행 환경으로 바꾸고 {clients}에도 반영할까요? 되돌릴 수 있습니다.",
+  "replace.confirm": "이것으로 바꾸기",
+  "replace.cancel": "그대로 두기"
 };
 
 const dictionaries: Record<Lang, Dictionary> = { zh, en, ko };

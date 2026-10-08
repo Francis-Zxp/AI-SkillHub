@@ -7,6 +7,7 @@ import { Glyph, Overlay, t } from "./mcpUi";
 export function McpTestDialog({
   preview,
   serverName,
+  missingNames,
   onRun,
   onCancel,
   onFillSecret,
@@ -14,6 +15,8 @@ export function McpTestDialog({
 }: {
   preview: McpTestPreview;
   serverName: string;
+  /** Display names for preview.missingSecrets (the variable rather than "Authorization"). */
+  missingNames?: string[];
   onRun: () => void;
   onCancel: () => void;
   onFillSecret: () => void;
@@ -59,7 +62,7 @@ export function McpTestDialog({
         {needsSecret && (
           <div className="mcp-callout warn" role="alert">
             <Glyph name="key" />
-            <span>{t("mcp.test.needsSecretFirst", { names: preview.missingSecrets.join(t("mcp.list.sep")) })}</span>
+            <span>{t("mcp.test.needsSecretFirst", { names: (missingNames?.length ? missingNames : preview.missingSecrets).join(t("mcp.list.sep")) })}</span>
             <button className="mcp-btn small quiet" onClick={onFillSecret} type="button">{t("mcp.row.fill")}</button>
           </div>
         )}

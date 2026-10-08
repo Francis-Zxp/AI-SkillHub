@@ -42,6 +42,7 @@ import {
   issueText,
   outcomeToast,
   rememberAck,
+  sameConfirmation,
   sortIssues,
   testAckKey,
   testFailureText,
@@ -82,6 +83,8 @@ type WriteOptions = {
   pending?: string[];
   silentCodes?: McpErrorCode[];
   quiet?: boolean;
+  /** Shown when the backend had nothing to write (a "noop"), so a click never looks ignored. */
+  noopText?: string;
 };
 
 // Session-scoped (memory only): the first-run import runs once per app session, and dismissed
@@ -356,16 +359,26 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
     return enqueue(async (): Promise<WriteResult> => {
       try {
         let answer: ConfirmAnswer | undefined;
-        for (let round = 0; round < 3; round += 1) {
+        let approved: McpConfirmation | null = null;
+        for (let round = 0; round < 4; round += 1) {
           const outcome = await withBusyRetry(() => attempt(answer));
           if (outcome.kind === "needs-confirmation") {
+            // The token also binds choices made inside the dialog (deleteEnvVars), so the confirmed
+            // call can come back with a fresh token for the same question: accept it, do not ask twice.
+            if (approved && answer && sameConfirmation(approved, outcome.confirmation)) {
+              answer = { ...answer, token: outcome.confirmation.confirmToken };
+              approved = null;
+              continue;
+            }
             const next = await askConfirm(outcome.confirmation);
             if (!next) return { status: "cancelled" };
             answer = next;
+            approved = outcome.confirmation;
             continue;
           }
           await refresh();
           if (outcome.kind === "done" && !options.quiet) showOutcome(outcome);
+          if (outcome.kind === "noop" && options.noopText) pushToast({ tone: "info", text: previewSuffix(options.noopText), actions: [] });
           return { status: "done", outcome };
         }
         return { status: "cancelled" };
@@ -392,7 +405,7 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
     const toast = outcomeToast(outcome, t, clients);
     const { summary } = outcome;
     let text = toast.text;
-    if (toast.tone === "ok" && summary.kind === "add" && summary.clientIds.length === 0) text = t("mcp.toast.add.noClient", { servers: summary.serverNames.join(t("mcp.list.sep")) });
+    if (toast.tone === "ok" && summary.kind === "add" && summary.clientIds.length === 0 && toast.skipped.length === 0) text = t("mcp.toast.add.noClient", { servers: summary.serverNames.join(t("mcp.list.sep")) });
     const actions: McpToastAction[] = [];
     // A failed client is retried by writing the same desired state again; failed undo, rollback or
     // removal cannot be "retried" that way, so they point to the file instead.
@@ -425,7 +438,10 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
         }
       });
     }
-    const detail = toast.restartClients.length > 0 ? t("mcp.toast.restart", { clients: clientNames(toast.restartClients, t, clients) }) : undefined;
+    // Clients left out on purpose are named with the reason, so "已添加" never hides a skipped tool.
+    const details = toast.skipped.map(line => line.text);
+    if (toast.restartClients.length > 0) details.push(t("mcp.toast.restart", { clients: clientNames(toast.restartClients, t, clients) }));
+    const detail = details.length > 0 ? details.join("\n") : undefined;
     pushToast({ tone: toast.tone, text: previewSuffix(text), detail, actions });
   }
 
@@ -613,7 +629,19 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
   }
 
   async function submitAdd(request: McpAddRequest): Promise<AddSubmitResult> {
-    const result = await runWrite(answer => mcpApi.addServers({ ...request, confirmToken: answer?.token }), { silentCodes: ["paste-expired"] });
+    const result = await runWrite(answer => mcpApi.addServers({ ...request, confirmToken: answer?.token }), {
+      silentCodes: ["paste-expired"],
+      noopText: t("mcp.toast.noop.add")
+    });
+    return toSubmitResult(result);
+  }
+
+  /** Discover → Origin: the library already has origin, so this only switches it on in more tools. */
+  async function enableInClients(serverId: string, clientIds: McpClientId[]): Promise<AddSubmitResult> {
+    const result = await runWrite(answer => mcpApi.setRow({ serverId, enabled: true, clientIds, confirmToken: answer?.token }), {
+      pending: clientIds.map(clientId => pendingKey(serverId, clientId)),
+      noopText: t("mcp.toast.noop.add")
+    });
     return toSubmitResult(result);
   }
 
@@ -704,6 +732,23 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
     { kind: "separator" as const },
     { kind: "action" as const, icon: "history" as const, label: t("mcp.header.history"), onSelect: () => setHistoryOpen(true) }
   ];
+
+  // "在外部被改过" covers three cases; each gets its own words for the two choices (backend
+  // mcp_resolve_changed_outside: take "file" keeps what the file says, take "library" writes ours).
+  const resolveCopy = (() => {
+    if (!resolveChange) return null;
+    const live = snapshot?.servers.find(row => row.id === resolveChange.row.id) ?? resolveChange.row;
+    const reason = cellFor(live, resolveChange.clientId)?.reason;
+    const client = clientLabel(resolveChange.clientId, snapshot?.clients);
+    const variant = reason === "entry-removed-outside" ? ".removed" : reason === "entry-added-outside" ? ".added" : "";
+    return { client, variant, title: t(`mcp.resolve.title${variant}`, { server: live.name, client }) };
+  })();
+
+  // The test preview names a missing header as "Authorization"; show the variable that holds it.
+  const testRow = testDialog ? snapshot?.servers.find(row => row.id === testDialog.preview.serverId) : undefined;
+  const testMissingNames = testDialog
+    ? testDialog.preview.missingSecrets.map(name => testRow?.secrets.find(secret => secret.name === name)?.envVar ?? name)
+    : [];
 
   const consentRow = consent ? snapshot?.servers.find(row => row.id === consent.row.id) ?? consent.row : null;
   const consentNames = consentRow ? consentRow.secrets.map(secret => secret.envVar ?? secret.name).join(t("mcp.list.sep")) : "";
@@ -855,7 +900,8 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
         <section aria-labelledby="mcp-tab-discover" className="mcp-panel" id="mcp-panel-discover" role="tabpanel">
           <Suspense fallback={<p className="mcp-muted"><Spinner /> {t("mcp.discover.loading")}</p>}>
             <McpDiscover
-              onAdd={async request => toSubmitResult(await runWrite(answer => mcpApi.addServers({ ...request, confirmToken: answer?.token })))}
+              onAdd={submitAdd}
+              onEnable={enableInClients}
               onAddTemplate={id => openAdd({ template: id })}
               onGithub={source => openGithub(source)}
               onOpenExisting={name => {
@@ -934,28 +980,28 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
         </Overlay>
       )}
 
-      {resolveChange && (
-        <Overlay label={t("mcp.resolve.title", { server: resolveChange.row.name, client: clientLabel(resolveChange.clientId, snapshot?.clients) })} onClose={() => setResolveChange(null)} variant="dialog">
+      {resolveChange && resolveCopy && (
+        <Overlay label={resolveCopy.title} onClose={() => setResolveChange(null)} variant="dialog">
           <div className="mcp-dialog-body">
             <div aria-hidden="true" className="mcp-dialog-icon warn"><Glyph name="flag" /></div>
-            <h2>{t("mcp.resolve.title", { server: resolveChange.row.name, client: clientLabel(resolveChange.clientId, snapshot?.clients) })}</h2>
-            <p>{t("mcp.resolve.body", { client: clientLabel(resolveChange.clientId, snapshot?.clients) })}</p>
+            <h2>{resolveCopy.title}</h2>
+            <p>{t("mcp.resolve.body", { client: resolveCopy.client })}</p>
             <div className="mcp-choice-list">
               <button className="mcp-choice" onClick={() => {
                 const target = resolveChange;
                 setResolveChange(null);
                 void runWrite(answer => mcpApi.resolveChange({ serverId: target.row.id, clientId: target.clientId, take: "library", confirmToken: answer?.token }), { pending: [pendingKey(target.row.id, target.clientId)] });
               }} type="button">
-                <strong>{t("mcp.resolve.takeLibrary")}</strong>
-                <span>{t("mcp.resolve.takeLibraryHint", { client: clientLabel(resolveChange.clientId, snapshot?.clients) })}</span>
+                <strong>{t(`mcp.resolve${resolveCopy.variant}.takeLibrary`)}</strong>
+                <span>{t(`mcp.resolve${resolveCopy.variant}.takeLibraryHint`, { client: resolveCopy.client })}</span>
               </button>
               <button className="mcp-choice" onClick={() => {
                 const target = resolveChange;
                 setResolveChange(null);
                 void runWrite(answer => mcpApi.resolveChange({ serverId: target.row.id, clientId: target.clientId, take: "file", confirmToken: answer?.token }), { pending: [pendingKey(target.row.id, target.clientId)] });
               }} type="button">
-                <strong>{t("mcp.resolve.takeFile")}</strong>
-                <span>{t("mcp.resolve.takeFileHint", { client: clientLabel(resolveChange.clientId, snapshot?.clients) })}</span>
+                <strong>{t(`mcp.resolve${resolveCopy.variant}.takeFile`)}</strong>
+                <span>{t(`mcp.resolve${resolveCopy.variant}.takeFileHint`, { client: resolveCopy.client })}</span>
               </button>
             </div>
           </div>
@@ -980,6 +1026,7 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
             setTestDialog(null);
             void runTest(current.preview, current.serverName);
           }}
+          missingNames={testMissingNames}
           preview={testDialog.preview}
           serverName={testDialog.serverName}
         />

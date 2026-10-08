@@ -962,7 +962,7 @@
 .mcp-toast.tone-info .mcp-toast-icon { background: var(--info-soft); color: var(--info); }
 .mcp-toast-body { grid-area: body; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .mcp-toast-body p { margin: 0; overflow-wrap: anywhere; line-height: 1.45; }
-.mcp-toast-body small { color: var(--text-muted); }
+.mcp-toast-body small { color: var(--text-muted); white-space: pre-line; overflow-wrap: anywhere; }
 .mcp-toast-actions { grid-area: actions; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 .mcp-toast-close { grid-area: close; margin-top: -2px; }
 

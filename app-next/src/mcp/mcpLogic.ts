@@ -7,6 +7,7 @@ import type {
   McpClient,
   McpClientId,
   McpClientResult,
+  McpConfirmation,
   McpError,
   McpHistoryEntry,
   McpIssue,
@@ -323,11 +324,16 @@ export function cellReasonText(reason: McpCellReason, t: Translate, client: stri
   return t(`mcp.reason.${reason}`, { client });
 }
 
+// Codes whose backend message names the exact field to fix ("工作目录需要是完整的文件夹路径。").
+// The backend writes these in plain zh, so the zh UI shows them as they are; en/ko keep the i18n copy.
+const DETAILED_CODES = new Set<McpError["code"]>(["invalid-input"]);
+
 export function errorText(error: McpError, t: Translate, clients?: readonly McpClient[] | null): string {
   const params: Record<string, string | number> = { ...(error.params ?? {}) };
   if (error.clientId && params.client === undefined) params.client = clientLabel(error.clientId, clients);
   if (params.client === undefined) params.client = t("mcp.word.aiTool");
   if (error.code === "engine") return error.message || t("mcp.err.engine");
+  if (DETAILED_CODES.has(error.code) && error.message && t("mcp.err.backendDetail") === "zh") return error.message;
   const key = `mcp.err.${error.code}`;
   const text = t(key, params);
   return text === key ? error.message : text;
@@ -339,11 +345,35 @@ export type OutcomeToast = {
   tone: "ok" | "warn" | "error" | "info";
   text: string;
   failed: Array<{ clientId: McpClientId; text: string }>;
+  /** Clients that were left out on purpose (unsupported, needs consent, same-name entry kept); never silent. */
+  skipped: Array<{ clientId: McpClientId; text: string }>;
   restartClients: McpClientId[];
 };
 
 function verbKey(summary: McpOperationSummary): string {
   return `mcp.toast.${summary.kind}`;
+}
+
+// The cell itself already shows these (⊘), so a toast does not repeat them.
+const EXPECTED_SKIPS = new Set<McpCellReason>(["transport-unsupported", "name-incompatible"]);
+
+/** "Claude Desktop：需要确认是否写入明文" lines for results the backend skipped on purpose. */
+export function skippedLines(results: readonly McpClientResult[], t: Translate, clients?: readonly McpClient[] | null) {
+  const lines: Array<{ clientId: McpClientId; text: string }> = [];
+  for (const result of results) {
+    if (result.status !== "skipped") continue;
+    if (result.skippedReason && EXPECTED_SKIPS.has(result.skippedReason)) continue;
+    if (lines.some(line => line.clientId === result.clientId)) continue;
+    const client = clientLabel(result.clientId, clients);
+    // "entry-added-outside" on a skip means the same-name entry already in that file was kept.
+    const reason = result.skippedReason === "entry-added-outside"
+      ? t("mcp.toast.skipKept", { client })
+      : result.skippedReason
+        ? cellReasonText(result.skippedReason, t, client)
+        : t("mcp.toast.skippedUnknown", { client });
+    lines.push({ clientId: result.clientId, text: reason.includes(client) ? reason : `${client}${t("mcp.toast.skipSep")}${reason}` });
+  }
+  return lines;
 }
 
 export function outcomeToast(
@@ -355,24 +385,30 @@ export function outcomeToast(
   const failedResults = results.filter(result => result.status === "failed");
   const okClients = uniqueClients(results.filter(result => result.status === "written" || result.status === "unchanged" || result.status === "undone"));
   const restartClients = uniqueClients(results.filter(result => result.restartHint && result.status !== "failed"));
+  const skipped = skippedLines(results, t, clients).filter(line => !okClients.includes(line.clientId));
   const servers = joinNames(summary.serverNames, t);
   const failed = failedResults.map(result => ({
     clientId: result.clientId,
     text: result.error ? errorText(result.error, t, clients) : t("mcp.cell.error")
   }));
-  const allClientIds = summary.clientIds.length ? summary.clientIds : okClients;
+  // Name only the clients that really changed; a skipped client is reported on its own line.
+  const failedIds = uniqueClients(failedResults);
+  const listed = summary.clientIds.filter(id => !failedIds.includes(id) && !skipped.some(line => line.clientId === id));
+  const allClientIds = listed.length ? listed : okClients;
   const vars = {
     servers,
     clients: clientNames(allClientIds, t, clients),
     names: joinNames(summary.envVarNames, t),
     n: summary.serverNames.length
   };
+  const undoing = summary.kind === "undo" || summary.kind === "rollback" || summary.kind === "legacy";
   if (failedResults.length > 0 && okClients.length === 0) {
     const first = failedResults[0];
     return {
       tone: "error",
-      text: t("mcp.toast.failedAll", { client: clientLabel(first.clientId, clients), reason: failed[0]?.text ?? "" }),
+      text: t(undoing ? "mcp.toast.failedAll.undo" : "mcp.toast.failedAll", { client: clientLabel(first.clientId, clients), reason: failed[0]?.text ?? "" }),
       failed,
+      skipped,
       restartClients: []
     };
   }
@@ -380,19 +416,40 @@ export function outcomeToast(
     const first = failedResults[0];
     return {
       tone: "warn",
-      text: t("mcp.toast.partial", {
+      text: t(undoing ? "mcp.toast.partial.undo" : "mcp.toast.partial", {
         ok: okClients.length,
         failed: failedResults.length,
         client: clientLabel(first.clientId, clients),
         reason: failed[0]?.text ?? ""
       }),
       failed,
+      skipped,
       restartClients
     };
   }
+  if (okClients.length === 0 && skipped.length > 0 && !undoing) {
+    // Everything was skipped: say so instead of claiming it was written.
+    const key = summary.kind === "add" ? "mcp.toast.nothingWritten.add" : "mcp.toast.nothingWritten";
+    return { tone: "warn", text: t(key, { servers }), failed: [], skipped, restartClients: [] };
+  }
   const key = verbKey(summary);
   const text = t(key, vars);
-  return { tone: "ok", text: text === key ? t("mcp.toast.done") : text, failed: [], restartClients };
+  return { tone: skipped.length > 0 ? "warn" : "ok", text: text === key ? t("mcp.toast.done") : text, failed: [], skipped, restartClients };
+}
+
+/**
+ * Two confirmations ask the same question when everything but the token is equal. The token binds
+ * the request too, so a choice made inside the dialog (e.g. "also delete GITHUB_TOKEN") yields a
+ * fresh token for the very same content; that one is accepted without asking twice.
+ */
+export function sameConfirmation(a: McpConfirmation, b: McpConfirmation): boolean {
+  const strip = (value: McpConfirmation) => JSON.stringify({
+    kinds: [...value.kinds].sort(),
+    items: value.items,
+    envVars: value.envVars ?? [],
+    undoable: value.undoable
+  });
+  return strip(a) === strip(b);
 }
 
 function uniqueClients(results: readonly McpClientResult[]): McpClientId[] {
