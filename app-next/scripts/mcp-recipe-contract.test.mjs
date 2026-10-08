@@ -23,3 +23,15 @@ test("the recipe runs only Python, pip and origin-mcp, never a shell", () => {
   assert.doesNotMatch(recipe, /Command::new\("(?:cmd|powershell|pwsh|bash)(?:\.exe)?"\)/);
   assert.match(recipe, /arg\("venv"\)/);
 });
+
+// v3.3 (contract F3, bugs #23/#24/MCP#9): the card lives in MCP → 发现, starts collapsed, detects
+// only after a click, writes through the MCP library and reads client state from the snapshot.
+const card = await readFile(new URL("../src/McpRecipeCard.tsx", import.meta.url), "utf8");
+
+test("the Origin card never detects on mount and never plans with the old engine commands", () => {
+  assert.doesNotMatch(card, /useEffect\s*\(/);
+  assert.doesNotMatch(card, /plan_mcp_changes|apply_mcp_plan|list_mcp_mutation_targets/);
+  assert.match(card, /const \[expanded, setExpanded\] = useState\(false\);/);
+  assert.match(card, /if \(opening && !status && !busy\) void detect\(\);/);
+  assert.match(card, /onAdd\(\{/);
+});

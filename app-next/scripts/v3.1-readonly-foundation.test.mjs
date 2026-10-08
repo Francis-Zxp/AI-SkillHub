@@ -5,7 +5,8 @@ import { readAppSource } from "./app-source.mjs";
 
 const files = {
   app: await readAppSource(),
-  mcpUi: await readFile(new URL("../src/McpCenter.tsx", import.meta.url), "utf8"),
+  mcpUi: await readFile(new URL("../src/mcp/McpPage.tsx", import.meta.url), "utf8"),
+  mcpLogic: await readFile(new URL("../src/mcp/mcpLogic.ts", import.meta.url), "utf8"),
   i18n: await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8"),
   styles: await readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
   doctorUi: await readFile(new URL("../src/CodexPluginDoctorPanel.tsx", import.meta.url), "utf8"),
@@ -57,9 +58,11 @@ test("MCP scanner stays read-only, secret-safe and never probes live capabilitie
   assert.match(files.mcp, /headersHelper/);
   assert.match(files.mcp, /Secret values[\s\S]*never enter the returned snapshot/);
   assert.doesNotMatch(files.mcp, /Command::new|\.spawn\(/);
-  assert.match(files.mcpUi, /Capabilities not probed|mcp\.unprobed/);
-  assert.match(files.mcpUi, /next\.bindings\.some\(item => item\.id === current\)/);
-  assert.match(files.mcpUi, /mcp\.copyPath/);
+  // v3.3: opening the page reads one snapshot; Origin detection and tests run only on clicks.
+  const mount = files.mcpUi.slice(files.mcpUi.indexOf("useEffect(() => {\n    mounted.current = true;"), files.mcpUi.indexOf("// ---------- paste hand-off"));
+  assert.match(mount, /const first = await refresh\(\);/);
+  assert.doesNotMatch(mount, /testServer|testPreview|detect_mcp_recipe|importGithub/);
+  assert.match(files.mcpUi, /const next = await mcpApi\.snapshot\(\);/);
 });
 
 test("optional MCP mutation module is gated, reversible and never starts a server", () => {
@@ -83,23 +86,30 @@ test("optional MCP mutation module is gated, reversible and never starts a serve
   assert.match(files.mcpMutation, /header_env/);
 });
 
-test("MCP read and parse failures remain visible even when no binding can be created", () => {
-  assert.match(files.mcpUi, /const globalDiagnosticGroups = useMemo/);
-  assert.match(files.mcpUi, /locationId && inventory\.bindings\.some\(binding => binding\.configLocationId === locationId\)/);
-  assert.match(files.mcpUi, /!locationId && inventory\.bindings\.some\(binding => binding\.hostId === finding\.hostId\)/);
-  assert.match(files.mcpUi, /location\?\.pathDisplay \?\? finding\.pathDisplay \?\? ""/);
-  assert.match(files.mcpUi, /location\.parseStatus === "ok"/);
-  assert.match(files.mcpUi, /className="mcp-global-diagnostics"/);
-  assert.match(files.mcpUi, /copyConfigPath\(group\.pathDisplay, group\.key\)/);
-  assert.match(files.mcpUi, /copyConfigPath\(selectedLocation\?\.pathDisplay, "selected-binding"\)/);
-  assert.doesNotMatch(files.mcpUi, /copyConfigPath\([^)]*\.configPath/);
-
-  assert.match(files.mcpUi, /finding\.configLocationId === binding\.configLocationId/);
-  assert.match(files.mcpUi, /finding\.hostId === binding\.hostId/);
-  assert.match(files.i18n, /"mcp\.diagnosticsBody"/);
-  assert.match(files.i18n, /界面中的路径均已脱敏/);
-  assert.match(files.styles, /\.mcp-diagnostic-findings li \{[\s\S]*border: 1px solid var\(--border\)/);
+test("v3.3 MCP library modules never start a process (contract I1)", async () => {
+  for (const name of ["mcp_library.rs", "mcp_paste.rs", "mcp_secrets.rs", "mcp_json_doc.rs", "mcp_templates.rs"]) {
+    const source = await readFile(new URL(`../src-tauri/src/${name}`, import.meta.url), "utf8").catch(error => {
+      if (error?.code === "ENOENT") return "";
+      throw error;
+    });
+    if (!source) continue;
+    assert.doesNotMatch(source, /Command::new|\.spawn\(/, name);
+  }
 });
+
+test("MCP read and parse failures remain visible even when no server row can be created", () => {
+  // An unreadable, JSONC or oversized client file is a per-client issue with one action, pinned so
+  // it is never hidden behind the issue toggle, and the import report lists every file it read.
+  assert.match(files.mcpUi, /const PINNED_ISSUES = new Set<McpIssue\["kind"\]>\(\["stuck-transaction", "client-unwritable", "interrupted"\]\)/);
+  assert.match(files.mcpUi, /case "open-file-location":\s*if \(issue\.clientId\) void openLocation\(issue\.clientId\);/);
+  assert.match(files.mcpUi, /report\.filesRead\.map\(\(file, index\) =>/);
+  assert.match(files.mcpUi, /t\(`mcp\.import\.status\.\$\{file\.status\}`, \{ n: file\.servers \}\)/);
+  assert.match(files.mcpLogic, /if \(issue\.kind === "client-unwritable" && issue\.clientId\) \{/);
+  // Paths are shown as the backend redacted them; the webview never sends a path to open.
+  assert.doesNotMatch(files.mcpUi, /configPath\b(?!Display)/);
+  assert.match(files.mcpUi, /mcpApi\.openConfigLocation\(\{ clientId, scope, workspaceId \}\)/);
+});
+
 
 test("Codex doctor guarantees zero writes and does not execute the standalone repair path", () => {
   assert.match(files.doctor, /mutation_count: 0/);

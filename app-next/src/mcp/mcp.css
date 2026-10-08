@@ -484,9 +484,8 @@
 }
 .mcp-cell.as-chip.state-on { border-color: color-mix(in srgb, var(--mcp-on) 45%, var(--border)); background: color-mix(in srgb, var(--mcp-on) 9%, var(--surface)); color: var(--text); }
 .mcp-cell.as-chip .mcp-dot { width: 12px; height: 12px; }
-.mcp-chip-label { order: 2; }
-.mcp-cell.as-chip .mcp-cell-visual { order: 1; }
-.mcp-cell.as-chip .mcp-cell-word { order: 3; color: var(--text-muted); font-weight: 500; }
+.mcp-cell.as-chip .mcp-cell-word { color: var(--text-muted); font-weight: 500; }
+.mcp-cell.as-chip .mcp-cell-word::before { content: "· "; }
 .mcp-more { align-self: center; }
 
 .mcp-other-clients { display: flex; flex-direction: column; gap: 4px; padding: 2px 4px; }
@@ -591,6 +590,8 @@
 
 /* ---------- overlays ---------- */
 .mcp-overlay { position: fixed; inset: 0; z-index: 120; display: flex; }
+/* Dialogs sit above sheets, drawers and toasts; toasts sit above sheets and drawers. */
+.mcp-overlay.mcp-overlay-dialog { z-index: 130; }
 .mcp-backdrop { position: absolute; inset: 0; background: rgba(8, 10, 22, .42); backdrop-filter: blur(2px); }
 .mcp-sheet,
 .mcp-drawer,
@@ -715,7 +716,7 @@
 .mcp-candidate-name-input:focus,
 .mcp-github-form input:focus,
 .mcp-paste textarea:focus,
-.mcp-args-editor input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent); }
+.mcp-args-editor input:focus { border-color: var(--brand); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand) 14%, transparent); outline: none; }
 .mcp-field input[readonly] { color: var(--text-muted); background: var(--surface-soft); }
 :is(.mcp-page, .mcp-overlay) [aria-invalid="true"] { border-color: var(--danger) !important; }
 .mcp-field-error { color: var(--danger); font-size: calc(12.5px * var(--ui-text-scale, 1)); }
@@ -723,16 +724,21 @@
 .mcp-field-hint.warn { color: color-mix(in srgb, var(--warning) 62%, var(--text)); }
 .mcp-field.compact { flex: 0 1 170px; }
 .mcp-field.compact.grow { flex: 1 1 200px; }
+.mcp-field.compact.value { flex: 1 1 100%; }
+.mcp-secret-fields:has(.mcp-field.compact.grow) .mcp-secret-remove { order: 2; }
 .mcp-optional { margin-left: 6px; color: var(--text-muted); font-style: normal; font-weight: 500; }
 .mcp-section-label { color: var(--text-muted); font-size: calc(12px * var(--ui-text-scale, 1)); font-weight: 600; letter-spacing: .02em; }
 .mcp-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text-soft); cursor: pointer; }
-.mcp-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--brand); }
+.mcp-candidate-secret .mcp-check,
+.mcp-secret-options .mcp-check { flex: 0 0 auto; white-space: nowrap; }
+.mcp-check input { flex: none; width: 15px !important; height: 15px; min-height: 0 !important; margin: 0; padding: 0; accent-color: var(--brand); }
 .mcp-radio-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .mcp-radio-group.batch { padding: 2px 2px 0; }
 .mcp-inline-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .mcp-chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
 .mcp-paste { display: flex; flex-direction: column; gap: 8px; }
+.mcp-paste textarea::placeholder { font-family: var(--ui-font, inherit); }
 .mcp-paste textarea {
   resize: vertical;
   min-height: 92px;
@@ -758,7 +764,7 @@
 .mcp-candidate-secret { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-soft); font-size: calc(12.5px * var(--ui-text-scale, 1)); }
 .mcp-candidate-secret .mcp-glyph { width: 14px; height: 14px; color: var(--text-muted); }
 .mcp-candidate-secret code { color: var(--text-muted); }
-.mcp-candidate-secret input { flex: 1 1 180px; width: auto; min-height: 30px; padding: 4px 8px; }
+.mcp-candidate-secret input:not([type="checkbox"]) { flex: 1 1 180px; width: auto; min-height: 30px; padding: 4px 8px; }
 .mcp-candidate-secret .mcp-field-error { flex: 1 1 100%; margin: 0; }
 .mcp-variant { display: flex; align-items: center; gap: 8px; padding-left: 26px; }
 .mcp-variant select { width: auto; min-height: 30px; padding: 3px 8px; }
@@ -782,6 +788,7 @@
 }
 .mcp-template-chip:hover { border-color: var(--brand); }
 .mcp-template-chip.active { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 14%, var(--surface)); }
+.mcp-template-chip.exists { border-style: dashed; color: var(--text-muted); }
 
 .mcp-manual { display: flex; flex-direction: column; gap: 12px; }
 .mcp-divider-button {
@@ -861,8 +868,13 @@
 .mcp-secret-editor input { flex: 1 1 180px; width: auto; }
 .mcp-secret-editor select { width: auto; flex: 0 1 auto; }
 .mcp-secret-editor .mcp-field-error { flex: 1 1 100%; margin: 0; }
-.mcp-client-list li, .mcp-project-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.mcp-cell.as-chip.wide { min-width: 220px; }
+.mcp-client-list li { display: flex; align-items: center; gap: 8px; }
+.mcp-client-list .mcp-cell.as-chip.wide { flex: 1 1 auto; justify-content: flex-start; min-width: 0; height: 36px; border-radius: 10px; }
+.mcp-client-list .mcp-cell.as-chip .mcp-cell-word { overflow: hidden; text-overflow: ellipsis; }
+.mcp-client-tools { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+.mcp-link.subtle { color: var(--text-muted); font-weight: 500; font-size: calc(12.5px * var(--ui-text-scale, 1)); }
+.mcp-link.subtle:hover { color: var(--danger); }
+.mcp-project-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .mcp-project-list li { padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 
 /* history */
@@ -911,12 +923,16 @@
   position: fixed;
   right: 20px;
   bottom: 20px;
-  z-index: 140;
+  z-index: 125;
   display: flex;
   flex-direction: column;
   gap: 8px;
   width: min(420px, calc(100vw - 32px));
   pointer-events: none;
+}
+.mcp-toast-stack.beside { right: calc(min(600px, 100vw) + 16px); }
+@media (max-width: 1080px) {
+  .mcp-toast-stack.beside { right: 16px; bottom: 88px; }
 }
 .mcp-toast {
   display: grid;

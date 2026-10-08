@@ -39,7 +39,8 @@ type Props = {
   snapshot: McpLibrarySnapshot;
   initialText?: string;
   initialTemplate?: McpTemplateId;
-  initialGithub?: string;
+  /** A GitHub import the user already ran from Discover (the network read happens in that click). */
+  initialGithub?: { source: string; result: McpPasteResult };
   preview: boolean;
   onClose: () => void;
   onSubmit: (request: McpAddRequest) => Promise<AddSubmitResult>;
@@ -180,8 +181,10 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
     sheetBodyRef.current?.scrollTo({ top: 0 });
     if (initialText.trim()) void runParse(initialText);
     if (initialGithub) {
-      setPasteText(initialGithub);
-      void runGithub(initialGithub);
+      parseSeq.current += 1;
+      setPasteText(initialGithub.source);
+      setResult(initialGithub.result);
+      resetChoices(initialGithub.result);
     }
     return () => {
       if (parseTimer.current !== null) window.clearTimeout(parseTimer.current);
@@ -594,7 +597,7 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
             />
           </label>
           {row.kind === "header" && (
-            <label className="mcp-field compact">
+            <label className="mcp-field compact grow">
               <span>{t("mcp.add.headerVar")}</span>
               <input
                 autoComplete="off"
@@ -605,7 +608,7 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
               />
             </label>
           )}
-          <label className="mcp-field compact grow">
+          <label className="mcp-field compact value">
             <span>
               {label}
               {!row.required && <em className="mcp-optional">{t("mcp.add.optional")}</em>}
@@ -874,7 +877,8 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
             {(templates ?? []).map(template => (
               <button
                 aria-pressed={templateId === template.id}
-                className={`mcp-template-chip${templateId === template.id ? " active" : ""}`}
+                className={`mcp-template-chip${templateId === template.id ? " active" : ""}${existingNames.some(item => item.toLowerCase() === template.id) ? " exists" : ""}`}
+                title={existingNames.some(item => item.toLowerCase() === template.id) ? t("mcp.discover.inLibrary") : undefined}
                 key={template.id}
                 onClick={() => applyTemplate(template)}
                 type="button"

@@ -21,6 +21,7 @@ import type {
   McpImportReport,
   McpIssue,
   McpLibrarySnapshot,
+  McpPasteResult,
   McpScope,
   McpServerRow,
   McpSetSecretRequest,
@@ -63,7 +64,7 @@ const McpDiscover = lazy(() => import("./McpDiscover"));
 
 export const OPEN_MCP_ADD_EVENT = "ai-skillhub-open-mcp-add";
 const TEST_ACK_STORAGE_KEY = "ai-skillhub-mcp-test-ack-v1";
-const NARROW_WIDTH = 760;
+const NARROW_WIDTH = 640;
 // Issues that have no cell or chip of their own in the matrix stay visible without expanding.
 const PINNED_ISSUES = new Set<McpIssue["kind"]>(["stuck-transaction", "client-unwritable", "interrupted"]);
 
@@ -75,7 +76,7 @@ export type McpPageProps = {
   takePendingPaste?: () => string | null;
 };
 
-type AddSheetState = { key: number; text?: string; template?: McpTemplateId; github?: string };
+type AddSheetState = { key: number; text?: string; template?: McpTemplateId; github?: { source: string; result: McpPasteResult } };
 type WriteResult = { status: "done"; outcome: McpWriteOutcome } | { status: "cancelled" } | { status: "failed"; error: McpError };
 type WriteOptions = {
   pending?: string[];
@@ -371,7 +372,8 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
         }
       });
     }
-    if (outcome.undoToken && summary.kind !== "undo" && summary.kind !== "rollback" && summary.kind !== "import") {
+    const changedSomething = outcome.results.some(item => item.status === "written" || item.status === "undone") || outcome.results.length === 0;
+    if (outcome.undoToken && changedSomething && summary.kind !== "undo" && summary.kind !== "rollback" && summary.kind !== "import") {
       const token = outcome.undoToken;
       actions.push({ label: t("mcp.toast.undoAction"), primary: actions.length === 0, run: () => void undo(token) });
     }
@@ -558,6 +560,18 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
   function openAdd(state: Omit<AddSheetState, "key">) {
     addKey.current += 1;
     setAddSheet({ key: addKey.current, ...state });
+  }
+
+  /** Discover → 从 GitHub 导入: the read runs here, on the click; the sheet then shows the drafts. */
+  async function openGithub(source: string): Promise<boolean> {
+    try {
+      const result = await mcpApi.importGithub(source);
+      openAdd({ github: { source, result } });
+      return true;
+    } catch (raw) {
+      pushError(toMcpError(raw));
+      return false;
+    }
   }
 
   async function submitAdd(request: McpAddRequest): Promise<AddSubmitResult> {
@@ -805,7 +819,11 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
             <McpDiscover
               onAdd={async request => toSubmitResult(await runWrite(answer => mcpApi.addServers({ ...request, confirmToken: answer?.token })))}
               onAddTemplate={id => openAdd({ template: id })}
-              onGithub={source => openAdd({ github: source })}
+              onGithub={source => openGithub(source)}
+              onOpenExisting={name => {
+                const row = snapshot?.servers.find(item => item.name.toLowerCase() === name.toLowerCase());
+                if (row) setEditing({ serverId: row.id });
+              }}
               onOpenUrl={url => void openUrl(url)}
               runtimeAvailable={runtimeAvailable}
               snapshot={snapshot}
@@ -935,7 +953,7 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
         />
       )}
 
-      <McpToastStack items={toasts} onDismiss={dismissToast} />
+      <McpToastStack beside={Boolean(addSheet || editing || historyOpen)} items={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

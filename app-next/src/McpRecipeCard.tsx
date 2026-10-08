@@ -220,7 +220,7 @@ export function McpRecipeCard({ runtimeAvailable, snapshot, onAdd }: Props) {
       {!expanded && (
         <p className="recipe-next">
           {rt("collapsedHint")}
-          <button className="text-action" disabled={busy} onClick={() => {
+          <button className="ghost-action small" disabled={busy} onClick={() => {
             setExpanded(true);
             void detect();
           }} type="button">{rt("check")}</button>

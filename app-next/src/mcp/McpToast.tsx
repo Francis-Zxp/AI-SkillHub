@@ -16,10 +16,11 @@ export type McpToastItem = {
 export const TOAST_MS = 8000;
 export const MAX_TOASTS = 3;
 
-export function McpToastStack({ items, onDismiss }: { items: McpToastItem[]; onDismiss: (id: number) => void }) {
+/** `beside`: a sheet or drawer is open on the right, so the stack moves next to it instead of covering it. */
+export function McpToastStack({ items, onDismiss, beside = false }: { items: McpToastItem[]; onDismiss: (id: number) => void; beside?: boolean }) {
   if (items.length === 0) return null;
   return createPortal(
-    <div aria-live="polite" className="mcp-toast-stack">
+    <div aria-live="polite" className={beside ? "mcp-toast-stack beside" : "mcp-toast-stack"}>
       {items.map(item => (
         <ToastCard item={item} key={item.id} onDismiss={onDismiss} />
       ))}

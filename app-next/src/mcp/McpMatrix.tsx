@@ -6,7 +6,7 @@ import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
 import type { McpCell, McpClient, McpClientId, McpServerRow, McpTestProgressEvent } from "./mcpTypes";
 import { cellFor, cellReasonText, cellStateText, columnStats, targetLine, testText, testTone } from "./mcpLogic";
 import { Glyph, MenuButton, Spinner, t } from "./mcpUi";
-import type { MenuItem } from "./mcpUi";
+import type { GlyphName, MenuItem } from "./mcpUi";
 
 export const VIRTUAL_THRESHOLD = 200;
 const ROW_HEIGHT = 60;
@@ -78,27 +78,39 @@ function rowMenu(row: McpServerRow, handlers: MatrixHandlers, busy: boolean): Me
   ];
 }
 
-function cellVisual(cell: McpCell, pending: boolean) {
-  if (pending) return <Spinner />;
+const CELL_ICON: Partial<Record<McpCell["state"], GlyphName>> = {
+  error: "warn",
+  unsupported: "ban",
+  readonly: "lock",
+  blocked: "unlock",
+  "changed-outside": "flag"
+};
+
+function cellWord(cell: McpCell): string {
   switch (cell.state) {
-    case "on":
-      return <span className="mcp-dot on" />;
-    case "off":
-      return <span className="mcp-dot off" />;
     case "error":
-      return <><Glyph name="warn" /><span className="mcp-cell-word">{t("mcp.cell.retryShort")}</span></>;
+      return t("mcp.cell.retryShort");
     case "unsupported":
-      return <><Glyph name="ban" /><span className="mcp-cell-word">{t("mcp.cell.unsupportedShort")}</span></>;
+      return t("mcp.cell.unsupportedShort");
     case "readonly":
-      return <><Glyph name="lock" /><span className="mcp-cell-word">{t("mcp.cell.readonlyShort")}</span></>;
+      return t("mcp.cell.readonlyShort");
     case "blocked":
-      return <><Glyph name="unlock" /><span className="mcp-cell-word">{t(cell.reason === "missing-secret" ? "mcp.cell.needsKeyShort" : "mcp.cell.blockedShort")}</span></>;
+      return t(cell.reason === "missing-secret" ? "mcp.cell.needsKeyShort" : "mcp.cell.blockedShort");
     case "changed-outside":
-      return <><Glyph name="flag" /><span className="mcp-cell-word">{t("mcp.cell.changedShort")}</span></>;
+      return t("mcp.cell.changedShort");
     default:
-      return null;
+      return "";
   }
 }
+
+/** The mark: a dot for on/off, an icon for the other states, a spinner while this cell is written. */
+function cellMark(cell: McpCell, pending: boolean) {
+  if (pending) return <Spinner />;
+  if (cell.state === "on" || cell.state === "off") return <span className={`mcp-dot ${cell.state}`} />;
+  const icon = CELL_ICON[cell.state];
+  return icon ? <Glyph name={icon} /> : null;
+}
+
 
 function cellTitle(cell: McpCell, client: McpClient): string {
   if (cell.state === "unsupported" || cell.state === "readonly") return cell.reason ? cellReasonText(cell.reason, t, client.label) : cellStateText(cell, t, client.label);
@@ -146,8 +158,9 @@ const CellButton = memo(function CellButton({
       title={cellTitle(cell, client)}
       type="button"
     >
+      <span className="mcp-cell-visual">{cellMark(cell, pending)}</span>
       {chip && <span className="mcp-chip-label">{client.label}</span>}
-      <span className="mcp-cell-visual">{cellVisual(cell, pending)}</span>
+      {!pending && cellWord(cell) && <span className="mcp-cell-word">{cellWord(cell)}</span>}
       {!chip && cell.projectCount > 0 && <span className="mcp-cell-badge">{t("mcp.cell.projects", { n: cell.projectCount })}</span>}
     </button>
   );

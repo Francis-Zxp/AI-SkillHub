@@ -558,14 +558,22 @@ export function McpEditDrawer(props: Props) {
                         <span className="mcp-cell-visual">{busy ? <Spinner /> : <span className={`mcp-dot ${cell.state === "on" ? "on" : "off"}`} />}</span>
                         <span className="mcp-cell-word">{cellStateText(cell, t, client.label)}</span>
                       </button>
-                      <button className="mcp-link" onClick={() => props.onOpenLocation(client.id)} type="button">
-                        <Glyph name="folder" /> {t("mcp.col.openLocation")}
-                      </button>
-                      {cell.presentInFile && client.writable && (
-                        <button className="mcp-link danger" onClick={() => props.onRemoveFromClient(serverId, client.id)} type="button">
-                          {t("mcp.edit.removeFromFile")}
+                      <span className="mcp-client-tools">
+                        {cell.presentInFile && client.writable && (
+                          <button className="mcp-link subtle" onClick={() => props.onRemoveFromClient(serverId, client.id)} type="button">
+                            {t("mcp.edit.removeFromFile")}
+                          </button>
+                        )}
+                        <button
+                          aria-label={`${t("mcp.col.openLocation")} · ${client.label}`}
+                          className="mcp-icon-button small"
+                          onClick={() => props.onOpenLocation(client.id)}
+                          title={t("mcp.col.openLocation")}
+                          type="button"
+                        >
+                          <Glyph name="folder" />
                         </button>
-                      )}
+                      </span>
                     </li>
                   );
                 })}

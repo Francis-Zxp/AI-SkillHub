@@ -17,18 +17,22 @@ export default function McpDiscover({
   onGithub,
   onAdd,
   onOpenUrl,
+  onOpenExisting,
   focusRecipe
 }: {
   snapshot: McpLibrarySnapshot | null;
   runtimeAvailable: boolean;
   onAddTemplate: (id: McpTemplateId) => void;
-  onGithub: (source: string) => void;
+  onGithub: (source: string) => Promise<boolean>;
   onAdd: (request: McpAddRequest) => Promise<AddSubmitResult>;
   onOpenUrl: (url: string) => void;
+  /** Opens the edit drawer of a library server with this name (templates already added). */
+  onOpenExisting: (name: string) => void;
   focusRecipe?: boolean;
 }) {
   const [templates, setTemplates] = useState<McpTemplate[] | null>(templateCache);
   const [source, setSource] = useState("");
+  const [reading, setReading] = useState(false);
 
   useEffect(() => {
     if (templateCache) return;
@@ -83,9 +87,15 @@ export default function McpDiscover({
                     {template.params.length > 0 && <span className="mcp-tag">{t("mcp.discover.needsFolder")}</span>}
                   </div>
                   <div className="mcp-template-actions">
-                    <button className="mcp-btn small solid" onClick={() => onAddTemplate(template.id)} type="button">
-                      <Glyph name="plus" /> {t("mcp.discover.add")}
-                    </button>
+                    {added ? (
+                      <button className="mcp-btn small quiet" onClick={() => onOpenExisting(template.id)} type="button">
+                        <Glyph name="key" /> {t("mcp.row.edit")}
+                      </button>
+                    ) : (
+                      <button className="mcp-btn small solid" onClick={() => onAddTemplate(template.id)} type="button">
+                        <Glyph name="plus" /> {t("mcp.discover.add")}
+                      </button>
+                    )}
                     <button className="mcp-link" onClick={() => onOpenUrl(template.docsUrl)} type="button">
                       {t("mcp.edit.docs")} <Glyph name="external" />
                     </button>
@@ -102,9 +112,15 @@ export default function McpDiscover({
         <p className="mcp-muted small">{t("mcp.discover.githubHint")}</p>
         <form
           className="mcp-github-form"
-          onSubmit={event => {
+          onSubmit={async event => {
             event.preventDefault();
-            if (source.trim()) onGithub(source.trim());
+            if (!source.trim() || reading) return;
+            setReading(true);
+            try {
+              await onGithub(source.trim());
+            } finally {
+              setReading(false);
+            }
           }}
         >
           <label className="sr-only" htmlFor="mcp-github-source">{t("mcp.discover.github")}</label>
@@ -116,8 +132,8 @@ export default function McpDiscover({
             spellCheck={false}
             value={source}
           />
-          <button className="mcp-btn solid" disabled={!source.trim()} type="submit">
-            <Glyph name="import" /> {t("mcp.discover.githubRead")}
+          <button className="mcp-btn solid" disabled={!source.trim() || reading} type="submit">
+            {reading ? <Spinner /> : <Glyph name="import" />} {t("mcp.discover.githubRead")}
           </button>
         </form>
       </section>
