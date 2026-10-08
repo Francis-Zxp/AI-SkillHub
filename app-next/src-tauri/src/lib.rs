@@ -2437,6 +2437,9 @@ fn run_skillhub_script_with_options(root: &Path, no_pull: bool) -> Result<(), St
 }
 
 fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<DeliveryRun, String> {
+    // The gate is decided only after the one-time migration: before it a fresh
+    // install would read as "completed" and be written to without consent.
+    ensure_v33_migration_before_gate(root, connection)?;
     if skill_delivery::delivery_writes_blocked(connection)? {
         // I-1: paused or onboarding pending. Nothing under any client path is
         // created, changed or removed; the targets file is written as a report
@@ -2575,6 +2578,20 @@ fn run_agent_link_script(root: &Path, connection: &Connection) -> Result<Deliver
     }
     skill_delivery::record_agent_results(connection, &results)?;
     Ok(DeliveryRun::Completed { results })
+}
+
+/// I-1 for every caller of the link step (rollback, connect, delete …), not
+/// only the queue: runs the idempotent v3.3 migration on its own connection
+/// when it has not run yet, so the onboarding gate is never read from a
+/// database that predates it. The caller holds the write guard.
+fn ensure_v33_migration_before_gate(root: &Path, connection: &Connection) -> Result<(), String> {
+    if skill_delivery::read_pref(connection, skill_delivery::PREF_MIGRATION)?
+        .is_some_and(|value| value.starts_with("done:"))
+    {
+        return Ok(());
+    }
+    let mut migration = open_index_database(root)?;
+    ensure_v33_delivery_migration(root, &mut migration)
 }
 
 /// Outcome of one link step. `Blocked` means I-1 applied and nothing in any
@@ -28375,6 +28392,33 @@ mod tests {
             Ok(_) => panic!("unblocked run must reach the script check"),
         };
         assert!(error.contains("找不到 AI 工具链接脚本"), "{error}");
+        drop(connection);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn link_step_never_reads_the_gate_before_the_migration() {
+        // I-1: a database that predates the v3.3 migration reads as onboarding
+        // "completed"; every link-step caller (rollback, connect, delete …)
+        // must therefore let the migration decide first.
+        let root = v33_temp_root("gate-migration");
+        let connection = open_index_database(&root).unwrap();
+        assert!(
+            skill_delivery::read_pref(&connection, skill_delivery::PREF_MIGRATION)
+                .unwrap()
+                .is_none()
+        );
+        let _ = run_agent_link_script(&root, &connection);
+        assert!(
+            skill_delivery::read_pref(&connection, skill_delivery::PREF_MIGRATION)
+                .unwrap()
+                .is_some_and(|value| value.starts_with("done:"))
+        );
+        assert!(
+            skill_delivery::read_pref(&connection, skill_delivery::PREF_ONBOARDING)
+                .unwrap()
+                .is_some()
+        );
         drop(connection);
         let _ = fs::remove_dir_all(root);
     }
