@@ -8,7 +8,7 @@ import type { SkillUniverseProps } from "./SkillUniverse";
 import { CLIMATES, climateCounts } from "./sky/climates";
 import { WEATHER_GLYPHS, skyWords } from "./sky/skyI18n";
 import {
-  APP_HIDDEN_EVENT, APP_VISIBLE_EVENTS, SKY_SCENE_EVENT as SCENE_EVENT, SKY_WEATHER_KINDS, appHiddenFromEvent, probeGraphics, readSetting,
+  APP_BACKGROUND_EVENT, APP_HIDDEN_EVENT, APP_VISIBLE_EVENTS, SKY_SCENE_EVENT as SCENE_EVENT, SKY_WEATHER_KINDS, appHiddenFromEvent, probeGraphics, readSetting,
   rerollWorld, setSkySceneEnabled, setSkyWeatherSetting, skySceneEnabled, skyWeatherSetting, worldSeed, writeSetting
 } from "./skyScene";
 import type { SkyWeatherSetting } from "./skyScene";
@@ -46,6 +46,9 @@ const SLEEP_AFTER_MS = (() => {
   const override = import.meta.env.DEV ? Number(readSetting("skillhub-sky-sleep-ms")) : 0;
   return override > 0 ? override : 15_000;
 })();
+/** The shell sends its background event only after the window has been
+ * unfocused for a while, so the world sleeps soon after it arrives. */
+const BACKGROUND_SLEEP_MS = 1_000;
 
 type Still = { key: string; url: string; view: SkyWorldView; width: number; height: number };
 /** The last still image, kept across remounts: home unmounts when another
@@ -130,8 +133,10 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   // minimised window) for SLEEP_AFTER_MS. Waking rebuilds it behind the still.
   const [pageHidden, setPageHidden] = useState(() => document.hidden);
   const [appHidden, setAppHidden] = useState(false);
+  // Unfocused for a while (the shell's background event): stop and sleep too.
+  const [appBackground, setAppBackground] = useState(false);
   const [asleep, setAsleep] = useState(false);
-  const awake = visible && !pageHidden && !appHidden;
+  const awake = visible && !pageHidden && !appHidden && !appBackground;
   const worldPanelRef = useRef<HTMLDivElement>(null), worldToggleRef = useRef<HTMLButtonElement>(null);
   const worldPanelId = useId();
   // The panel opens just under the controls, wherever the page puts them
@@ -154,15 +159,21 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   useEffect(() => {
     const onVisibility = () => setPageHidden(document.hidden);
     const onHidden = (event: Event) => setAppHidden(appHiddenFromEvent(event));
-    const onShown = () => setAppHidden(false);
+    const onBackground = () => setAppBackground(true);
+    const onShown = () => {
+      setAppHidden(false);
+      setAppBackground(false);
+    };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener(APP_HIDDEN_EVENT, onHidden);
+    window.addEventListener(APP_BACKGROUND_EVENT, onBackground);
     for (const name of APP_VISIBLE_EVENTS) window.addEventListener(name, onShown);
     // A restored window takes focus again even if the shell says nothing.
     window.addEventListener("focus", onShown);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener(APP_HIDDEN_EVENT, onHidden);
+      window.removeEventListener(APP_BACKGROUND_EVENT, onBackground);
       for (const name of APP_VISIBLE_EVENTS) window.removeEventListener(name, onShown);
       window.removeEventListener("focus", onShown);
     };
@@ -289,34 +300,55 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   useEffect(() => { world.current?.setDirection(timeOfDay); }, [timeOfDay]);
   useEffect(() => { world.current?.setWeather(weatherSetting); }, [weatherSetting]);
 
-  // Out of sight long enough: keep a still image and release the world.
+  // Out of sight long enough: keep a still image and release the world. The
+  // world goes only once its still is decoded and on screen, so a window that
+  // stays visible (the background case) never shows an empty sky in between;
+  // waking up before then cancels the sleep, and a late still is not shown.
   useEffect(() => {
     if (awake || asleep) return;
+    let cancelled = false;
     const timer = window.setTimeout(() => {
       const sleeping = world.current;
       if (!sleeping) return;
       const canvas = sleeping.snapshot();
-      if (canvas) {
-        const view = sleeping.view();
-        const { width, height } = canvas;
-        const key = current.current.stillKey;
-        encodeStill(canvas, url => {
-          if (!url) return;
-          keepStill({ key, url, view, width, height });
+      if (!canvas) {
+        setAsleep(true);
+        return;
+      }
+      const view = sleeping.view();
+      const { width, height } = canvas;
+      const key = current.current.stillKey;
+      encodeStill(canvas, url => {
+        if (url) keepStill({ key, url, view, width, height });
+        if (cancelled) return;
+        if (!url) {
+          setAsleep(true);
+          return;
+        }
+        const image = new Image();
+        image.src = url;
+        const swap = () => {
+          if (cancelled) return;
           stillRef.current = url;
           setStill(url);
-        });
-      }
-      setAsleep(true);
-    }, SLEEP_AFTER_MS);
-    return () => window.clearTimeout(timer);
+          setAsleep(true);
+        };
+        image.decode().then(swap, swap);
+      });
+    }, appBackground && visible && !pageHidden && !appHidden ? BACKGROUND_SLEEP_MS : SLEEP_AFTER_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [awake, asleep]);
   // Back in sight: rebuild behind the still (it goes after the first frame).
   useEffect(() => {
     if (awake && asleep) setAsleep(false);
   }, [awake, asleep]);
+  // A pointer over the scene means someone is looking at it again.
   const wake = () => {
     if (appHidden) setAppHidden(false);
+    if (appBackground) setAppBackground(false);
     if (asleep && visible && !pageHidden) setAsleep(false);
   };
 
@@ -405,7 +437,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
 
   const maxWeight = Math.max(1, ...islands.map(island => island.weight));
   const threeD = islands.length > 0 && status !== "off";
-  return <section className={`skill-archipelago sky-islands sky-phase-${timeOfDay}${lightTheme ? " is-light" : ""}${status === "fallback" ? " is-fallback" : ""}${status === "off" ? " is-flat" : ""}`} aria-label={words.title} data-status={status} data-weather={info?.weather ?? ""} data-world-seed={seed} onPointerMove={asleep || appHidden ? wake : undefined}>
+  return <section className={`skill-archipelago sky-islands sky-phase-${timeOfDay}${lightTheme ? " is-light" : ""}${status === "fallback" ? " is-fallback" : ""}${status === "off" ? " is-flat" : ""}`} aria-label={words.title} data-status={status} data-weather={info?.weather ?? ""} data-world-seed={seed} onPointerMove={asleep || appHidden || appBackground ? wake : undefined}>
     <header className="sky-heading">
       <h2>{words.title}</h2>
       {islands.length > 0 && <p>{sky.summary(islands.length, totalSkills)}</p>}

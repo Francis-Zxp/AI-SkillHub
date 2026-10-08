@@ -11,6 +11,9 @@ export const SKY_SCENE_EVENT = "skillhub-sky-scene-change";
  * home scenes sleep while hidden and wake on either "back" event. */
 export const APP_HIDDEN_EVENT = "skillhub-app-hidden";
 export const APP_VISIBLE_EVENTS = ["skillhub-app-visible", "skillhub-app-shown"] as const;
+/** The window has been unfocused for a while (the shell then trims memory):
+ * the 3D world stops and sleeps behind its still image, like a hidden one. */
+export const APP_BACKGROUND_EVENT = "skillhub-app-background";
 
 /** Whether an `APP_HIDDEN_EVENT` means hidden (a plain Event or detail true). */
 export function appHiddenFromEvent(event: Event): boolean {
