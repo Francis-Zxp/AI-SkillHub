@@ -107,6 +107,13 @@ export function Library({
   const managedAgents = agents.filter(agent => agent.takeover && agent.canDeliver);
   const scope = folderId === "all" ? "all" : folderId;
   const folderCounts = useMemo(() => countSkills(library, { folderId: scope }), [library, scope]);
+  // One count per chip, recomputed only when the library changes (not on every delivery event
+  // that re-renders the page with the same snapshot).
+  const chipCounts = useMemo(() => {
+    const result = new Map<string, number>([["unfiled", countSkills(library, { folderId: "unfiled" }).skills]]);
+    for (const folder of library?.skillFolders ?? []) result.set(folder.id, countSkills(library, { folderId: folder.id }).skills);
+    return result;
+  }, [library?.skills, library?.sources, library?.skillFolders]);
 
   const visibleRows = useMemo(() => rows.filter(row => {
     if (!rowInFolder(row, scope)) return false;
@@ -300,7 +307,7 @@ export function Library({
         />
         <FolderChip
           active={folderId === "unfiled"}
-          count={countSkills(library, { folderId: "unfiled" }).skills}
+          count={chipCounts.get("unfiled") ?? 0}
           dropId="unfiled"
           label={t("v33.folderUnfiled")}
           onClick={() => onSelectFolder("unfiled")}
@@ -311,7 +318,7 @@ export function Library({
           <FolderChip
             active={folderId === folder.id}
             color={folder.color}
-            count={countSkills(library, { folderId: folder.id }).skills}
+            count={chipCounts.get(folder.id) ?? 0}
             dropId={folder.id}
             key={folder.id}
             label={folder.name}
