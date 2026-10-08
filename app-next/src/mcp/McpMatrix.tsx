@@ -335,7 +335,12 @@ export function McpMatrix(props: Props) {
     <table aria-label={t("mcp.matrix.label")} className={`mcp-matrix${virtual ? " virtual" : ""}`} style={{ ["--mcp-cols" as string]: columns.length }}>
       <thead>
         <tr>
-          <th className="mcp-col-name" scope="col">{t("mcp.matrix.serverColumn")}</th>
+          {/* The count lives here too: the header summary is hidden when the page is narrower than 1180 px. */}
+          <th className="mcp-col-name" scope="col">
+            {searchActive
+              ? t("mcp.matrix.serverColumnFiltered", { shown: rows.length, n: props.totalRows })
+              : t("mcp.matrix.serverColumnCount", { n: props.totalRows })}
+          </th>
           {columns.map(client => {
             const stats = columnStats(rows, client.id);
             return (

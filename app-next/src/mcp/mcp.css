@@ -988,6 +988,13 @@
   .mcp-statusline { flex-direction: column; align-items: stretch; gap: 6px; }
   .mcp-summary { flex-wrap: wrap; white-space: normal; }
 }
+/* With the shell's icon rail a phone leaves ~300 px: the actions wrap under a full-width search
+   instead of overflowing to the left (flex-end pushed the search box off screen). */
+@container mcp-page (max-width: 560px) {
+  .mcp-head-actions { flex-wrap: wrap; justify-content: flex-start; }
+  .mcp-head-actions .mcp-search { flex: 1 1 100%; min-width: 0; }
+  .mcp-head-actions .mcp-btn.solid { flex: 1 1 auto; justify-content: center; }
+}
 @media (max-width: 640px) {
   .mcp-sheet, .mcp-drawer { width: 100vw; border-radius: 0; border-left: 0; }
   .mcp-sheet-body, .mcp-overlay-head, .mcp-sheet-foot { padding-left: 16px; padding-right: 16px; }

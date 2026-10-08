@@ -48,7 +48,6 @@ const zh: Dictionary = {
   // issues
   "mcp.issues.label": "需要处理的问题",
   "mcp.issues.dismiss": "先不管这一条",
-  "mcp.issues.more": "还有 {n} 个问题",
   "mcp.issue.client-unwritable": "{client} 的配置只能查看：{reason}",
   "mcp.issue.write-failed": "无法写入 {client} 的配置：{reason}",
   "mcp.issue.missing-secret": "{server} 缺少 API Key",
@@ -71,7 +70,6 @@ const zh: Dictionary = {
 
   // matrix
   "mcp.matrix.label": "MCP 与 AI 工具",
-  "mcp.matrix.serverColumn": "MCP",
   "mcp.matrix.clients": "AI 工具",
   "mcp.matrix.showMore": "再显示 {n} 个",
   "mcp.col.menu": "{client} 的批量操作",
@@ -554,7 +552,9 @@ const zh: Dictionary = {
   "mcp.resolve.added.takeFile": "收进列表",
   "mcp.resolve.added.takeFileHint": "把 {client} 里的写法存进列表并记为已启用；其他已启用的 AI 工具会跟着更新。",
   "mcp.resolve.added.takeLibrary": "从 {client} 拿掉",
-  "mcp.resolve.added.takeLibraryHint": "从 {client} 的配置里拿掉这一项，列表里保持未启用。"
+  "mcp.resolve.added.takeLibraryHint": "从 {client} 的配置里拿掉这一项，列表里保持未启用。",
+  "mcp.matrix.serverColumnCount": "MCP · {n}",
+  "mcp.matrix.serverColumnFiltered": "MCP · {shown}/{n}"
 };
 
 const en: Dictionary = {
@@ -595,7 +595,6 @@ const en: Dictionary = {
   "mcp.other.body": "Their MCP cannot be managed here in this version.",
   "mcp.issues.label": "Issues to handle",
   "mcp.issues.dismiss": "Hide this one",
-  "mcp.issues.more": "More issues ({n})",
   "mcp.issue.client-unwritable": "{client}'s config is view only: {reason}",
   "mcp.issue.write-failed": "Could not write {client}'s config: {reason}",
   "mcp.issue.missing-secret": "{server} needs an API key",
@@ -616,7 +615,6 @@ const en: Dictionary = {
   "mcp.issue.action.allow-inline": "Allow",
   "mcp.issue.action.resync": "Fix",
   "mcp.matrix.label": "MCP and AI tools",
-  "mcp.matrix.serverColumn": "MCP",
   "mcp.matrix.clients": "AI tools",
   "mcp.matrix.showMore": "Show {n} more",
   "mcp.col.menu": "Bulk actions for {client}",
@@ -1077,7 +1075,9 @@ const en: Dictionary = {
   "mcp.resolve.added.takeFile": "Add it to your list",
   "mcp.resolve.added.takeFileHint": "Save {client}'s version in your list and mark it on; other AI tools that use it follow.",
   "mcp.resolve.added.takeLibrary": "Remove it from {client}",
-  "mcp.resolve.added.takeLibraryHint": "Take this entry out of {client}'s config; it stays off in your list."
+  "mcp.resolve.added.takeLibraryHint": "Take this entry out of {client}'s config; it stays off in your list.",
+  "mcp.matrix.serverColumnCount": "MCP · {n}",
+  "mcp.matrix.serverColumnFiltered": "MCP · {shown}/{n}"
 };
 
 const ko: Dictionary = {
@@ -1118,7 +1118,6 @@ const ko: Dictionary = {
   "mcp.other.body": "이번 버전에서는 이 도구들의 MCP를 여기에서 관리할 수 없습니다.",
   "mcp.issues.label": "처리할 문제",
   "mcp.issues.dismiss": "이 항목 숨기기",
-  "mcp.issues.more": "문제 {n}개 더 보기",
   "mcp.issue.client-unwritable": "{client} 설정은 보기만 가능: {reason}",
   "mcp.issue.write-failed": "{client} 설정을 쓰지 못함: {reason}",
   "mcp.issue.missing-secret": "{server}에 API 키가 필요합니다",
@@ -1139,7 +1138,6 @@ const ko: Dictionary = {
   "mcp.issue.action.allow-inline": "동의",
   "mcp.issue.action.resync": "고치기",
   "mcp.matrix.label": "MCP와 AI 도구",
-  "mcp.matrix.serverColumn": "MCP",
   "mcp.matrix.clients": "AI 도구",
   "mcp.matrix.showMore": "{n}개 더 보기",
   "mcp.col.menu": "{client} 일괄 작업",
@@ -1600,7 +1598,9 @@ const ko: Dictionary = {
   "mcp.resolve.added.takeFile": "목록에 넣기",
   "mcp.resolve.added.takeFileHint": "{client}의 설정을 목록에 저장하고 켜짐으로 표시합니다. 이 MCP를 쓰는 다른 AI 도구도 함께 바뀝니다.",
   "mcp.resolve.added.takeLibrary": "{client}에서 빼기",
-  "mcp.resolve.added.takeLibraryHint": "{client}의 설정에서 이 항목을 빼고 목록에서는 꺼진 상태로 둡니다."
+  "mcp.resolve.added.takeLibraryHint": "{client}의 설정에서 이 항목을 빼고 목록에서는 꺼진 상태로 둡니다.",
+  "mcp.matrix.serverColumnCount": "MCP · {n}",
+  "mcp.matrix.serverColumnFiltered": "MCP · {shown}/{n}"
 };
 
 const dictionaries: Record<Lang, Dictionary> = { en, zh, ko };
