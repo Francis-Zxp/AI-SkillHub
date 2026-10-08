@@ -209,7 +209,9 @@ export function createWalker(gltf: GLTF, shape: IslandShape, origin: THREE.Vecto
       if (pause <= 0) switchTo(walk);
       return;
     }
-    const [ax, az] = route[segment], [bx, bz] = route[(segment + 1) % route.length];
+    // Every frame: plain indexing, no array destructuring.
+    const from = route[segment], to = route[(segment + 1) % route.length];
+    const ax = from[0], az = from[1], bx = to[0], bz = to[1];
     const length = Math.hypot(bx - ax, bz - az) || 1;
     progress += (speed * delta) / length;
     if (progress >= 1) {
