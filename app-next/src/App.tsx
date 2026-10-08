@@ -2536,7 +2536,10 @@ function initialAppUpdateState(): AppUpdateState {
 }
 
 function classifyUpdateFailure(error: unknown, stage: UpdateFailureStage): UpdateFailureKind {
-  const message = messageFromError(error).toLocaleLowerCase("en-US");
+  // The whole redacted text, not just the first line: the updater often puts the cause
+  // ("operation timed out", "invalid certificate") on a later line.
+  const normalized = normalizeSkillHubError(error);
+  const message = `${normalized.message} ${normalized.detail}`.toLocaleLowerCase("en-US");
   if (/timed?\s*out|timeout|deadline/.test(message)) return "timeout";
   if (/tls|ssl|certificate|cert\b|unexpected end of file/.test(message)) return "tls";
   if (/proxy|407\b|tunnel/.test(message)) return "proxy";

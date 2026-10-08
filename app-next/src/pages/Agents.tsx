@@ -34,8 +34,13 @@ const CodexPluginDoctorPanel = lazy(() =>
 
 type DetailTab = "skills" | "mcp" | "diagnostics";
 
+/** Shows the home folder as "~". Windows paths may use / or \, any drive and letter case, and the
+ *  extended-length prefix \\?\ that some tools report. */
 export function displayPath(path: string) {
-  return path.replace(/^[A-Za-z]:\\Users\\[^\\]+/, "~").replace(/^\/(?:home|Users)\/[^/]+/, "~");
+  return path
+    .replace(/^\\\\\?\\(?=[A-Za-z]:)/, "")
+    .replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, "~")
+    .replace(/^\/(?:home|Users)\/[^/]+/, "~");
 }
 
 export function Agents({
