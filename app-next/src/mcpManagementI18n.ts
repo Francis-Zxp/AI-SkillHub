@@ -272,7 +272,7 @@ const zh: Dictionary = {
   "mcp.consent.title": "{client} 需要明文密钥",
   "mcp.consent.body": "{client} 不支持引用环境变量。要把 {names} 的值直接写进 {client} 的配置文件吗？只有这个文件里会有明文。",
   "mcp.resolve.title": "{server} 在 {client} 里被手动改过",
-  "mcp.resolve.body": "选一个版本：采用 {client} 文件里的写法（会同步给其他 AI 工具），或者用库里的版本覆盖它。两种都可以撤销。",
+  "mcp.resolve.body": "SkillHub 不会悄悄覆盖。选一个版本，两种都可以撤销：",
   "mcp.resolve.takeFile": "采用文件中的版本",
   "mcp.resolve.takeLibrary": "用库里的版本覆盖",
 
@@ -533,7 +533,9 @@ const zh: Dictionary = {
   "mcp.word.apiKey": "API Key",
   "mcp.word.thisServer": "这个 MCP",
   "mcp.list.sep": "、",
-  "mcp.list.more": "{items} 等另外 {n} 个"
+  "mcp.list.more": "{items} 等另外 {n} 个",
+  "mcp.resolve.takeLibraryHint": "把 {client} 里这一项改回列表里的版本。",
+  "mcp.resolve.takeFileHint": "把 {client} 里的写法存进列表，并同步给其他已启用的 AI 工具。"
 };
 
 const en: Dictionary = {
@@ -786,7 +788,7 @@ const en: Dictionary = {
   "mcp.consent.title": "{client} needs the key in plain text",
   "mcp.consent.body": "{client} cannot reference environment variables. Write the value of {names} straight into {client}'s config file? Only that file will contain it in plain text.",
   "mcp.resolve.title": "{server} was edited by hand in {client}",
-  "mcp.resolve.body": "Pick a version: keep what {client}'s file has (it is synced to your other AI tools), or replace it with the version in your list. Both can be undone.",
+  "mcp.resolve.body": "SkillHub never overwrites it silently. Pick a version; both can be undone:",
   "mcp.resolve.takeFile": "Keep the file's version",
   "mcp.resolve.takeLibrary": "Replace with my list's version",
   "mcp.import.title": "Import from AI tools",
@@ -1035,7 +1037,9 @@ const en: Dictionary = {
   "mcp.word.apiKey": "API key",
   "mcp.word.thisServer": "this MCP",
   "mcp.list.sep": ", ",
-  "mcp.list.more": "{items} and {n} more"
+  "mcp.list.more": "{items} and {n} more",
+  "mcp.resolve.takeLibraryHint": "Put this entry in {client} back to the version in your list.",
+  "mcp.resolve.takeFileHint": "Keep what {client} has, save it to your list and sync it to your other AI tools."
 };
 
 const ko: Dictionary = {
@@ -1288,7 +1292,7 @@ const ko: Dictionary = {
   "mcp.consent.title": "{client}에는 평문 키가 필요합니다",
   "mcp.consent.body": "{client}은(는) 환경 변수 참조를 지원하지 않습니다. {names} 값을 {client} 설정 파일에 직접 쓸까요? 평문은 이 파일에만 들어갑니다.",
   "mcp.resolve.title": "{client}에서 {server}을(를) 직접 수정했습니다",
-  "mcp.resolve.body": "버전을 고르세요: {client} 파일의 내용을 채택(다른 AI 도구에도 동기화)하거나 목록의 버전으로 덮어씁니다. 둘 다 되돌릴 수 있습니다.",
+  "mcp.resolve.body": "SkillHub는 몰래 덮어쓰지 않습니다. 버전을 고르세요. 둘 다 되돌릴 수 있습니다:",
   "mcp.resolve.takeFile": "파일의 버전 채택",
   "mcp.resolve.takeLibrary": "목록의 버전으로 덮어쓰기",
   "mcp.import.title": "AI 도구에서 가져오기",
@@ -1537,7 +1541,9 @@ const ko: Dictionary = {
   "mcp.word.apiKey": "API 키",
   "mcp.word.thisServer": "이 MCP",
   "mcp.list.sep": ", ",
-  "mcp.list.more": "{items} 외 {n}개"
+  "mcp.list.more": "{items} 외 {n}개",
+  "mcp.resolve.takeLibraryHint": "{client}의 이 항목을 목록의 버전으로 되돌립니다.",
+  "mcp.resolve.takeFileHint": "{client}의 내용을 목록에 저장하고 켜 둔 다른 AI 도구에도 동기화합니다."
 };
 
 const dictionaries: Record<Lang, Dictionary> = { en, zh, ko };

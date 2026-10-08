@@ -940,20 +940,28 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
             <div aria-hidden="true" className="mcp-dialog-icon warn"><Glyph name="flag" /></div>
             <h2>{t("mcp.resolve.title", { server: resolveChange.row.name, client: clientLabel(resolveChange.clientId, snapshot?.clients) })}</h2>
             <p>{t("mcp.resolve.body", { client: clientLabel(resolveChange.clientId, snapshot?.clients) })}</p>
+            <div className="mcp-choice-list">
+              <button className="mcp-choice" onClick={() => {
+                const target = resolveChange;
+                setResolveChange(null);
+                void runWrite(answer => mcpApi.resolveChange({ serverId: target.row.id, clientId: target.clientId, take: "library", confirmToken: answer?.token }), { pending: [pendingKey(target.row.id, target.clientId)] });
+              }} type="button">
+                <strong>{t("mcp.resolve.takeLibrary")}</strong>
+                <span>{t("mcp.resolve.takeLibraryHint", { client: clientLabel(resolveChange.clientId, snapshot?.clients) })}</span>
+              </button>
+              <button className="mcp-choice" onClick={() => {
+                const target = resolveChange;
+                setResolveChange(null);
+                void runWrite(answer => mcpApi.resolveChange({ serverId: target.row.id, clientId: target.clientId, take: "file", confirmToken: answer?.token }), { pending: [pendingKey(target.row.id, target.clientId)] });
+              }} type="button">
+                <strong>{t("mcp.resolve.takeFile")}</strong>
+                <span>{t("mcp.resolve.takeFileHint", { client: clientLabel(resolveChange.clientId, snapshot?.clients) })}</span>
+              </button>
+            </div>
           </div>
-          <footer className="mcp-dialog-foot stack">
+          <footer className="mcp-dialog-foot">
+            <button className="mcp-btn quiet mcp-foot-left" onClick={() => void openLocation(resolveChange.clientId)} type="button"><Glyph name="folder" /> {t("mcp.col.openLocation")}</button>
             <button className="mcp-btn quiet" onClick={() => setResolveChange(null)} type="button">{t("mcp.common.cancel")}</button>
-            <button className="mcp-btn quiet" onClick={() => void openLocation(resolveChange.clientId)} type="button"><Glyph name="folder" /> {t("mcp.col.openLocation")}</button>
-            <button className="mcp-btn quiet" onClick={() => {
-              const target = resolveChange;
-              setResolveChange(null);
-              void runWrite(answer => mcpApi.resolveChange({ serverId: target.row.id, clientId: target.clientId, take: "file", confirmToken: answer?.token }), { pending: [pendingKey(target.row.id, target.clientId)] });
-            }} type="button">{t("mcp.resolve.takeFile")}</button>
-            <button className="mcp-btn solid" onClick={() => {
-              const target = resolveChange;
-              setResolveChange(null);
-              void runWrite(answer => mcpApi.resolveChange({ serverId: target.row.id, clientId: target.clientId, take: "library", confirmToken: answer?.token }), { pending: [pendingKey(target.row.id, target.clientId)] });
-            }} type="button">{t("mcp.resolve.takeLibrary")}</button>
           </footer>
         </Overlay>
       )}

@@ -994,3 +994,46 @@
   .mcp-toast-stack { right: 16px; bottom: 16px; }
   .mcp-history-item { grid-template-columns: 1fr; }
 }
+
+/* Checkboxes and radios never stretch, whatever the shell's input defaults are. */
+.mcp-overlay input[type="checkbox"],
+.mcp-overlay input[type="radio"],
+.mcp-page input[type="checkbox"],
+.mcp-page input[type="radio"] {
+  flex: none;
+  width: 15px !important;
+  height: 15px;
+  min-height: 0 !important;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--brand);
+}
+.mcp-confirm-env label { align-items: flex-start; }
+.mcp-confirm-env label input { margin-top: 3px; }
+
+/* Two-way choices (changed outside): big, explicit buttons instead of four footer buttons. */
+.mcp-choice-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.mcp-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mcp-choice:hover { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 6%, var(--surface)); }
+.mcp-choice:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.mcp-choice strong { font-weight: 650; }
+.mcp-choice span { color: var(--text-soft); font-size: calc(12.5px * var(--ui-text-scale, 1)); }
+.mcp-foot-left { margin-right: auto; }
+
+/* The remove button of a key row sits in its corner instead of wrapping onto its own line. */
+.mcp-secret-row { position: relative; padding-right: 40px; }
+.mcp-secret-row .mcp-secret-remove { position: absolute; top: 8px; right: 8px; margin: 0; }
