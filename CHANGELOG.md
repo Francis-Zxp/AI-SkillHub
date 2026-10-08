@@ -2,6 +2,16 @@
 
 All notable changes to AI SkillHub are documented here.
 
+## 3.3.0 — One-click takeover, per-tool sync, MCP matrix, island climates, lower memory (2026-10-08)
+
+- New shell: sidebar with text labels and per-tool sub-items, a top bar with working Ctrl/⌘+K search, "+ 添加" from anywhere (paste a GitHub address, owner/repo, /tree/ path, local folder or .zip — or an MCP config), "更新 (N)" and one sync status dot. Plain-language terms throughout (技能 / 技能包 / MCP / AI 工具); the fake "真实写入授权" pill and the Workspaces page are gone.
+- First-run consent: nothing is written to any AI tool folder before the user agrees; per-tool "接管" switches and a global pause are enforced by the backend. Existing users keep their current tools.
+- Skills: one row of AI-tool icons per skill pack — sync or remove per tool with one click; background, debounced delivery that never locks the window; disabling a child skill also removes it from its parent entry; one-box import with a preview of the skills, the security result and target tools (flagged packs stay "仅加入技能库（保持停用）"); adopt all existing skills at once; Cursor and Gemini CLI as experimental targets; same-name personal folders are reported as conflicts and never moved.
+- MCP: a servers × AI tools matrix (Codex, Claude Code, Claude Desktop, Cursor) with one click per cell and "启用其余 N 个" per column; paste a config from any README (JSON, TOML, VS Code, OpenCode); templates and a Discover tab; API keys entered in the app are stored as user environment variables and referenced from configs; user-started connection test (initialize + tools/list only); per-tool results with Undo and a readable history. Every write still goes through snapshot, fingerprint, atomic write and read-back.
+- Sky islands: eight random climates (meadow, snow peaks, desert mesa, tropical, autumn, volcano, crystal, rice terraces) and nine kinds of weather, reroll and pin from the "世界" panel; visual bug fixes; far fewer draw calls.
+- Memory: the WebView is hidden and trimmed when the window is minimized or long in the background, the 3D scene sleeps to a still image when unseen, per-frame allocations removed, WebView2 network service in-process and a smaller V8 young generation. Minimized: ~330 MB → ~20 MB (isolated profile).
+- 50 adversarially verified bugs fixed across the shell, Rust core, MCP and visuals. Public updater manifest unchanged.
+
 ## 3.2.18 — Client discovery and Coze delivery (2026-10-06)
 
 - Detect WorkBuddy AI installations outside default folders and resolve the Skills profile from installed product metadata.
