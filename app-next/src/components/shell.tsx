@@ -40,6 +40,8 @@ export function AgentGlyph({ agentId, name, size = "md" }: { agentId: string; na
 
 /* ---------- Sidebar ---------- */
 
+// A slim icon rail, as in 3.2.x: each item opens its page, where the details live (the AI 工具
+// page lists every tool). Labels show as tooltips on hover; nothing here duplicates the top bar.
 const NAV: Array<{ key: NavKey; icon: IconName; label: string }> = [
   { key: "dashboard", icon: "dashboard", label: "nav.dashboard" },
   { key: "library", icon: "library", label: "nav.library" },
@@ -49,112 +51,37 @@ const NAV: Array<{ key: NavKey; icon: IconName; label: string }> = [
 
 export function Sidebar({
   active,
-  agentDetailId,
-  delivery,
   updateCount,
-  onAdd,
-  onNavigate,
-  onOpenAgent
+  onNavigate
 }: {
   active: NavKey;
-  agentDetailId: string | null;
-  delivery: SkillDeliveryState | null;
   updateCount: number;
-  onAdd: () => void;
   onNavigate: (key: NavKey) => void;
-  onOpenAgent: (agentId: string | null) => void;
 }) {
-  const managed = sidebarAgents(delivery);
-  const discovered = availableAgents(delivery);
+  const item = (key: NavKey, icon: IconName, label: string, badge = 0) => (
+    <button
+      aria-current={active === key ? "page" : undefined}
+      aria-label={t(label)}
+      className="rail-item"
+      data-testid={`nav-${key}`}
+      key={key}
+      onClick={() => onNavigate(key)}
+      type="button"
+    >
+      <span className="rail-icon" aria-hidden="true"><Icon name={icon} /></span>
+      {badge > 0 && <em className="rail-badge" title={t("v33.updatesBadge", { n: badge })}>{badge}</em>}
+      <span className="rail-tip" aria-hidden="true">{t(label)}</span>
+    </button>
+  );
   return (
     <aside className="side-rail" aria-label={t("v33.navLabel")}>
       <div className="rail-brand">
-        <img alt="" src="/ai-skillhub-logo.png" />
-        <strong>AI SkillHub</strong>
+        <img alt="AI SkillHub" src="/ai-skillhub-logo.png" />
       </div>
-      <button className="rail-item rail-add" data-testid="sidebar-add-button" onClick={onAdd} type="button">
-        <span className="rail-icon" aria-hidden="true"><Icon name="add" /></span>
-        <span className="rail-label">{t("v33.add")}</span>
-        <span className="rail-tip" aria-hidden="true">{t("v33.add")}</span>
-      </button>
       <nav className="rail-nav">
-        {NAV.map(item => (
-          <div className="rail-group" key={item.key}>
-            <button
-              aria-current={active === item.key && !(item.key === "agents" && agentDetailId) ? "page" : undefined}
-              aria-label={t(item.label)}
-              className="rail-item"
-              data-testid={`nav-${item.key}`}
-              onClick={() => {
-                if (item.key === "agents") onOpenAgent(null);
-                onNavigate(item.key);
-              }}
-              type="button"
-            >
-              <span className="rail-icon" aria-hidden="true"><Icon name={item.icon} /></span>
-              <span className="rail-label">{t(item.label)}</span>
-              {item.key === "library" && updateCount > 0 && (
-                <em className="rail-badge" title={t("v33.updatesBadge", { n: updateCount })}>{updateCount}</em>
-              )}
-              <span className="rail-tip" aria-hidden="true">{t(item.label)}</span>
-            </button>
-            {item.key === "agents" && (managed.length > 0 || discovered.length > 0) && (
-              <div className="rail-sub">
-                {managed.map(agent => (
-                  <button
-                    aria-current={active === "agents" && agentDetailId === agent.id ? "page" : undefined}
-                    aria-label={agent.name}
-                    className="rail-sub-item"
-                    data-testid={`nav-agent-${agent.id}`}
-                    key={agent.id}
-                    onClick={() => {
-                      onOpenAgent(agent.id);
-                      onNavigate("agents");
-                    }}
-                    type="button"
-                  >
-                    <AgentGlyph agentId={agent.id} name={agent.name} size="sm" />
-                    <span className="rail-label">{agent.name}</span>
-                    <em className="rail-sub-count">{agent.counts.skillsSynced}</em>
-                    <i className={`agent-dot tone-${agentDotTone(agent.health)}`} title={t(`v33.health.${agentDotTone(agent.health)}`)} />
-                    <span className="rail-tip" aria-hidden="true">{agent.name} · {agent.counts.skillsSynced}</span>
-                  </button>
-                ))}
-                {discovered.length > 0 && (
-                  <button
-                    aria-label={t("v33.discoverTools", { n: discovered.length })}
-                    className="rail-sub-item discover"
-                    data-testid="nav-discover-agents"
-                    onClick={() => {
-                      onOpenAgent(null);
-                      onNavigate("agents");
-                    }}
-                    type="button"
-                  >
-                    <span className="rail-sub-plus" aria-hidden="true"><Icon name="add" /></span>
-                    <span className="rail-label">{t("v33.discoverTools", { n: discovered.length })}</span>
-                    <span className="rail-tip" aria-hidden="true">{t("v33.discoverTools", { n: discovered.length })}</span>
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
+        {NAV.map(entry => item(entry.key, entry.icon, entry.label, entry.key === "library" ? updateCount : 0))}
       </nav>
-      <div className="rail-footer">
-        <button
-          aria-current={active === "settings" ? "page" : undefined}
-          aria-label={t("nav.settings")}
-          className="rail-item"
-          data-testid="nav-settings"
-          onClick={() => onNavigate("settings")}
-          type="button"
-        >
-          <span className="rail-icon" aria-hidden="true"><Icon name="settings" /></span>
-          <span className="rail-label">{t("nav.settings")}</span>
-          <span className="rail-tip" aria-hidden="true">{t("nav.settings")}</span>
-        </button>
-      </div>
+      <div className="rail-footer">{item("settings", "settings", "nav.settings")}</div>
     </aside>
   );
 }

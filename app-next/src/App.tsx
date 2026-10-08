@@ -63,6 +63,7 @@ import {
   copyTextToClipboard
 } from "./appShared";
 import { DeferredSurface, useConfirm } from "./components/ui";
+import { LanguageSwitcher, ThemeSwitcher } from "./components/topbarSwitchers";
 import {
   ErrorBanner,
   GlobalSearchResults,
@@ -179,7 +180,7 @@ type StoredUpdateDiagnostic = {
 };
 type BannerScope = "delivery" | "import" | "index" | "other";
 type DrawerTab = "overview" | "versions" | "settings";
-export type HomeVisual = "islands" | "universe" | "off";
+export type HomeVisual = "islands" | "universe" | "summary";
 
 const PROJECT_HOME_URL = "https://github.com/Francis-Zxp/AI-SkillHub";
 const PROJECT_RELEASES_URL = "https://github.com/Francis-Zxp/AI-SkillHub/releases/latest";
@@ -1976,11 +1977,11 @@ export function App() {
       )}
       <Sidebar
         active={active}
-        agentDetailId={agentDetailId}
-        delivery={delivery}
-        onAdd={() => openImport()}
-        onNavigate={key => (key === "library" ? openLibrary() : navigate(key))}
-        onOpenAgent={openAgent}
+        onNavigate={key => {
+          if (key === "agents") openAgent(null);
+          if (key === "library") openLibrary();
+          else navigate(key);
+        }}
         updateCount={counts.updateRows}
       />
 
@@ -2008,6 +2009,18 @@ export function App() {
             <kbd aria-hidden="true">{isMac ? "⌘ K" : "Ctrl K"}</kbd>
           </div>
           <div className="topbar-actions">
+            <LanguageSwitcher current={lang} onChange={changeLang} />
+            <ThemeSwitcher current={theme} onChange={changeTheme} />
+            <button
+              aria-label={t("project.openGithub")}
+              className="icon-button project-home-link"
+              data-testid="topbar-github"
+              onClick={() => void openProjectHome()}
+              title={t("project.openGithub")}
+              type="button"
+            >
+              <Icon name="github" />
+            </button>
             <button className="primary-pill add-pill" data-testid="add-button" onClick={() => openImport()} type="button">
               <Icon name="add" />
               <span>{t("v33.add")}</span>
@@ -2403,7 +2416,9 @@ function readFlag(key: string) {
 function initialHomeVisual(): HomeVisual {
   try {
     const value = window.localStorage.getItem(HOME_VISUAL_STORAGE_KEY);
-    return value === "universe" || value === "off" ? value : "islands";
+    // 3.3.0's "off" became the 2D summary (归纳) view.
+    if (value === "off" || value === "summary") return "summary";
+    return value === "universe" ? value : "islands";
   } catch {
     return "islands";
   }
@@ -2505,11 +2520,7 @@ function isThemeName(value: string | null): value is ThemeName {
     value === "atlas-dark" ||
     value === "atlas-light" ||
     value === "atlas-legacy-dark" ||
-    value === "atlas-legacy-light" ||
-    value === "dark" ||
-    value === "light" ||
-    value === "classic-dark" ||
-    value === "classic-light"
+    value === "atlas-legacy-light"
   );
 }
 

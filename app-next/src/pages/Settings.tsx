@@ -35,15 +35,7 @@ import "./settings.css";
 const DevTools = lazy(() => import("./DevTools").then(module => ({ default: module.DevTools })));
 
 const UI_SCALE_OPTIONS: UiScalePreset[] = ["compact", "standard", "comfortable", "large"];
-type HomeVisual = "islands" | "universe" | "off";
-type Appearance = "auto" | "light" | "dark" | "custom";
-
-function appearanceOf(theme: ThemeName): Appearance {
-  if (theme === "sky-auto") return "auto";
-  if (theme === "sky-noon") return "light";
-  if (theme === "sky-night") return "dark";
-  return "custom";
-}
+type HomeVisual = "islands" | "universe" | "summary";
 
 export function Settings({
   appUpdate,
@@ -125,7 +117,6 @@ export function Settings({
   const [gitRuntime, setGitRuntime] = useState<GitRuntimeCard | null>(null);
   const [gitInstallBusy, setGitInstallBusy] = useState(false);
   const [gitInstallResult, setGitInstallResult] = useState<GitInstallResultCard | null>(null);
-  const appearance = appearanceOf(currentTheme);
   const updateStatus = t(`update.status.${appUpdate.phase}`, {
     progress: appUpdate.progress,
     version: appUpdate.version || APP_VERSION
@@ -277,24 +268,6 @@ export function Settings({
             />
           </div>
           <div className="settings-row">
-            <strong>{t("v33.appearance")}</strong>
-            <SegmentedToggle<Appearance>
-              label={t("v33.appearance")}
-              value={appearance}
-              options={[
-                { value: "auto", label: t("v33.appearanceAuto") },
-                { value: "light", label: t("v33.appearanceLight") },
-                { value: "dark", label: t("v33.appearanceDark") },
-                ...(appearance === "custom" ? [{ value: "custom" as const, label: t("v33.appearanceCustom") }] : [])
-              ]}
-              onChange={value => {
-                if (value === "auto") onChangeTheme("sky-auto");
-                else if (value === "light") onChangeTheme("sky-noon");
-                else if (value === "dark") onChangeTheme("sky-night");
-              }}
-            />
-          </div>
-          <div className="settings-row">
             <strong>{t("v33.homeScene")}</strong>
             <SegmentedToggle<HomeVisual>
               label={t("v33.homeScene")}
@@ -302,15 +275,15 @@ export function Settings({
               options={[
                 { value: "islands", label: t("v33.sceneIslands") },
                 { value: "universe", label: t("v33.sceneStars") },
-                { value: "off", label: t("v33.sceneOff") }
+                { value: "summary", label: t("v33.sceneSummary") }
               ]}
               onChange={onChangeHomeVisual}
             />
           </div>
           {homeVisual === "islands" && <SkySceneSettingRow />}
-          <details className="settings-more-themes" open={appearance === "custom"}>
-            <summary>{t("v33.moreThemes")}</summary>
-            <div className="theme-grid" role="radiogroup" aria-label={t("v33.moreThemes")}>
+          <div className="settings-row settings-theme-row">
+            <strong>{t("v33.appearance")}</strong>
+            <div className="theme-grid" role="radiogroup" aria-label={t("v33.appearance")}>
               {THEME_OPTIONS.map(option => (
                 <button
                   aria-checked={currentTheme === option.value}
@@ -324,7 +297,7 @@ export function Settings({
                 </button>
               ))}
             </div>
-          </details>
+          </div>
           <div className="settings-row settings-scale-row">
             <span className="settings-scale-label">
               <strong>{t("set.textSize")}</strong>

@@ -48,11 +48,14 @@ test("skill metadata editor remains a viewport-level readable glass drawer", () 
 });
 
 test("logo and theme labels keep optical alignment and one-line names", () => {
-  // v3.3: the rail brand and the theme list in 设置 → 常规 (the top-bar theme menu is gone).
+  // v3.3: a slim icon rail (3.2.x look, labels as hover tips); themes in the top-bar menu and
+  // listed in full in 设置 → 常规.
   const shell = readFileSync(new URL("../src/shell.css", import.meta.url), "utf8");
   const settings = readFileSync(new URL("../src/pages/settings.css", import.meta.url), "utf8");
   assert.match(shell, /\.rail-brand img \{[^}]*width: 40px;[^}]*border-radius: 11px;/);
-  assert.match(shell, /\.rail-brand strong \{[^}]*white-space: nowrap;/);
+  assert.match(shell, /main\.shell\.v33 \{ --rail-w: 76px;/);
+  assert.doesNotMatch(shell, /--rail-w: 212px/);
+  assert.match(shell, /\.rail-tip \{[^}]*white-space: nowrap;/);
   assert.match(settings, /\.theme-grid button \{[^}]*white-space: nowrap;/);
   assert.match(styles, /\.segmented button\s*\{[\s\S]*?white-space:\s*nowrap/);
 });

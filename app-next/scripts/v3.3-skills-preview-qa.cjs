@@ -355,13 +355,18 @@ async function probe(page, text) {
     await page.context().close();
   });
 
-  await check("Narrow and wide: labels at ≥1200 px, hover-only tooltips below", async () => {
+  await check("Slim icon rail at every width, hover-only tooltips", async () => {
+    // Users preferred the 3.2.x slim rail; details live on each page.
     const wide = await open("?view=library", { width: 1920, height: 1080 });
-    expect(await wide.locator(".rail-label").first().isVisible(), "labels visible at 1920");
+    const railWidth = await wide.locator(".side-rail").evaluate(element => element.getBoundingClientRect().width);
+    expect(railWidth <= 90, `rail is ${railWidth}px wide at 1920`);
+    await wide.hover('[data-testid="nav-agents"]');
+    await wide.waitForTimeout(250);
+    const hoverTips = await wide.$$eval(".rail-tip", tips => tips.filter(tip => getComputedStyle(tip).visibility === "visible").length);
+    expect(hoverTips === 1, `${hoverTips} tooltip(s) on hover`);
     await shot(wide, "17-wide-1920");
     await wide.context().close();
     const narrow = await open("?view=library", { width: 1100, height: 800 });
-    expect(!(await narrow.locator(".rail-label").first().isVisible()), "icons only at 1100");
     await narrow.focus('[data-testid="nav-agents"]');
     await narrow.keyboard.press("Tab");
     await narrow.waitForTimeout(250);

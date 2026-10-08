@@ -290,16 +290,14 @@ test("review: a closed add sheet cancels its probe and cannot be torn down mid-i
   assert.match(importSheetSource, /disabled=\{installing\} onClick=\{\(\) => onOpenMcp\(config\.relativePath\)\}/);
 });
 
-test("review: the home scene's own controls sit under the measured home block", () => {
-  assert.match(dashboardSource, /view\.style\.setProperty\("--home-top-bottom", `\$\{bottom\}px`\)/);
-  for (const selector of [".home-visual-switch", ".atlas-immersive-toggle", ".skill-universe-modes", ".sky-controls", ".sky-heading"]) {
-    const index = homeCss.indexOf(`:not(.dashboard-immersive) .dashboard-hero ${selector}`) >= 0
-      ? homeCss.indexOf(`:not(.dashboard-immersive) .dashboard-hero ${selector}`)
-      : homeCss.indexOf(`:not(.dashboard-immersive) ${selector}`);
-    assert.ok(index >= 0, selector);
-    assert.match(homeCss.slice(index, homeCss.indexOf("}", index)), /var\(--home-top-bottom/, selector);
-  }
-  // 首页场景: 关闭 spans the window without depending on the 3D stylesheet.
+test("home keeps the 3.2.x layout: the scene fills the page, the numbers sit in the bottom bar", () => {
+  // Nothing floats over the top of the scene any more (users: it covered the star map).
+  assert.doesNotMatch(dashboardSource, /className="home-top"|--home-top-bottom|data-testid="home-add-input"/);
+  assert.match(dashboardSource, /className=\{`metric-grid\$\{atlasMode \? " atlas-touchbar" : ""\}`\}/);
+  assert.match(dashboardSource, /\{ value: "summary", label: t\("v33\.sceneSummary"\) \}/);
+  assert.match(dashboardSource, /<div className="home-summary-scene" data-testid="home-summary">/);
+  assert.doesNotMatch(homeCss, /--home-top-bottom/);
+  // 首页场景: 归纳 spans the window without depending on the 3D stylesheet.
   assert.match(homeCss, /\.v33\.theme-family-atlas\.page-dashboard \.workspace \{ grid-column: 1 \/ -1; grid-row: 1; \}/);
 });
 

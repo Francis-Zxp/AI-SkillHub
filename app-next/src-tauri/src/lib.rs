@@ -10074,7 +10074,8 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
                 END AS metadata_confidence,
                 COALESCE(skill_folder_memberships.folder_id, source_folder_memberships.folder_id, '') AS user_folder_id,
                 COALESCE(skill_folders.name, '') AS user_folder_name,
-                COALESCE(skill_folders.color, '') AS user_folder_color
+                COALESCE(skill_folders.color, '') AS user_folder_color,
+                COALESCE(sources.name, '') AS pack_entry_name
             FROM skills
             LEFT JOIN sources ON sources.id = skills.source_id
             LEFT JOIN source_overrides ON source_overrides.source_id = sources.id
@@ -10121,15 +10122,18 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
                     user_folder_name: row.get(17)?,
                     user_folder_color: row.get(18)?,
                 },
+                row.get::<_, String>(19)?,
             ))
         })
         .map_err(|error| format!("Cannot read indexed skills: {}", error))?;
 
     let mut skills = Vec::new();
     for row in rows {
-        let (skill_id, mut skill) =
+        let (skill_id, mut skill, pack_entry) =
             row.map_err(|error| format!("Cannot decode indexed skill: {}", error))?;
         skill.tags = tag_map.remove(&skill_id).unwrap_or_default();
+        skill.invocation_name =
+            skill_call_name(&skill.folder_name, &pack_entry, skill.is_router_hub);
         // Brief §7 #18: generator markers are machine data. `is_router_hub`
         // comes from the scanned file, never from this editable text, so a
         // user edit can no longer flip the parent detection.
@@ -10137,6 +10141,25 @@ fn read_indexed_skills(connection: &Connection) -> Result<Vec<SkillCard>, String
         skills.push(skill);
     }
     Ok(skills)
+}
+
+/// What a user types to call a skill in an AI tool. Tools only see one parent
+/// entry per pack (named after the pack); its router picks a child by the
+/// child's own name. Index keys like `pack__child` exist only inside SkillHub.
+fn skill_call_name(folder_name: &str, pack_entry: &str, is_router_hub: bool) -> String {
+    let folder_name = folder_name.trim();
+    let pack_entry = pack_entry.trim();
+    if is_router_hub || pack_entry.is_empty() {
+        return folder_name.to_string();
+    }
+    let child = folder_name
+        .strip_prefix(&format!("{pack_entry}__"))
+        .unwrap_or(folder_name);
+    if child.is_empty() || child == pack_entry {
+        pack_entry.to_string()
+    } else {
+        format!("{pack_entry} {child}")
+    }
 }
 
 fn strip_generator_markers(description: &str) -> String {
@@ -18830,7 +18853,7 @@ fn scan_source_tree_skills(
                 id: stable_id("skill", &folder_name),
                 source_id: source.id.clone(),
                 name,
-                invocation_name: folder_name.clone(),
+                invocation_name: skill_call_name(&folder_name, &source.name, is_router_hub),
                 folder_name,
                 category,
                 description,
@@ -22544,6 +22567,36 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn call_names_follow_the_parent_entry_tools_actually_see() {
+        use super::skill_call_name;
+        // Child stored under an index key: parent + child name.
+        assert_eq!(
+            skill_call_name(
+                "academic-humanizer--aiscientists-dev__academic-humanizer",
+                "academic-humanizer--aiscientists-dev",
+                false
+            ),
+            "academic-humanizer--aiscientists-dev academic-humanizer"
+        );
+        // Child stored under its own folder name.
+        assert_eq!(
+            skill_call_name("benchmark", "gstack--garrytan", false),
+            "gstack--garrytan benchmark"
+        );
+        // The parent entry itself, and a pack whose only skill is the pack.
+        assert_eq!(
+            skill_call_name("gstack--garrytan", "gstack--garrytan", true),
+            "gstack--garrytan"
+        );
+        assert_eq!(
+            skill_call_name("mineru--x", "mineru--x", false),
+            "mineru--x"
+        );
+        // Standalone skills have no pack.
+        assert_eq!(skill_call_name("my-skill", "", false), "my-skill");
+    }
+
     use super::*;
 
     #[test]

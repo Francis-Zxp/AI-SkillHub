@@ -30,11 +30,7 @@ export type ThemeName =
   | "atlas-dark"
   | "atlas-light"
   | "atlas-legacy-dark"
-  | "atlas-legacy-light"
-  | "dark"
-  | "light"
-  | "classic-dark"
-  | "classic-light";
+  | "atlas-legacy-light";
 export type UiScalePreset = "compact" | "standard" | "comfortable" | "large";
 
 export type SkillDraft = { name: string; category: string; description: string; note: string; tags: string };
@@ -100,11 +96,7 @@ export const THEME_OPTIONS: Array<{ icon: IconName; labelKey: string; value: The
   { value: "atlas-dark", labelKey: "theme.atlasDark", icon: "moon" },
   { value: "atlas-light", labelKey: "theme.atlasLight", icon: "sun" },
   { value: "atlas-legacy-dark", labelKey: "theme.atlasLegacyDark", icon: "moon" },
-  { value: "atlas-legacy-light", labelKey: "theme.atlasLegacyLight", icon: "sun" },
-  { value: "dark", labelKey: "theme.dark", icon: "moon" },
-  { value: "light", labelKey: "theme.light", icon: "sun" },
-  { value: "classic-dark", labelKey: "theme.classicDark", icon: "moon" },
-  { value: "classic-light", labelKey: "theme.classicLight", icon: "sun" }
+  { value: "atlas-legacy-light", labelKey: "theme.atlasLegacyLight", icon: "sun" }
 ];
 let previewModulePromise: Promise<typeof import("./preview")> | null = null;
 
@@ -206,7 +198,7 @@ export function atlasThemeVisual(theme: ThemeName) {
 
 export function themeLabel(theme: ThemeName): string {
   const option = THEME_OPTIONS.find(item => item.value === theme);
-  return option ? t(option.labelKey) : t("theme.dark");
+  return option ? t(option.labelKey) : t("theme.skyAuto");
 }
 
 export function showUiToast(message: string, tone: ToastTone = "info") {

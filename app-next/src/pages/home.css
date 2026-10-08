@@ -1,114 +1,79 @@
-/* v3.3 home (skills contract §6.2). The four numbers, the first-run / new-tool card and the
-   添加 box form one compact glass block; in the scene themes it floats over the islands. */
-.home-top { display: grid; gap: 10px; }
-.home-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.home-metrics .metric {
-  display: grid;
-  gap: 2px;
-  min-height: 0;
-  padding: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
-  text-align: left;
-  backdrop-filter: blur(18px);
-}
-.home-metrics .metric > div { display: flex; align-items: center; justify-content: space-between; color: var(--text-soft); font-size: 12.5px; font-weight: 600; }
-.home-metrics .metric > div em { color: var(--text-muted); }
-.home-metrics .metric > div .ui-icon { width: 16px; height: 16px; }
-.home-metrics .metric strong { display: flex; align-items: baseline; gap: 2px; font-size: calc(22px * var(--ui-text-scale, 1)); font-variant-numeric: tabular-nums; line-height: 1.15; }
-.home-metrics .metric small { color: var(--text-muted); font-size: 12px; }
-.home-metrics .metric .metric-suffix { color: var(--text-muted); font-size: 15px; font-weight: 600; }
-.home-metrics .metric:hover { border-color: var(--border-strong); }
-.home-metrics .metric-alert strong { color: var(--danger); }
-.home-row { display: flex; flex-wrap: wrap; gap: 10px; }
-.home-add {
-  display: flex;
-  flex: 1 1 320px;
-  align-items: center;
-  gap: 10px;
-  min-height: 48px;
-  padding: 6px 6px 6px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--surface-elevated) 84%, transparent);
-  backdrop-filter: blur(18px);
-  cursor: text;
-}
-.home-add:hover { border-color: var(--brand); }
-.home-add input { flex: 1 1 auto; padding: 6px 0; border: 0; outline: none; background: transparent; color: var(--text); cursor: text; }
-.home-add > .ui-icon { color: var(--brand-strong); }
-.home-card {
-  display: flex;
-  flex: 1 1 300px;
-  align-items: center;
-  gap: 12px;
-  min-height: 48px;
-  padding: 8px 10px 8px 14px;
-  border: 1px solid color-mix(in srgb, var(--brand) 40%, var(--border));
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--brand) 12%, var(--surface-elevated));
-  backdrop-filter: blur(18px);
-}
-.home-card > div { display: grid; flex: 1 1 auto; min-width: 0; }
-.home-card strong { font-size: 14px; }
-.home-card span { overflow: hidden; color: var(--text-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.home-card.empty { border-color: var(--border); background: color-mix(in srgb, var(--surface-elevated) 84%, transparent); }
-.scene-off-note { position: absolute; bottom: 34px; left: 32px; z-index: 4; margin: 0; color: var(--text-muted); font-size: 13px; }
-.dashboard-hero.scene-off { min-height: 0; }
+/* v3.3 home, 3.2.x layout: the scene fills the page and the four numbers sit in the bottom
+   touch bar (styles.css .atlas-touchbar), so nothing covers the islands, the star map or the
+   summary. */
 .home-visual-switch .segmented { backdrop-filter: blur(16px); }
-
-/* Scene themes: the block floats over the islands just under the top bar. */
-.theme-family-atlas.page-dashboard .home-top {
-  position: absolute;
-  top: 82px;
-  right: var(--atlas-page-gutter, 24px);
-  left: calc(var(--home-rail, 0px) + var(--atlas-page-gutter, 24px));
-  z-index: 30;
-}
 .theme-family-atlas.page-dashboard .preview-panel { display: none; }
-.theme-family-atlas.page-dashboard .dashboard-hero.scene-off { min-height: 420px; }
 
-/* The scene spans the window in every home mode, including 首页场景: 关闭 (HomeScene.css, which
-   also sets this, only loads with the 3D scenes). */
+/* The scene spans the window in every home mode, 归纳 included (HomeScene.css, which also sets
+   this, only loads with the 3D scenes). */
 @media (min-width: 821px) {
   .v33.theme-family-atlas.page-dashboard .workspace { grid-column: 1 / -1; grid-row: 1; }
   .v33.theme-family-atlas.page-dashboard .topbar { margin: var(--home-gap, 12px) var(--home-gap, 12px) 0 calc(var(--home-rail, 0px) + var(--home-gap, 12px)); top: var(--home-gap, 12px); }
 }
 
-/* The scene's own controls start under the home block. Dashboard.tsx keeps --home-top-bottom at
-   the block's bottom edge, which moves with the window width, the text size and the language.
-   One row under the block: the islands' heading (or 群岛/星图/关闭 on the star map and with the
-   scene off) on the left; the islands' buttons, the star map's modes, 简介 and full screen on the
-   right. On the islands the scene switch sits under the heading: the 3D view fits the islands
-   below the heading and the buttons, so nothing else may push that line down. */
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .home-visual-switch {
-  top: calc(var(--home-top-bottom, 268px) + 14px);
-  left: calc(var(--home-rail, 0px) + 24px);
+/* 归纳 (summary): the 2D category view takes the scene's place, between the top bar and the
+   touch bar, on a quiet glass card. */
+.theme-family-atlas.page-dashboard .dashboard-hero.summary-home .dashboard-hero-inner { display: none; }
+.home-summary-scene {
+  position: absolute;
+  top: calc(var(--home-scene-top, 160px));
+  right: var(--atlas-page-gutter, 24px);
+  bottom: calc(var(--home-scene-bottom, 104px));
+  left: calc(var(--home-rail, 0px) + var(--atlas-page-gutter, 24px));
+  z-index: 3;
+  display: flex;
 }
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .islands-home .home-visual-switch { top: calc(var(--home-top-bottom, 268px) + 93px); }
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .dashboard-hero .skill-universe-modes,
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .dashboard-hero .atlas-intro-toggle,
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .dashboard-hero .atlas-immersive-toggle,
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .dashboard-hero .sky-controls,
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .dashboard-hero .sky-heading {
-  top: calc(var(--home-top-bottom, 268px) + 19px);
+.home-summary-scene .skill-showcase {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface-elevated) 78%, transparent);
+  backdrop-filter: blur(18px);
 }
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .dashboard-hero.islands-home .atlas-immersive-toggle { right: 24px; }
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .dashboard-hero.islands-home .sky-controls { right: 72px; }
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .skill-universe-inspector { top: calc(var(--home-top-bottom, 268px) + 70px); }
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .sky-navigation { top: calc(var(--home-top-bottom, 268px) + 71px); }
-.v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .sky-board { top: calc(var(--home-top-bottom, 268px) + 150px); }
-@media (max-height: 750px) {
-  /* The islands' heading is hidden here (HomeScene.css), so the switch takes its place. */
-  .v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .islands-home .home-visual-switch { top: calc(var(--home-top-bottom, 268px) + 14px); }
-  .v33.theme-family-atlas.page-dashboard:not(.dashboard-immersive) .sky-board { top: calc(var(--home-top-bottom, 268px) + 76px); }
+.home-summary-scene .skill-showcase > .panel-head { flex: 0 0 auto; }
+.home-summary-scene .skill-graph { flex: 1 1 auto; min-height: 0; height: auto; }
+.home-summary-scene .skill-graph-canvas { height: 100%; }
+.dashboard-immersive .home-summary-scene { top: 76px; bottom: 24px; }
+
+/* Touch-bar actions (restored 3.2.x look): one tile per action, the last one is the primary. */
+.atlas-touchbar-actions {
+  display: grid;
+  grid-auto-columns: minmax(88px, auto);
+  grid-auto-flow: column;
+  gap: 4px;
+  align-self: stretch;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
 }
-/* 关闭: no scene, so no scene title either; the note sits clear of the rail. */
-.v33.theme-family-atlas.page-dashboard .scene-off .dashboard-hero-inner { display: none; }
-.v33.theme-family-atlas.page-dashboard .scene-off-note { left: calc(var(--home-rail, 0px) + 32px); }
-/* Four numbers stay on one row down to the smallest supported window (860 px wide); two rows
-   would push the scene and its controls far down. */
-@media (max-width: 700px) {
-  .home-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.atlas-touchbar-actions button {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 15px;
+  color: var(--text-soft);
+  background: color-mix(in srgb, var(--surface-strong) 50%, transparent);
+  font: 600 calc(12px * var(--ui-text-scale, 1))/1.1 var(--ui-font);
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease, transform 180ms cubic-bezier(.16,1,.3,1);
 }
+.atlas-touchbar-actions button span { max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atlas-touchbar-actions button:last-child { color: var(--bg); background: var(--brand-strong); }
+.atlas-touchbar-actions button:hover:not(:disabled) { transform: translateY(-1px) scale(1.015); }
+.atlas-touchbar-actions button:focus-visible { outline: 2px solid var(--brand-strong); outline-offset: 2px; }
+.atlas-touchbar-actions svg { width: 16px; height: 16px; }
+@media (max-width: 1080px) {
+  .atlas-touchbar-actions { grid-column: 1 / -1; min-height: 44px; padding: 4px 0 0; border-top: 1px solid var(--border); border-left: 0; }
+  .atlas-touchbar-actions button { grid-auto-flow: column; justify-content: center; }
+}
+/* 归纳: the canvas speaks for itself; the scene switch sits above the card. */
+.home-summary-scene .skill-showcase > .panel-head { display: none; }
+.home-summary-scene .skill-showcase { padding: 10px; }
+.home-summary-scene .skill-graph { border: 0; background: transparent; }

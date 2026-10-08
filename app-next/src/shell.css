@@ -4,7 +4,6 @@
 
 /* ---------- layout ---------- */
 main.shell.v33 { --rail-w: 76px; grid-template-columns: var(--rail-w) minmax(0, 1fr); }
-@media (min-width: 1200px) { main.shell.v33 { --rail-w: 212px; } }
 main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
 
 .side-rail {
@@ -35,21 +34,19 @@ main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
 /* Home: the scene spans the window and the rail floats over it (HomeScene.css offsets use --home-rail). */
 .v33.theme-family-atlas.page-dashboard { --home-rail: var(--rail-w); }
 @media (min-width: 821px) { .v33.theme-family-atlas.page-dashboard .side-rail { grid-column: 1; grid-row: 1; } }
-.rail-brand { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 6px 8px; }
+.rail-brand { display: flex; justify-content: center; min-height: 48px; padding: 0 0 8px; }
 .rail-brand img { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 11px; }
-.rail-brand strong { overflow: hidden; font-size: calc(15px * var(--ui-text-scale, 1)); white-space: nowrap; }
-.rail-nav { display: flex; flex-direction: column; gap: 2px; }
+.side-rail { align-items: center; padding-inline: 8px; }
+.rail-nav { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .rail-item {
   position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 40px;
-  padding: 6px 10px;
-  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  width: 50px;
+  min-height: 46px;
+  padding: 6px;
+  border-radius: 14px;
   color: var(--text-soft);
-  text-align: left;
   transition: background var(--duration) var(--ease), color var(--duration) var(--ease);
 }
 .rail-item:hover { background: var(--surface-soft); color: var(--text); }
@@ -59,85 +56,49 @@ main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
   color: var(--text);
 }
 .rail-item[aria-current="page"] .rail-icon { color: var(--brand-strong); }
-.rail-add { margin-bottom: 6px; background: var(--brand); color: var(--on-brand, #fff); }
-.rail-add:hover { background: var(--brand-strong); color: var(--on-brand, #fff); }
-.rail-icon { display: grid; flex: 0 0 26px; place-items: center; width: 26px; height: 26px; }
-.rail-label { flex: 1 1 auto; min-width: 0; overflow: hidden; font-size: calc(13.5px * var(--ui-text-scale, 1)); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.rail-icon { display: grid; place-items: center; width: 26px; height: 26px; }
 .rail-badge {
-  min-width: 20px;
-  padding: 0 6px;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  padding: 0 4px;
   border-radius: var(--radius-pill);
   background: var(--warning-soft);
   color: var(--warning);
-  font-size: 11px;
+  font-size: 10px;
   font-style: normal;
   font-weight: 800;
-  line-height: 18px;
+  line-height: 15px;
   text-align: center;
 }
-.rail-tip { display: none; }
-.rail-sub { display: flex; flex-direction: column; gap: 1px; margin: 0 0 4px 22px; padding-left: 8px; border-left: 1px solid var(--border); }
-.rail-sub-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 30px;
-  padding: 3px 8px;
+/* The label shows on hover only and never sticks on keyboard focus (bug #32). */
+.rail-tip {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 10px);
+  z-index: 80;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
   border-radius: 10px;
-  color: var(--text-soft);
-  font-size: calc(12.5px * var(--ui-text-scale, 1));
-  text-align: left;
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-chrome);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-50%);
+  pointer-events: none;
+  transition: opacity 120ms var(--ease);
 }
-.rail-sub-item:hover,
-.rail-sub-item[aria-current="page"] { background: var(--surface-soft); color: var(--text); }
-.rail-sub-item .rail-label { font-weight: 500; font-size: inherit; }
-.rail-sub-count { margin-left: auto; color: var(--text-muted); font-size: 12px; font-style: normal; font-variant-numeric: tabular-nums; }
-.rail-sub-plus { display: grid; place-items: center; width: 20px; height: 20px; border: 1px dashed var(--border-strong); border-radius: 6px; }
-.rail-sub-plus .ui-icon { width: 14px; height: 14px; }
-.rail-footer { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
+.rail-item:hover .rail-tip { opacity: 1; visibility: visible; }
+.rail-footer { display: flex; justify-content: center; margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border); }
 .agent-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--text-muted); }
 .agent-dot.tone-ok { background: var(--success); box-shadow: none; }
 .agent-dot.tone-busy { background: var(--info); box-shadow: none; }
 .agent-dot.tone-problem { background: var(--danger); box-shadow: none; }
-
-/* Below 1200 px: icons only; the tooltip shows on hover and never sticks on focus (bug #32). */
-@media (max-width: 1199px) {
-  .side-rail { align-items: center; padding-inline: 8px; }
-  .rail-brand { justify-content: center; padding-inline: 0; }
-  .rail-brand strong,
-  .rail-label,
-  .rail-sub-count { display: none; }
-  .rail-item { justify-content: center; width: 50px; padding: 6px; }
-  .rail-badge { position: absolute; top: 1px; right: 1px; min-width: 16px; padding: 0 4px; font-size: 10px; line-height: 15px; }
-  .rail-tip {
-    position: absolute;
-    top: 50%;
-    left: calc(100% + 10px);
-    z-index: 80;
-    display: block;
-    padding: 6px 10px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--surface-elevated);
-    box-shadow: var(--shadow-chrome);
-    color: var(--text);
-    font-size: 12px;
-    font-weight: 600;
-    white-space: nowrap;
-    opacity: 0;
-    visibility: hidden;
-    transform: translateY(-50%);
-    pointer-events: none;
-    transition: opacity 120ms var(--ease);
-  }
-  .rail-item:hover .rail-tip,
-  .rail-sub-item:hover .rail-tip { opacity: 1; visibility: visible; }
-  .rail-sub { align-items: center; margin: 0 0 4px; padding: 0; border: 0; }
-  .rail-sub-item { justify-content: center; width: 50px; padding: 4px; }
-  .rail-sub-item .agent-dot { position: absolute; right: 8px; bottom: 4px; box-shadow: 0 0 0 2px var(--bg); }
-  .rail-sub-item .agent-dot:not(.tone-ok):not(.tone-busy):not(.tone-problem) { background: var(--surface-strong); }
-}
 
 /* ---------- top bar ---------- */
 .v33 .topbar { gap: 10px; }
@@ -333,6 +294,8 @@ main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
   box-shadow: var(--shadow-card);
 }
 .more-menu.align-start .more-list { right: auto; left: 0; }
+/* Rendered in the overlay layer (ui.tsx MoreMenu): fixed, above cards and lists. */
+.more-list.floating { z-index: 140; overflow: auto; }
 .more-list button {
   display: flex;
   align-items: center;

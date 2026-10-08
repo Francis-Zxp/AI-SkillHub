@@ -260,7 +260,9 @@ function createFixtureSnapshot(): LegacySnapshot {
         mode: "scan",
         createdAt: "2026-05-01T00:00:00Z",
         categoryId: "academic-writing",
-        note: "论文科研工作流。",
+        // A hand-written note (manual metadata): the library shows it first on the row.
+        note: "投稿前用：查结构和审稿意见",
+        metadataOrigin: "manual+readme",
         localPath: "../app-next/data/github_sources/Nature-Paper-Skills",
         enabled: true,
         tags: ["GitHub", "论文科研", "常用"],

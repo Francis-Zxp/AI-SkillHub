@@ -587,8 +587,16 @@ export function rowName(row: LibraryRow) {
 /** The skill whose invocation name the "复制调用名" action copies: the parent entry or the only skill. */
 export function rowEntrySkill(row: LibraryRow): SkillCard | null {
   if (row.skill) return row.skill;
-  if (row.skills.length === 1) return row.skills[0];
-  return row.ownedSkills.find(skill => isRouterHubSkill(skill)) ?? null;
+  return row.ownedSkills.find(skill => isRouterHubSkill(skill)) ?? row.skills[0] ?? null;
+}
+
+/** The user's own note (not the auto summary): shown first so similar packs stay tell-apart-able. */
+export function rowNote(row: LibraryRow) {
+  if (row.source) {
+    const manual = (row.source.metadataOrigin ?? "").startsWith("manual");
+    return manual ? row.source.note.trim() : "";
+  }
+  return row.skill?.note.trim() ?? "";
 }
 
 function avatarHue(name: string) {
@@ -627,6 +635,8 @@ function LibraryRowView({
   const name = rowName(row);
   const state = rowFilterState(row);
   const entry = rowEntrySkill(row);
+  const note = rowNote(row);
+  const callName = entry ? skillInvocationName(entry) : "";
   const targets = orderTargetsForRow(row.targets, agents);
   const shown = targets.slice(0, MAX_ICONS);
   const hidden = targets.length - shown.length;
@@ -670,7 +680,14 @@ function LibraryRowView({
           <strong>{name}</strong>
           <small>{ownerOf(row)}</small>
         </span>
-        <span className="lib-summary">{rowSummary(row)}</span>
+        {note ? (
+          <span className="lib-summary has-note">
+            <span className="lib-note" title={note}><Icon name="edit" />{note}</span>
+            <small>{rowSummary(row)}</small>
+          </span>
+        ) : (
+          <span className="lib-summary">{rowSummary(row)}</span>
+        )}
       </button>
       <span className="lib-badges">
         {row.kind === "prompt" ? (
@@ -719,10 +736,23 @@ function LibraryRowView({
           <button className="target-more" onClick={() => onOpen("overview")} title={t("v33.moreTools", { n: hidden })} type="button">+{hidden}</button>
         )}
       </span>
+      {callName ? (
+        <button
+          aria-label={t("v33.copyInvocationOf", { name: callName })}
+          className="icon-action lib-copy"
+          data-testid={`library-row-copy-${row.key}`}
+          onClick={() => void copyTextToClipboard(callName, t("v33.copiedName", { name: callName }))}
+          title={`${t("v33.copyInvocation")} · ${callName}`}
+          type="button"
+        >
+          <Icon name="copy" />
+        </button>
+      ) : (
+        <span className="lib-copy" aria-hidden="true" />
+      )}
       <MoreMenu
         items={[
           { key: "open", label: t("v33.details"), onSelect: () => onOpen("overview"), icon: "info" },
-          ...(entry ? [{ key: "copy", label: t("v33.copyInvocation"), onSelect: () => void copyTextToClipboard(skillInvocationName(entry), t("toast.skillNameCopied")), icon: "copy" as const }] : []),
           { key: "move", label: t("v33.moveToFolder"), onSelect: onMove, icon: "folder" },
           { key: "settings", label: t("v33.editSettings"), onSelect: () => onOpen("settings"), icon: "edit" }
         ]}
@@ -761,7 +791,7 @@ function ChildRow({
       </span>
       <span className="lib-child-summary">{summary}{tags.length > 0 && <em>{tags.join(" · ")}</em>}</span>
       <span className="lib-child-stars"><StarRating compact label={t("v33.rating")} onChange={onRate} value={skill.rating} /></span>
-      <button className="icon-action" onClick={() => void copyTextToClipboard(skillInvocationName(skill), t("toast.skillNameCopied"))} title={t("v33.copyInvocation")} aria-label={t("v33.copyInvocationOf", { name: skillInvocationName(skill) })} type="button">
+      <button className="icon-action" onClick={() => void copyTextToClipboard(skillInvocationName(skill), t("v33.copiedName", { name: skillInvocationName(skill) }))} title={`${t("v33.copyInvocation")} · ${skillInvocationName(skill)}`} aria-label={t("v33.copyInvocationOf", { name: skillInvocationName(skill) })} type="button">
         <Icon name="copy" />
       </button>
       <ToggleSwitch

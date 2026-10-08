@@ -12,12 +12,16 @@ const styles = await readFile(new URL("../src/styles.css", import.meta.url), "ut
 const universe = await readFile(new URL("../src/SkillUniverse.tsx", import.meta.url), "utf8");
 
 test("pack rows and child Skills expose exact-name copy actions", () => {
-  // v3.3: the row is the parent entry; "复制调用名" copies the exact invocation name, never a prompt.
+  // v3.3: the row is the parent entry; "复制调用名" sits on every row (not only in ⋯) and copies
+  // what an AI tool accepts: the parent entry, or "parent child" for a skill inside a pack.
+  // The internal `pack__child` index key is never copied.
   assert.ok(app.includes("export function rowEntrySkill(row: LibraryRow): SkillCard | null"));
-  assert.ok(app.includes('copyTextToClipboard(skillInvocationName(entry), t("toast.skillNameCopied"))'));
-  assert.ok(app.includes('copyTextToClipboard(skillInvocationName(skill), t("toast.skillNameCopied"))'));
+  assert.ok(app.includes('return row.ownedSkills.find(skill => isRouterHubSkill(skill)) ?? row.skills[0] ?? null;'));
+  assert.ok(app.includes('copyTextToClipboard(callName, t("v33.copiedName", { name: callName }))'));
+  assert.ok(app.includes('copyTextToClipboard(skillInvocationName(skill), t("v33.copiedName", { name: skillInvocationName(skill) }))'));
   assert.ok(app.includes("return skill.invocationName?.trim() || skill.folderName.trim() || skill.name.trim()"));
-  assert.ok(backend.includes("invocation_name: row.get(2)?"));
+  assert.ok(backend.includes("skill_call_name(&skill.folder_name, &pack_entry, skill.is_router_hub)"));
+  assert.ok(backend.includes('format!("{pack_entry} {child}")'));
   assert.match(preview, /name: "Nature-Paper-Skills",\s*invocationName: "nature-paper-skills"/);
   const rowMenu = app.slice(app.indexOf("function LibraryRowView"), app.indexOf("function ChildRow"));
   assert.doesNotMatch(rowMenu, /copySkillPrompt|onRecordUsage|recordUsage/);

@@ -71,7 +71,7 @@
 .lib-list { position: relative; display: block; }
 .lib-row {
   display: grid;
-  grid-template-columns: 14px 18px 24px minmax(0, 1fr) auto auto minmax(0, auto) 32px;
+  grid-template-columns: 14px 18px 24px minmax(0, 1fr) auto auto minmax(0, auto) 30px 32px;
   align-items: center;
   gap: 8px;
   height: 64px;
@@ -152,9 +152,15 @@
   font-weight: 700;
   pointer-events: none;
 }
+/* The user's note comes first: it is how people tell similar packs apart. */
+.lib-summary.has-note { display: grid; gap: 1px; align-content: center; }
+.lib-note { display: flex; align-items: center; gap: 5px; overflow: hidden; color: var(--text); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.lib-note .ui-icon { flex: 0 0 13px; width: 13px; height: 13px; color: var(--brand-strong); }
+.lib-summary.has-note small { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.lib-copy { display: grid; place-items: center; width: 30px; height: 30px; }
 @media (max-width: 1180px) {
-  .lib-main { grid-template-columns: 34px minmax(120px, 1fr); }
-  .lib-summary { display: none; }
+  .lib-main { grid-template-columns: 34px minmax(110px, 200px) minmax(0, 1fr); }
+  .lib-summary.has-note small { display: none; }
   .lib-row .star-rating { display: none; }
 }
 

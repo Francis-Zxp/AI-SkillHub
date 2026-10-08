@@ -38,7 +38,7 @@ import "./home.css";
 const SkillArchipelago = lazy(() => import("../SkillArchipelago").then(module => ({ default: module.SkillArchipelago })));
 const SkillUniverse = lazy(() => import("../SkillUniverse").then(module => ({ default: module.SkillUniverse })));
 
-type HomeVisual = "islands" | "universe" | "off";
+type HomeVisual = "islands" | "universe" | "summary";
 
 const ATLAS_INTRO_VISIBILITY_KEY = "ai-skillhub-atlas-intro-visible";
 const DISMISSED_AGENT_CARDS_KEY = "ai-skillhub-dismissed-agent-cards";
@@ -120,9 +120,6 @@ export function Dashboard({
     }
   });
   const [dismissedAgents, setDismissedAgents] = useState<string[]>(() => readDismissedAgents());
-  const viewRef = useRef<HTMLDivElement | null>(null);
-  const homeTopRef = useRef<HTMLDivElement | null>(null);
-  useHomeTopInset(viewRef, homeTopRef);
   const agents = delivery?.agents ?? [];
   const installedDeliverable = agents.filter(agent => agent.installed && agent.canDeliver);
   const taken = installedDeliverable.filter(agent => agent.takeover).length;
@@ -131,7 +128,7 @@ export function Dashboard({
   const onboardingPending = delivery?.onboarding === "pending";
   const atlasMode = isAtlasTheme(theme);
   const atlasVisual = atlasThemeVisual(theme);
-  const sceneVisual: HomeVisual = atlasMode && !sceneSuspended ? homeVisual : "off";
+  const sceneVisual: HomeVisual | "none" = atlasMode && !sceneSuspended ? homeVisual : "none";
   const emptyLibrary = !loading && counts.rows === 0;
   const toggleAtlasIntro = () => {
     const next = !atlasIntroVisible;
@@ -152,123 +149,26 @@ export function Dashboard({
     }
   };
 
+  const sceneSwitch = (
+    <div className="home-visual-switch" aria-label={t("v33.homeScene")}>
+      <SegmentedToggle
+        label={t("v33.homeScene")}
+        onChange={onChangeHomeVisual}
+        options={[
+          { value: "islands", label: t("v33.sceneIslands") },
+          { value: "universe", label: t("v33.sceneStars") },
+          { value: "summary", label: t("v33.sceneSummary") }
+        ]}
+        value={homeVisual}
+      />
+    </div>
+  );
+
+  // 3.2.x layout: the scene fills the page and the four numbers sit in the bar along the bottom,
+  // so nothing covers the islands, the star map or the summary on any window shape.
   return (
-    <div className="view dashboard-view home-v33" ref={viewRef}>
-      <div className="home-top" ref={homeTopRef} data-sky-overlay>
-      <section className="home-metrics" aria-label={t("v33.homeMetrics")}>
-        <Metric
-          icon="agent"
-          label={t("v33.metricAgents")}
-          onClick={onOpenAgents}
-          suffix={`/${installedDeliverable.length}`}
-          testId="home-metric-agents"
-          trend={installedDeliverable.length === 0 ? t("v33.metricAgentsNone") : t("v33.metricAgentsTrend")}
-          value={taken}
-        />
-        <Metric
-          icon="sparkle"
-          label={t("v33.metricSkills")}
-          onClick={onOpenLibrary}
-          testId="home-metric-skills"
-          trend={counts.updateRows > 0 ? t("v33.metricSkillsUpdates", { n: counts.updateRows }) : t("v33.metricSkillsPacks", { n: counts.packs })}
-          value={counts.skills}
-        />
-        <Metric
-          icon="plug"
-          label={t("v33.metricMcp")}
-          onClick={onOpenMcp}
-          testId="home-metric-mcp"
-          trend={mcpCount === null ? t("v33.metricMcpOpen") : t("v33.metricMcpTrend")}
-          value={mcpCount ?? 0}
-        />
-        <Metric
-          icon="alert"
-          label={t("v33.metricProblems")}
-          onClick={onOpenProblems}
-          testId="home-metric-problems"
-          tone={problems > 0 ? "alert" : ""}
-          trend={problems > 0 ? t("v33.metricProblemsTrend") : t("v33.metricProblemsNone")}
-          value={problems}
-        />
-      </section>
-
-      <div className="home-row">
-      {onboardingPending ? (
-        <section className="home-card first-run" data-testid="home-first-run-card">
-          <Icon name="sparkle" />
-          <div>
-            <strong>{t("v33.firstRunTitle", { n: installedDeliverable.length })}</strong>
-            <span>{t("v33.firstRunBody")}</span>
-          </div>
-          <button className="primary-action" onClick={onOpenOnboarding} type="button">{t("v33.firstRunAction")}</button>
-        </section>
-      ) : discovered.length > 0 ? (
-        <section className="home-card discover" data-testid="home-discover-card">
-          <AgentGlyph agentId={discovered[0].id} name={discovered[0].name} />
-          <div>
-            <strong>{t("v33.discoverOne", { name: discovered[0].name })}</strong>
-            <span>{discovered[0].experimental ? t("v33.experimentalShort") : t("v33.discoverBody")}</span>
-          </div>
-          <button className="primary-action small" onClick={() => onTakeover(discovered[0])} type="button">{t("v33.takeover")}</button>
-          <button
-            aria-label={t("v33.dismiss")}
-            className="icon-action"
-            onClick={() => dismissAgentCard(discovered[0].id)}
-            title={t("v33.dismiss")}
-            type="button"
-          >
-            <Icon name="close" />
-          </button>
-        </section>
-      ) : null}
-
-      <section className="home-add" aria-label={t("v33.add")}>
-        <Icon name="add" />
-        {/* A click opens the sheet; typing or pasting here opens it with that text. Keyboard
-            focus alone opens nothing, so Tab can pass through the page. */}
-        <input
-          aria-label={t("v33.addPlaceholder")}
-          data-testid="home-add-input"
-          onChange={event => {
-            const text = event.currentTarget.value;
-            if (text.trim()) onAdd(text);
-          }}
-          onClick={() => onAdd()}
-          // Load the sheet's code before the first keystroke lands, so no typed character is lost.
-          onFocus={() => void import("./ImportSheet")}
-          onKeyDown={event => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              onAdd();
-            }
-          }}
-          onPaste={event => {
-            const text = event.clipboardData.getData("text/plain").trim();
-            if (!text) return;
-            event.preventDefault();
-            onAdd(text);
-          }}
-          placeholder={t("v33.addPlaceholder")}
-          spellCheck={false}
-          value=""
-        />
-        <button className="primary-action small" onClick={() => onAdd()} type="button">{t("v33.add")}</button>
-      </section>
-      </div>
-
-      {emptyLibrary && (
-        <section className="home-card empty" data-testid="home-empty-card">
-          <Icon name="library" />
-          <div>
-            <strong>{t("v33.emptyLibraryTitle")}</strong>
-            <span>{t("v33.emptyLibraryBody")}</span>
-          </div>
-          <button className="primary-action small" onClick={() => onAdd()} type="button">{t("v33.add")}</button>
-        </section>
-      )}
-      </div>
-
-      <section className={`dashboard-hero glow-card${sceneVisual === "off" ? " scene-off" : ""}${atlasMode && (!atlasIntroVisible || sceneVisual === "islands") ? " intro-collapsed" : ""}${sceneVisual === "islands" ? " islands-home" : " universe-home"}`}>
+    <div className="view dashboard-view home-v33">
+      <section className={`dashboard-hero glow-card${sceneVisual === "summary" ? " summary-home" : ""}${atlasMode && (!atlasIntroVisible || sceneVisual !== "universe") ? " intro-collapsed" : ""}${sceneVisual === "islands" ? " islands-home" : " universe-home"}`}>
         {sceneVisual === "islands" && (
           <Suspense fallback={<p role="status">{t("dash.loadingIndex")}</p>}>
             <SkillArchipelago visible centered lightTheme={isLightTheme(theme)} phase={theme.startsWith("sky-") ? (theme.slice(4) as SkyPhase) : isLightTheme(theme) ? "noon" : "night"} tone="mist" onOpenSkill={onOpenSkill} onOpenSource={onOpenSource} onOpenFolder={onOpenFolder} onAdd={() => onAdd()} snapshot={snapshot} />
@@ -297,6 +197,11 @@ export function Dashboard({
             />
           </Suspense>
         )}
+        {sceneVisual === "summary" && (
+          <div className="home-summary-scene" data-testid="home-summary">
+            <SkillShowcase loading={loading} onCopySkill={onCopySkill} onOpenLibrary={onOpenLibrary} snapshot={snapshot} />
+          </div>
+        )}
         {!atlasMode && (
           <ParticleField
             accent={atlasVisual.accent}
@@ -306,21 +211,8 @@ export function Dashboard({
             skillCount={summary.skills}
           />
         )}
-        {atlasMode && (
-          <div className="home-visual-switch" aria-label={t("v33.homeScene")}>
-            <SegmentedToggle
-              label={t("v33.homeScene")}
-              onChange={onChangeHomeVisual}
-              options={[
-                { value: "islands", label: t("v33.sceneIslands") },
-                { value: "universe", label: t("v33.sceneStars") },
-                { value: "off", label: t("v33.sceneOff") }
-              ]}
-              value={homeVisual}
-            />
-          </div>
-        )}
-        {atlasMode && sceneVisual !== "off" && (
+        {atlasMode && sceneSwitch}
+        {atlasMode && sceneVisual !== "summary" && (
           <button
             aria-pressed={immersive}
             className="atlas-immersive-toggle"
@@ -344,15 +236,76 @@ export function Dashboard({
             <span>{atlasIntroVisible ? t("atlas.hideIntro") : t("atlas.showIntro")}</span>
           </button>
         )}
-        {sceneVisual === "off" && atlasMode && (
-          <p className="scene-off-note">{t("v33.sceneOffNote")}</p>
-        )}
         <div aria-hidden={atlasMode && (!atlasIntroVisible || sceneVisual !== "universe")} className="dashboard-hero-inner">
           <div className="atlas-hero-copy">
             <h2>{atlasMode ? t("atlas.heroTitle") : t("dash.title")}</h2>
             <p>{atlasMode ? t("v33.heroSubtitle", { skills: counts.skills, packs: counts.packs }) : t("dash.subtitle")}</p>
           </div>
         </div>
+      </section>
+
+      <section className={`metric-grid${atlasMode ? " atlas-touchbar" : ""}`} aria-label={t("v33.homeMetrics")} data-testid="home-touchbar">
+        <Metric
+          icon="agent"
+          label={t("v33.metricAgents")}
+          onClick={onOpenAgents}
+          suffix={`/${installedDeliverable.length}`}
+          testId="home-metric-agents"
+          tone="amber"
+          trend={installedDeliverable.length === 0 ? t("v33.metricAgentsNone") : t("v33.metricAgentsTrend")}
+          value={taken}
+        />
+        <Metric
+          icon="sparkle"
+          label={t("v33.metricSkills")}
+          onClick={onOpenLibrary}
+          testId="home-metric-skills"
+          tone="violet"
+          trend={counts.updateRows > 0 ? t("v33.metricSkillsUpdates", { n: counts.updateRows }) : t("v33.metricSkillsPacks", { n: counts.packs })}
+          value={counts.skills}
+        />
+        <Metric
+          icon="plug"
+          label={t("v33.metricMcp")}
+          onClick={onOpenMcp}
+          testId="home-metric-mcp"
+          tone="indigo"
+          trend={mcpCount === null ? t("v33.metricMcpOpen") : t("v33.metricMcpTrend")}
+          value={mcpCount ?? 0}
+        />
+        <Metric
+          icon="alert"
+          label={t("v33.metricProblems")}
+          onClick={onOpenProblems}
+          testId="home-metric-problems"
+          tone={problems > 0 ? "rose metric-alert" : "rose"}
+          trend={problems > 0 ? t("v33.metricProblemsTrend") : t("v33.metricProblemsNone")}
+          value={problems}
+        />
+        {atlasMode && (
+          <div className="atlas-touchbar-actions">
+            {onboardingPending ? (
+              <button data-testid="home-first-run-card" onClick={onOpenOnboarding} title={t("v33.firstRunBody")} type="button">
+                <Icon name="sparkle" />
+                <span>{t("v33.firstRunAction")}</span>
+              </button>
+            ) : discovered.length > 0 ? (
+              <button
+                data-testid="home-discover-card"
+                onClick={() => onTakeover(discovered[0])}
+                title={discovered[0].experimental ? t("v33.experimentalShort") : t("v33.discoverBody")}
+                type="button"
+              >
+                <AgentGlyph agentId={discovered[0].id} name={discovered[0].name} size="sm" />
+                <span>{t("v33.discoverOne", { name: discovered[0].name })}</span>
+              </button>
+            ) : null}
+            <button data-testid="home-add-button" onClick={() => onAdd()} title={t("v33.addPlaceholder")} type="button">
+              <Icon name="add" />
+              <span>{t("v33.add")}</span>
+            </button>
+          </div>
+        )}
       </section>
 
       {!atlasMode && (
@@ -372,39 +325,6 @@ export function Dashboard({
       </section>
     </div>
   );
-}
-
-/**
- * In the scene themes the home block (numbers · card · 添加) floats over the top of the scene, so
- * the scene's own controls (群岛/星图/关闭, full screen, star-map modes, the islands' heading and
- * buttons) must start below it. Its height changes with the window width (the numbers wrap into
- * two rows), the text size and the language, so the bottom edge is measured and published as
- * --home-top-bottom on the page; home.css positions the controls from it.
- */
-function useHomeTopInset(viewRef: React.RefObject<HTMLDivElement | null>, homeTopRef: React.RefObject<HTMLDivElement | null>) {
-  useLayoutEffect(() => {
-    const view = viewRef.current;
-    const homeTop = homeTopRef.current;
-    if (!view || !homeTop) return;
-    let frame = 0;
-    const measure = () => {
-      frame = 0;
-      const bottom = Math.round(homeTop.getBoundingClientRect().bottom - view.getBoundingClientRect().top);
-      if (bottom > 0) view.style.setProperty("--home-top-bottom", `${bottom}px`);
-    };
-    const schedule = () => {
-      if (!frame) frame = window.requestAnimationFrame(measure);
-    };
-    measure();
-    const observer = new ResizeObserver(schedule);
-    observer.observe(homeTop);
-    window.addEventListener("resize", schedule);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", schedule);
-      if (frame) window.cancelAnimationFrame(frame);
-    };
-  }, [viewRef, homeTopRef]);
 }
 
 function ActivityTimeline({ snapshot }: { snapshot: LegacySnapshot | null }) {
@@ -980,9 +900,7 @@ function isLightTheme(theme: ThemeName): boolean {
     theme === "sky-golden" ||
     theme === "parchment" ||
     theme === "atlas-light" ||
-    theme === "atlas-legacy-light" ||
-    theme === "light" ||
-    theme === "classic-light"
+    theme === "atlas-legacy-light"
   );
 }
 

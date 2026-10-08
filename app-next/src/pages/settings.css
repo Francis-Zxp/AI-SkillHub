@@ -17,3 +17,7 @@
 .settings-v33 .git-runtime-card.is-ready { border: 0; padding: 0; }
 .settings-v33 .git-runtime-card p { margin: 0; }
 .dev-tools { display: grid; gap: 12px; }
+
+/* Themes are listed in full, never folded away (users took a folded list for "no themes"). */
+.settings-row.settings-theme-row { display: grid; align-items: start; gap: 8px; }
+.settings-theme-row .theme-grid { padding-top: 0; }

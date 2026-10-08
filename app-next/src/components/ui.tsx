@@ -198,7 +198,9 @@ export function useConfirm(): [ReactNode, (request: ConfirmRequest) => Promise<b
   return [node, ask];
 }
 
-/** "⋯" menu: closes on outside click and Escape, keyboard reachable. */
+/** "⋯" menu: closes on outside click and Escape, keyboard reachable. The list renders in the
+ * overlay layer with fixed positioning, so a card or a scrolling list with hidden overflow
+ * can never clip it; near the bottom of the window it opens upwards. */
 export function MoreMenu({
   items,
   label,
@@ -211,11 +213,14 @@ export function MoreMenu({
   align?: "start" | "end";
 }) {
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<React.CSSProperties | null>(null);
   const host = useRef<HTMLDivElement | null>(null);
+  const list = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!open) return;
     const onPointer = (event: PointerEvent) => {
-      if (!host.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!host.current?.contains(target) && !list.current?.contains(target)) setOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -231,6 +236,41 @@ export function MoreMenu({
       window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null);
+      return;
+    }
+    const place = () => {
+      const trigger = host.current?.querySelector<HTMLElement>(".more-trigger");
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const height = list.current?.offsetHeight ?? 0;
+      const below = window.innerHeight - rect.bottom - 8;
+      const upward = height > below && rect.top - 8 > below;
+      const next: React.CSSProperties = { position: "fixed", maxHeight: Math.max(160, (upward ? rect.top : below) - 12) };
+      if (upward) next.bottom = window.innerHeight - rect.top + 6;
+      else next.top = rect.bottom + 6;
+      if (align === "start") next.left = Math.max(8, rect.left);
+      else next.right = Math.max(8, window.innerWidth - rect.right);
+      setPosition(next);
+    };
+    place();
+    // A second pass once the list has its real height.
+    const frame = window.requestAnimationFrame(place);
+    const close = () => setOpen(false);
+    // The page moving under a fixed menu would detach it; scrolling the menu itself is fine.
+    const onScroll = (event: Event) => {
+      if (!list.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [open, align]);
   return (
     <div className={`more-menu${open ? " open" : ""} align-${align}`} ref={host}>
       <button
@@ -248,27 +288,34 @@ export function MoreMenu({
       >
         <Icon name="more" />
       </button>
-      {open && (
-        <div className="more-list" role="menu">
-          {items.map(item => (
-            <button
-              className={item.danger ? "danger" : ""}
-              disabled={item.disabled}
-              key={item.key}
-              onClick={event => {
-                event.stopPropagation();
-                setOpen(false);
-                item.onSelect();
-              }}
-              role="menuitem"
-              type="button"
-            >
-              {item.icon && <Icon name={item.icon} />}
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            className="more-list floating"
+            ref={list}
+            role="menu"
+            style={position ?? { position: "fixed", top: -9999, left: -9999 }}
+          >
+            {items.map(item => (
+              <button
+                className={item.danger ? "danger" : ""}
+                disabled={item.disabled}
+                key={item.key}
+                onClick={event => {
+                  event.stopPropagation();
+                  setOpen(false);
+                  item.onSelect();
+                }}
+                role="menuitem"
+                type="button"
+              >
+                {item.icon && <Icon name={item.icon} />}
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>,
+          overlayRoot()
+        )}
     </div>
   );
 }
