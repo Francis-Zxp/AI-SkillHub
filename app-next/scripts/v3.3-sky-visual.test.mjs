@@ -6,7 +6,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const read = file => readFile(new URL(`../src/${file}`, import.meta.url), "utf8");
+// Line endings normalised: a Windows checkout may carry CRLF.
+const read = file => readFile(new URL(`../src/${file}`, import.meta.url), "utf8").then(text => text.replace(/\r\n/g, "\n"));
 const [archipelago, world, weather, materials, universe, labelLayer, theme, refinements, archipelagoCss, assets, fauna, memory, effects, scene] = await Promise.all([
   read("SkillArchipelago.tsx"), read("sky/world.ts"), read("sky/weather.ts"), read("sky/materials.ts"), read("SkillUniverse.tsx"),
   read("universeLabelLayer.ts"), read("sky-theme.css"), read("refinements.css"), read("SkillArchipelago.css"), read("sky/assets.ts"),
@@ -135,8 +136,17 @@ test("memory: GPU budget, release after upload and sleep when out of sight", () 
     assert.match(source, /addEventListener\(APP_HIDDEN_EVENT, /);
     assert.match(source, /for \(const name of APP_VISIBLE_EVENTS\) window\.addEventListener\(name, /);
   }
-  assert.match(archipelago, /const awake = visible && !pageHidden && !appHidden;/);
+  // The shell's background event (unfocused for a while) sleeps the world too.
+  assert.match(scene, /export const APP_BACKGROUND_EVENT = "skillhub-app-background";/);
+  assert.match(archipelago, /window\.addEventListener\(APP_BACKGROUND_EVENT, onBackground\);/);
+  assert.match(archipelago, /const awake = visible && !pageHidden && !appHidden && !appBackground;/);
   assert.match(archipelago, /onFirstFrame: clearStill/);
+  // The world goes only once its still is decoded; a wake first cancels the
+  // sleep, so a late still can never cover a live world.
+  const sleep = body(archipelago, "  useEffect(() => {\n    if (awake || asleep) return;");
+  assert.match(sleep, /if \(cancelled\) return;/);
+  assert.match(sleep, /image\.decode\(\)\.then\(swap, swap\);/);
+  assert.ok(sleep.indexOf("setStill(url);") < sleep.indexOf("setAsleep(true);\n        };"), "the still is up before the world is released");
   assert.match(body(world, "    dispose() {"), /renderer\.forceContextLoss\(\);/);
   assert.match(body(world, "    dispose() {"), /releaseShared\(\);/);
   assert.match(assets, /export function releaseSharedGpuListeners\(\)/);
