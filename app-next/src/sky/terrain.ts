@@ -205,11 +205,23 @@ export class IslandShape {
     const q = this.normalizedDistance(x, z);
     const scale = this.radius * 0.42;
     const shape = this.shapeSpec;
-    const hills = fbm2(x / scale + 11.3, z / scale - 4.1, this.seed, 3) * this.relief * shape.hills;
+    // The hills fade out toward the rim: noise near the edge raised a ridge
+    // above the ground inside it, which read as the island's edge curling up.
+    const rimFade = 1 - smoothstep(0.6, 0.9, q) * 0.9;
+    const hills = fbm2(x / scale + 11.3, z / scale - 4.1, this.seed, 3) * this.relief * shape.hills * rimFade;
     const dome = (1 - Math.min(1, q) ** 2) * this.relief * 0.9 * shape.dome;
     // Rounded grass lip before the cliff, so the edge reads soft, not cut.
     const lip = smoothstep(shape.lipStart, 1.0, q) ** 1.5 * Math.min(0.75, this.radius * 0.07) * shape.lip;
-    let height = dome + hills - lip;
+    let height = dome + hills;
+    if (q > 0.7) {
+      // Past 70 % of the radius the ground never rises above its own height
+      // at 70 % on the same bearing, so the edge always falls away.
+      const k = 0.7 / q;
+      const innerHills = fbm2((x * k) / scale + 11.3, (z * k) / scale - 4.1, this.seed, 3) * this.relief * shape.hills * (1 - smoothstep(0.6, 0.9, 0.7) * 0.9);
+      const inner = (1 - 0.49) * this.relief * 0.9 * shape.dome + innerHills;
+      height = Math.min(height, inner);
+    }
+    height -= lip;
     if (this.feature) height += this.featureHeight(x, z);
     if (this.terraceStep > 0) {
       // Rice terraces: a tall dome cut into flat rings with short risers.

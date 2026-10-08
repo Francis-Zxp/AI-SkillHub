@@ -2713,3 +2713,35 @@ fn import_merges_the_same_literal_key_from_two_clients() {
         ("blocked", Some("needs-inline-consent"))
     );
 }
+
+#[test]
+fn codex_builtin_servers_stay_in_codex_and_passthrough_vars_are_not_keys() {
+    // Codex's own node_repl: a bundled runtime that forwards a variable from
+    // Codex's environment. It is not an API key and it never fits another tool.
+    let entry = crate::mcp_json_doc::parse_jsonc_node(
+        r#"{"command":"C:/Users/me/AppData/Local/OpenAI/Codex/runtimes/cua_node/abc/bin/node_repl.exe","args":[],"env_vars":["CODEX_WINDOWS_REGISTERED_CORE","DOCS_TOKEN"]}"#,
+    )
+    .unwrap();
+    let spec = spec_from_entry(ClientId::Codex, &entry).unwrap();
+    assert!(is_codex_builtin(&spec));
+    let passthrough = spec
+        .env
+        .iter()
+        .find(|item| item.name == "CODEX_WINDOWS_REGISTERED_CORE")
+        .unwrap();
+    assert!(!passthrough.secret && !passthrough.required);
+    let token = spec
+        .env
+        .iter()
+        .find(|item| item.name == "DOCS_TOKEN")
+        .unwrap();
+    assert!(token.secret && token.required);
+
+    let ordinary = crate::mcp_json_doc::parse_jsonc_node(
+        r#"{"command":"npx","args":["-y","@upstash/context7-mcp"]}"#,
+    )
+    .unwrap();
+    assert!(!is_codex_builtin(
+        &spec_from_entry(ClientId::Codex, &ordinary).unwrap()
+    ));
+}

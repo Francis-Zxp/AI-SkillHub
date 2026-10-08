@@ -22067,8 +22067,12 @@ fn install_skill_source_blocking(
     }
     if !existing {
         apply_install_metadata(&connection, &source, &request)?;
-        // Record the probe's scan under the indexed id so a later enable of a
-        // flagged pack still asks for the review (I-5).
+    }
+    // Record the probe's scan under the indexed id so a later enable of a
+    // flagged pack still asks for the review (I-5). Re-adding a pack that is
+    // already in the library refreshes its evidence too: otherwise a pack kept
+    // off from an earlier install showed no reason and no way to review it.
+    {
         let high_findings = probe
             .security
             .findings

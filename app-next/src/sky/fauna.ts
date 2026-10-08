@@ -277,7 +277,10 @@ export function createAnimal(
   const clip = (name: string) => gltf.animations.find(item => item.name.endsWith(`|${name}`));
   const action = (name: string) => (clip(name) ? mixer.clipAction(clip(name)!) : null);
   const idle = action("Idle");
-  const walk = action("WalkSlow") ?? action("Walk");
+  // The farm pack's "WalkSlow" is a pace (same-side legs move together, measured
+  // correlation 0.9 for the cow and horse) and read as 顺拐; "Walk" is a proper
+  // diagonal walk.
+  const walk = action("Walk") ?? action("WalkSlow");
   const solver = createFarmLegSolver(object);
   const random = seededRandom(seed);
   let current: THREE.AnimationAction | null = null;

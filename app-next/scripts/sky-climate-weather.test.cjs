@@ -333,3 +333,20 @@ test("the empty state offers adding a source, and falls back to the library", ()
   assert.equal(i18n.skyWords("zh").addSource, "+ 添加");
   assert.doesNotMatch(archipelago, /创建分类/);
 });
+
+test("island edges fall away: past 0.7 R the ground never rises (no curled-up rim)", () => {
+  for (const profile of ["rolling", "peak", "crater", "mesa", "dome", "terraces"]) {
+    for (let seed = 1; seed < 40; seed++) {
+      const radius = 4 + (seed % 7);
+      const shape = new terrain.IslandShape(radius, seed * 97, profile);
+      for (let k = 0; k < 32; k++) {
+        const angle = (k / 32) * Math.PI * 2, rim = shape.rimRadius(angle);
+        const at = q => shape.heightAt(Math.cos(angle) * rim * q, Math.sin(angle) * rim * q);
+        const reference = at(0.7);
+        for (let q = 0.74; q <= 0.98; q += 0.04) {
+          assert.ok(at(q) <= reference + 1e-6, `${profile} seed ${seed}: rim rises at ${q.toFixed(2)} R`);
+        }
+      }
+    }
+  }
+});

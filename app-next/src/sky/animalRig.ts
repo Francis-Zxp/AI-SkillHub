@@ -30,8 +30,10 @@ export function repairFarmHoofWeights(gltf: GLTF) {
   });
 }
 
-/** Four-beat walk: the phase offset of each leg. */
-const GAIT_OFFSETS = [0, 0.5, 0.25, 0.75];
+/** Four-beat lateral-sequence walk (left hind → left fore → right hind → right
+ * fore, a quarter cycle apart), offsets for the legs in solver order FrontL,
+ * BackR, FrontR, BackL. A footfall happens when (phase + offset) wraps to 0. */
+const GAIT_OFFSETS = [0.75, 0.5, 0.25, 0];
 
 /** Reconstruct the two-bone IK omitted by the FBX exporter. The authored
  * root-level Foot tracks are targets, not deform bones. Solve the upper and

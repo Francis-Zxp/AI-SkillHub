@@ -1490,6 +1490,24 @@ fn string_map(pairs: &[(String, String)]) -> Node {
 
 /// Builds the managed keys of `spec` for `client` (§2.4). The webview can
 /// never send a projection: it is computed here from the stored spec.
+/// Servers the Codex desktop app registers for itself (its bundled runtimes and
+/// plugins, e.g. `node_repl`) only work inside Codex: they rely on Codex's own
+/// environment, so they are never copied into another AI tool.
+pub(crate) fn is_codex_builtin(spec: &McpServerSpec) -> bool {
+    let command = spec
+        .command
+        .as_deref()
+        .unwrap_or("")
+        .replace('/', "\\")
+        .to_ascii_lowercase();
+    command.contains("\\openai\\codex\\runtimes\\")
+        || command.contains("\\.codex\\plugins\\")
+        || spec.env.iter().any(|item| {
+            item.name
+                .eq_ignore_ascii_case("CODEX_WINDOWS_REGISTERED_CORE")
+        })
+}
+
 fn project(
     ctx: &McpLibraryContext,
     name: &str,
@@ -1501,6 +1519,9 @@ fn project(
     }
     if !client.transports().contains(&spec.transport) {
         return Err(ProjectError::Unsupported("transport-unsupported"));
+    }
+    if client != ClientId::Codex && is_codex_builtin(spec) {
+        return Err(ProjectError::Unsupported("codex-builtin"));
     }
     let env_store = &*ctx.env;
     let literal_secret = |storage: SecretStorage,
@@ -1813,14 +1834,18 @@ fn spec_from_entry(client: ClientId, entry: &Node) -> Result<McpServerSpec, &'st
                     if spec.env.iter().any(|existing| existing.name == name) {
                         continue;
                     }
+                    // `env_vars` forwards a variable from Codex's own environment
+                    // (e.g. CODEX_WINDOWS_REGISTERED_CORE for Codex's node_repl). Only
+                    // a secret-looking name is an API key the user may need to set.
+                    let secret = mcp_paste::name_looks_secret(name);
                     spec.env.push(SpecEnv {
                         name: name.to_string(),
-                        secret: true,
+                        secret,
                         storage: SecretStorage::External,
                         env_var: None,
                         value: None,
                         inline_clients: Vec::new(),
-                        required: true,
+                        required: secret,
                     });
                 }
             }
