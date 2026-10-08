@@ -161,9 +161,11 @@ fn parse_json_root(root: &Node) -> ParseOutcome {
         }
         let opencode = !mcp.is_empty()
             && mcp.iter().all(|(_, value)| {
-                value.get("type").and_then(Node::as_str).is_some_and(|kind| {
-                    kind == "local" || kind == "remote"
-                }) || value.get("command").and_then(Node::as_array).is_some()
+                value
+                    .get("type")
+                    .and_then(Node::as_str)
+                    .is_some_and(|kind| kind == "local" || kind == "remote")
+                    || value.get("command").and_then(Node::as_array).is_some()
             });
         if opencode {
             return parse_named_map(mcp, PasteFormat::Opencode);
@@ -188,11 +190,9 @@ fn parse_json_root(root: &Node) -> ParseOutcome {
         return outcome;
     }
     if !object.is_empty()
-        && object.iter().all(|(_, value)| {
-            value
-                .as_object()
-                .is_some_and(is_server_object)
-        })
+        && object
+            .iter()
+            .all(|(_, value)| value.as_object().is_some_and(is_server_object))
     {
         return parse_named_map(object, PasteFormat::Named);
     }
@@ -200,8 +200,10 @@ fn parse_json_root(root: &Node) -> ParseOutcome {
 }
 
 fn is_server_object(object: &ObjectMap) -> bool {
-    matches!(object.get("command"), Some(Node::String(_)) | Some(Node::Array(_)))
-        || object.get("url").and_then(Node::as_str).is_some()
+    matches!(
+        object.get("command"),
+        Some(Node::String(_)) | Some(Node::Array(_))
+    ) || object.get("url").and_then(Node::as_str).is_some()
 }
 
 fn parse_named_map(map: &ObjectMap, format: PasteFormat) -> ParseOutcome {
@@ -420,7 +422,10 @@ fn parse_codex_toml(text: &str) -> ParseOutcome {
 }
 
 /// `cmd /c <runner> …` → `<runner> …` (§2.5); returns whether it unwrapped.
-pub(crate) fn unwrap_windows_cmd(command: String, args: Vec<String>) -> (String, Vec<String>, bool) {
+pub(crate) fn unwrap_windows_cmd(
+    command: String,
+    args: Vec<String>,
+) -> (String, Vec<String>, bool) {
     let is_cmd = command.eq_ignore_ascii_case("cmd") || command.eq_ignore_ascii_case("cmd.exe");
     if is_cmd
         && args.len() >= 2
@@ -502,7 +507,9 @@ fn host_label(url: &str) -> String {
 pub(crate) fn url_host(url: &str) -> Option<String> {
     let rest = url.split_once("://")?.1;
     let authority = rest.split(['/', '?', '#']).next()?;
-    let authority = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
     let host = if authority.starts_with('[') {
         authority
             .split_once(']')
@@ -553,12 +560,8 @@ fn package_label(command: &str, args: &[String]) -> String {
 /// `python -m X`, the file of `node <file>`, the image of `docker run`.
 pub(crate) fn subject_of(command: &str, args: &[String]) -> Option<String> {
     let runner = mcp_mutation::command_stem(command);
-    let first_positional = |items: &[String]| {
-        items
-            .iter()
-            .find(|item| !item.starts_with('-'))
-            .cloned()
-    };
+    let first_positional =
+        |items: &[String]| items.iter().find(|item| !item.starts_with('-')).cloned();
     let file_name = |value: &str| {
         value
             .rsplit(['/', '\\'])
@@ -568,7 +571,11 @@ pub(crate) fn subject_of(command: &str, args: &[String]) -> Option<String> {
     };
     match runner.as_str() {
         "npx" | "pnpx" | "bunx" | "uvx" => first_positional(args),
-        "npm" | "pnpm" | "yarn" if args.first().is_some_and(|first| first == "exec" || first == "dlx") => {
+        "npm" | "pnpm" | "yarn"
+            if args
+                .first()
+                .is_some_and(|first| first == "exec" || first == "dlx") =>
+        {
             first_positional(&args[1..])
         }
         "python" | "python3" | "py" => args
@@ -622,7 +629,9 @@ pub(crate) fn placeholder_variable(value: &str) -> Option<String> {
             .chars()
             .next()
             .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
-        && bare.chars().all(|ch| ch == '_' || ch.is_ascii_alphanumeric());
+        && bare
+            .chars()
+            .all(|ch| ch == '_' || ch.is_ascii_alphanumeric());
     valid.then(|| bare.to_string())
 }
 
@@ -655,7 +664,15 @@ pub(crate) fn name_looks_secret(name: &str) -> bool {
         "COOKIE",
         "APIKEY",
     ];
-    const SEGMENTS: [&str; 7] = ["KEY", "PAT", "AUTH", "AUTHORIZATION", "SESSION", "PWD", "SID"];
+    const SEGMENTS: [&str; 7] = [
+        "KEY",
+        "PAT",
+        "AUTH",
+        "AUTHORIZATION",
+        "SESSION",
+        "PWD",
+        "SID",
+    ];
     SUBSTRINGS.iter().any(|marker| upper.contains(marker))
         || upper
             .split(['_', '-'])
@@ -735,7 +752,9 @@ pub(crate) fn vault_store(values: HashMap<String, String>) -> Option<String> {
         return None;
     }
     let handle = format!("paste-{}", uuid::Uuid::new_v4().simple());
-    let mut map = vault().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut map = vault()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     prune_vault(&mut map);
     map.insert(
         handle.clone(),
@@ -749,7 +768,9 @@ pub(crate) fn vault_store(values: HashMap<String, String>) -> Option<String> {
 
 /// Looks up a pasted value. `None` means expired or unknown.
 pub(crate) fn vault_get(handle: &str, value_handle: &str) -> Option<String> {
-    let mut map = vault().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut map = vault()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     map.retain(|_, entry| entry.created.elapsed() <= VAULT_TTL);
     map.get(handle)
         .and_then(|entry| entry.values.get(value_handle).cloned())
@@ -799,9 +820,15 @@ mod tests {
         let outcome = parse(toml).unwrap();
         assert_eq!(outcome.format, Some(PasteFormat::CodexToml));
         assert_eq!(names(&outcome), ["docs", "remote"]);
-        assert_eq!(outcome.servers[0].env, [("MODE".to_string(), "fast".to_string())]);
+        assert_eq!(
+            outcome.servers[0].env,
+            [("MODE".to_string(), "fast".to_string())]
+        );
         assert_eq!(outcome.servers[0].env_refs, ["DOCS_TOKEN"]);
-        assert_eq!(outcome.servers[1].bearer_env.as_deref(), Some("REMOTE_TOKEN"));
+        assert_eq!(
+            outcome.servers[1].bearer_env.as_deref(),
+            Some("REMOTE_TOKEN")
+        );
 
         let codex_json = r#"{"mcp_servers":{"docs":{"command":"uvx","args":["mcp-server-fetch"],"env_vars":["DOCS_TOKEN"]}}}"#;
         let outcome = parse(codex_json).unwrap();
@@ -820,7 +847,10 @@ mod tests {
         assert_eq!(outcome.format, Some(PasteFormat::Opencode));
         assert_eq!(outcome.servers[0].command.as_deref(), Some("npx"));
         assert_eq!(outcome.servers[0].args, ["-y", "@playwright/mcp@latest"]);
-        assert_eq!(outcome.servers[0].env, [("MODE".to_string(), "x".to_string())]);
+        assert_eq!(
+            outcome.servers[0].env,
+            [("MODE".to_string(), "x".to_string())]
+        );
         assert_eq!(outcome.servers[1].transport, "http");
 
         let fenced = "```jsonc\n{\n  // comment\n  \"mcpServers\": {\"fetch\": {\"command\": \"uvx\", \"args\": [\"mcp-server-fetch\"],},},\n}\n```";
@@ -830,10 +860,15 @@ mod tests {
         let wrapped = r#"{"mcpServers":{"memory":{"command":"cmd","args":["/c","npx","-y","@modelcontextprotocol/server-memory"]}}}"#;
         let outcome = parse(wrapped).unwrap();
         assert_eq!(outcome.servers[0].command.as_deref(), Some("npx"));
-        assert!(outcome.servers[0].warnings.contains(&"windows-cmd-unwrapped"));
+        assert!(outcome.servers[0]
+            .warnings
+            .contains(&"windows-cmd-unwrapped"));
 
         assert_eq!(parse("not a config").unwrap().format, None);
-        assert_eq!(parse(&"x".repeat(MAX_PASTE_BYTES + 1)).unwrap_err(), "paste-too-large");
+        assert_eq!(
+            parse(&"x".repeat(MAX_PASTE_BYTES + 1)).unwrap_err(),
+            "paste-too-large"
+        );
     }
 
     /// P3: `--port=3000` and `task-master-ai` are kept; credentials in args
@@ -870,41 +905,86 @@ mod tests {
             args: args.iter().map(|value| value.to_string()).collect(),
             ..ParsedServer::default()
         };
-        assert_eq!(suggest_name(&server("npx", &["-y", "@upstash/context7-mcp"])), "context7");
+        assert_eq!(
+            suggest_name(&server("npx", &["-y", "@upstash/context7-mcp"])),
+            "context7"
+        );
         assert_eq!(suggest_name(&server("uvx", &["mcp-server-fetch"])), "fetch");
         assert_eq!(
-            suggest_name(&server("npx", &["-y", "@modelcontextprotocol/server-memory"])),
+            suggest_name(&server(
+                "npx",
+                &["-y", "@modelcontextprotocol/server-memory"]
+            )),
             "memory"
         );
-        assert_eq!(suggest_name(&server("npx", &["@playwright/mcp@latest"])), "playwright");
+        assert_eq!(
+            suggest_name(&server("npx", &["@playwright/mcp@latest"])),
+            "playwright"
+        );
         let remote = ParsedServer {
             url: Some("https://api.githubcopilot.com/mcp/".to_string()),
             ..ParsedServer::default()
         };
         assert_eq!(suggest_name(&remote), "githubcopilot");
-        assert_eq!(subject_of("docker", &["run".into(), "-i".into(), "--rm".into(), "mcp/memory".into()]).as_deref(), Some("mcp/memory"));
-        assert_eq!(subject_of("python", &["-m".into(), "origin_mcp".into()]).as_deref(), Some("origin_mcp"));
+        assert_eq!(
+            subject_of(
+                "docker",
+                &[
+                    "run".into(),
+                    "-i".into(),
+                    "--rm".into(),
+                    "mcp/memory".into()
+                ]
+            )
+            .as_deref(),
+            Some("mcp/memory")
+        );
+        assert_eq!(
+            subject_of("python", &["-m".into(), "origin_mcp".into()]).as_deref(),
+            Some("origin_mcp")
+        );
     }
 
     /// P2 (parser part): placeholders and secret classification.
     #[test]
     fn placeholders_and_secret_values_are_classified() {
-        for placeholder in ["${API_KEY}", "${env:API_KEY}", "$API_KEY", "${input:token}", "<your key>", "YOUR_API_KEY", "your-token", "xxxxxxxx", "PASTE_KEY_HERE", ""] {
+        for placeholder in [
+            "${API_KEY}",
+            "${env:API_KEY}",
+            "$API_KEY",
+            "${input:token}",
+            "<your key>",
+            "YOUR_API_KEY",
+            "your-token",
+            "xxxxxxxx",
+            "PASTE_KEY_HERE",
+            "",
+        ] {
             assert!(is_placeholder(placeholder), "{placeholder}");
         }
         assert_eq!(
             classify_env_value("GITHUB_TOKEN", "${GH_TOKEN}"),
-            ValueKind::Placeholder { env_var: Some("GH_TOKEN".to_string()) }
+            ValueKind::Placeholder {
+                env_var: Some("GH_TOKEN".to_string())
+            }
         );
-        assert!(matches!(classify_env_value("GITHUB_TOKEN", "ghp_realvalue123"), ValueKind::Secret(_)));
-        assert!(matches!(classify_env_value("MODE", "sk-live-1234567890"), ValueKind::Secret(_)));
+        assert!(matches!(
+            classify_env_value("GITHUB_TOKEN", "ghp_realvalue123"),
+            ValueKind::Secret(_)
+        ));
+        assert!(matches!(
+            classify_env_value("MODE", "sk-live-1234567890"),
+            ValueKind::Secret(_)
+        ));
         assert!(matches!(
             classify_env_value("GITHUB_OAUTH_CALLBACK_PORT", "8085"),
             ValueKind::Literal(_)
         ));
         assert!(!name_looks_secret("PYTHONPATH"));
         assert!(name_looks_secret("BRAVE_API_KEY"));
-        assert!(!format!("{:?}", classify_env_value("TOKEN", "never-print")).contains("never-print"));
+        assert!(
+            !format!("{:?}", classify_env_value("TOKEN", "never-print")).contains("never-print")
+        );
     }
 
     #[test]

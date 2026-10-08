@@ -20,7 +20,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, TableLike, Value as TomlValue};
+use toml_edit::{
+    value, Array, DocumentMut, InlineTable, Item, Table, TableLike, Value as TomlValue,
+};
 use uuid::Uuid;
 
 const MAX_CONFIG_BYTES: u64 = 2 * 1024 * 1024;
@@ -1320,12 +1322,17 @@ fn is_known_host(host_id: &str) -> bool {
 }
 
 fn is_json_host(host_id: &str) -> bool {
-    matches!(host_id, HOST_CLAUDE_CODE | HOST_CLAUDE_DESKTOP | HOST_CURSOR)
+    matches!(
+        host_id,
+        HOST_CLAUDE_CODE | HOST_CLAUDE_DESKTOP | HOST_CURSOR
+    )
 }
 
 fn validate_change(change: &McpBindingChange) -> Result<(), String> {
     if !is_known_host(&change.host_id) {
-        return Err("仅支持 Codex、Claude Code、Claude Desktop 与 Cursor 的 MCP 配置。".to_string());
+        return Err(
+            "仅支持 Codex、Claude Code、Claude Desktop 与 Cursor 的 MCP 配置。".to_string(),
+        );
     }
     validate_server_name(&change.host_id, &change.server_name)?;
     match change.action.as_str() {
@@ -1561,7 +1568,9 @@ pub(crate) fn validate_command_with_args(command: &str, args: &[String]) -> Resu
         && is_wrap_family(&args[1])
         && validate_command(&args[1]).is_ok();
     if !valid_wrapper {
-        return Err("cmd 只能以 cmd /c npx（或 npm、pnpm、yarn、node、bun、deno）的形式使用。".to_string());
+        return Err(
+            "cmd 只能以 cmd /c npx（或 npm、pnpm、yarn、node、bun、deno）的形式使用。".to_string(),
+        );
     }
     if args[1..].iter().any(|argument| {
         argument.contains(['&', '|', '<', '>', '^', '%', '"', '(', ')', '!', '\r', '\n'])
@@ -2395,7 +2404,10 @@ fn replace_json_env_refs(
         };
         env.retain(|key, value| simple_env_reference(value) != Some(key));
         for name in names {
-            env.insert(name.clone(), Node::string(json_env_reference(host_id, name)));
+            env.insert(
+                name.clone(),
+                Node::string(json_env_reference(host_id, name)),
+            );
         }
         env.is_empty()
     } else if names.is_empty() {
@@ -2403,7 +2415,10 @@ fn replace_json_env_refs(
     } else {
         let env = object_field_mut(binding, "env")?;
         for name in names {
-            env.insert(name.clone(), Node::string(json_env_reference(host_id, name)));
+            env.insert(
+                name.clone(),
+                Node::string(json_env_reference(host_id, name)),
+            );
         }
         false
     };
@@ -3072,7 +3087,10 @@ fn apply_projection_to_json_entry(entry: &mut ObjectMap, projected: &ProjectedEn
     }
 }
 
-fn apply_entry_change_codex(document: &mut DocumentMut, change: &EntryChange) -> Result<(), String> {
+fn apply_entry_change_codex(
+    document: &mut DocumentMut,
+    change: &EntryChange,
+) -> Result<(), String> {
     let servers = codex_servers_mut(document)?;
     match &change.op {
         EntryOp::Remove => {
@@ -3214,7 +3232,11 @@ fn apply_entry_changes_to_text(
     }
 }
 
-fn entries_of(target: &ResolvedTarget, text: &str, names: &[&str]) -> Result<Vec<(String, Option<Node>)>, String> {
+fn entries_of(
+    target: &ResolvedTarget,
+    text: &str,
+    names: &[&str],
+) -> Result<Vec<(String, Option<Node>)>, String> {
     let read = if target.host_id == HOST_CODEX {
         read_codex_entries(text)
     } else {
@@ -3462,7 +3484,8 @@ pub(crate) fn restore_snapshot_if_unchanged(
         &recorded.scope,
         recorded.workspace_id.as_deref(),
     )?;
-    if target.id != recorded.id || target_path_binding(&target.path)? != recorded.path_binding_sha256
+    if target.id != recorded.id
+        || target_path_binding(&target.path)? != recorded.path_binding_sha256
     {
         return Ok(false);
     }
@@ -3480,8 +3503,11 @@ pub(crate) fn restore_snapshot_if_unchanged(
             .backup_file_name
             .as_deref()
             .ok_or_else(|| "MCP 撤销备份记录不完整。".to_string())?;
-        let backup =
-            read_private_backup(&snapshot_backup_path_by_name(context, snapshot_id, backup_name)?)?;
+        let backup = read_private_backup(&snapshot_backup_path_by_name(
+            context,
+            snapshot_id,
+            backup_name,
+        )?)?;
         if sha256_hex(&backup) != recorded.original.sha256 {
             return Err("MCP 撤销备份校验失败。".to_string());
         }
@@ -3513,7 +3539,8 @@ pub(crate) fn restore_snapshot_if_unchanged(
             "MCP 配置在撤销前又被外部修改；已停止且不会覆盖外部改动。",
         )
         .and_then(|_| {
-            fs::remove_file(&target.path).map_err(|_| "无法移除由 MCP 写入新建的配置文件。".to_string())
+            fs::remove_file(&target.path)
+                .map_err(|_| "无法移除由 MCP 写入新建的配置文件。".to_string())
         }),
     };
     if let Err(error) = result {
@@ -4246,9 +4273,7 @@ fn prune_snapshot_store(
             {
                 remove_private_snapshot_dir(&root, &path)?
             }
-            Ok(manifest)
-                if now > manifest.created_at_unix_ms.saturating_add(SNAPSHOT_TTL_MS) =>
-            {
+            Ok(manifest) if now > manifest.created_at_unix_ms.saturating_add(SNAPSHOT_TTL_MS) => {
                 // A non-committed transaction older than the retention
                 // window no longer counts as a protected orphan (bug MCP#2).
                 remove_private_snapshot_dir(&root, &path)?
@@ -5127,7 +5152,9 @@ command = "obsolete"
         )
         .unwrap();
         apply_mcp_plan(&context, &next.plan_id).unwrap();
-        assert!(fs::read_to_string(&path).unwrap().contains("enabled = false"));
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("enabled = false"));
         resolve_stuck_transaction(&context, &snapshot_id).unwrap();
         assert!(list_stuck_transactions(&context).is_empty());
         let _ = fs::remove_dir_all(root);

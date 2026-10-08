@@ -424,7 +424,6 @@ fn safe_remote_url(value: &str) -> bool {
         && value.len() <= 1024
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -817,9 +816,10 @@ fn fetch_error(error: FetchError, file: &str) -> McpError {
             format!("{file} 太大了，SkillHub 不读取。"),
         )
         .param("file", file),
-        FetchError::Unreachable | FetchError::Other => {
-            McpError::new("github-unreachable", "无法连接 GitHub；请检查网络或代理后重试。")
-        }
+        FetchError::Unreachable | FetchError::Other => McpError::new(
+            "github-unreachable",
+            "无法连接 GitHub；请检查网络或代理后重试。",
+        ),
     }
 }
 
@@ -892,7 +892,9 @@ pub(crate) fn fetch_github_candidates(
 ) -> Result<GithubCandidates, McpError> {
     let source = parse_github_source(source_text)?;
     let attempts: Vec<(String, Vec<String>, Option<String>)> = match &source.form {
-        GithubSourceForm::Root => vec![(default_branch(fetcher, &source)?, vec![String::new()], None)],
+        GithubSourceForm::Root => {
+            vec![(default_branch(fetcher, &source)?, vec![String::new()], None)]
+        }
         GithubSourceForm::Tree(rest) => ref_splits(rest)
             .into_iter()
             .map(|(reference, path)| {
@@ -991,7 +993,12 @@ fn finish(source: &GithubSource, path: &str, text: &str, readme: bool) -> Github
         match mcp_paste::parse(text) {
             Ok(outcome) => {
                 let count = outcome.servers.len();
-                (outcome.format, outcome.servers, vec![true; count], outcome.skipped)
+                (
+                    outcome.format,
+                    outcome.servers,
+                    vec![true; count],
+                    outcome.skipped,
+                )
             }
             Err(_) => (None, Vec::new(), Vec::new(), Vec::new()),
         }
@@ -1001,7 +1008,9 @@ fn finish(source: &GithubSource, path: &str, text: &str, readme: bool) -> Github
         notices.push("readme-example");
     }
     // The verified Origin recipe lives in Discover (§6.8).
-    if source.owner.eq_ignore_ascii_case("Ge-Shun") && source.repo.eq_ignore_ascii_case("origin-mcp") {
+    if source.owner.eq_ignore_ascii_case("Ge-Shun")
+        && source.repo.eq_ignore_ascii_case("origin-mcp")
+    {
         notices.push("has-verified-recipe");
     }
     GithubCandidates {
@@ -1019,7 +1028,9 @@ fn finish(source: &GithubSource, path: &str, text: &str, readme: bool) -> Github
 /// The first balanced `{…}` that mentions `mcpServers` / `mcp_servers`
 /// (JS/TS examples). Unquoted keys simply fail to parse and are skipped.
 fn balanced_object(text: &str) -> Option<&str> {
-    let anchor = text.find("mcpServers").or_else(|| text.find("mcp_servers"))?;
+    let anchor = text
+        .find("mcpServers")
+        .or_else(|| text.find("mcp_servers"))?;
     let bytes = text.as_bytes();
     // The nearest opening brace before the anchor holds the example object.
     let start = (0..anchor).rev().find(|index| bytes[*index] == b'{')?;
@@ -1054,7 +1065,10 @@ fn balanced_object(text: &str) -> Option<&str> {
 
 fn same_server(left: &mcp_paste::ParsedServer, right: &mcp_paste::ParsedServer) -> bool {
     let keys = |pairs: &[(String, String)]| {
-        let mut names = pairs.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
+        let mut names = pairs
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
         names.sort();
         names
     };
@@ -1093,7 +1107,11 @@ pub(crate) fn parse_readme_blocks(
     let mut servers: Vec<mcp_paste::ParsedServer> = Vec::new();
     let mut skipped: Vec<(String, &'static str)> = Vec::new();
     let accept = |language: &str| -> Option<String> {
-        let language = language.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        let language = language
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
         matches!(
             language.as_str(),
             "" | "json" | "jsonc" | "json5" | "js" | "javascript" | "ts" | "typescript" | "toml"
@@ -1106,11 +1124,12 @@ pub(crate) fn parse_readme_blocks(
             let run = trimmed.chars().take_while(|ch| ch == marker).count();
             if run >= *width && trimmed[run..].trim().is_empty() {
                 if let Some(language) = language {
-                    let body = if matches!(language.as_str(), "js" | "javascript" | "ts" | "typescript") {
-                        balanced_object(&block).map(str::to_string)
-                    } else {
-                        Some(block.clone())
-                    };
+                    let body =
+                        if matches!(language.as_str(), "js" | "javascript" | "ts" | "typescript") {
+                            balanced_object(&block).map(str::to_string)
+                        } else {
+                            Some(block.clone())
+                        };
                     if let Some(body) = body {
                         if let Ok(outcome) = mcp_paste::parse(&body) {
                             for server in outcome.servers {
@@ -1146,7 +1165,11 @@ pub(crate) fn parse_readme_blocks(
         }
     }
     // A skipped name that also has a usable example is not "skipped".
-    skipped.retain(|(name, _)| !servers.iter().any(|server| server.name.eq_ignore_ascii_case(name)));
+    skipped.retain(|(name, _)| {
+        !servers
+            .iter()
+            .any(|server| server.name.eq_ignore_ascii_case(name))
+    });
     let mut preferred = vec![false; servers.len()];
     let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (index, server) in servers.iter().enumerate() {
@@ -1233,17 +1256,23 @@ mod v33_tests {
     #[test]
     fn github_source_forms_and_3xx_moved() {
         assert_eq!(
-            parse_github_source("https://github.com/owner/repo.git").unwrap().form,
+            parse_github_source("https://github.com/owner/repo.git")
+                .unwrap()
+                .form,
             GithubSourceForm::Root
         );
         assert_eq!(
-            parse_github_source("https://github.com/modelcontextprotocol/servers/tree/main/src/memory")
-                .unwrap()
-                .form,
+            parse_github_source(
+                "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
+            )
+            .unwrap()
+            .form,
             GithubSourceForm::Tree(vec!["main".into(), "src".into(), "memory".into()])
         );
         assert_eq!(
-            parse_github_source("https://github.com/o/r/blob/main/docs/mcp.json").unwrap().form,
+            parse_github_source("https://github.com/o/r/blob/main/docs/mcp.json")
+                .unwrap()
+                .form,
             GithubSourceForm::Blob(vec!["main".into(), "docs".into(), "mcp.json".into()])
         );
         for bad in [
@@ -1298,6 +1327,9 @@ mod v33_tests {
             Ok(fixture("context7.md")),
         );
         let result = fetch_github_candidates(&FakeFetch(responses), "o/r").unwrap();
-        assert!(result.servers.iter().any(|server| server.name == "context7"));
+        assert!(result
+            .servers
+            .iter()
+            .any(|server| server.name == "context7"));
     }
 }

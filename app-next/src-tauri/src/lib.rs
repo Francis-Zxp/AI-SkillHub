@@ -4796,10 +4796,8 @@ async fn rollback_mcp_snapshot(
 /// cross-process lock and never fails because of a stuck transaction.
 #[tauri::command]
 async fn list_mcp_rollback_snapshots() -> Result<Vec<mcp_mutation::McpRollbackSnapshot>, String> {
-    run_blocking_task(move || {
-        mcp_mutation::list_mcp_rollback_snapshots(&mcp_mutation_context()?)
-    })
-    .await
+    run_blocking_task(move || mcp_mutation::list_mcp_rollback_snapshots(&mcp_mutation_context()?))
+        .await
 }
 
 #[tauri::command]
@@ -4821,10 +4819,13 @@ async fn list_mcp_mutation_targets() -> Result<Vec<mcp_mutation::McpMutationTarg
 // ============================================================================
 
 fn mcp_library_context() -> Result<mcp_library::McpLibraryContext, mcp_library::McpError> {
-    let mutation = mcp_mutation_context()
-        .map_err(|message| mcp_library::McpError::new("engine", message))?;
+    let mutation =
+        mcp_mutation_context().map_err(|message| mcp_library::McpError::new("engine", message))?;
     let root = resolve_legacy_root().map_err(|_| {
-        mcp_library::McpError::new("engine", "无法确定 AI SkillHub 数据目录；没有改动任何配置。")
+        mcp_library::McpError::new(
+            "engine",
+            "无法确定 AI SkillHub 数据目录；没有改动任何配置。",
+        )
     })?;
     Ok(mcp_library::McpLibraryContext {
         mutation,
@@ -4961,16 +4962,66 @@ macro_rules! mcp_write_command {
     };
 }
 
-mcp_write_command!(mcp_set_cell, mcp_library::McpSetCellRequest, mcp_library::set_cell, "write");
-mcp_write_command!(mcp_set_column, mcp_library::McpSetColumnRequest, mcp_library::set_column, "write");
-mcp_write_command!(mcp_set_row, mcp_library::McpSetRowRequest, mcp_library::set_row, "write");
-mcp_write_command!(mcp_add_servers, mcp_library::McpAddRequest, mcp_library::add_servers, "write");
-mcp_write_command!(mcp_update_server, mcp_library::McpUpdateRequest, mcp_library::update_server, "write");
-mcp_write_command!(mcp_remove_server, mcp_library::McpRemoveRequest, mcp_library::remove_server, "write");
-mcp_write_command!(mcp_undo, mcp_library::McpUndoRequest, mcp_library::undo, "undo");
-mcp_write_command!(mcp_rollback, mcp_library::McpRollbackRequest, mcp_library::rollback, "undo");
-mcp_write_command!(mcp_set_secret, mcp_library::McpSetSecretRequest, mcp_library::set_secret, "secret");
-mcp_write_command!(mcp_resync, mcp_library::McpResyncRequest, mcp_library::resync, "write");
+mcp_write_command!(
+    mcp_set_cell,
+    mcp_library::McpSetCellRequest,
+    mcp_library::set_cell,
+    "write"
+);
+mcp_write_command!(
+    mcp_set_column,
+    mcp_library::McpSetColumnRequest,
+    mcp_library::set_column,
+    "write"
+);
+mcp_write_command!(
+    mcp_set_row,
+    mcp_library::McpSetRowRequest,
+    mcp_library::set_row,
+    "write"
+);
+mcp_write_command!(
+    mcp_add_servers,
+    mcp_library::McpAddRequest,
+    mcp_library::add_servers,
+    "write"
+);
+mcp_write_command!(
+    mcp_update_server,
+    mcp_library::McpUpdateRequest,
+    mcp_library::update_server,
+    "write"
+);
+mcp_write_command!(
+    mcp_remove_server,
+    mcp_library::McpRemoveRequest,
+    mcp_library::remove_server,
+    "write"
+);
+mcp_write_command!(
+    mcp_undo,
+    mcp_library::McpUndoRequest,
+    mcp_library::undo,
+    "undo"
+);
+mcp_write_command!(
+    mcp_rollback,
+    mcp_library::McpRollbackRequest,
+    mcp_library::rollback,
+    "undo"
+);
+mcp_write_command!(
+    mcp_set_secret,
+    mcp_library::McpSetSecretRequest,
+    mcp_library::set_secret,
+    "secret"
+);
+mcp_write_command!(
+    mcp_resync,
+    mcp_library::McpResyncRequest,
+    mcp_library::resync,
+    "write"
+);
 mcp_write_command!(
     mcp_resolve_changed_outside,
     mcp_library::McpResolveChangeRequest,
@@ -5034,12 +5085,17 @@ async fn mcp_test_server(
     let progress_app = app.clone();
     let result = mcp_run_read(move |context| {
         let server_id = request.server_id.clone();
-        mcp_probe::run_test(context, &request.server_id, &request.preview_token, &|phase| {
-            let _ = progress_app.emit(
-                mcp_library::MCP_TEST_PROGRESS_EVENT,
-                serde_json::json!({ "serverId": server_id, "phase": phase }),
-            );
-        })
+        mcp_probe::run_test(
+            context,
+            &request.server_id,
+            &request.preview_token,
+            &|phase| {
+                let _ = progress_app.emit(
+                    mcp_library::MCP_TEST_PROGRESS_EVENT,
+                    serde_json::json!({ "serverId": server_id, "phase": phase }),
+                );
+            },
+        )
     })
     .await?;
     let _ = app.emit(

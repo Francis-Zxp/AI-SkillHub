@@ -151,7 +151,10 @@ fn done(outcome: &McpWriteOutcome) -> (&String, &Vec<McpClientResult>, &Option<S
             undo_token,
             ..
         } => (operation_id, results, undo_token),
-        other => panic!("expected done, got {}", serde_json::to_string(other).unwrap()),
+        other => panic!(
+            "expected done, got {}",
+            serde_json::to_string(other).unwrap()
+        ),
     }
 }
 
@@ -223,10 +226,7 @@ env_vars = [{ name = "REMOTE_TOKEN", source = "remote" }]
 fn first_import_reads_all_clients_without_touching_files() {
     let fixture = Fixture::new("r1");
     fs::write(fixture.codex(), SAMPLE_CODEX).unwrap();
-    let local_key = fixture
-        .workspace()
-        .to_string_lossy()
-        .replace('\\', "/");
+    let local_key = fixture.workspace().to_string_lossy().replace('\\', "/");
     fs::write(
         fixture.claude(),
         serde_json::to_string_pretty(&json!({
@@ -252,7 +252,12 @@ fn first_import_reads_all_clients_without_touching_files() {
         r#"{"mcpServers":{"context7":{"command":"npx","args":["-y","@upstash/context7-mcp","--other"]}}}"#,
     )
     .unwrap();
-    let paths = [fixture.codex(), fixture.claude(), fixture.desktop(), fixture.cursor()];
+    let paths = [
+        fixture.codex(),
+        fixture.claude(),
+        fixture.desktop(),
+        fixture.cursor(),
+    ];
     let before = paths.iter().map(|path| sha(path)).collect::<Vec<_>>();
 
     assert!(!fixture.snapshot().library_initialized);
@@ -263,7 +268,10 @@ fn first_import_reads_all_clients_without_touching_files() {
     assert_eq!(report.files_read.len(), 4 + 1);
     let mut added = report.added.clone();
     added.sort();
-    assert_eq!(added, ["context7", "fetch", "local-only", "memory", "team.docs"]);
+    assert_eq!(
+        added,
+        ["context7", "fetch", "local-only", "memory", "team.docs"]
+    );
     assert!(report
         .merged
         .iter()
@@ -288,7 +296,10 @@ fn first_import_reads_all_clients_without_touching_files() {
     assert_eq!(fetch.state, "off");
     assert!(fetch.disabled_in_file);
     assert_eq!(
-        fixture.cell("team.docs", ClientId::ClaudeCode).reason.as_deref(),
+        fixture
+            .cell("team.docs", ClientId::ClaudeCode)
+            .reason
+            .as_deref(),
         Some("name-incompatible")
     );
     let codex_struct = fixture.cell("context7", ClientId::Codex);
@@ -435,15 +446,31 @@ fn desktop_and_cursor_writers_preserve_unknown_top_level_keys_order_and_indent()
     let fixture = Fixture::new("r5");
     let desktop = "{\n    \"preferences\": {\n        \"menuBarEnabled\": false\n    },\n    \"coworkUserFilesPath\": \"D:\\\\Work\",\n    \"mcpServers\": {}\n}\n";
     fs::write(fixture.desktop(), desktop).unwrap();
-    fs::write(fixture.cursor(), "{\n\t\"zeta\": 1,\n\t\"mcpServers\": {}\n}").unwrap();
+    fs::write(
+        fixture.cursor(),
+        "{\n\t\"zeta\": 1,\n\t\"mcpServers\": {}\n}",
+    )
+    .unwrap();
     fixture.import();
     let outcome = add(
         &fixture,
-        stdio_input("memory", "npx", &["-y", "@modelcontextprotocol/server-memory"]),
-        &[ClientId::ClaudeDesktop, ClientId::Cursor, ClientId::ClaudeCode, ClientId::Codex],
+        stdio_input(
+            "memory",
+            "npx",
+            &["-y", "@modelcontextprotocol/server-memory"],
+        ),
+        &[
+            ClientId::ClaudeDesktop,
+            ClientId::Cursor,
+            ClientId::ClaudeCode,
+            ClientId::Codex,
+        ],
     );
     let (_, results, _) = done(&outcome);
-    assert!(results.iter().all(|result| result.status == "written"), "{results:?}");
+    assert!(
+        results.iter().all(|result| result.status == "written"),
+        "{results:?}"
+    );
     let desktop_text = fs::read_to_string(fixture.desktop()).unwrap();
     assert!(desktop_text.starts_with("{\n    \"preferences\": {\n        \"menuBarEnabled\": false\n    },\n    \"coworkUserFilesPath\""));
     assert!(desktop_text.ends_with("}\n"));
@@ -476,10 +503,17 @@ fn windows_family_commands_wrapped_for_claude_clients_only_and_unwrapped_on_impo
     fixture.import();
     add(
         &fixture,
-        stdio_input("memory", "npx", &["-y", "@modelcontextprotocol/server-memory"]),
+        stdio_input(
+            "memory",
+            "npx",
+            &["-y", "@modelcontextprotocol/server-memory"],
+        ),
         &[ClientId::ClaudeCode],
     );
-    assert_eq!(json_file(&fixture.claude())["mcpServers"]["memory"]["command"], "npx");
+    assert_eq!(
+        json_file(&fixture.claude())["mcpServers"]["memory"]["command"],
+        "npx"
+    );
 
     let windows = Fixture::new("r7w");
     fs::write(
@@ -499,16 +533,31 @@ fn windows_family_commands_wrapped_for_claude_clients_only_and_unwrapped_on_impo
         .any(|issue| issue.kind == "windows-fix"));
     let outcome = windows.write_op(resync(&windows.ctx, McpResyncRequest::default()));
     done(&outcome);
-    assert_eq!(json_file(&windows.claude())["mcpServers"]["memory"]["command"], "cmd");
-    assert!(!windows.cell("memory", ClientId::ClaudeCode).windows_fix_available);
+    assert_eq!(
+        json_file(&windows.claude())["mcpServers"]["memory"]["command"],
+        "cmd"
+    );
+    assert!(
+        !windows
+            .cell("memory", ClientId::ClaudeCode)
+            .windows_fix_available
+    );
 }
 
 /// R8: `cmd` only as `cmd /c <family runner>` without shell metacharacters.
 #[test]
 fn validate_command_with_args_accepts_only_cmd_slash_c_runner() {
-    let args = |values: &[&str]| values.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+    let args = |values: &[&str]| {
+        values
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+    };
     assert!(engine::validate_command_with_args("cmd", &args(&["/c", "npx", "-y", "pkg"])).is_ok());
-    assert!(engine::validate_command_with_args("cmd.exe", &args(&["/C", "npx.cmd", "-y", "pkg"])).is_ok());
+    assert!(
+        engine::validate_command_with_args("cmd.exe", &args(&["/C", "npx.cmd", "-y", "pkg"]))
+            .is_ok()
+    );
     for (command, values) in [
         ("cmd", &[][..]),
         ("cmd", &["/k", "npx"][..]),
@@ -580,7 +629,13 @@ fn codex_transport_switch_removes_incompatible_keys_and_keeps_unknown_valid_ones
     .unwrap();
     fixture.import();
     let id = fixture.server_id("docs");
-    let detail = get_server(&fixture.ctx, McpGetServerRequest { server_id: id.clone() }).unwrap();
+    let detail = get_server(
+        &fixture.ctx,
+        McpGetServerRequest {
+            server_id: id.clone(),
+        },
+    )
+    .unwrap();
     let outcome = fixture.write_op(update_server(
         &fixture.ctx,
         McpUpdateRequest {
@@ -674,7 +729,8 @@ fn claude_local_scope_uses_forward_slash_key_matches_existing_and_refuses_ambigu
     let backslash = fixture.workspace().to_string_lossy().replace('/', "\\");
     fs::write(
         fixture.claude(),
-        serde_json::to_string(&json!({"projects": {backslash.clone(): {"allowedTools": []}}})).unwrap(),
+        serde_json::to_string(&json!({"projects": {backslash.clone(): {"allowedTools": []}}}))
+            .unwrap(),
     )
     .unwrap();
     let outcome = fixture.write_op(add_servers(
@@ -726,7 +782,10 @@ fn claude_local_scope_uses_forward_slash_key_matches_existing_and_refuses_ambigu
         let (_, results, _) = done(&outcome);
         assert!(results.iter().any(|result| result.skipped_reason.as_deref()
             == Some("config-ambiguous-project")
-            || result.error.as_ref().is_some_and(|error| error.code == "config-ambiguous-project")));
+            || result
+                .error
+                .as_ref()
+                .is_some_and(|error| error.code == "config-ambiguous-project")));
         assert_eq!(sha(&fixture.claude()), before);
     }
 }
@@ -746,7 +805,11 @@ fn claude_json_single_entry_change_touches_only_that_entry() {
     text.push_str("  \"mcpServers\": {\n    \"keep\": {\n      \"type\": \"stdio\",\n      \"command\": \"node\",\n      \"args\": [\n        \"keep.js\"\n      ],\n      \"env\": {}\n    }\n  }\n}\n");
     fs::write(fixture.claude(), &text).unwrap();
     fixture.import();
-    add(&fixture, stdio_input("added", "uvx", &["added-mcp"]), &[ClientId::ClaudeCode]);
+    add(
+        &fixture,
+        stdio_input("added", "uvx", &["added-mcp"]),
+        &[ClientId::ClaudeCode],
+    );
     let after = fs::read_to_string(fixture.claude()).unwrap();
     let before_lines = text.lines().collect::<Vec<_>>();
     let after_lines = after.lines().collect::<Vec<_>>();
@@ -776,12 +839,24 @@ fn claude_dollar_brace_env_and_bearer_headers_are_references_with_presence() {
     fixture.env.set("API_KEY", "present-value").unwrap();
     fixture.import();
     let snapshot = fixture.snapshot();
-    let local = snapshot.servers.iter().find(|server| server.name == "local").unwrap();
+    let local = snapshot
+        .servers
+        .iter()
+        .find(|server| server.name == "local")
+        .unwrap();
     assert_eq!(local.secrets.len(), 1);
     assert_eq!(local.secrets[0].storage, "external");
     assert!(local.secrets[0].present);
-    let remote = snapshot.servers.iter().find(|server| server.name == "remote").unwrap();
-    let bearer = remote.secrets.iter().find(|secret| secret.name == "Authorization").unwrap();
+    let remote = snapshot
+        .servers
+        .iter()
+        .find(|server| server.name == "remote")
+        .unwrap();
+    let bearer = remote
+        .secrets
+        .iter()
+        .find(|secret| secret.name == "Authorization")
+        .unwrap();
     assert_eq!(bearer.header_template.as_deref(), Some("bearer"));
     assert_eq!(bearer.env_var.as_deref(), Some("REMOTE_TOKEN"));
     assert!(!bearer.present);
@@ -790,9 +865,9 @@ fn claude_dollar_brace_env_and_bearer_headers_are_references_with_presence() {
     assert_eq!(fixture.cell("remote", ClientId::ClaudeCode).state, "on");
 
     // The read-only scanner agrees (bug MCP#7).
-    let inventory = crate::mcp_center::scan_read_only(&crate::mcp_center::McpScanRequest::for_home(
-        fixture.home(),
-    ));
+    let inventory = crate::mcp_center::scan_read_only(
+        &crate::mcp_center::McpScanRequest::for_home(fixture.home()),
+    );
     let requirement = |name: &str| {
         inventory
             .secret_requirements
@@ -821,7 +896,11 @@ fn per_client_failure_is_isolated() {
     );
     let outcome = add(
         &fixture,
-        stdio_input("memory", "npx", &["-y", "@modelcontextprotocol/server-memory"]),
+        stdio_input(
+            "memory",
+            "npx",
+            &["-y", "@modelcontextprotocol/server-memory"],
+        ),
         &[ClientId::Codex, ClientId::ClaudeCode, ClientId::Cursor],
     );
     let (_, results, _) = done(&outcome);
@@ -845,7 +924,9 @@ fn per_client_failure_is_isolated() {
         .unwrap();
     assert_eq!(cursor_error.code, "config-changed");
     assert_ne!(sha(&fixture.codex()), codex_before);
-    assert!(fs::read_to_string(fixture.codex()).unwrap().contains("[mcp_servers.memory]"));
+    assert!(fs::read_to_string(fixture.codex())
+        .unwrap()
+        .contains("[mcp_servers.memory]"));
     assert_eq!(fixture.cell("memory", ClientId::Codex).state, "on");
     assert_eq!(fixture.cell("memory", ClientId::Cursor).state, "error");
     if let McpWriteOutcome::Done { summary, .. } = &outcome {
@@ -885,7 +966,9 @@ fn remove_requires_confirmation_and_token_is_content_bound() {
     let fresh = confirmation(&second).confirm_token.clone();
     let third = fixture.write_op(remove_server(&fixture.ctx, request(Some(fresh))));
     done(&third);
-    assert!(!fs::read_to_string(fixture.codex()).unwrap().contains("context7"));
+    assert!(!fs::read_to_string(fixture.codex())
+        .unwrap()
+        .contains("context7"));
     assert!(fixture.snapshot().servers.is_empty());
 }
 
@@ -899,12 +982,19 @@ fn overwrite_same_name_different_requires_confirmation_but_batch_overwrite_choic
         r#"{"mcpServers":{"memory":{"command":"node","args":["old.js"]}}}"#,
     )
     .unwrap();
-    let new_input = stdio_input("memory", "npx", &["-y", "@modelcontextprotocol/server-memory"]);
+    let new_input = stdio_input(
+        "memory",
+        "npx",
+        &["-y", "@modelcontextprotocol/server-memory"],
+    );
     let first = add(&fixture, new_input.clone(), &[ClientId::Cursor]);
     let descriptor = confirmation(&first);
     assert_eq!(descriptor.kinds, ["overwrite-different"]);
     let item = &descriptor.items[0];
-    assert_eq!(item.before.as_ref().unwrap().target_display, "node · old.js");
+    assert_eq!(
+        item.before.as_ref().unwrap().target_display,
+        "node · old.js"
+    );
     assert_eq!(
         item.after.as_ref().unwrap().target_display,
         "npx · @modelcontextprotocol/server-memory"
@@ -925,7 +1015,10 @@ fn overwrite_same_name_different_requires_confirmation_but_batch_overwrite_choic
         },
     ));
     done(&outcome);
-    assert_eq!(json_file(&fixture.cursor())["mcpServers"]["memory"]["command"], "npx");
+    assert_eq!(
+        json_file(&fixture.cursor())["mcpServers"]["memory"]["command"],
+        "npx"
+    );
 }
 
 /// R17: undo after Claude rewrote unrelated keys reverts only the touched
@@ -933,7 +1026,11 @@ fn overwrite_same_name_different_requires_confirmation_but_batch_overwrite_choic
 #[test]
 fn undo_after_claude_rewrites_unrelated_keys_reverts_only_touched_entries() {
     let fixture = Fixture::new("r17");
-    fs::write(fixture.claude(), "{\n  \"numStartups\": 1,\n  \"mcpServers\": {}\n}\n").unwrap();
+    fs::write(
+        fixture.claude(),
+        "{\n  \"numStartups\": 1,\n  \"mcpServers\": {}\n}\n",
+    )
+    .unwrap();
     fixture.import();
     let outcome = add(
         &fixture,
@@ -945,7 +1042,11 @@ fn undo_after_claude_rewrites_unrelated_keys_reverts_only_touched_entries() {
     let mut json = json_file(&fixture.claude());
     json["numStartups"] = json!(2);
     json["tipsHistory"] = json!({"a": 1});
-    fs::write(fixture.claude(), serde_json::to_string_pretty(&json).unwrap()).unwrap();
+    fs::write(
+        fixture.claude(),
+        serde_json::to_string_pretty(&json).unwrap(),
+    )
+    .unwrap();
     let undone = fixture.write_op(undo(
         &fixture.ctx,
         McpUndoRequest {
@@ -983,7 +1084,10 @@ fn undo_reports_conflict_per_client_when_entry_changed_after_apply() {
         },
     ));
     let (_, results, _) = done(&undone);
-    let codex = results.iter().find(|result| result.client_id == ClientId::Codex).unwrap();
+    let codex = results
+        .iter()
+        .find(|result| result.client_id == ClientId::Codex)
+        .unwrap();
     assert_eq!(codex.status, "undone");
     let conflict = results
         .iter()
@@ -995,7 +1099,9 @@ fn undo_reports_conflict_per_client_when_entry_changed_after_apply() {
     assert!(fs::read_to_string(fixture.codex())
         .map(|text| !text.contains("context7"))
         .unwrap_or(true));
-    assert!(fs::read_to_string(fixture.cursor()).unwrap().contains("--edited"));
+    assert!(fs::read_to_string(fixture.cursor())
+        .unwrap()
+        .contains("--edited"));
 }
 
 const SENTINEL: &str = "S3NT1NEL-7f3a9c2e1d";
@@ -1040,14 +1146,24 @@ fn sentinel_secret_never_leaks_outside_allowed_stores() {
     let outcome = add(
         &fixture,
         input,
-        &[ClientId::Codex, ClientId::ClaudeCode, ClientId::ClaudeDesktop, ClientId::Cursor],
+        &[
+            ClientId::Codex,
+            ClientId::ClaudeCode,
+            ClientId::ClaudeDesktop,
+            ClientId::Cursor,
+        ],
     );
     assert_no_sentinel("add outcome", &serde_json::to_string(&outcome).unwrap());
     let (_, results, _) = done(&outcome);
     // Desktop has no references: blocked until inline consent.
-    assert!(results.iter().any(|result| result.client_id == ClientId::ClaudeDesktop
-        && result.skipped_reason.as_deref() == Some("needs-inline-consent")));
-    assert!(fixture.env.snapshot_values().contains(&SENTINEL.to_string()));
+    assert!(results
+        .iter()
+        .any(|result| result.client_id == ClientId::ClaudeDesktop
+            && result.skipped_reason.as_deref() == Some("needs-inline-consent")));
+    assert!(fixture
+        .env
+        .snapshot_values()
+        .contains(&SENTINEL.to_string()));
     let id = fixture.server_id("sentinel");
     // Inline consent for Claude Desktop through the cell dialog.
     let needs = fixture.write_op(set_cell(
@@ -1073,7 +1189,9 @@ fn sentinel_secret_never_leaks_outside_allowed_stores() {
         },
     ));
     assert_no_sentinel("consent outcome", &serde_json::to_string(&consent).unwrap());
-    assert!(fs::read_to_string(fixture.desktop()).unwrap().contains(SENTINEL));
+    assert!(fs::read_to_string(fixture.desktop())
+        .unwrap()
+        .contains(SENTINEL));
     // set_secret with a new value.
     let second = format!("{SENTINEL}-2");
     let secret = fixture.write_op(set_secret(
@@ -1088,18 +1206,43 @@ fn sentinel_secret_never_leaks_outside_allowed_stores() {
         },
     ));
     assert_no_sentinel("secret outcome", &serde_json::to_string(&secret).unwrap());
-    assert_no_sentinel("debug", &format!("{:?}", McpSetSecretRequest {
-        server_id: id.clone(),
-        name: "X".to_string(),
-        value: SENTINEL.to_string(),
-        mode: "user_env".to_string(),
-        inline_clients: None,
-        confirm_token: None,
-    }));
+    assert_no_sentinel(
+        "debug",
+        &format!(
+            "{:?}",
+            McpSetSecretRequest {
+                server_id: id.clone(),
+                name: "X".to_string(),
+                value: SENTINEL.to_string(),
+                mode: "user_env".to_string(),
+                inline_clients: None,
+                confirm_token: None,
+            }
+        ),
+    );
     for (label, text) in [
-        ("snapshot", serde_json::to_string(&fixture.snapshot()).unwrap()),
-        ("history", serde_json::to_string(&history(&fixture.ctx, McpHistoryRequest::default()).unwrap()).unwrap()),
-        ("detail", serde_json::to_string(&get_server(&fixture.ctx, McpGetServerRequest { server_id: id.clone() }).unwrap()).unwrap()),
+        (
+            "snapshot",
+            serde_json::to_string(&fixture.snapshot()).unwrap(),
+        ),
+        (
+            "history",
+            serde_json::to_string(&history(&fixture.ctx, McpHistoryRequest::default()).unwrap())
+                .unwrap(),
+        ),
+        (
+            "detail",
+            serde_json::to_string(
+                &get_server(
+                    &fixture.ctx,
+                    McpGetServerRequest {
+                        server_id: id.clone(),
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        ),
         (
             "export",
             serde_json::to_string(
@@ -1196,7 +1339,12 @@ fn set_secret_user_env_projects_references_per_client() {
     add(
         &fixture,
         input,
-        &[ClientId::Codex, ClientId::ClaudeCode, ClientId::Cursor, ClientId::ClaudeDesktop],
+        &[
+            ClientId::Codex,
+            ClientId::ClaudeCode,
+            ClientId::Cursor,
+            ClientId::ClaudeDesktop,
+        ],
     );
     let id = fixture.server_id("brave");
     assert_eq!(fixture.snapshot().servers[0].missing_secret_count, 1);
@@ -1212,8 +1360,13 @@ fn set_secret_user_env_projects_references_per_client() {
         },
     ));
     done(&outcome);
-    assert_eq!(fixture.env.get("BRAVE_API_KEY").unwrap().as_deref(), Some("brave-value-123"));
-    assert!(fs::read_to_string(fixture.codex()).unwrap().contains("env_vars = [\"BRAVE_API_KEY\"]"));
+    assert_eq!(
+        fixture.env.get("BRAVE_API_KEY").unwrap().as_deref(),
+        Some("brave-value-123")
+    );
+    assert!(fs::read_to_string(fixture.codex())
+        .unwrap()
+        .contains("env_vars = [\"BRAVE_API_KEY\"]"));
     assert_eq!(
         json_file(&fixture.claude())["mcpServers"]["brave"]["env"]["BRAVE_API_KEY"],
         "${BRAVE_API_KEY}"
@@ -1256,16 +1409,25 @@ fn bearer_header_projects_per_client() {
             required: Some(true),
         }]),
         codex_required: None,
-        source: McpServerSource::Template { id: "github".to_string() },
+        source: McpServerSource::Template {
+            id: "github".to_string(),
+        },
     };
     let outcome = add(
         &fixture,
         input,
-        &[ClientId::Codex, ClientId::ClaudeCode, ClientId::Cursor, ClientId::ClaudeDesktop],
+        &[
+            ClientId::Codex,
+            ClientId::ClaudeCode,
+            ClientId::Cursor,
+            ClientId::ClaudeDesktop,
+        ],
     );
     let (_, results, _) = done(&outcome);
-    assert!(results.iter().any(|result| result.client_id == ClientId::ClaudeDesktop
-        && result.skipped_reason.as_deref() == Some("transport-unsupported")));
+    assert!(results
+        .iter()
+        .any(|result| result.client_id == ClientId::ClaudeDesktop
+            && result.skipped_reason.as_deref() == Some("transport-unsupported")));
     let codex = fs::read_to_string(fixture.codex()).unwrap();
     assert!(codex.contains("bearer_token_env_var = \"GITHUB_PERSONAL_ACCESS_TOKEN\""));
     assert!(!codex.contains("env_http_headers"));
@@ -1273,13 +1435,19 @@ fn bearer_header_projects_per_client() {
         json_file(&fixture.claude())["mcpServers"]["github"]["headers"]["Authorization"],
         "Bearer ${GITHUB_PERSONAL_ACCESS_TOKEN}"
     );
-    assert_eq!(json_file(&fixture.claude())["mcpServers"]["github"]["type"], "http");
+    assert_eq!(
+        json_file(&fixture.claude())["mcpServers"]["github"]["type"],
+        "http"
+    );
     assert_eq!(
         json_file(&fixture.cursor())["mcpServers"]["github"]["headers"]["Authorization"],
         "Bearer ${env:GITHUB_PERSONAL_ACCESS_TOKEN}"
     );
     assert_eq!(
-        fixture.cell("github", ClientId::ClaudeDesktop).reason.as_deref(),
+        fixture
+            .cell("github", ClientId::ClaudeDesktop)
+            .reason
+            .as_deref(),
         Some("transport-unsupported")
     );
 }
@@ -1316,7 +1484,9 @@ fn reserved_env_names_and_invalid_values_rejected_without_echo() {
     )
     .unwrap_err();
     assert_eq!(error.code, "secret-name-reserved");
-    assert!(!serde_json::to_string(&error).unwrap().contains("very-secret-path-value"));
+    assert!(!serde_json::to_string(&error)
+        .unwrap()
+        .contains("very-secret-path-value"));
     assert!(fixture.env.get("PATH").unwrap().is_none());
     assert!(!fixture.codex().exists());
 }
@@ -1334,12 +1504,18 @@ fn history_entries_are_structured_and_secret_free() {
     let entries = history(&fixture.ctx, McpHistoryRequest::default()).unwrap();
     assert_eq!(entries[0].kind, "add");
     assert_eq!(entries[0].server_names, ["context7"]);
-    assert_eq!(entries[0].client_ids, [ClientId::Codex, ClientId::ClaudeCode]);
+    assert_eq!(
+        entries[0].client_ids,
+        [ClientId::Codex, ClientId::ClaudeCode]
+    );
     assert!(entries[0].undo_available);
     assert!(entries[0].at.ends_with('Z'));
     let import = entries.iter().find(|entry| entry.kind == "import").unwrap();
     assert!(!import.undo_available);
-    assert_eq!(import.undo_unavailable_reason.as_deref(), Some("import-only"));
+    assert_eq!(
+        import.undo_unavailable_reason.as_deref(),
+        Some("import-only")
+    );
     let text = serde_json::to_string(&entries).unwrap();
     for banned in ["mcp-snapshot-", "DPAPI", "npx"] {
         assert!(!text.contains(banned), "{banned}");
@@ -1370,7 +1546,10 @@ fn history_entries_are_structured_and_secret_free() {
     let entries = history(&fixture.ctx, McpHistoryRequest::default()).unwrap();
     assert_eq!(entries[0].kind, "rollback");
     let added = entries.iter().find(|entry| entry.kind == "add").unwrap();
-    assert_eq!(added.undo_unavailable_reason.as_deref(), Some("already-undone"));
+    assert_eq!(
+        added.undo_unavailable_reason.as_deref(),
+        Some("already-undone")
+    );
 }
 
 /// P2: pasted secret values go to the vault and are never returned;
@@ -1385,10 +1564,18 @@ fn paste_moves_secret_values_into_vault_and_never_returns_them() {
     let serialized = serde_json::to_string(&result).unwrap();
     assert_no_sentinel("paste result", &serialized);
     assert_eq!(result.format, "mcp-servers");
-    let brave = result.candidates.iter().find(|candidate| candidate.name == "brave").unwrap();
+    let brave = result
+        .candidates
+        .iter()
+        .find(|candidate| candidate.name == "brave")
+        .unwrap();
     assert!(brave.secrets[0].has_pasted_value);
     assert_eq!(brave.exists, "new");
-    let github = result.candidates.iter().find(|candidate| candidate.name == "github").unwrap();
+    let github = result
+        .candidates
+        .iter()
+        .find(|candidate| candidate.name == "github")
+        .unwrap();
     assert!(github.secrets[0].placeholder);
     assert_eq!(github.target_display, "api.githubcopilot.com");
     // Adding with the handle writes the value to HKCU (memory store) only.
@@ -1407,7 +1594,10 @@ fn paste_moves_secret_values_into_vault_and_never_returns_them() {
         },
     ));
     done(&outcome);
-    assert_eq!(fixture.env.get("BRAVE_API_KEY").unwrap().as_deref(), Some(SENTINEL));
+    assert_eq!(
+        fixture.env.get("BRAVE_API_KEY").unwrap().as_deref(),
+        Some(SENTINEL)
+    );
     assert_no_sentinel("codex", &fs::read_to_string(fixture.codex()).unwrap());
     // The handle is cleared after use: a retry is told to re-paste.
     let again = add_servers(
@@ -1432,7 +1622,11 @@ fn paste_moves_secret_values_into_vault_and_never_returns_them() {
 fn preview_token_required_and_bound_to_spec_revision() {
     let fixture = Fixture::new("t1");
     fixture.import();
-    add(&fixture, stdio_input("fetch", "uvx", &["mcp-server-fetch"]), &[ClientId::Codex]);
+    add(
+        &fixture,
+        stdio_input("fetch", "uvx", &["mcp-server-fetch"]),
+        &[ClientId::Codex],
+    );
     let id = fixture.server_id("fetch");
     let preview = crate::mcp_probe::test_preview(&fixture.ctx, &id).unwrap();
     let preview_json = serde_json::to_value(&preview).unwrap();
@@ -1442,7 +1636,13 @@ fn preview_token_required_and_bound_to_spec_revision() {
     let missing = crate::mcp_probe::run_test(&fixture.ctx, &id, "", &|_| {}).unwrap_err();
     assert_eq!(missing.code, "test-preview-required");
     // Change the spec: the old token is stale and nothing runs.
-    let detail = get_server(&fixture.ctx, McpGetServerRequest { server_id: id.clone() }).unwrap();
+    let detail = get_server(
+        &fixture.ctx,
+        McpGetServerRequest {
+            server_id: id.clone(),
+        },
+    )
+    .unwrap();
     let outcome = fixture.write_op(update_server(
         &fixture.ctx,
         McpUpdateRequest {
@@ -1454,7 +1654,10 @@ fn preview_token_required_and_bound_to_spec_revision() {
     ));
     done(&outcome);
     let stale = crate::mcp_probe::run_test(&fixture.ctx, &id, &token, &|_| {}).unwrap();
-    assert_eq!(serde_json::to_value(&stale).unwrap()["status"], "stale-preview");
+    assert_eq!(
+        serde_json::to_value(&stale).unwrap()["status"],
+        "stale-preview"
+    );
     // A revision conflict is reported, not silently overwritten.
     let conflict = update_server(
         &fixture.ctx,
@@ -1474,8 +1677,16 @@ fn preview_token_required_and_bound_to_spec_revision() {
 fn column_toggle_enables_the_rest_and_disables_all() {
     let fixture = Fixture::new("column");
     fixture.import();
-    add(&fixture, stdio_input("one", "uvx", &["one-mcp"]), &[ClientId::Codex]);
-    add(&fixture, stdio_input("two", "uvx", &["two-mcp"]), &[ClientId::Codex]);
+    add(
+        &fixture,
+        stdio_input("one", "uvx", &["one-mcp"]),
+        &[ClientId::Codex],
+    );
+    add(
+        &fixture,
+        stdio_input("two", "uvx", &["two-mcp"]),
+        &[ClientId::Codex],
+    );
     let enable = fixture.write_op(set_column(
         &fixture.ctx,
         McpSetColumnRequest {
@@ -1522,13 +1733,16 @@ fn jsonc_client_file_is_readonly_reported_and_never_written() {
     fs::write(fixture.cursor(), jsonc).unwrap();
     fixture.import();
     let snapshot = fixture.snapshot();
-    let cursor = snapshot.clients.iter().find(|client| client.id == ClientId::Cursor).unwrap();
+    let cursor = snapshot
+        .clients
+        .iter()
+        .find(|client| client.id == ClientId::Cursor)
+        .unwrap();
     assert!(!cursor.writable);
     assert_eq!(cursor.readonly_reason.as_deref(), Some("config-jsonc"));
-    assert!(snapshot
-        .issues
-        .iter()
-        .any(|issue| issue.kind == "client-unwritable" && issue.client_id == Some(ClientId::Cursor)));
+    assert!(snapshot.issues.iter().any(
+        |issue| issue.kind == "client-unwritable" && issue.client_id == Some(ClientId::Cursor)
+    ));
     let id = fixture.server_id("x");
     let outcome = fixture.write_op(set_cell(
         &fixture.ctx,
@@ -1542,4 +1756,42 @@ fn jsonc_client_file_is_readonly_reported_and_never_written() {
     ));
     assert!(matches!(outcome, McpWriteOutcome::Noop { .. }));
     assert_eq!(fs::read_to_string(fixture.cursor()).unwrap(), jsonc);
+}
+
+/// A failed HKCU write stops before any client file is touched.
+#[test]
+fn env_write_failure_stops_before_any_client_write() {
+    let fixture = Fixture::new("env-fail");
+    fixture.import();
+    fixture.env.fail_writes(true);
+    let mut input = stdio_input("brave", "npx", &["-y", "brave-mcp"]);
+    input.secrets = Some(vec![McpSecretInput {
+        kind: "env".to_string(),
+        name: "BRAVE_API_KEY".to_string(),
+        env_var: None,
+        header_template: None,
+        value: Some("value-that-cannot-be-saved".to_string()),
+        paste_value_handle: None,
+        mode: "user_env".to_string(),
+        inline_clients: None,
+        required: Some(true),
+    }]);
+    let error = add_servers(
+        &fixture.ctx,
+        McpAddRequest {
+            candidates: vec![McpAddCandidate {
+                input,
+                on_conflict: None,
+            }],
+            client_ids: vec![ClientId::Codex, ClientId::Cursor],
+            placement: None,
+            paste_handle: None,
+            confirm_token: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "env-write-failed");
+    assert!(!fixture.codex().exists());
+    assert!(!fixture.cursor().exists());
+    assert!(fixture.snapshot().servers.is_empty());
 }

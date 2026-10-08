@@ -439,7 +439,12 @@ mod tests {
         assert_eq!(map.get("a"), Some(&Node::Bool(false)));
         map.remove("a");
         assert_eq!(map.keys().cloned().collect::<Vec<_>>(), ["b"]);
-        assert!(JsonDoc::parse("   \n").unwrap().root.as_object().unwrap().is_empty());
+        assert!(JsonDoc::parse("   \n")
+            .unwrap()
+            .root
+            .as_object()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

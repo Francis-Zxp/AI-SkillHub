@@ -1361,12 +1361,7 @@ fn env_requirement(name: &str, use_kind: &str) -> RawSecretRequirement {
     RawSecretRequirement {
         key_name: name.to_string(),
         use_kind: use_kind.to_string(),
-        presence_state: if present {
-            "present"
-        } else {
-            "missing"
-        }
-        .to_string(),
+        presence_state: if present { "present" } else { "missing" }.to_string(),
     }
 }
 

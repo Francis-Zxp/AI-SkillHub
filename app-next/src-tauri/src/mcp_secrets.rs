@@ -68,7 +68,12 @@ pub(crate) fn env_var_present(store: &dyn EnvStore, name: &str) -> bool {
     {
         return true;
     }
-    if store.get(name).ok().flatten().is_some_and(|value| !value.is_empty()) {
+    if store
+        .get(name)
+        .ok()
+        .flatten()
+        .is_some_and(|value| !value.is_empty())
+    {
         return true;
     }
     store.machine_present(name)
@@ -123,10 +128,7 @@ pub(crate) fn validate_secret_name(value: &str) -> Result<(), &'static str> {
 pub(crate) fn normalize_secret_value(value: &str) -> Result<String, &'static str> {
     let trimmed = value.trim_matches(|ch: char| ch.is_ascii_whitespace());
     let count = trimmed.chars().count();
-    if count == 0
-        || count > MAX_SECRET_VALUE_CHARS
-        || trimmed.contains(['\0', '\r', '\n'])
-    {
+    if count == 0 || count > MAX_SECRET_VALUE_CHARS || trimmed.contains(['\0', '\r', '\n']) {
         return Err("secret-value-invalid");
     }
     Ok(trimmed.to_string())
@@ -240,7 +242,8 @@ impl EnvStore for RegistryEnvStore {
     fn get(&self, name: &str) -> Result<Option<String>, ()> {
         use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
         use winreg::RegKey;
-        let key = match RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags("Environment", KEY_READ)
+        let key = match RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey_with_flags("Environment", KEY_READ)
         {
             Ok(key) => key,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -281,7 +284,8 @@ impl EnvStore for RegistryEnvStore {
     }
 
     fn machine_present(&self, name: &str) -> bool {
-        self.machine_get(name).is_some_and(|value| !value.is_empty())
+        self.machine_get(name)
+            .is_some_and(|value| !value.is_empty())
     }
 
     fn machine_get(&self, name: &str) -> Option<String> {
@@ -448,7 +452,10 @@ mod tests {
     fn real_hkcu_roundtrip() {
         let name = format!(
             "SKH_TEST_ONLY_{}",
-            uuid::Uuid::new_v4().simple().to_string().to_ascii_uppercase()
+            uuid::Uuid::new_v4()
+                .simple()
+                .to_string()
+                .to_ascii_uppercase()
         );
         let store = RegistryEnvStore;
         store.set(&name, "roundtrip-value").unwrap();

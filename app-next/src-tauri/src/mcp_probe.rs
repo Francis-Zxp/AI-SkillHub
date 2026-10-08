@@ -119,7 +119,12 @@ impl StdioSession {
             .map_err(|_| "MCP 服务器已关闭输入。".to_string())
     }
 
-    pub(crate) fn request(&mut self, id: u64, method: &str, params: Value) -> Result<Value, String> {
+    pub(crate) fn request(
+        &mut self,
+        id: u64,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, String> {
         self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))?;
         loop {
             let remaining = self.deadline.saturating_duration_since(Instant::now());
@@ -221,7 +226,11 @@ pub(crate) fn path_extensions() -> Vec<String> {
 }
 
 /// Finds the runner by checking files only (never `where.exe`).
-pub(crate) fn resolve_runner(command: &str, dirs: &[PathBuf], extensions: &[String]) -> Option<PathBuf> {
+pub(crate) fn resolve_runner(
+    command: &str,
+    dirs: &[PathBuf],
+    extensions: &[String],
+) -> Option<PathBuf> {
     let candidate = Path::new(command);
     let has_extension = candidate.extension().is_some();
     let try_file = |base: &Path| -> Option<PathBuf> {
@@ -247,12 +256,17 @@ pub(crate) fn resolve_runner(command: &str, dirs: &[PathBuf], extensions: &[Stri
 fn install_hint(runner: &str) -> Option<(&'static str, &'static str)> {
     match runner {
         "node" | "npx" | "npm" | "pnpm" | "yarn" | "pnpx" => Some(("node", "https://nodejs.org/")),
-        "uv" | "uvx" => Some(("uv", "https://docs.astral.sh/uv/getting-started/installation/")),
+        "uv" | "uvx" => Some((
+            "uv",
+            "https://docs.astral.sh/uv/getting-started/installation/",
+        )),
         "docker" => Some((
             "docker",
             "https://docs.docker.com/desktop/setup/install/windows-install/",
         )),
-        "python" | "python3" | "py" => Some(("python", "https://www.python.org/downloads/windows/")),
+        "python" | "python3" | "py" => {
+            Some(("python", "https://www.python.org/downloads/windows/"))
+        }
         _ => None,
     }
 }
@@ -359,7 +373,10 @@ pub(crate) fn redact_message(text: &str, secrets: &[String], home: &Path) -> Str
         .collect::<String>();
     let trimmed = out.trim();
     if trimmed.chars().count() > MAX_MESSAGE_CHARS {
-        let mut short = trimmed.chars().take(MAX_MESSAGE_CHARS - 1).collect::<String>();
+        let mut short = trimmed
+            .chars()
+            .take(MAX_MESSAGE_CHARS - 1)
+            .collect::<String>();
         short.push('…');
         short
     } else {
@@ -377,7 +394,11 @@ fn plan_run(ctx: &McpLibraryContext, target: &library::TestTarget) -> PlannedRun
     let (kind, command_line, url, runner, program, missing) = match spec.transport {
         Transport::Stdio => {
             let command = spec.command.clone().unwrap_or_default();
-            let all = spec.args.iter().map(|arg| arg.value.clone()).collect::<Vec<_>>();
+            let all = spec
+                .args
+                .iter()
+                .map(|arg| arg.value.clone())
+                .collect::<Vec<_>>();
             let mut parts = vec![quote_arg(&redact_home(&command, &ctx.mutation.home_dir))];
             for (index, arg) in spec.args.iter().enumerate() {
                 let masked = arg.secret
@@ -398,9 +419,9 @@ fn plan_run(ctx: &McpLibraryContext, target: &library::TestTarget) -> PlannedRun
             let runner = RunnerView {
                 name: runner_name.clone(),
                 found: resolved.is_some(),
-                path_display: resolved
-                    .as_ref()
-                    .map(|path| crate::mcp_mutation::redact_home_path(path, &ctx.mutation.home_dir)),
+                path_display: resolved.as_ref().map(|path| {
+                    crate::mcp_mutation::redact_home_path(path, &ctx.mutation.home_dir)
+                }),
                 install_hint: install_hint(&runner_name).map(|(kind, url)| InstallHint {
                     kind: kind.to_string(),
                     url: url.to_string(),
@@ -417,9 +438,10 @@ fn plan_run(ctx: &McpLibraryContext, target: &library::TestTarget) -> PlannedRun
             )
         }
         Transport::Http | Transport::Sse => {
-            let url = spec.url.as_deref().map(|url| {
-                url.split(['?', '#']).next().unwrap_or_default().to_string()
-            });
+            let url = spec
+                .url
+                .as_deref()
+                .map(|url| url.split(['?', '#']).next().unwrap_or_default().to_string());
             let (_, missing) = library::test_headers(ctx, spec);
             ("http", None, url, None, None, missing)
         }
@@ -451,7 +473,10 @@ fn plan_run(ctx: &McpLibraryContext, target: &library::TestTarget) -> PlannedRun
 }
 
 /// Builds the exact command line and resolves the runner without spawning.
-pub(crate) fn test_preview(ctx: &McpLibraryContext, server_id: &str) -> Result<McpTestPreview, McpError> {
+pub(crate) fn test_preview(
+    ctx: &McpLibraryContext,
+    server_id: &str,
+) -> Result<McpTestPreview, McpError> {
     let target = library::load_test_target(ctx, server_id)?;
     Ok(plan_run(ctx, &target).preview)
 }
@@ -527,17 +552,33 @@ pub(crate) fn run_stdio_probe(
             )
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return ProbeOutcome::failure("runner-missing", "runner-missing", "找不到要运行的程序。")
+            return ProbeOutcome::failure(
+                "runner-missing",
+                "runner-missing",
+                "找不到要运行的程序。",
+            )
         }
         Err(_) => return ProbeOutcome::failure("failed", "exit-early", "无法启动这个 MCP。"),
     };
     let classify = |error: String, session: &StdioSession| -> ProbeOutcome {
         let tail = session.stderr_tail();
-        let detail = tail.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or_default();
+        let detail = tail
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or_default();
         if error.contains("限定时间") {
-            ProbeOutcome::failure("timeout", "timeout", format!("超时（{} 秒）", timeout.as_secs()))
+            ProbeOutcome::failure(
+                "timeout",
+                "timeout",
+                format!("超时（{} 秒）", timeout.as_secs()),
+            )
         } else if error.contains("退出") || error.contains("关闭输入") {
-            ProbeOutcome::failure("failed", "exit-early", format!("启动后很快退出了。{detail}"))
+            ProbeOutcome::failure(
+                "failed",
+                "exit-early",
+                format!("启动后很快退出了。{detail}"),
+            )
         } else {
             ProbeOutcome::failure("failed", "invalid-response", error)
         }
@@ -601,62 +642,99 @@ fn parse_rpc_body(body: &str) -> Option<Value> {
     body.lines()
         .filter_map(|line| line.strip_prefix("data:"))
         .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok())
-        .last()
+        .next_back()
 }
 
-fn run_http_probe(url: &str, headers: &[(String, String)], timeout: Duration, app_version: &str, progress: &dyn Fn(&str)) -> ProbeOutcome {
+fn run_http_probe(
+    url: &str,
+    headers: &[(String, String)],
+    timeout: Duration,
+    app_version: &str,
+    progress: &dyn Fn(&str),
+) -> ProbeOutcome {
     let agent = ureq::AgentBuilder::new()
         .timeout(timeout)
         .redirects(0)
         .build();
     let deadline = Instant::now() + timeout;
-    let post = |body: &Value, session: Option<&str>| -> Result<(Value, Option<String>), ProbeOutcome> {
-        if Instant::now() >= deadline {
-            return Err(ProbeOutcome::failure("timeout", "timeout", format!("超时（{} 秒）", timeout.as_secs())));
-        }
-        let mut request = agent
-            .post(url)
-            .set("Accept", "application/json, text/event-stream")
-            .set("Content-Type", "application/json")
-            .set("User-Agent", "AI-SkillHub-MCP-Test/3.3");
-        for (name, value) in headers {
-            request = request.set(name, value);
-        }
-        if let Some(session) = session {
-            request = request.set("Mcp-Session-Id", session);
-        }
-        let response = match request.send_string(&body.to_string()) {
-            Ok(response) => response,
-            Err(ureq::Error::Status(401 | 403, _)) => {
-                return Err(ProbeOutcome::failure("needs-secret", "http-401", "需要 API Key，或 API Key 不正确。"))
+    let post =
+        |body: &Value, session: Option<&str>| -> Result<(Value, Option<String>), ProbeOutcome> {
+            if Instant::now() >= deadline {
+                return Err(ProbeOutcome::failure(
+                    "timeout",
+                    "timeout",
+                    format!("超时（{} 秒）", timeout.as_secs()),
+                ));
             }
-            Err(ureq::Error::Status(404, _)) => {
-                return Err(ProbeOutcome::failure("failed", "http-404", "这个地址上没有 MCP 服务（404）。"))
+            let mut request = agent
+                .post(url)
+                .set("Accept", "application/json, text/event-stream")
+                .set("Content-Type", "application/json")
+                .set("User-Agent", "AI-SkillHub-MCP-Test/3.3");
+            for (name, value) in headers {
+                request = request.set(name, value);
             }
-            Err(ureq::Error::Status(code, _)) => {
-                return Err(ProbeOutcome::failure("failed", "invalid-response", format!("服务返回了 HTTP {code}。")))
+            if let Some(session) = session {
+                request = request.set("Mcp-Session-Id", session);
             }
-            Err(ureq::Error::Transport(transport)) => {
-                let timed_out = transport.kind() == ureq::ErrorKind::Io
-                    && Instant::now() >= deadline;
-                return Err(if timed_out {
-                    ProbeOutcome::failure("timeout", "timeout", format!("超时（{} 秒）", timeout.as_secs()))
-                } else {
-                    ProbeOutcome::failure("failed", "exit-early", "无法连接这个地址。")
-                });
+            let response = match request.send_string(&body.to_string()) {
+                Ok(response) => response,
+                Err(ureq::Error::Status(401 | 403, _)) => {
+                    return Err(ProbeOutcome::failure(
+                        "needs-secret",
+                        "http-401",
+                        "需要 API Key，或 API Key 不正确。",
+                    ))
+                }
+                Err(ureq::Error::Status(404, _)) => {
+                    return Err(ProbeOutcome::failure(
+                        "failed",
+                        "http-404",
+                        "这个地址上没有 MCP 服务（404）。",
+                    ))
+                }
+                Err(ureq::Error::Status(code, _)) => {
+                    return Err(ProbeOutcome::failure(
+                        "failed",
+                        "invalid-response",
+                        format!("服务返回了 HTTP {code}。"),
+                    ))
+                }
+                Err(ureq::Error::Transport(transport)) => {
+                    let timed_out =
+                        transport.kind() == ureq::ErrorKind::Io && Instant::now() >= deadline;
+                    return Err(if timed_out {
+                        ProbeOutcome::failure(
+                            "timeout",
+                            "timeout",
+                            format!("超时（{} 秒）", timeout.as_secs()),
+                        )
+                    } else {
+                        ProbeOutcome::failure("failed", "exit-early", "无法连接这个地址。")
+                    });
+                }
+            };
+            let session_id = response.header("Mcp-Session-Id").map(str::to_string);
+            let mut text = String::new();
+            let _ = response
+                .into_reader()
+                .take(1024 * 1024)
+                .read_to_string(&mut text);
+            let value = parse_rpc_body(&text).ok_or_else(|| {
+                ProbeOutcome::failure("failed", "invalid-response", "服务的回应不是 MCP 格式。")
+            })?;
+            if value.get("error").is_some() {
+                return Err(ProbeOutcome::failure(
+                    "failed",
+                    "invalid-response",
+                    "服务返回了错误。",
+                ));
             }
+            Ok((
+                value.get("result").cloned().unwrap_or(Value::Null),
+                session_id,
+            ))
         };
-        let session_id = response.header("Mcp-Session-Id").map(str::to_string);
-        let mut text = String::new();
-        let _ = response.into_reader().take(1024 * 1024).read_to_string(&mut text);
-        let value = parse_rpc_body(&text).ok_or_else(|| {
-            ProbeOutcome::failure("failed", "invalid-response", "服务的回应不是 MCP 格式。")
-        })?;
-        if value.get("error").is_some() {
-            return Err(ProbeOutcome::failure("failed", "invalid-response", "服务返回了错误。"));
-        }
-        Ok((value.get("result").cloned().unwrap_or(Value::Null), session_id))
-    };
     progress("initialize");
     let (initialized, session) = match post(
         &json!({
@@ -727,10 +805,17 @@ pub(crate) fn run_test(
         server_name: outcome.server_name.clone(),
         server_version: outcome.server_version.clone(),
         message_code: outcome.message_code.to_string(),
-        message: redact_message(&outcome.message, &target.secret_values, &ctx.mutation.home_dir),
+        message: redact_message(
+            &outcome.message,
+            &target.secret_values,
+            &ctx.mutation.home_dir,
+        ),
     };
     if preview_token.is_empty() {
-        return Err(McpError::new("test-preview-required", "请先查看将要运行的命令。"));
+        return Err(McpError::new(
+            "test-preview-required",
+            "请先查看将要运行的命令。",
+        ));
     }
     if planned.preview.preview_token != preview_token {
         return Ok(result(ProbeOutcome::failure(
@@ -774,7 +859,10 @@ fn run_planned(
         return ProbeOutcome::failure(
             "needs-secret",
             "needs-secret",
-            format!("需要先填写 API Key：{}", planned.preview.missing_secrets.join("、")),
+            format!(
+                "需要先填写 API Key：{}",
+                planned.preview.missing_secrets.join("、")
+            ),
         );
     }
     match spec.transport {
@@ -819,8 +907,20 @@ fn run_planned(
                 .iter()
                 .map(|arg| OsString::from(&arg.value))
                 .collect::<Vec<_>>();
-            let cwd = spec.cwd.as_deref().map(Path::new).filter(|cwd| cwd.is_dir());
-            run_stdio_probe(&program, &args, &env, cwd, TEST_TIMEOUT, &ctx.app_version, progress)
+            let cwd = spec
+                .cwd
+                .as_deref()
+                .map(Path::new)
+                .filter(|cwd| cwd.is_dir());
+            run_stdio_probe(
+                &program,
+                &args,
+                &env,
+                cwd,
+                TEST_TIMEOUT,
+                &ctx.app_version,
+                progress,
+            )
         }
     }
 }
@@ -845,16 +945,26 @@ mod tests {
         let root = temp_dir("runner");
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        let file = if cfg!(windows) { bin.join("fakerunner.cmd") } else { bin.join("fakerunner") };
+        let file = if cfg!(windows) {
+            bin.join("fakerunner.cmd")
+        } else {
+            bin.join("fakerunner")
+        };
         std::fs::write(&file, "echo").unwrap();
         let extensions = vec![".exe".to_string(), ".cmd".to_string()];
-        let found = resolve_runner("fakerunner", &[root.join("missing"), bin.clone()], &extensions);
+        let found = resolve_runner(
+            "fakerunner",
+            &[root.join("missing"), bin.clone()],
+            &extensions,
+        );
         if cfg!(windows) {
             assert_eq!(found.as_deref(), Some(file.as_path()));
         }
-        assert!(resolve_runner("nope-runner", &[bin.clone()], &extensions).is_none());
+        assert!(resolve_runner("nope-runner", std::slice::from_ref(&bin), &extensions).is_none());
         let store = MemoryEnvStore::new();
-        store.set("SKH_TEST_ONLY_BIN", &bin.to_string_lossy()).unwrap();
+        store
+            .set("SKH_TEST_ONLY_BIN", &bin.to_string_lossy())
+            .unwrap();
         store.set("Path", "%SKH_TEST_ONLY_BIN%").unwrap();
         let dirs = effective_path_dirs(&store);
         assert!(dirs.iter().any(|dir| dir == &bin));
@@ -939,7 +1049,10 @@ mod tests {
             .lines()
             .filter_map(|line| line.strip_prefix("method "))
             .collect::<Vec<_>>();
-        assert_eq!(methods, ["initialize", "notifications/initialized", "tools/list"]);
+        assert_eq!(
+            methods,
+            ["initialize", "notifications/initialized", "tools/list"]
+        );
         assert!(!logged.contains("tools/call"));
         let pids = logged
             .lines()
@@ -963,7 +1076,10 @@ mod tests {
         let root = temp_dir("silent-server");
         let env = vec![
             (OsString::from("FAKE_MCP_SILENT"), OsString::from("1")),
-            (OsString::from("FAKE_MCP_LOG"), root.join("log").into_os_string()),
+            (
+                OsString::from("FAKE_MCP_LOG"),
+                root.join("log").into_os_string(),
+            ),
         ];
         let started = Instant::now();
         let outcome = run_stdio_probe(

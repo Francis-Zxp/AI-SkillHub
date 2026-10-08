@@ -295,7 +295,9 @@ fn classify_engine_error(message: &str) -> McpError {
         || message.contains("UTF-8")
     {
         "config-parse-failed"
-    } else if message.contains("不可读") || message.contains("读取失败") || message.contains("符号链接")
+    } else if message.contains("不可读")
+        || message.contains("读取失败")
+        || message.contains("符号链接")
     {
         "config-unreadable"
     } else {
@@ -452,7 +454,9 @@ impl McpServerSpec {
                 continue;
             }
             match item.storage {
-                SecretStorage::Library | SecretStorage::Literal => values.extend(item.value.clone()),
+                SecretStorage::Library | SecretStorage::Literal => {
+                    values.extend(item.value.clone())
+                }
                 SecretStorage::UserEnv | SecretStorage::External => {
                     values.extend(mcp_secrets::resolve_env_value(env, item.variable()))
                 }
@@ -626,7 +630,9 @@ fn hash_key(ctx: &McpLibraryContext) -> Result<[u8; 32], McpError> {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, [u8; 32]>>> = OnceLock::new();
     let path = ctx.hash_key_path();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut cache = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(key) = cache.get(&path) {
         return Ok(*key);
     }
@@ -661,8 +667,10 @@ fn hash_key(ctx: &McpLibraryContext) -> Result<[u8; 32], McpError> {
 }
 
 fn protect_json<T: Serialize>(value: &T) -> Result<Vec<u8>, McpError> {
-    let plain = serde_json::to_vec(value).map_err(|_| McpError::library("MCP 库数据序列化失败。"))?;
-    engine::protect_private_backup(&plain).map_err(|_| McpError::library("MCP 库数据无法加密保存。"))
+    let plain =
+        serde_json::to_vec(value).map_err(|_| McpError::library("MCP 库数据序列化失败。"))?;
+    engine::protect_private_backup(&plain)
+        .map_err(|_| McpError::library("MCP 库数据无法加密保存。"))
 }
 
 fn unprotect_json<T: for<'de> Deserialize<'de>>(bytes: &[u8]) -> Result<T, McpError> {
@@ -734,7 +742,8 @@ pub(crate) fn ensure_schema(connection: &Connection) -> rusqlite::Result<()> {
 
 fn open_db(ctx: &McpLibraryContext) -> Result<Connection, McpError> {
     if let Some(parent) = ctx.db_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|_| McpError::new("engine", "无法打开 MCP 库。"))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|_| McpError::new("engine", "无法打开 MCP 库。"))?;
     }
     let connection = Connection::open(&ctx.db_path).map_err(db_error)?;
     connection
@@ -768,7 +777,11 @@ fn write_preference(connection: &Connection, key: &str, value: &str) -> Result<(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub(crate) enum McpServerSource {
     Import { client_id: ClientId, scope: Scope },
     Paste { format: String },
@@ -882,8 +895,19 @@ fn load_servers(
         .map_err(db_error)?;
     let mut servers = Vec::new();
     for row in rows {
-        let (id, name, display_name, protected, revision, source, meta, test, created, updated, deleted) =
-            row.map_err(db_error)?;
+        let (
+            id,
+            name,
+            display_name,
+            protected,
+            revision,
+            source,
+            meta,
+            test,
+            created,
+            updated,
+            deleted,
+        ) = row.map_err(db_error)?;
         if deleted.is_some() && !include_deleted {
             continue;
         }
@@ -936,8 +960,19 @@ fn load_rows(connection: &Connection) -> Result<Vec<ClientRow>, McpError> {
         .map_err(db_error)?;
     let mut result = Vec::new();
     for row in rows {
-        let (server_id, client, scope, workspace_id, enabled, consent, written, seen, code, message, operation) =
-            row.map_err(db_error)?;
+        let (
+            server_id,
+            client,
+            scope,
+            workspace_id,
+            enabled,
+            consent,
+            written,
+            seen,
+            code,
+            message,
+            operation,
+        ) = row.map_err(db_error)?;
         let (Some(client), Some(scope)) = (ClientId::parse(&client), Scope::parse(&scope)) else {
             continue;
         };
@@ -1167,9 +1202,10 @@ fn server_summary(spec: &McpServerSpec) -> ServerSummary {
         summary.header_names.push(header.name.clone());
         if header.template != HeaderTemplate::Literal {
             summary.secret_names.push(header.name.clone());
-            summary
-                .secret_storage
-                .insert(header.name.clone(), header.storage.contract_name().to_string());
+            summary.secret_storage.insert(
+                header.name.clone(),
+                header.storage.contract_name().to_string(),
+            );
         }
     }
     summary
@@ -1302,7 +1338,10 @@ fn canonical_entry(client: ClientId, entry: &Node, unwrap: bool) -> String {
 
 fn entry_hash(key: &[u8; 32], client: ClientId, entry: &Node) -> String {
     let canonical = canonical_entry(client, entry, false);
-    hmac_hex(key, &[b"entry", client.as_str().as_bytes(), canonical.as_bytes()])
+    hmac_hex(
+        key,
+        &[b"entry", client.as_str().as_bytes(), canonical.as_bytes()],
+    )
 }
 
 fn semantic_equal(client: ClientId, left: &Node, right: &Node) -> bool {
@@ -1366,8 +1405,8 @@ fn wrap_command(
     command: &str,
     args: Vec<String>,
 ) -> (String, Vec<String>) {
-    let absolute_exe = Path::new(command).is_absolute()
-        && command.to_ascii_lowercase().ends_with(".exe");
+    let absolute_exe =
+        Path::new(command).is_absolute() && command.to_ascii_lowercase().ends_with(".exe");
     if ctx.windows
         && matches!(client, ClientId::ClaudeCode | ClientId::ClaudeDesktop)
         && engine::is_wrap_family(command)
@@ -1453,7 +1492,8 @@ fn project(
                     if client == ClientId::Codex {
                         referenced.push(item.name.clone());
                     } else {
-                        literal_env.push((item.name.clone(), json_reference(client, item.variable())));
+                        literal_env
+                            .push((item.name.clone(), json_reference(client, item.variable())));
                     }
                 } else {
                     let value = literal_secret(
@@ -1499,8 +1539,10 @@ fn project(
             let mut bearer_env: Option<String> = None;
             for header in &spec.headers {
                 if header.template == HeaderTemplate::Literal {
-                    literal_headers
-                        .push((header.name.clone(), header.value.clone().unwrap_or_default()));
+                    literal_headers.push((
+                        header.name.clone(),
+                        header.value.clone().unwrap_or_default(),
+                    ));
                     continue;
                 }
                 let variable = header.env_var.clone().unwrap_or_default();
@@ -1622,7 +1664,9 @@ fn projected_node(client: ClientId, projected: &ProjectedEntry, existing: Option
     if client == ClientId::Codex {
         match projected.codex_enabled {
             Some(false) => object.insert("enabled", Node::Bool(false)),
-            Some(true) if object.contains_key("enabled") => object.insert("enabled", Node::Bool(true)),
+            Some(true) if object.contains_key("enabled") => {
+                object.insert("enabled", Node::Bool(true))
+            }
             _ => {}
         }
     }
@@ -1658,10 +1702,7 @@ fn looks_like_secret_arg(args: &[String], index: usize) -> bool {
         && !matches!(args[index - 1].as_str(), "--env" | "-e")
 }
 
-fn spec_from_entry(
-    client: ClientId,
-    entry: &Node,
-) -> Result<McpServerSpec, &'static str> {
+fn spec_from_entry(client: ClientId, entry: &Node) -> Result<McpServerSpec, &'static str> {
     let object = entry.as_object().ok_or("unknown-type")?;
     let transport = match entry_transport(client, object) {
         "stdio" => Transport::Stdio,
@@ -1672,7 +1713,9 @@ fn spec_from_entry(
     let mut spec = McpServerSpec::empty(transport);
     let text = |key: &str| object.get(key).and_then(Node::as_str).map(str::to_string);
     if transport == Transport::Stdio {
-        let command = text("command").filter(|value| !value.is_empty()).ok_or("unknown-type")?;
+        let command = text("command")
+            .filter(|value| !value.is_empty())
+            .ok_or("unknown-type")?;
         let args = node_strings(object.get("args"));
         let (command, args, _) = unwrap_entry_command(&command, &args);
         if args.len() > mcp_paste::MAX_ARGS {
@@ -2107,7 +2150,11 @@ pub(crate) struct McpConfirmation {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
 pub(crate) enum McpWriteOutcome {
     Done {
         operation_id: String,
@@ -2395,7 +2442,12 @@ pub(crate) struct McpUpdateRequest {
 }
 
 #[derive(Deserialize, Serialize, Clone)]
-#[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub(crate) enum McpRemoveFrom {
     Library,
     Client {
@@ -2593,10 +2645,16 @@ fn adapter_detected(connection: Option<&Connection>, adapter_id: &str) -> bool {
 }
 
 /// Detection reads the file system and SQLite only (never `where.exe`).
-fn client_detected(ctx: &McpLibraryContext, connection: Option<&Connection>, client: ClientId) -> bool {
+fn client_detected(
+    ctx: &McpLibraryContext,
+    connection: Option<&Connection>,
+    client: ClientId,
+) -> bool {
     let home = ctx.home();
     match client {
-        ClientId::Codex => is_directory(&home.join(".codex")) || adapter_detected(connection, "codex"),
+        ClientId::Codex => {
+            is_directory(&home.join(".codex")) || adapter_detected(connection, "codex")
+        }
         ClientId::ClaudeCode => {
             let (path, _) = ctx.mutation.claude_user_config();
             path.is_file()
@@ -2626,7 +2684,11 @@ fn default_path_display(ctx: &McpLibraryContext, client: ClientId) -> String {
     }
 }
 
-fn client_state(ctx: &McpLibraryContext, connection: Option<&Connection>, client: ClientId) -> ClientState {
+fn client_state(
+    ctx: &McpLibraryContext,
+    connection: Option<&Connection>,
+    client: ClientId,
+) -> ClientState {
     let detected = client_detected(ctx, connection, client);
     match engine::resolve_target(&ctx.mutation, client.host_id(), "user", None) {
         Ok(target) => {
@@ -2800,7 +2862,11 @@ fn compute_cell(ctx: &McpLibraryContext, key: &[u8; 32], input: CellInput<'_>) -
         cell.reason = reason.map(str::to_string);
     };
     if !input.state.writable {
-        set(&mut cell, "readonly", input.state.readonly_reason.or(Some("config-unreadable")));
+        set(
+            &mut cell,
+            "readonly",
+            input.state.readonly_reason.or(Some("config-unreadable")),
+        );
         return cell;
     }
     if client == ClientId::Codex
@@ -2887,7 +2953,10 @@ fn secret_statuses(
     let mut statuses = Vec::new();
     for item in spec.env.iter().filter(|item| item.secret) {
         let variable = item.variable().to_string();
-        let by_variable = matches!(item.storage, SecretStorage::UserEnv | SecretStorage::External);
+        let by_variable = matches!(
+            item.storage,
+            SecretStorage::UserEnv | SecretStorage::External
+        );
         statuses.push(McpSecretStatus {
             kind: "env".to_string(),
             name: item.name.clone(),
@@ -2906,7 +2975,10 @@ fn secret_statuses(
         .filter(|header| header.template != HeaderTemplate::Literal)
     {
         let variable = header.env_var.clone().unwrap_or_default();
-        let by_variable = matches!(header.storage, SecretStorage::UserEnv | SecretStorage::External);
+        let by_variable = matches!(
+            header.storage,
+            SecretStorage::UserEnv | SecretStorage::External
+        );
         statuses.push(McpSecretStatus {
             kind: "header".to_string(),
             name: header.name.clone(),
@@ -2963,8 +3035,12 @@ fn project_bindings_for(
             project_label: source.label.clone(),
             workspace_id: source.workspace_id.clone(),
             state: state.to_string(),
-            readonly_reason: (!source.writable)
-                .then(|| source.readonly_reason.unwrap_or("not-registered").to_string()),
+            readonly_reason: (!source.writable).then(|| {
+                source
+                    .readonly_reason
+                    .unwrap_or("not-registered")
+                    .to_string()
+            }),
         });
     }
     bindings
@@ -2984,8 +3060,8 @@ fn find_row<'a>(rows: &'a [ClientRow], server_id: &str, client: ClientId) -> Opt
 }
 
 fn other_clients(connection: &Connection) -> Vec<OtherClient> {
-    let Ok(mut statement) =
-        connection.prepare("SELECT id, name FROM agent_adapters WHERE detected = 1 ORDER BY lower(name)")
+    let Ok(mut statement) = connection
+        .prepare("SELECT id, name FROM agent_adapters WHERE detected = 1 ORDER BY lower(name)")
     else {
         return Vec::new();
     };
@@ -3010,7 +3086,8 @@ pub(crate) fn library_snapshot(ctx: &McpLibraryContext) -> Result<McpLibrarySnap
     let rows = load_rows(&connection)?;
     let states = client_states(ctx, Some(&connection));
     let sources = project_sources(ctx);
-    let library_initialized = read_preference(&connection, PREF_INITIALIZED).as_deref() == Some("1");
+    let library_initialized =
+        read_preference(&connection, PREF_INITIALIZED).as_deref() == Some("1");
 
     let column_clients = states
         .iter()
@@ -3028,7 +3105,10 @@ pub(crate) fn library_snapshot(ctx: &McpLibraryContext) -> Result<McpLibrarySnap
     for server in &servers {
         let bindings = project_bindings_for(server, &sources, &rows);
         let mut cells = Vec::new();
-        for state in states.iter().filter(|state| column_clients.contains(&state.client)) {
+        for state in states
+            .iter()
+            .filter(|state| column_clients.contains(&state.client))
+        {
             let cell = compute_cell(
                 ctx,
                 &key,
@@ -3210,8 +3290,12 @@ pub(crate) fn library_snapshot(ctx: &McpLibraryContext) -> Result<McpLibrarySnap
             adapter_id: state.client.adapter_id().to_string(),
             detected: state.detected,
             writable: state.writable,
-            readonly_reason: (!state.writable)
-                .then(|| state.readonly_reason.unwrap_or("config-unreadable").to_string()),
+            readonly_reason: (!state.writable).then(|| {
+                state
+                    .readonly_reason
+                    .unwrap_or("config-unreadable")
+                    .to_string()
+            }),
             config_path_display: state.path_display.clone(),
             transports: state.client.transports(),
             secret_reference: state.client.secret_reference().to_string(),
@@ -3340,7 +3424,9 @@ pub(crate) fn import_from_clients(
     // Deterministic order: client order, user scope before project scopes.
     sources.sort_by_key(|source| (source.scope != Scope::User, source.client));
 
-    connection.execute_batch("BEGIN IMMEDIATE").map_err(db_error)?;
+    connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .map_err(db_error)?;
     let outcome = (|| -> Result<McpImportReport, McpError> {
         let mut servers = load_servers(&connection, true)?;
         let rows = load_rows(&connection)?;
@@ -3371,9 +3457,9 @@ pub(crate) fn import_from_clients(
                 });
                 continue;
             }
-            let existing_index = servers
-                .iter()
-                .position(|server| server.name.to_ascii_lowercase() == name_key && server.deleted_at.is_none());
+            let existing_index = servers.iter().position(|server| {
+                server.name.to_ascii_lowercase() == name_key && server.deleted_at.is_none()
+            });
             let server_index = match existing_index {
                 Some(index) => index,
                 None => {
@@ -3478,7 +3564,15 @@ pub(crate) fn import_from_clients(
             failed_client_ids: Vec::new(),
             env_var_names: Vec::new(),
         };
-        insert_operation(&connection, &operation_id, "import", "applied", &summary, &[], None)?;
+        insert_operation(
+            &connection,
+            &operation_id,
+            "import",
+            "applied",
+            &summary,
+            &[],
+            None,
+        )?;
         prune_operations(&connection)?;
         Ok(McpImportReport {
             operation_id: Some(operation_id),
@@ -3663,7 +3757,9 @@ fn prune_operations(connection: &Connection) -> Result<(), McpError> {
         .prepare("SELECT id, deleted_at FROM mcp_servers WHERE deleted_at IS NOT NULL")
         .map_err(db_error)?;
     let expired = statement
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(db_error)?
         .flatten()
         .filter(|(_, deleted)| parse_ns(deleted) < cutoff)
@@ -3720,7 +3816,10 @@ fn load_operations(connection: &Connection) -> Result<Vec<OperationRow>, McpErro
     rows.collect::<Result<Vec<_>, _>>().map_err(db_error)
 }
 
-fn load_undo_blob(connection: &Connection, operation_id: &str) -> Result<Option<UndoBlob>, McpError> {
+fn load_undo_blob(
+    connection: &Connection,
+    operation_id: &str,
+) -> Result<Option<UndoBlob>, McpError> {
     let protected = connection
         .query_row(
             "SELECT undo_protected FROM mcp_operations WHERE id = ?1",
@@ -3748,7 +3847,10 @@ fn overlaps(left: &McpOperationSummary, right: &McpOperationSummary) -> bool {
         .any(|name| names.contains(&name.to_ascii_lowercase()));
     let client_overlap = left.client_ids.is_empty()
         || right.client_ids.is_empty()
-        || right.client_ids.iter().any(|client| left.client_ids.contains(client));
+        || right
+            .client_ids
+            .iter()
+            .any(|client| left.client_ids.contains(client));
     let env_overlap = right
         .env_var_names
         .iter()
@@ -3758,7 +3860,10 @@ fn overlaps(left: &McpOperationSummary, right: &McpOperationSummary) -> bool {
 
 /// Later operations (newest first in `operations`) that touched the same
 /// entries and are still in effect.
-fn later_overlapping<'a>(operations: &'a [OperationRow], target: &OperationRow) -> Vec<&'a OperationRow> {
+fn later_overlapping<'a>(
+    operations: &'a [OperationRow],
+    target: &OperationRow,
+) -> Vec<&'a OperationRow> {
     operations
         .iter()
         .filter(|other| {
@@ -3984,7 +4089,10 @@ fn request_digest<T: Serialize>(request: &T) -> Vec<u8> {
 fn entry_preview(client: ClientId, entry: &Node) -> McpEntryPreview {
     let object = entry.as_object().cloned().unwrap_or_default();
     let transport = Transport::parse(entry_transport(client, &object)).unwrap_or(Transport::Stdio);
-    let command = object.get("command").and_then(Node::as_str).unwrap_or_default();
+    let command = object
+        .get("command")
+        .and_then(Node::as_str)
+        .unwrap_or_default();
     let args = node_strings(object.get("args"));
     let (command, args, _) = unwrap_entry_command(command, &args);
     let target_display = match transport {
@@ -4043,7 +4151,15 @@ fn changed_fields(client: ClientId, before: Option<&Node>, after: Option<&Node>)
         ("args", &["args"][..]),
         ("url", &["url"][..]),
         ("env", &["env", "env_vars"][..]),
-        ("headers", &["headers", "http_headers", "env_http_headers", "bearer_token_env_var"][..]),
+        (
+            "headers",
+            &[
+                "headers",
+                "http_headers",
+                "env_http_headers",
+                "bearer_token_env_var",
+            ][..],
+        ),
         ("cwd", &["cwd"][..]),
         ("required", &["required"][..]),
     ] {
@@ -4075,7 +4191,8 @@ fn entry_changes(target: &TargetPlan) -> Vec<EntryChange> {
             item.op.clone().map(|op| EntryChange {
                 host_id: target.client.host_id().to_string(),
                 scope: target.scope.as_str().to_string(),
-                workspace_id: (!target.workspace_id.is_empty()).then(|| target.workspace_id.clone()),
+                workspace_id: (!target.workspace_id.is_empty())
+                    .then(|| target.workspace_id.clone()),
                 server_name: item.server_name.clone(),
                 op,
             })
@@ -4105,7 +4222,12 @@ fn apply_target_with_retry(
 ) -> Result<engine::EntryApplyOutcome, String> {
     let mut attempt = 0usize;
     loop {
-        match engine::apply_entry_changes_now(&ctx.mutation, changes.clone(), operation_id, index * 4 + attempt) {
+        match engine::apply_entry_changes_now(
+            &ctx.mutation,
+            changes.clone(),
+            operation_id,
+            index * 4 + attempt,
+        ) {
             Ok(outcome) => return Ok(outcome),
             Err(error) if is_config_changed(&error) && attempt < 2 => {
                 attempt += 1;
@@ -4231,7 +4353,15 @@ fn execute_plan(
         failed_client_ids: Vec::new(),
         env_var_names: plan.env_var_names.clone(),
     };
-    insert_operation(connection, &operation_id, plan.kind, "applying", &summary, &[], None)?;
+    insert_operation(
+        connection,
+        &operation_id,
+        plan.kind,
+        "applying",
+        &summary,
+        &[],
+        None,
+    )?;
 
     // Capture the library and env state before anything changes.
     let all_servers = load_servers(connection, true)?;
@@ -4263,11 +4393,21 @@ fn execute_plan(
     let mut blob = UndoBlob {
         servers_before: touched_servers
             .iter()
-            .map(|id| (id.clone(), all_servers.iter().find(|server| &server.id == id).cloned()))
+            .map(|id| {
+                (
+                    id.clone(),
+                    all_servers.iter().find(|server| &server.id == id).cloned(),
+                )
+            })
             .collect(),
         rows_before: touched_rows
             .iter()
-            .map(|key| (key.clone(), all_rows.iter().find(|row| &row.key == key).cloned()))
+            .map(|key| {
+                (
+                    key.clone(),
+                    all_rows.iter().find(|row| &row.key == key).cloned(),
+                )
+            })
             .collect(),
         entries: Vec::new(),
         targets: Vec::new(),
@@ -4298,7 +4438,10 @@ fn execute_plan(
                     };
                 }
                 update_operation(connection, &operation_id, "failed", &summary, &[], None)?;
-                return Err(McpError::new("env-write-failed", "没能保存到当前用户环境变量。"));
+                return Err(McpError::new(
+                    "env-write-failed",
+                    "没能保存到当前用户环境变量。",
+                ));
             }
             applied.push(before);
         }
@@ -4322,7 +4465,9 @@ fn execute_plan(
     }
 
     // 5. Library rows (desired state) in one SQLite transaction.
-    connection.execute_batch("BEGIN IMMEDIATE").map_err(db_error)?;
+    connection
+        .execute_batch("BEGIN IMMEDIATE")
+        .map_err(db_error)?;
     let library = (|| -> Result<(), McpError> {
         for id in &plan.servers_hard_deleted {
             delete_server_hard(connection, id)?;
@@ -4455,7 +4600,9 @@ fn execute_plan(
                 let reread = resolve_read(ctx, target.client, target.scope, &target.workspace_id);
                 for item in &target.items {
                     let previous = lookup(&before, &item.server_name);
-                    let now = reread.as_ref().and_then(|read| read.entry(&item.server_name));
+                    let now = reread
+                        .as_ref()
+                        .and_then(|read| read.entry(&item.server_name));
                     if !engine::nodes_equivalent(previous, now) {
                         blob.entries.push(UndoEntry {
                             client: target.client,
@@ -4478,7 +4625,11 @@ fn execute_plan(
                     client_id: target.client,
                     scope: target.scope,
                     project_label: target.project_label.clone(),
-                    server_ids: target.items.iter().map(|item| item.server_id.clone()).collect(),
+                    server_ids: target
+                        .items
+                        .iter()
+                        .map(|item| item.server_id.clone())
+                        .collect(),
                     status: "undone".to_string(),
                     skipped_reason: None,
                     error: None,
@@ -4646,7 +4797,9 @@ pub(crate) fn prepare_write(ctx: &McpLibraryContext) -> Result<(), McpError> {
     mark_interrupted(&connection)
 }
 
-fn load_state(ctx: &McpLibraryContext) -> Result<(Connection, [u8; 32], Vec<ServerRecord>, Vec<ClientRow>), McpError> {
+type LoadedState = (Connection, [u8; 32], Vec<ServerRecord>, Vec<ClientRow>);
+
+fn load_state(ctx: &McpLibraryContext) -> Result<LoadedState, McpError> {
     let connection = open_db(ctx)?;
     let key = hash_key(ctx)?;
     let servers = load_servers(&connection, false)?;
@@ -4708,7 +4861,7 @@ fn grant_inline(spec: &mut McpServerSpec, client: ClientId) {
 }
 
 enum CellDecision {
-    Item(PlanItem),
+    Item(Box<PlanItem>),
     Skip(&'static str),
     Noop,
 }
@@ -4728,16 +4881,20 @@ fn decide_cell(
 ) -> CellDecision {
     let row_enabled = row.is_some_and(|row| row.enabled);
     let has_error = row.is_some_and(|row| !row.last_error_code.is_empty());
-    let written = row.map(|row| row.last_written_hash.clone()).unwrap_or_default();
-    let item = |op: Option<EntryOp>, action: ItemAction, confirm: Option<&'static str>| PlanItem {
-        server_id: working.id.clone(),
-        server_name: working.name.clone(),
-        action,
-        op,
-        desired_enabled: Some(enabled),
-        confirm,
-        consent: None,
-        row_override: None,
+    let written = row
+        .map(|row| row.last_written_hash.clone())
+        .unwrap_or_default();
+    let item = |op: Option<EntryOp>, action: ItemAction, confirm: Option<&'static str>| {
+        Box::new(PlanItem {
+            server_id: working.id.clone(),
+            server_name: working.name.clone(),
+            action,
+            op,
+            desired_enabled: Some(enabled),
+            confirm,
+            consent: None,
+            row_override: None,
+        })
     };
     if enabled {
         let mut confirm = None;
@@ -4783,12 +4940,18 @@ fn decide_cell(
             if confirm.is_none()
                 && file_hash != written
                 && !semantic_equal(client, file, &wanted)
-                && !(disabled && canonical_entry(client, file, true) == canonical_entry(client, &wanted, true))
+                && !(disabled
+                    && canonical_entry(client, file, true)
+                        == canonical_entry(client, &wanted, true))
             {
                 confirm = Some("changed-outside");
             }
         }
-        let mut decided = item(Some(EntryOp::Upsert(projected)), ItemAction::Enable, confirm);
+        let mut decided = item(
+            Some(EntryOp::Upsert(projected)),
+            ItemAction::Enable,
+            confirm,
+        );
         decided.consent = consent;
         CellDecision::Item(decided)
     } else {
@@ -4843,7 +5006,7 @@ fn push_decision(
         CellDecision::Item(item) => plan
             .target_mut(client, scope, workspace_id, project_label)
             .items
-            .push(item),
+            .push(*item),
         CellDecision::Skip(reason) => plan.skip(client, scope, server_id, reason),
         CellDecision::Noop => {}
     }
@@ -4912,7 +5075,13 @@ pub(crate) fn set_cell(
     }
     save_working_if_changed(&mut plan, server, working);
     let digest = request_digest(&request);
-    execute_plan(ctx, &connection, plan, request.confirm_token.as_deref(), &digest)
+    execute_plan(
+        ctx,
+        &connection,
+        plan,
+        request.confirm_token.as_deref(),
+        &digest,
+    )
 }
 
 pub(crate) fn set_row(
@@ -4943,9 +5112,18 @@ pub(crate) fn set_row(
             continue;
         }
         if state.client == ClientId::Codex
-            && state.read.structured_env.iter().any(|name| name == &server.name)
+            && state
+                .read
+                .structured_env
+                .iter()
+                .any(|name| name == &server.name)
         {
-            plan.skip(state.client, Scope::User, &server.id, "codex-structured-env");
+            plan.skip(
+                state.client,
+                Scope::User,
+                &server.id,
+                "codex-structured-env",
+            );
             continue;
         }
         let decision = decide_cell(
@@ -4958,11 +5136,25 @@ pub(crate) fn set_row(
             request.enabled,
             false,
         );
-        push_decision(&mut plan, decision, state.client, Scope::User, "", None, &server.id);
+        push_decision(
+            &mut plan,
+            decision,
+            state.client,
+            Scope::User,
+            "",
+            None,
+            &server.id,
+        );
     }
     save_working_if_changed(&mut plan, server, working);
     let digest = request_digest(&request);
-    execute_plan(ctx, &connection, plan, request.confirm_token.as_deref(), &digest)
+    execute_plan(
+        ctx,
+        &connection,
+        plan,
+        request.confirm_token.as_deref(),
+        &digest,
+    )
 }
 
 pub(crate) fn set_column(
@@ -4982,7 +5174,11 @@ pub(crate) fn set_column(
             }
         }
         if state.client == ClientId::Codex
-            && state.read.structured_env.iter().any(|name| name == &server.name)
+            && state
+                .read
+                .structured_env
+                .iter()
+                .any(|name| name == &server.name)
         {
             continue;
         }
@@ -5020,7 +5216,15 @@ pub(crate) fn set_column(
         if matches!(decision, CellDecision::Item(_)) {
             plan.note_server(&server.name);
         }
-        push_decision(&mut plan, decision, state.client, Scope::User, "", None, &server.id);
+        push_decision(
+            &mut plan,
+            decision,
+            state.client,
+            Scope::User,
+            "",
+            None,
+            &server.id,
+        );
         save_working_if_changed(&mut plan, server, working);
     }
     if plan.targets.is_empty() && plan.servers_after.is_empty() {
@@ -5031,7 +5235,13 @@ pub(crate) fn set_column(
         }));
     }
     let digest = request_digest(&request);
-    execute_plan(ctx, &connection, plan, request.confirm_token.as_deref(), &digest)
+    execute_plan(
+        ctx,
+        &connection,
+        plan,
+        request.confirm_token.as_deref(),
+        &digest,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -5054,7 +5264,9 @@ fn invalid_text(value: &str, max: usize) -> bool {
 fn secret_error(code: &'static str, name: &str) -> McpError {
     let message = match code {
         "secret-name-reserved" => format!("{name} 是系统变量名，不能用来保存密钥。"),
-        "secret-value-invalid" => "密钥值无效：不能为空、不能含换行，最长 8192 个字符。".to_string(),
+        "secret-value-invalid" => {
+            "密钥值无效：不能为空、不能含换行，最长 8192 个字符。".to_string()
+        }
         _ => format!("{name} 不是有效的变量名。"),
     };
     McpError::new(code, message).param("name", name)
@@ -5063,14 +5275,26 @@ fn secret_error(code: &'static str, name: &str) -> McpError {
 fn derived_variable(server_name: &str, header: &str, bearer: bool) -> String {
     let base = server_name
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_uppercase() } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
         .collect::<String>();
     let suffix = if bearer && header.eq_ignore_ascii_case("authorization") {
         "TOKEN".to_string()
     } else {
         header
             .chars()
-            .map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_uppercase() } else { '_' })
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() {
+                    ch.to_ascii_uppercase()
+                } else {
+                    '_'
+                }
+            })
             .collect()
     };
     let name = format!("{base}_{suffix}");
@@ -5118,8 +5342,9 @@ fn spec_from_input(
                     "命令里不需要写 cmd。Windows 上需要的 cmd /c 会自动加上。",
                 ));
             }
-            engine::validate_command(command)
-                .map_err(|_| McpError::invalid("命令无效：请只填写一个可执行程序，参数逐项填写。"))?;
+            engine::validate_command(command).map_err(|_| {
+                McpError::invalid("命令无效：请只填写一个可执行程序，参数逐项填写。")
+            })?;
             let args = input.args.clone().unwrap_or_default();
             if args.len() > mcp_paste::MAX_ARGS {
                 return Err(McpError::invalid("参数最多 64 个。"));
@@ -5148,15 +5373,21 @@ fn spec_from_input(
             })?;
             spec.command = Some(command.to_string());
             spec.args = new_args;
-            if let Some(cwd) = input.cwd.as_deref().map(str::trim).filter(|cwd| !cwd.is_empty()) {
+            if let Some(cwd) = input
+                .cwd
+                .as_deref()
+                .map(str::trim)
+                .filter(|cwd| !cwd.is_empty())
+            {
                 if invalid_text(cwd, 1024) || !Path::new(cwd).is_absolute() {
                     return Err(McpError::invalid("工作目录需要是完整的文件夹路径。"));
                 }
                 spec.cwd = Some(cwd.to_string());
             }
             for item in input.env.clone().unwrap_or_default() {
-                mcp_secrets::validate_env_name(&item.name)
-                    .map_err(|_| McpError::invalid(format!("{} 不是有效的环境变量名。", item.name)))?;
+                mcp_secrets::validate_env_name(&item.name).map_err(|_| {
+                    McpError::invalid(format!("{} 不是有效的环境变量名。", item.name))
+                })?;
                 if item.value.chars().count() > 8192 || item.value.contains(['\0', '\r', '\n']) {
                     return Err(McpError::invalid(format!("{} 的值无效。", item.name)));
                 }
@@ -5166,7 +5397,11 @@ fn spec_from_input(
                         item.name
                     )));
                 }
-                if spec.env.iter().any(|existing| existing.name.eq_ignore_ascii_case(&item.name)) {
+                if spec
+                    .env
+                    .iter()
+                    .any(|existing| existing.name.eq_ignore_ascii_case(&item.name))
+                {
                     return Err(McpError::invalid(format!("{} 重复了。", item.name)));
                 }
                 spec.env.push(SpecEnv {
@@ -5188,7 +5423,9 @@ fn spec_from_input(
                 .filter(|url| !url.is_empty())
                 .ok_or_else(|| McpError::invalid("远程地址方式需要填写网址。"))?;
             engine::validate_safe_url(url).map_err(|_| {
-                McpError::invalid("网址需要以 https:// 或 http:// 开头，不能带 ? 参数、# 片段或账号密码。")
+                McpError::invalid(
+                    "网址需要以 https:// 或 http:// 开头，不能带 ? 参数、# 片段或账号密码。",
+                )
             })?;
             spec.url = Some(url.to_string());
         }
@@ -5204,8 +5441,9 @@ fn spec_from_input(
             if spec.transport == Transport::Stdio {
                 continue; // Transport switch: headers do not apply.
             }
-            engine::validate_header_name(&secret.name)
-                .map_err(|_| McpError::invalid(format!("{} 不是有效的请求头名称。", secret.name)))?;
+            engine::validate_header_name(&secret.name).map_err(|_| {
+                McpError::invalid(format!("{} 不是有效的请求头名称。", secret.name))
+            })?;
         } else {
             if spec.transport != Transport::Stdio {
                 continue; // Transport switch: process env does not apply.
@@ -5232,13 +5470,16 @@ fn spec_from_input(
                 .find(|item| header && item.name.eq_ignore_ascii_case(&secret.name))
         });
         let pasted = match (&secret.paste_value_handle, paste_handle) {
-            (Some(value_handle), Some(handle)) => Some(
-                mcp_paste::vault_get(handle, value_handle).ok_or_else(|| {
+            (Some(value_handle), Some(handle)) => {
+                Some(mcp_paste::vault_get(handle, value_handle).ok_or_else(|| {
                     McpError::new("paste-expired", "粘贴的内容已过期，请重新粘贴。")
-                })?,
-            ),
+                })?)
+            }
             (Some(_), None) => {
-                return Err(McpError::new("paste-expired", "粘贴的内容已过期，请重新粘贴。"))
+                return Err(McpError::new(
+                    "paste-expired",
+                    "粘贴的内容已过期，请重新粘贴。",
+                ))
             }
             _ => None,
         };
@@ -5255,107 +5496,125 @@ fn spec_from_input(
             .map(|item| item.inline_clients.clone())
             .or_else(|| previous_header.map(|item| item.inline_clients.clone()))
             .unwrap_or_default();
-        let (storage, stored_value, variable, inline_clients) = match secret.mode.as_str() {
-            "inline" => {
-                let value = match value.clone() {
-                    Some(value) => Some(value),
-                    None => previous_env
-                        .and_then(|item| item.value.clone())
-                        .or_else(|| previous_header.and_then(|item| item.value.clone())),
-                };
-                let value = value.ok_or_else(|| secret_error("secret-value-invalid", &secret.name))?;
-                let clients = if inline_requested.is_empty() {
-                    target_clients.to_vec()
-                } else {
-                    inline_requested.clone()
-                };
-                if value_changed(previous_env, previous_header, &value) || clients != previous_inline {
-                    build.kinds.push("inline-secret");
+        let (storage, stored_value, variable, inline_clients) =
+            match secret.mode.as_str() {
+                "inline" => {
+                    let value = match value.clone() {
+                        Some(value) => Some(value),
+                        None => previous_env
+                            .and_then(|item| item.value.clone())
+                            .or_else(|| previous_header.and_then(|item| item.value.clone())),
+                    };
+                    let value =
+                        value.ok_or_else(|| secret_error("secret-value-invalid", &secret.name))?;
+                    let clients = if inline_requested.is_empty() {
+                        target_clients.to_vec()
+                    } else {
+                        inline_requested.clone()
+                    };
+                    if value_changed(previous_env, previous_header, &value)
+                        || clients != previous_inline
+                    {
+                        build.kinds.push("inline-secret");
+                    }
+                    (SecretStorage::Library, Some(value), None, clients)
                 }
-                (SecretStorage::Library, Some(value), None, clients)
-            }
-            "user_env" => {
-                let variable = secret
-                    .env_var
-                    .clone()
-                    .filter(|name| !name.trim().is_empty())
-                    .or_else(|| previous_header.and_then(|item| item.env_var.clone()))
-                    .unwrap_or_else(|| {
-                        if header {
-                            derived_variable(&input.name, &secret.name, bearer)
-                        } else {
-                            secret.name.clone()
-                        }
-                    });
-                if !inline_requested.is_empty() && inline_requested != previous_inline {
-                    build.kinds.push("inline-secret");
-                }
-                match value {
-                    Some(value) => {
-                        mcp_secrets::validate_secret_name(&variable)
-                            .map_err(|code| secret_error(code, &variable))?;
-                        let current = ctx.env.get(&variable).ok().flatten();
-                        let created = env_var_created_by_skillhub(connection, &variable);
-                        if current.as_deref() != Some(value.as_str()) {
-                            if current.as_ref().is_some_and(|current| !current.is_empty())
-                                && created != Some(true)
-                            {
-                                build.kinds.push("overwrite-env-var");
-                                build.env_confirm.push(McpEnvVarConfirmation {
+                "user_env" => {
+                    let variable = secret
+                        .env_var
+                        .clone()
+                        .filter(|name| !name.trim().is_empty())
+                        .or_else(|| previous_header.and_then(|item| item.env_var.clone()))
+                        .unwrap_or_else(|| {
+                            if header {
+                                derived_variable(&input.name, &secret.name, bearer)
+                            } else {
+                                secret.name.clone()
+                            }
+                        });
+                    if !inline_requested.is_empty() && inline_requested != previous_inline {
+                        build.kinds.push("inline-secret");
+                    }
+                    match value {
+                        Some(value) => {
+                            mcp_secrets::validate_secret_name(&variable)
+                                .map_err(|code| secret_error(code, &variable))?;
+                            let current = ctx.env.get(&variable).ok().flatten();
+                            let created = env_var_created_by_skillhub(connection, &variable);
+                            if current.as_deref() != Some(value.as_str()) {
+                                if current.as_ref().is_some_and(|current| !current.is_empty())
+                                    && created != Some(true)
+                                {
+                                    build.kinds.push("overwrite-env-var");
+                                    build.env_confirm.push(McpEnvVarConfirmation {
+                                        name: variable.clone(),
+                                        exists: true,
+                                        created_by_skillhub: false,
+                                        action: "set".to_string(),
+                                    });
+                                }
+                                if current.is_none() {
+                                    build.env_created.push(variable.clone());
+                                }
+                                build.env_ops.push(EnvOp::Set {
                                     name: variable.clone(),
-                                    exists: true,
-                                    created_by_skillhub: false,
-                                    action: "set".to_string(),
+                                    value,
                                 });
                             }
-                            if current.is_none() {
-                                build.env_created.push(variable.clone());
-                            }
-                            build.env_ops.push(EnvOp::Set {
-                                name: variable.clone(),
-                                value,
-                            });
-                        }
-                        build.env_var_names.push(variable.clone());
-                        (SecretStorage::UserEnv, None, Some(variable), inline_requested)
-                    }
-                    None => {
-                        let previous_storage = previous_env
-                            .map(|item| item.storage)
-                            .or_else(|| previous_header.map(|item| item.storage));
-                        match previous_storage {
-                            // Omitted value keeps the stored value (§3.2).
-                            Some(SecretStorage::Library) => (
-                                SecretStorage::Library,
-                                previous_env
-                                    .and_then(|item| item.value.clone())
-                                    .or_else(|| previous_header.and_then(|item| item.value.clone())),
-                                None,
-                                if inline_requested.is_empty() {
-                                    previous_inline.clone()
-                                } else {
-                                    inline_requested
-                                },
-                            ),
-                            Some(storage) => (
-                                storage,
+                            build.env_var_names.push(variable.clone());
+                            (
+                                SecretStorage::UserEnv,
                                 None,
                                 Some(variable),
-                                if inline_requested.is_empty() {
-                                    previous_inline.clone()
-                                } else {
-                                    inline_requested
-                                },
-                            ),
-                            None => (SecretStorage::External, None, Some(variable), inline_requested),
+                                inline_requested,
+                            )
+                        }
+                        None => {
+                            let previous_storage = previous_env
+                                .map(|item| item.storage)
+                                .or_else(|| previous_header.map(|item| item.storage));
+                            match previous_storage {
+                                // Omitted value keeps the stored value (§3.2).
+                                Some(SecretStorage::Library) => (
+                                    SecretStorage::Library,
+                                    previous_env.and_then(|item| item.value.clone()).or_else(
+                                        || previous_header.and_then(|item| item.value.clone()),
+                                    ),
+                                    None,
+                                    if inline_requested.is_empty() {
+                                        previous_inline.clone()
+                                    } else {
+                                        inline_requested
+                                    },
+                                ),
+                                Some(storage) => (
+                                    storage,
+                                    None,
+                                    Some(variable),
+                                    if inline_requested.is_empty() {
+                                        previous_inline.clone()
+                                    } else {
+                                        inline_requested
+                                    },
+                                ),
+                                None => (
+                                    SecretStorage::External,
+                                    None,
+                                    Some(variable),
+                                    inline_requested,
+                                ),
+                            }
                         }
                     }
                 }
-            }
-            _ => return Err(McpError::invalid("密钥保存方式无效。")),
-        };
+                _ => return Err(McpError::invalid("密钥保存方式无效。")),
+            };
         if header {
-            if spec.headers.iter().any(|item| item.name.eq_ignore_ascii_case(&secret.name)) {
+            if spec
+                .headers
+                .iter()
+                .any(|item| item.name.eq_ignore_ascii_case(&secret.name))
+            {
                 return Err(McpError::invalid(format!("{} 重复了。", secret.name)));
             }
             spec.headers.push(SpecHeader {
@@ -5368,7 +5627,11 @@ fn spec_from_input(
                 required,
             });
         } else {
-            if spec.env.iter().any(|item| item.name.eq_ignore_ascii_case(&secret.name)) {
+            if spec
+                .env
+                .iter()
+                .any(|item| item.name.eq_ignore_ascii_case(&secret.name))
+            {
                 return Err(McpError::invalid(format!("{} 重复了。", secret.name)));
             }
             let env_var = variable.filter(|name| name != &secret.name);
@@ -5442,7 +5705,9 @@ fn placement_target(
     client: ClientId,
     placement: Option<&McpPlacement>,
 ) -> PlacementTarget {
-    let scope = placement.map(|placement| placement.scope).unwrap_or(Scope::User);
+    let scope = placement
+        .map(|placement| placement.scope)
+        .unwrap_or(Scope::User);
     if scope == Scope::User {
         let state = states
             .iter()
@@ -5467,7 +5732,9 @@ fn placement_target(
         .find(|workspace| workspace.id == workspace_id);
     let supported = matches!(
         (client, scope),
-        (ClientId::Codex, Scope::Project) | (ClientId::ClaudeCode, Scope::Local) | (ClientId::ClaudeCode, Scope::Project)
+        (ClientId::Codex, Scope::Project)
+            | (ClientId::ClaudeCode, Scope::Local)
+            | (ClientId::ClaudeCode, Scope::Project)
     );
     let Some(workspace) = workspace.filter(|_| supported) else {
         return PlacementTarget {
@@ -5475,12 +5742,21 @@ fn placement_target(
             workspace_id,
             label: None,
             writable: false,
-            reason: Some(if supported { "not-registered" } else { "transport-unsupported" }),
+            reason: Some(if supported {
+                "not-registered"
+            } else {
+                "transport-unsupported"
+            }),
             read: empty_read(),
         };
     };
     let label = Some(engine::safe_label(&workspace.display_name));
-    match engine::resolve_target(&ctx.mutation, client.host_id(), scope.as_str(), Some(&workspace.id)) {
+    match engine::resolve_target(
+        &ctx.mutation,
+        client.host_id(),
+        scope.as_str(),
+        Some(&workspace.id),
+    ) {
         Ok(target) => {
             let read = engine::read_target_entries(&target);
             let reason = read_status_reason(read.status);
@@ -5553,9 +5829,9 @@ pub(crate) fn add_servers(
         if !seen_names.insert(name_key.clone()) {
             return Err(McpError::invalid(format!("{} 重复了。", input.name)));
         }
-        let existing = all_servers
-            .iter()
-            .find(|server| server.name.to_ascii_lowercase() == name_key && server.deleted_at.is_none());
+        let existing = all_servers.iter().find(|server| {
+            server.name.to_ascii_lowercase() == name_key && server.deleted_at.is_none()
+        });
         let overwrite = candidate.on_conflict.as_deref() == Some("overwrite");
         if let Some(existing) = existing {
             match candidate.on_conflict.as_deref() {
@@ -5567,15 +5843,17 @@ pub(crate) fn add_servers(
                 }
                 Some("overwrite") => {}
                 _ => {
-                    return Err(McpError::new("name-taken", format!("已经有一个叫 {} 的 MCP。", input.name))
-                        .param("name", input.name.clone()))
+                    return Err(McpError::new(
+                        "name-taken",
+                        format!("已经有一个叫 {} 的 MCP。", input.name),
+                    )
+                    .param("name", input.name.clone()))
                 }
             }
         }
-        if let Some(deleted) = all_servers
-            .iter()
-            .find(|server| server.name.to_ascii_lowercase() == name_key && server.deleted_at.is_some())
-        {
+        if let Some(deleted) = all_servers.iter().find(|server| {
+            server.name.to_ascii_lowercase() == name_key && server.deleted_at.is_some()
+        }) {
             plan.servers_hard_deleted.push(deleted.id.clone());
         }
         let mut build = spec_from_input(
@@ -5646,18 +5924,23 @@ pub(crate) fn add_servers(
                 let same = file_hash == entry_hash(&key, *client, &wanted)
                     && !(*client == ClientId::Codex && codex_disabled(file));
                 if same {
-                    plan.target_mut(*client, place.scope, &place.workspace_id, place.label.clone())
-                        .items
-                        .push(PlanItem {
-                            server_id: record.id.clone(),
-                            server_name: record.name.clone(),
-                            action: ItemAction::Add,
-                            op: None,
-                            desired_enabled: Some(true),
-                            confirm: None,
-                            consent: Some(server_needs_inline(&record.spec, *client)),
-                            row_override: None,
-                        });
+                    plan.target_mut(
+                        *client,
+                        place.scope,
+                        &place.workspace_id,
+                        place.label.clone(),
+                    )
+                    .items
+                    .push(PlanItem {
+                        server_id: record.id.clone(),
+                        server_name: record.name.clone(),
+                        action: ItemAction::Add,
+                        op: None,
+                        desired_enabled: Some(true),
+                        confirm: None,
+                        consent: Some(server_needs_inline(&record.spec, *client)),
+                        row_override: None,
+                    });
                     continue;
                 }
                 let managed_by_us = row.is_some_and(|row| row.last_written_hash == file_hash);
@@ -5672,24 +5955,35 @@ pub(crate) fn add_servers(
                     }
                 }
             }
-            plan.target_mut(*client, place.scope, &place.workspace_id, place.label.clone())
-                .items
-                .push(PlanItem {
-                    server_id: record.id.clone(),
-                    server_name: record.name.clone(),
-                    action: ItemAction::Add,
-                    op: Some(EntryOp::Upsert(projected)),
-                    desired_enabled: Some(true),
-                    confirm,
-                    consent: Some(server_needs_inline(&record.spec, *client)),
-                    row_override: None,
-                });
+            plan.target_mut(
+                *client,
+                place.scope,
+                &place.workspace_id,
+                place.label.clone(),
+            )
+            .items
+            .push(PlanItem {
+                server_id: record.id.clone(),
+                server_name: record.name.clone(),
+                action: ItemAction::Add,
+                op: Some(EntryOp::Upsert(projected)),
+                desired_enabled: Some(true),
+                confirm,
+                consent: Some(server_needs_inline(&record.spec, *client)),
+                row_override: None,
+            });
         }
         record.updated_at = ns_text(now_ns());
         plan.servers_after.push(record);
     }
     let digest = request_digest(&request);
-    let outcome = execute_plan(ctx, &connection, plan, request.confirm_token.as_deref(), &digest)?;
+    let outcome = execute_plan(
+        ctx,
+        &connection,
+        plan,
+        request.confirm_token.as_deref(),
+        &digest,
+    )?;
     if matches!(outcome, McpWriteOutcome::Done { .. }) {
         if let Some(handle) = &request.paste_handle {
             mcp_paste::vault_clear(handle);
@@ -5805,7 +6099,10 @@ fn reproject_enabled(
     skip_client: Option<ClientId>,
 ) {
     let sources = project_sources(ctx);
-    for row in rows.iter().filter(|row| row.key.server_id == new.id && row.enabled) {
+    for row in rows
+        .iter()
+        .filter(|row| row.key.server_id == new.id && row.enabled)
+    {
         if Some(row.key.client) == skip_client && row.key.scope == Scope::User {
             continue;
         }
@@ -5815,7 +6112,12 @@ fn reproject_enabled(
                 .find(|state| state.client == row.key.client)
                 .expect("all clients have a state");
             if !state.writable {
-                plan.skip(state.client, Scope::User, &new.id, state.readonly_reason.unwrap_or("config-unreadable"));
+                plan.skip(
+                    state.client,
+                    Scope::User,
+                    &new.id,
+                    state.readonly_reason.unwrap_or("config-unreadable"),
+                );
                 continue;
             }
             reproject_cell(
@@ -5872,7 +6174,10 @@ pub(crate) fn update_server(
         ));
     }
     if request.expected_revision != server.spec_revision {
-        return Err(McpError::new("revision-conflict", "这个 MCP 刚被改过，已重新载入。"));
+        return Err(McpError::new(
+            "revision-conflict",
+            "这个 MCP 刚被改过，已重新载入。",
+        ));
     }
     let enabled_clients = rows
         .iter()
@@ -5881,7 +6186,14 @@ pub(crate) fn update_server(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let mut build = spec_from_input(ctx, &connection, &request.input, Some(server), None, &enabled_clients)?;
+    let mut build = spec_from_input(
+        ctx,
+        &connection,
+        &request.input,
+        Some(server),
+        None,
+        &enabled_clients,
+    )?;
     let mut plan = WritePlan::new("update");
     merge_build(&mut plan, &mut build);
     plan.note_server(&server.name);
@@ -5913,7 +6225,13 @@ pub(crate) fn update_server(
     updated.updated_at = ns_text(now_ns());
     plan.servers_after.push(updated);
     let digest = request_digest(&request);
-    execute_plan(ctx, &connection, plan, request.confirm_token.as_deref(), &digest)
+    execute_plan(
+        ctx,
+        &connection,
+        plan,
+        request.confirm_token.as_deref(),
+        &digest,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -5990,23 +6308,31 @@ pub(crate) fn remove_server(
                         row_override: None,
                     });
             }
-            for source in project_sources(ctx).into_iter().filter(|source| source.writable) {
+            for source in project_sources(ctx)
+                .into_iter()
+                .filter(|source| source.writable)
+            {
                 if source.read.entry(&server.name).is_none() {
                     continue;
                 }
                 let workspace_id = source.workspace_id.clone().unwrap_or_default();
-                plan.target_mut(source.client, source.scope, &workspace_id, Some(source.label.clone()))
-                    .items
-                    .push(PlanItem {
-                        server_id: server.id.clone(),
-                        server_name: server.name.clone(),
-                        action: ItemAction::Remove,
-                        op: Some(EntryOp::Remove),
-                        desired_enabled: Some(false),
-                        confirm: None,
-                        consent: None,
-                        row_override: None,
-                    });
+                plan.target_mut(
+                    source.client,
+                    source.scope,
+                    &workspace_id,
+                    Some(source.label.clone()),
+                )
+                .items
+                .push(PlanItem {
+                    server_id: server.id.clone(),
+                    server_name: server.name.clone(),
+                    action: ItemAction::Remove,
+                    op: Some(EntryOp::Remove),
+                    desired_enabled: Some(false),
+                    confirm: None,
+                    consent: None,
+                    row_override: None,
+                });
             }
             let owned = unused_owned_variables(&connection, server, &servers);
             for name in &owned {
@@ -6056,22 +6382,33 @@ pub(crate) fn remove_server(
             if place.read.entry(&server.name).is_none() {
                 return Ok(McpWriteOutcome::noop("already-in-state"));
             }
-            plan.target_mut(*client_id, place.scope, &place.workspace_id, place.label.clone())
-                .items
-                .push(PlanItem {
-                    server_id: server.id.clone(),
-                    server_name: server.name.clone(),
-                    action: ItemAction::Remove,
-                    op: Some(EntryOp::Remove),
-                    desired_enabled: Some(false),
-                    confirm: None,
-                    consent: None,
-                    row_override: None,
-                });
+            plan.target_mut(
+                *client_id,
+                place.scope,
+                &place.workspace_id,
+                place.label.clone(),
+            )
+            .items
+            .push(PlanItem {
+                server_id: server.id.clone(),
+                server_name: server.name.clone(),
+                action: ItemAction::Remove,
+                op: Some(EntryOp::Remove),
+                desired_enabled: Some(false),
+                confirm: None,
+                consent: None,
+                row_override: None,
+            });
         }
     }
     let digest = request_digest(&request);
-    execute_plan(ctx, &connection, plan, request.confirm_token.as_deref(), &digest)
+    execute_plan(
+        ctx,
+        &connection,
+        plan,
+        request.confirm_token.as_deref(),
+        &digest,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -6100,11 +6437,10 @@ pub(crate) fn set_secret(
         .env
         .iter()
         .position(|item| item.secret && item.name.eq_ignore_ascii_case(&request.name));
-    let header_index = updated
-        .spec
-        .headers
-        .iter()
-        .position(|header| header.template != HeaderTemplate::Literal && header.name.eq_ignore_ascii_case(&request.name));
+    let header_index = updated.spec.headers.iter().position(|header| {
+        header.template != HeaderTemplate::Literal
+            && header.name.eq_ignore_ascii_case(&request.name)
+    });
     if env_index.is_none() && header_index.is_none() {
         return Err(McpError::not_found());
     }
@@ -6117,7 +6453,11 @@ pub(crate) fn set_secret(
             let header = &updated.spec.headers[index];
             (
                 header.env_var.clone().unwrap_or_else(|| {
-                    derived_variable(&server.name, &header.name, header.template == HeaderTemplate::Bearer)
+                    derived_variable(
+                        &server.name,
+                        &header.name,
+                        header.template == HeaderTemplate::Bearer,
+                    )
                 }),
                 header.inline_clients.clone(),
             )
@@ -6126,11 +6466,14 @@ pub(crate) fn set_secret(
     };
     let (storage, stored_value, inline_clients) = match request.mode.as_str() {
         "user_env" => {
-            mcp_secrets::validate_secret_name(&variable).map_err(|code| secret_error(code, &variable))?;
+            mcp_secrets::validate_secret_name(&variable)
+                .map_err(|code| secret_error(code, &variable))?;
             let current = ctx.env.get(&variable).ok().flatten();
             let created = env_var_created_by_skillhub(&connection, &variable);
             if current.as_deref() != Some(value.as_str()) {
-                if current.as_ref().is_some_and(|current| !current.is_empty()) && created != Some(true) {
+                if current.as_ref().is_some_and(|current| !current.is_empty())
+                    && created != Some(true)
+                {
                     plan.add_kind("overwrite-env-var");
                     plan.env_confirm.push(McpEnvVarConfirmation {
                         name: variable.clone(),
@@ -6152,7 +6495,10 @@ pub(crate) fn set_secret(
             } else {
                 previous_inline.clone()
             };
-            if inline.iter().any(|client| !previous_inline.contains(client)) {
+            if inline
+                .iter()
+                .any(|client| !previous_inline.contains(client))
+            {
                 plan.add_kind("inline-secret");
             }
             (SecretStorage::UserEnv, None, inline)
@@ -6174,7 +6520,8 @@ pub(crate) fn set_secret(
         let item = &mut updated.spec.env[index];
         item.storage = storage;
         item.value = stored_value;
-        item.env_var = (storage == SecretStorage::UserEnv && variable != item.name).then(|| variable.clone());
+        item.env_var =
+            (storage == SecretStorage::UserEnv && variable != item.name).then(|| variable.clone());
         item.inline_clients = inline_clients;
     } else if let Some(index) = header_index {
         let header = &mut updated.spec.headers[index];
@@ -6200,7 +6547,13 @@ pub(crate) fn set_secret(
     updated.updated_at = ns_text(now_ns());
     plan.servers_after.push(updated);
     let digest = request_digest(&request);
-    execute_plan(ctx, &connection, plan, request.confirm_token.as_deref(), &digest)
+    execute_plan(
+        ctx,
+        &connection,
+        plan,
+        request.confirm_token.as_deref(),
+        &digest,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -6237,9 +6590,12 @@ pub(crate) fn resync(
             let row = find_row(&rows, &server.id, state.client);
             let enabled = row.is_some_and(|row| row.enabled);
             let entry = state.entry(&server.name);
-            let written = row.map(|row| row.last_written_hash.clone()).unwrap_or_default();
+            let written = row
+                .map(|row| row.last_written_hash.clone())
+                .unwrap_or_default();
             if enabled {
-                let Ok(mut projected) = project(ctx, &server.name, &working.spec, state.client) else {
+                let Ok(mut projected) = project(ctx, &server.name, &working.spec, state.client)
+                else {
                     continue;
                 };
                 if state.client == ClientId::Codex {
@@ -6317,11 +6673,21 @@ pub(crate) fn resync(
         }
         save_working_if_changed(&mut plan, server, working);
     }
-    if plan.targets.iter().any(|target| target.items.iter().any(|item| item.confirm.is_some())) {
+    if plan
+        .targets
+        .iter()
+        .any(|target| target.items.iter().any(|item| item.confirm.is_some()))
+    {
         plan.add_kind("resync");
     }
     let digest = request_digest(&request);
-    execute_plan(ctx, &connection, plan, request.confirm_token.as_deref(), &digest)
+    execute_plan(
+        ctx,
+        &connection,
+        plan,
+        request.confirm_token.as_deref(),
+        &digest,
+    )
 }
 
 pub(crate) fn resolve_changed_outside(
@@ -6368,7 +6734,9 @@ pub(crate) fn resolve_changed_outside(
                         return Ok(McpWriteOutcome::noop("already-in-state"));
                     }
                     item.confirm = Some("changed-outside");
-                    plan.target_mut(request.client_id, Scope::User, "", None).items.push(item);
+                    plan.target_mut(request.client_id, Scope::User, "", None)
+                        .items
+                        .push(*item);
                 }
                 CellDecision::Skip(_) => return Ok(McpWriteOutcome::noop("nothing-selected")),
                 CellDecision::Noop => return Ok(McpWriteOutcome::noop("already-in-state")),
@@ -6406,7 +6774,11 @@ pub(crate) fn resolve_changed_outside(
                 Some(file) => {
                     let mut spec = spec_from_entry(request.client_id, file).map_err(|reason| {
                         McpError::new(
-                            if reason == "codex-structured-env" { reason } else { "invalid-input" },
+                            if reason == "codex-structured-env" {
+                                reason
+                            } else {
+                                "invalid-input"
+                            },
                             "这一项使用了 SkillHub 暂不支持的写法，保持只读。",
                         )
                     })?;
@@ -6419,7 +6791,8 @@ pub(crate) fn resolve_changed_outside(
                     updated.spec = spec;
                     updated.spec_revision += 1;
                     let mut adopted = row.cloned().unwrap_or_else(|| ClientRow::new(row_key));
-                    adopted.enabled = !(request.client_id == ClientId::Codex && codex_disabled(file));
+                    adopted.enabled =
+                        !(request.client_id == ClientId::Codex && codex_disabled(file));
                     adopted.last_written_hash = entry_hash(&key, request.client_id, file);
                     adopted.last_seen_hash = adopted.last_written_hash.clone();
                     adopted.last_error_code.clear();
@@ -6450,11 +6823,9 @@ pub(crate) fn resolve_changed_outside(
                         "resync",
                         Some(request.client_id),
                     );
-                    if plan
-                        .targets
-                        .iter()
-                        .any(|target| target.client != request.client_id && !target.items.is_empty())
-                    {
+                    if plan.targets.iter().any(|target| {
+                        target.client != request.client_id && !target.items.is_empty()
+                    }) {
                         plan.add_kind("resync");
                     }
                     updated.updated_at = ns_text(now_ns());
@@ -6462,10 +6833,20 @@ pub(crate) fn resolve_changed_outside(
                 }
             }
         }
-        _ => return Err(McpError::invalid("请选择采用文件中的版本，或用库里的版本覆盖。")),
+        _ => {
+            return Err(McpError::invalid(
+                "请选择采用文件中的版本，或用库里的版本覆盖。",
+            ))
+        }
     }
     let digest = request_digest(&request);
-    execute_plan(ctx, &connection, plan, request.confirm_token.as_deref(), &digest)
+    execute_plan(
+        ctx,
+        &connection,
+        plan,
+        request.confirm_token.as_deref(),
+        &digest,
+    )
 }
 
 pub(crate) fn resolve_stuck_transaction(
@@ -6483,7 +6864,15 @@ pub(crate) fn resolve_stuck_transaction(
         kind: "resolve".to_string(),
         ..McpOperationSummary::default()
     };
-    insert_operation(&connection, &operation_id, "resolve", "applied", &summary, &[], None)?;
+    insert_operation(
+        &connection,
+        &operation_id,
+        "resolve",
+        "applied",
+        &summary,
+        &[],
+        None,
+    )?;
     let generation = bump_generation();
     Ok(McpWriteOutcome::Done {
         operation_id,
@@ -6530,8 +6919,9 @@ fn build_undo_plan(
         .ok_or_else(|| McpError::new("undo-unavailable", "这条记录已经不能撤销。"))?;
     if let Some(reason) = undo_unavailable_reason(&operations, operation, now_ns()) {
         if reason != "superseded" || kind == "undo" {
-            return Err(McpError::new("undo-unavailable", "这条记录已经不能撤销。")
-                .param("reason", reason));
+            return Err(
+                McpError::new("undo-unavailable", "这条记录已经不能撤销。").param("reason", reason)
+            );
         }
     }
     let blob = load_undo_blob(connection, operation_id)?
@@ -6589,7 +6979,12 @@ fn build_undo_plan(
         if entries.is_empty() {
             continue;
         }
-        let read = resolve_read(ctx, undo_target.client, undo_target.scope, &undo_target.workspace_id);
+        let read = resolve_read(
+            ctx,
+            undo_target.client,
+            undo_target.scope,
+            &undo_target.workspace_id,
+        );
         let mut target_items = Vec::new();
         let mut conflicts = Vec::new();
         for entry in &entries {
@@ -6632,9 +7027,9 @@ fn build_undo_plan(
         }
         let byte_restore = conflicts.is_empty()
             && undo_target.snapshot_id.is_some()
-            && read
-                .as_ref()
-                .is_some_and(|read| !read.sha256.is_empty() && read.sha256 == undo_target.applied_sha256);
+            && read.as_ref().is_some_and(|read| {
+                !read.sha256.is_empty() && read.sha256 == undo_target.applied_sha256
+            });
         let target = plan.target_mut(
             undo_target.client,
             undo_target.scope,
@@ -6651,7 +7046,11 @@ fn build_undo_plan(
     Ok((plan, operation.summary.clone()))
 }
 
-fn finish_undo(connection: &Connection, undone: &str, outcome: &McpWriteOutcome) -> Result<(), McpError> {
+fn finish_undo(
+    connection: &Connection,
+    undone: &str,
+    outcome: &McpWriteOutcome,
+) -> Result<(), McpError> {
     if let Some(new_id) = outcome.operation_id() {
         connection
             .execute(
@@ -6663,7 +7062,10 @@ fn finish_undo(connection: &Connection, undone: &str, outcome: &McpWriteOutcome)
     Ok(())
 }
 
-pub(crate) fn undo(ctx: &McpLibraryContext, request: McpUndoRequest) -> Result<McpWriteOutcome, McpError> {
+pub(crate) fn undo(
+    ctx: &McpLibraryContext,
+    request: McpUndoRequest,
+) -> Result<McpWriteOutcome, McpError> {
     let connection = open_db(ctx)?;
     let (plan, _) = build_undo_plan(ctx, &connection, &request.undo_token, "undo")?;
     let outcome = execute_plan(ctx, &connection, plan, None, &[])?;
@@ -6682,13 +7084,14 @@ pub(crate) fn rollback(
         let legacy = engine::list_legacy_snapshots(&ctx.mutation)
             .into_iter()
             .find(|item| &item.snapshot_id == snapshot_id)
-            .ok_or_else(|| McpError::new("undo-unavailable", "这条 3.2 版本的记录已经不能撤销。"))?;
+            .ok_or_else(|| {
+                McpError::new("undo-unavailable", "这条 3.2 版本的记录已经不能撤销。")
+            })?;
         if !legacy.restorable {
-            return Err(McpError::new(
-                "undo-conflict",
-                "这些配置文件在之后又被改过，没有撤销。",
-            )
-            .param("reason", "legacy-changed"));
+            return Err(
+                McpError::new("undo-conflict", "这些配置文件在之后又被改过，没有撤销。")
+                    .param("reason", "legacy-changed"),
+            );
         }
         let items = legacy
             .host_ids
@@ -6747,7 +7150,10 @@ pub(crate) fn rollback(
                 server_ids: Vec::new(),
                 status: if result.is_ok() { "undone" } else { "failed" }.to_string(),
                 skipped_reason: None,
-                error: result.as_ref().err().map(|message| classify_engine_error(message)),
+                error: result
+                    .as_ref()
+                    .err()
+                    .map(|message| classify_engine_error(message)),
                 restart_hint: result.is_ok() && client.restart_hint(),
             })
             .collect();
@@ -6809,7 +7215,9 @@ pub(crate) fn rollback(
                 }
                 .to_string(),
                 before: after.as_ref().map(|node| entry_preview(entry.client, node)),
-                after: before.as_ref().map(|node| entry_preview(entry.client, node)),
+                after: before
+                    .as_ref()
+                    .map(|node| entry_preview(entry.client, node)),
                 changed_fields: changed_fields(entry.client, after.as_ref(), before.as_ref()),
             });
             if let Some(read) = resolve_read(ctx, entry.client, entry.scope, &entry.workspace_id) {
@@ -6933,7 +7341,11 @@ pub(crate) fn history(
         ));
     }
     entries.sort_by_key(|(created, _)| std::cmp::Reverse(*created));
-    Ok(entries.into_iter().take(limit).map(|(_, entry)| entry).collect())
+    Ok(entries
+        .into_iter()
+        .take(limit)
+        .map(|(_, entry)| entry)
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -7000,7 +7412,10 @@ pub(crate) fn get_server(
         source: server.source.clone(),
         meta: server.meta.clone(),
         spec_revision: server.spec_revision,
-        cells: row.as_ref().map(|row| row.cells.clone()).unwrap_or_default(),
+        cells: row
+            .as_ref()
+            .map(|row| row.cells.clone())
+            .unwrap_or_default(),
         project_bindings: row
             .as_ref()
             .map(|row| row.project_bindings.clone())
@@ -7026,7 +7441,7 @@ pub(crate) fn export_json(
                 .is_none_or(|ids| ids.contains(&server.id))
         })
         .collect::<Vec<_>>();
-    selected.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    selected.sort_by_key(|server| server.name.to_lowercase());
     let mask = |count: &mut usize| {
         *count += 1;
         SECRET_MASK.to_string()
@@ -7041,8 +7456,15 @@ pub(crate) fn export_json(
         }
         match spec.transport {
             Transport::Stdio => {
-                entry.insert("command", Node::string(spec.command.clone().unwrap_or_default()));
-                let all = spec.args.iter().map(|arg| arg.value.clone()).collect::<Vec<_>>();
+                entry.insert(
+                    "command",
+                    Node::string(spec.command.clone().unwrap_or_default()),
+                );
+                let all = spec
+                    .args
+                    .iter()
+                    .map(|arg| arg.value.clone())
+                    .collect::<Vec<_>>();
                 let args = spec
                     .args
                     .iter()
@@ -7063,7 +7485,10 @@ pub(crate) fn export_json(
                 for item in &spec.env {
                     let value = if !item.secret {
                         item.value.clone().unwrap_or_default()
-                    } else if matches!(item.storage, SecretStorage::UserEnv | SecretStorage::External) {
+                    } else if matches!(
+                        item.storage,
+                        SecretStorage::UserEnv | SecretStorage::External
+                    ) {
                         if codex && item.variable() == item.name {
                             env_vars.push(item.name.clone());
                             continue;
@@ -7100,7 +7525,10 @@ pub(crate) fn export_json(
                     headers.insert(header.name.clone(), Node::string(value));
                 }
                 if !headers.is_empty() {
-                    entry.insert(if codex { "http_headers" } else { "headers" }, Node::Object(headers));
+                    entry.insert(
+                        if codex { "http_headers" } else { "headers" },
+                        Node::Object(headers),
+                    );
                 }
             }
         }
@@ -7155,8 +7583,11 @@ pub(crate) fn config_location(
         request.workspace_id.as_deref(),
     )
     .map_err(|_| {
-        McpError::new("client-not-installed", format!("没有检测到 {}。", request.client_id.label()))
-            .with_client(request.client_id)
+        McpError::new(
+            "client-not-installed",
+            format!("没有检测到 {}。", request.client_id.label()),
+        )
+        .with_client(request.client_id)
     })?;
     let path = target.path().to_path_buf();
     if path.is_file() {
@@ -7264,9 +7695,8 @@ pub(crate) fn candidates_from(
         let mut secrets_view = Vec::new();
         let mut secret_inputs = Vec::new();
         let mut literal_env = Vec::new();
-        let mut provisional = McpServerSpec::empty(
-            Transport::parse(parsed.transport).unwrap_or(Transport::Stdio),
-        );
+        let mut provisional =
+            McpServerSpec::empty(Transport::parse(parsed.transport).unwrap_or(Transport::Stdio));
         for (name, value) in &parsed.env {
             match mcp_paste::classify_env_value(name, value) {
                 mcp_paste::ValueKind::Literal(value) => {
@@ -7392,7 +7822,12 @@ pub(crate) fn candidates_from(
             header_inputs.push((name.clone(), false, Some(variable.clone()), None));
         }
         if let Some(variable) = &parsed.bearer_env {
-            header_inputs.push(("Authorization".to_string(), true, Some(variable.clone()), None));
+            header_inputs.push((
+                "Authorization".to_string(),
+                true,
+                Some(variable.clone()),
+                None,
+            ));
         }
         for (name, bearer, env_var, value) in header_inputs {
             let variable = env_var.unwrap_or_else(|| derived_variable(&parsed.name, &name, bearer));
@@ -7484,9 +7919,11 @@ pub(crate) fn candidates_from(
                     &projected_node(reference, &left, None),
                     &projected_node(reference, &right, None),
                 ),
-                _ => server.spec.transport == provisional.transport
-                    && server.spec.command == provisional.command
-                    && server.spec.url == provisional.url,
+                _ => {
+                    server.spec.transport == provisional.transport
+                        && server.spec.command == provisional.command
+                        && server.spec.url == provisional.url
+                }
             }
         });
         let exists = if existing.is_none() && !any_file {
@@ -7541,10 +7978,13 @@ pub(crate) fn candidates_from(
         .iter()
         .enumerate()
         .map(|(index, candidate)| (candidate.name.to_ascii_lowercase(), index))
-        .fold(BTreeMap::<String, Vec<usize>>::new(), |mut map, (name, index)| {
-            map.entry(name).or_default().push(index);
-            map
-        });
+        .fold(
+            BTreeMap::<String, Vec<usize>>::new(),
+            |mut map, (name, index)| {
+                map.entry(name).or_default().push(index);
+                map
+            },
+        );
     for indexes in groups.values().filter(|indexes| indexes.len() > 1) {
         let variants = indexes
             .iter()
@@ -7575,7 +8015,11 @@ pub(crate) fn candidates_from(
             })
             .collect(),
         source_display: source.source_display,
-        notices: source.notices.iter().map(|notice| notice.to_string()).collect(),
+        notices: source
+            .notices
+            .iter()
+            .map(|notice| notice.to_string())
+            .collect(),
     })
 }
 
@@ -7583,9 +8027,8 @@ pub(crate) fn parse_paste(
     ctx: &McpLibraryContext,
     request: McpParsePasteRequest,
 ) -> Result<McpPasteResult, McpError> {
-    let outcome = mcp_paste::parse(&request.text).map_err(|_| {
-        McpError::new("paste-too-large", "粘贴的内容太长了（超过 256 KB）。")
-    })?;
+    let outcome = mcp_paste::parse(&request.text)
+        .map_err(|_| McpError::new("paste-too-large", "粘贴的内容太长了（超过 256 KB）。"))?;
     let format = outcome.format;
     let count = outcome.servers.len();
     candidates_from(
@@ -7620,7 +8063,10 @@ pub(crate) struct TestTarget {
     pub key: [u8; 32],
 }
 
-pub(crate) fn load_test_target(ctx: &McpLibraryContext, server_id: &str) -> Result<TestTarget, McpError> {
+pub(crate) fn load_test_target(
+    ctx: &McpLibraryContext,
+    server_id: &str,
+) -> Result<TestTarget, McpError> {
     let connection = open_db(ctx)?;
     let servers = load_servers(&connection, false)?;
     let server = find_server(&servers, server_id)?;
@@ -7653,7 +8099,10 @@ pub(crate) fn save_test_result(
     connection
         .execute(
             "UPDATE mcp_servers SET test_json = ?2 WHERE id = ?1 AND deleted_at IS NULL",
-            params![server_id, serde_json::to_string(&stored).unwrap_or_default()],
+            params![
+                server_id,
+                serde_json::to_string(&stored).unwrap_or_default()
+            ],
         )
         .map_err(db_error)?;
     bump_generation();
@@ -7662,7 +8111,10 @@ pub(crate) fn save_test_result(
 
 /// Effective literal environment for a test run: non-secret env, HKCU /
 /// process values for references, and library values.
-pub(crate) fn test_environment(ctx: &McpLibraryContext, spec: &McpServerSpec) -> (Vec<(String, String)>, Vec<String>) {
+pub(crate) fn test_environment(
+    ctx: &McpLibraryContext,
+    spec: &McpServerSpec,
+) -> (Vec<(String, String)>, Vec<String>) {
     let mut env = Vec::new();
     let mut missing = Vec::new();
     for item in &spec.env {
@@ -7682,7 +8134,10 @@ pub(crate) fn test_environment(ctx: &McpLibraryContext, spec: &McpServerSpec) ->
 }
 
 /// Resolved request headers for an HTTP test, and the names still missing.
-pub(crate) fn test_headers(ctx: &McpLibraryContext, spec: &McpServerSpec) -> (Vec<(String, String)>, Vec<String>) {
+pub(crate) fn test_headers(
+    ctx: &McpLibraryContext,
+    spec: &McpServerSpec,
+) -> (Vec<(String, String)>, Vec<String>) {
     let mut headers = Vec::new();
     let mut missing = Vec::new();
     for header in &spec.headers {
@@ -7718,7 +8173,6 @@ pub(crate) fn emit_payload(outcome: &McpWriteOutcome, reason: &str) -> Option<Js
         _ => None,
     }
 }
-
 
 #[cfg(test)]
 #[path = "mcp_library_tests.rs"]
