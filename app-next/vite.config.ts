@@ -22,7 +22,8 @@ export default defineConfig({
     strictPort: true,
     watch: {
       ignored: [
-        "**/src-tauri/target/**",
+        // Any Cargo target directory (target, target-*): builds lock their files.
+        "**/src-tauri/target*/**",
         "**/.skillhub-next/**",
         "**/.pnpm-store/**",
         "**/.npm-cache/**"
