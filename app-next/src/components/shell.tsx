@@ -6,6 +6,7 @@ import { Icon, type IconName } from "../icons";
 import { t } from "../i18n";
 import { agentDotTone, availableAgents, sidebarAgents, type SyncIndicator } from "../deliveryView";
 import { skillHubErrorText } from "../skillErrors";
+import { problemText } from "../agentText";
 import type { DeliveryProblem, ErrorAction, NavKey, SkillAgent, SkillCard, SkillDeliveryState, SkillHubError } from "../types";
 
 /* ---------- AI tool monogram ---------- */
@@ -192,12 +193,15 @@ export function ProblemsPopover({
   problems,
   agents,
   onAction,
-  onClose
+  onClose,
+  unitName
 }: {
   problems: DeliveryProblem[];
   agents: SkillAgent[];
   onAction: (action: ErrorAction, problem: DeliveryProblem) => void;
   onClose: () => void;
+  /** Library name of a unit id, for problems that mention a skill pack. */
+  unitName: (unitId: string) => string;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -229,7 +233,7 @@ export function ProblemsPopover({
           {problems.map(problem => (
             <li key={problem.id} data-testid={`problem-${problem.id}`}>
               {problem.agentId && <AgentGlyph agentId={problem.agentId} name={agentName(problem.agentId)} size="sm" />}
-              <p>{problem.message}</p>
+              <p>{problemText(problem, agents, unitName)}</p>
               {problem.action && (
                 <button className="ghost-action small" data-testid="problem-action" onClick={() => onAction(problem.action!, problem)} type="button">
                   {t(`err.action.${problem.action.kind}`)}

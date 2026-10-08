@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import { completeOnboarding, getOnboardingState } from "../skillApi";
 import { normalizeSkillHubError, skillHubErrorText } from "../skillErrors";
 import { getMcpSummary } from "../mcpBridge";
+import { onboardingReason } from "../agentText";
 import type { AgentId, OnboardingResult, OnboardingState, SkillHubError } from "../types";
 import { DeferredSurface } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
@@ -116,7 +117,7 @@ export function Onboarding({
                 <AgentGlyph agentId={agent.agentId} name={agent.name} />
                 <strong>{agent.name}</strong>
                 {agent.experimental && <em className="chip chip-experimental">{t("v33.experimental")}</em>}
-                {agent.reason && !agent.experimental && <small className="muted">{agent.reason}</small>}
+                {!agent.experimental && onboardingReason(agent) && <small className="muted">{onboardingReason(agent)}</small>}
                 {sharedPair && (agent.agentId === "codex" || agent.agentId === "coze") && (
                   <small className="chip chip-linked"><Icon name="link" /> {t(agent.agentId === "codex" ? "v33.sharedWithCoze" : "v33.sharedWithCodex")}</small>
                 )}
@@ -129,7 +130,7 @@ export function Onboarding({
                 <input disabled type="checkbox" />
                 <AgentGlyph agentId={agent.agentId} name={agent.name} />
                 <strong>{agent.name}</strong>
-                <small className="muted">{agent.reason || t("v33.notSupportedReason")}</small>
+                <small className="muted">{onboardingReason(agent) || t("v33.notSupportedReason")}</small>
               </label>
             </li>
           ))}

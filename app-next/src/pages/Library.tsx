@@ -12,6 +12,7 @@ import type { AgentId, LegacySnapshot, SkillAgent, SkillCard, SkillFolderCard, S
 import { copyTextToClipboard, displayCategoryName, isRouterHubSkill, skillInvocationName, stableSkillClientId } from "../appShared";
 import { Dialog, MoreMenu, StarRating, ToggleSwitch, useConfirm } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
+import { targetErrorText } from "../agentText";
 import "./library.css";
 
 export type LibraryFilter = "all" | "synced" | "unsynced" | "update" | "problem";
@@ -681,7 +682,7 @@ function LibraryRowView({
           const agent = agents.find(item => item.id === target.agentId);
           const view = targetIconView(target, row.unit?.libraryOnlyReason ?? "");
           const linkedNext = target.agentId === "codex" && shown[index + 1]?.agentId === "coze";
-          const tip = t(view.tooltipKey, { tool: agent?.name ?? target.agentId, message: target.error?.message ?? "" });
+          const tip = t(view.tooltipKey, { tool: agent?.name ?? target.agentId, message: targetErrorText(target.error) });
           return (
             <span className="target-icon-wrap" key={target.agentId}>
               <button

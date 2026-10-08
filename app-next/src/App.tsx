@@ -2038,6 +2038,10 @@ export function App() {
                   onAction={(action, problem) => runErrorAction(action, problem)}
                   onClose={closeProblems}
                   problems={delivery?.problems ?? []}
+                  unitName={unitId => {
+                    const row = rows.find(item => item.key === unitId);
+                    return row?.source?.name ?? row?.skill?.name ?? "";
+                  }}
                 />
               )}
             </div>

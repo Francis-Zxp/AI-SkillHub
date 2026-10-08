@@ -32,6 +32,7 @@ import type {
 import { CATEGORY_IDS, displayCategoryName, inferCategoryIds, parseTagInput } from "../appShared";
 import { useFocusTrap } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
+import { chipDisabledReason, invalidSkillReason } from "../agentText";
 import "./import.css";
 
 const DRAFT_KEY = "ai-skillhub-import-draft-v33";
@@ -675,7 +676,7 @@ function ProbePreview({
                 disabled={disabled}
                 key={chip.agentId}
                 onClick={() => onToggleChip(chip.agentId)}
-                title={chipsLocked ? t("v33.needsReviewFirst") : chip.disabledReason || chip.name}
+                title={chipsLocked ? t("v33.needsReviewFirst") : chipDisabledReason(chip.disabledReason, chip.name)}
                 type="button"
               >
                 <AgentGlyph agentId={chip.agentId} name={chip.name} size="sm" />
@@ -818,7 +819,7 @@ function SkillGroups({
                       />
                       <span>
                         <strong>{node.name}</strong>
-                        <small>{node.valid ? node.description : node.invalidReason}</small>
+                        <small>{node.valid ? node.description : invalidSkillReason(node.invalidReason)}</small>
                       </span>
                       {node.inLibrary && <em className="chip">{t("v33.inLibrary")}</em>}
                     </label>

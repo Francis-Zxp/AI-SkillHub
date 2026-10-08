@@ -13,6 +13,7 @@ import {
   type ImportProgress
 } from "../skillApi";
 import { normalizeSkillHubError, skillHubErrorText } from "../skillErrors";
+import { agentAfterSyncHint, agentExperimentalReason, agentSharedNote, agentUnsupportedReason, problemText } from "../agentText";
 import type {
   AdoptCandidate,
   AdoptReport,
@@ -115,6 +116,8 @@ export function Agents({
                 agents={agents}
                 delivery={delivery}
                 key={agent.id}
+                unitName={unitId => snapshot?.sources.find(source => source.id === unitId)?.name
+                  ?? delivery.units.find(unit => unit.unitId === unitId)?.entryName ?? ""}
                 onOpen={() => onOpenAgent(agent.id)}
                 onOpenFolder={() => onOpenFolder(agent.id)}
                 onTakeover={enabled => onTakeover(agent, enabled)}
@@ -131,7 +134,7 @@ export function Agents({
                     <AgentGlyph agentId={agent.id} name={agent.name} />
                     <strong>{agent.name}</strong>
                     <span className="chip">{t(`v33.word.${agent.statusWord}`)}</span>
-                    <small>{agent.statusWord === "unsupported" ? agent.unsupportedReason || t("v33.notSupportedReason") : t("v33.notInstalledReason")}</small>
+                    <small>{agent.statusWord === "unsupported" ? agentUnsupportedReason(agent.unsupportedReason) : t("v33.notInstalledReason")}</small>
                     {(() => {
                       const leftovers = delivery.targets.filter(target => target.agentId === agent.id && target.status === "orphan").length;
                       return leftovers > 0 ? (
@@ -157,7 +160,8 @@ function AgentCardView({
   delivery,
   onOpen,
   onOpenFolder,
-  onTakeover
+  onTakeover,
+  unitName
 }: {
   agent: SkillAgent;
   agents: SkillAgent[];
@@ -165,9 +169,12 @@ function AgentCardView({
   onOpen: () => void;
   onOpenFolder: () => void;
   onTakeover: (enabled: boolean) => void;
+  unitName: (unitId: string) => string;
 }) {
   const problem = delivery.problems.find(item => item.agentId === agent.id);
-  const linked = agent.linkedAgentIds.map(id => agents.find(item => item.id === id)?.name ?? id);
+  const sharedNote = agentSharedNote(agent, agents);
+  const experimentalReason = agentExperimentalReason(agent);
+  const afterSyncHint = agentAfterSyncHint(agent);
   const switchable = agent.canDeliver && agent.installed;
   return (
     <article className={`agent-card glow-card status-${agent.statusWord}`} data-testid={`agent-card-${agent.id}`}>
@@ -176,10 +183,10 @@ function AgentCardView({
         <header>
           <button className="agent-name" onClick={onOpen} type="button">{agent.name}</button>
           <span className={`chip word-${agent.statusWord}`}>{t(`v33.word.${agent.statusWord}`)}</span>
-          {agent.experimental && <span className="chip chip-experimental" title={agent.experimentalReason}>{t("v33.experimental")}</span>}
-          {linked.length > 0 && (
-            <span className="chip chip-linked" title={agent.sharedFolderNote}>
-              <Icon name="link" /> {agent.sharedFolderNote || t("v33.sharedWith", { name: linked.join("、") })}
+          {agent.experimental && <span className="chip chip-experimental" title={experimentalReason}>{t("v33.experimental")}</span>}
+          {sharedNote && (
+            <span className="chip chip-linked" title={sharedNote}>
+              <Icon name="link" /> {sharedNote}
             </span>
           )}
         </header>
@@ -188,9 +195,9 @@ function AgentCardView({
           {agent.counts.personal !== null && agent.counts.personal > 0 && <> · {t("v33.agentPersonal", { n: agent.counts.personal })}</>}
         </p>
         {agent.skillsPath && <code className="agent-path" title={agent.skillsPath}>{displayPath(agent.skillsPath)}</code>}
-        {agent.experimental && <small className="muted">{agent.experimentalReason}</small>}
-        {agent.afterSyncHint && <small className="agent-hint"><Icon name="info" /> {agent.afterSyncHint}</small>}
-        {agent.health === "problem" && problem && <small className="agent-problem"><Icon name="alert" /> {problem.message}</small>}
+        {experimentalReason && <small className="muted">{experimentalReason}</small>}
+        {afterSyncHint && <small className="agent-hint"><Icon name="info" /> {afterSyncHint}</small>}
+        {agent.health === "problem" && problem && <small className="agent-problem"><Icon name="alert" /> {problemText(problem, agents, unitName, false)}</small>}
       </div>
       <div className="agent-card-side">
         <ToggleSwitch
@@ -242,6 +249,7 @@ function AgentDetail({
   snapshot: LegacySnapshot | null;
 }) {
   const [tab, setTab] = useState<DetailTab>("skills");
+  const sharedNote = agentSharedNote(agent, delivery.agents);
   return (
     <div className="view agents-view agent-detail" data-testid={`agent-detail-${agent.id}`}>
       <button className="link-action back-link" onClick={onBack} type="button"><Icon name="chevron" className="rotate-180" /> {t("nav.agents")}</button>
@@ -250,7 +258,7 @@ function AgentDetail({
         <div>
           <h2>{agent.name}</h2>
           <span className={`chip word-${agent.statusWord}`}>{t(`v33.word.${agent.statusWord}`)}</span>
-          {agent.sharedFolderNote && <span className="chip chip-linked"><Icon name="link" /> {agent.sharedFolderNote}</span>}
+          {sharedNote && <span className="chip chip-linked"><Icon name="link" /> {sharedNote}</span>}
           {agent.skillsPath && <code className="agent-path">{displayPath(agent.skillsPath)}</code>}
         </div>
         <ToggleSwitch

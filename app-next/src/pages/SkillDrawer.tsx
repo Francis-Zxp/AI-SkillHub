@@ -9,7 +9,7 @@ import { localizedSkillDescription } from "../localizedDescriptions";
 import { rowFilterState, type LibraryRow } from "../skillCounts";
 import { orderTargetsForRow, targetIconView } from "../deliveryView";
 import { readLibrarySkillDocument } from "../skillApi";
-import { normalizeSkillHubError } from "../skillErrors";
+import { normalizeSkillHubError, skillHubErrorText } from "../skillErrors";
 import type {
   AgentId,
   LegacySnapshot,
@@ -304,7 +304,7 @@ function OverviewTab({
         if (!cancelled) setDoc(result);
       })
       .catch(error => {
-        if (!cancelled) setDocError(normalizeSkillHubError(error).message || t("v33.docUnavailable"));
+        if (!cancelled) setDocError(skillHubErrorText(normalizeSkillHubError(error), t) || t("v33.docUnavailable"));
       });
     return () => {
       cancelled = true;
