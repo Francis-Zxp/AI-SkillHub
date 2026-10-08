@@ -465,6 +465,19 @@ const LIBRARY_ENABLED_UNITS_SQL: &str = "
 /// desired row for every taken-over tool that auto-adds new packs. Existing
 /// rows (including explicit offs) are never touched. Returns rows created.
 pub(crate) fn materialize_defaults(connection: &Connection) -> Result<usize, String> {
+    // Automatic rows for sources without any skill (Prompt sources, emptied
+    // packs) could never be delivered and would stay "pending" forever; the
+    // first 3.3.0 migration created such rows. Explicit user rows are kept.
+    connection
+        .execute(
+            "DELETE FROM agent_skill_targets
+             WHERE origin IN ('migration', 'default')
+               AND source_id NOT LIKE 'standalone:%'
+               AND NOT EXISTS (
+                 SELECT 1 FROM skills k WHERE k.source_id = agent_skill_targets.source_id)",
+            [],
+        )
+        .map_err(|error| format!("Cannot prune undeliverable targets: {error}"))?;
     let now = unix_timestamp_string();
     let sql = format!(
         "INSERT OR IGNORE INTO agent_skill_targets
@@ -686,7 +699,9 @@ pub(crate) fn migrate_v33_delivery_state(
              LEFT JOIN source_overrides so ON so.source_id = s.id
              JOIN agent_takeover t ON t.enabled = 1
              WHERE COALESCE(so.enabled, s.enabled, 1) = 1
-               AND s.name <> 'AI-SkillHub-local-routers'",
+               AND s.name <> 'AI-SkillHub-local-routers'
+               -- Prompt sources and empty packs have nothing to deliver.
+               AND EXISTS (SELECT 1 FROM skills k WHERE k.source_id = s.id)",
             params![now],
         )
         .map_err(|error| format!("Cannot migrate pack targets: {error}"))?;
@@ -3063,7 +3078,9 @@ mod tests {
     fn migration_existing_user_takes_over_tools_with_entries_once() {
         let mut connection = memory_db();
         add_source(&connection, "pack-on", true);
+        add_skill(&connection, "on-1", "pack-on");
         add_source(&connection, "pack-off", false);
+        add_skill(&connection, "off-1", "pack-off");
         add_skill(&connection, "local-skill", "");
         let has = BTreeSet::from(["claude", "codex", "coze"]);
         let report = migrate_v33_delivery_state(&mut connection, &has, "").unwrap();
@@ -3164,6 +3181,36 @@ mod tests {
         let mut connection = memory_db();
         let report = migrate_v33_delivery_state(&mut connection, &BTreeSet::new(), "abc").unwrap();
         assert_eq!(report.onboarding, "completed");
+    }
+
+    #[test]
+    fn prompt_sources_get_no_targets_and_stale_rows_are_pruned() {
+        let mut connection = memory_db();
+        add_source(&connection, "pack-a", true);
+        add_skill(&connection, "a1", "pack-a");
+        // A Prompt source: enabled, but it has no skills to deliver.
+        add_source(&connection, "prompts", true);
+        migrate_v33_delivery_state(&mut connection, &BTreeSet::from(["claude"]), "").unwrap();
+        let targets = read_targets(&connection).unwrap();
+        assert!(targets.contains_key(&("pack-a".to_string(), "claude".to_string())));
+        assert!(!targets.contains_key(&("prompts".to_string(), "claude".to_string())));
+
+        // Rows the first 3.3.0 migration created for such sources are pruned;
+        // an explicit user row is kept.
+        add_source(&connection, "notes", true);
+        connection
+            .execute(
+                "INSERT INTO agent_skill_targets (source_id, agent_id, enabled, origin, status, updated_at)
+                 VALUES ('prompts', 'claude', 1, 'migration', 'pending', '1'),
+                        ('notes', 'claude', 1, 'user', 'pending', '1')",
+                [],
+            )
+            .unwrap();
+        materialize_defaults(&connection).unwrap();
+        let targets = read_targets(&connection).unwrap();
+        assert!(!targets.contains_key(&("prompts".to_string(), "claude".to_string())));
+        assert!(targets.contains_key(&("notes".to_string(), "claude".to_string())));
+        assert!(targets.contains_key(&("pack-a".to_string(), "claude".to_string())));
     }
 
     #[test]
