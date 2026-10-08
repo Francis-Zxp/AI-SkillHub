@@ -10,7 +10,7 @@ export { t };
 
 export type GlyphName =
   | "close" | "check" | "lock" | "ban" | "flag" | "warn" | "play" | "undo" | "history" | "plus"
-  | "more" | "search" | "help" | "folder" | "copy" | "external" | "chevron" | "import" | "key" | "unlock" | "refresh";
+  | "more" | "search" | "help" | "folder" | "copy" | "external" | "chevron" | "import" | "key" | "unlock" | "refresh" | "trash";
 
 const PATHS: Record<GlyphName, ReactNode> = {
   close: <path d="M6 6l12 12M18 6L6 18" />,
@@ -33,7 +33,8 @@ const PATHS: Record<GlyphName, ReactNode> = {
   chevron: <path d="M8 10l4 4 4-4" />,
   import: <><path d="M12 4v11" /><path d="M7.5 10.5L12 15l4.5-4.5" /><path d="M5 19.5h14" /></>,
   key: <><circle cx="8" cy="15" r="3.5" /><path d="M10.5 12.5L19 4M16 7l2.5 2.5M14 9l2 2" /></>,
-  refresh: <><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" /><path d="M19.5 4.5v4h-4" /></>
+  refresh: <><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" /><path d="M19.5 4.5v4h-4" /></>,
+  trash: <><path d="M5 7h14" /><path d="M9.5 7V5h5v2" /><path d="M7 7l.8 12h8.4L17 7" /></>
 };
 
 export function Glyph({ name, className = "" }: { name: GlyphName; className?: string }) {
@@ -307,7 +308,8 @@ export function HelpTip({ label, children }: { label: string; children: ReactNod
 
 /** Media/size helper without polling: a ResizeObserver on the page root. */
 export function useNarrow(ref: RefObject<HTMLElement | null>, breakpoint: number): boolean {
-  const [narrow, setNarrow] = useState(false);
+  // First guess from the window (the sidebar takes ~260 px) so a phone does not flash the table.
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.innerWidth - 260 < breakpoint && window.innerWidth < 900);
   useEffect(() => {
     const node = ref.current;
     if (!node || typeof ResizeObserver === "undefined") return;

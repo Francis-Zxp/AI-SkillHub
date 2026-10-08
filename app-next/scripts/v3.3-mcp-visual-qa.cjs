@@ -52,6 +52,7 @@ async function waitIdle(page) {
 }
 
 async function shot(page, name) {
+  await page.waitForTimeout(260); // let the 200 ms slide-in finish
   await page.screenshot({ path: path.join(SHOTS, `${name}.png`) });
 }
 

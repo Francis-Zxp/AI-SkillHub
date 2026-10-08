@@ -230,7 +230,9 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
   })();
   const folderProblem = folder && !folder.value.trim() ? "mcp.add.err.folder" : "";
   const secretProblems = new Map<number, string>();
-  for (const row of secrets) {
+  const fits = (row: SecretRow) => (transport === "stdio" ? row.kind === "env" : row.kind === "header");
+  const activeSecrets = secrets.filter(fits);
+  for (const row of activeSecrets) {
     if (row.kind === "env") {
       const problem = validateEnvName(row.name);
       if (problem) secretProblems.set(row.id, `mcp.add.err.env.${problem}`);
@@ -279,7 +281,7 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
   const pickedIds = (picked ?? defaultPicked).filter(id => availability.find(item => item.client.id === id)?.available);
   const targetCount = pickedIds.length;
 
-  const hasSecrets = pasteActive ? includedCandidates.some(item => item.candidate.secrets.length > 0) : secrets.length > 0;
+  const hasSecrets = pasteActive ? includedCandidates.some(item => item.candidate.secrets.length > 0) : activeSecrets.length > 0;
   const desktopNeedsConsent = hasSecrets && pickedIds.includes("claude-desktop");
 
   const candidateProblems = new Map<string, string>();
@@ -439,7 +441,7 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
   }
 
   function manualInput(): McpServerInput {
-    const secretInputs: McpSecretInput[] = secrets.map(row => ({
+    const secretInputs: McpSecretInput[] = activeSecrets.map(row => ({
       kind: row.kind,
       name: row.name.trim(),
       envVar: row.kind === "header" ? row.envVar.trim() || undefined : undefined,
@@ -956,11 +958,13 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
                 </label>
               )}
 
-              {secrets.map(secretRowView)}
+              {activeSecrets.map(secretRowView)}
               <div className="mcp-inline-actions">
-                <button className="mcp-btn small quiet" onClick={() => setSecrets(rows => [...rows, emptySecret("env")])} type="button">
-                  <Glyph name="plus" /> {t("mcp.add.addKey")}
-                </button>
+                {transport === "stdio" && (
+                  <button className="mcp-btn small quiet" onClick={() => setSecrets(rows => [...rows, emptySecret("env")])} type="button">
+                    <Glyph name="plus" /> {t("mcp.add.addKey")}
+                  </button>
+                )}
                 {transport !== "stdio" && (
                   <button className="mcp-btn small quiet" onClick={() => setSecrets(rows => [...rows, emptySecret("header")])} type="button">
                     <Glyph name="plus" /> {t("mcp.add.addBearer")}

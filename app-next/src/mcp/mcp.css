@@ -616,7 +616,7 @@
   animation: mcp-slide-in 200ms cubic-bezier(.2, .8, .2, 1);
 }
 .mcp-drawer { width: min(560px, 100vw); }
-@keyframes mcp-slide-in { from { transform: translateX(24px); opacity: .4; } to { transform: none; opacity: 1; } }
+@keyframes mcp-slide-in { from { transform: translateX(28px); } to { transform: none; } }
 .mcp-overlay-dialog { align-items: center; justify-content: center; padding: 16px; }
 .mcp-dialog {
   width: min(480px, 100%);
@@ -854,6 +854,8 @@
 .mcp-edit-test { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .mcp-edit-test > span:nth-child(2) { flex: 1; font-weight: 600; }
 .mcp-edit-section { display: flex; flex-direction: column; gap: 8px; }
+.mcp-edit-section > .mcp-btn,
+.mcp-plain-env > .mcp-btn { align-self: flex-start; }
 .mcp-edit-section h3 { margin: 4px 0 0; color: var(--text-soft); font-size: calc(13px * var(--ui-text-scale, 1)); font-weight: 700; }
 .mcp-args-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .mcp-arg-input { display: inline-flex; align-items: center; gap: 2px; }
@@ -872,8 +874,9 @@
 .mcp-client-list .mcp-cell.as-chip.wide { flex: 1 1 auto; justify-content: flex-start; min-width: 0; height: 36px; border-radius: 10px; }
 .mcp-client-list .mcp-cell.as-chip .mcp-cell-word { overflow: hidden; text-overflow: ellipsis; }
 .mcp-client-tools { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; }
-.mcp-link.subtle { color: var(--text-muted); font-weight: 500; font-size: calc(12.5px * var(--ui-text-scale, 1)); }
-.mcp-link.subtle:hover { color: var(--danger); }
+.mcp-client-list .mcp-state-text { margin-left: auto; }
+.mcp-client-list .mcp-state-text::before { content: none !important; }
+.mcp-icon-button.danger-hover:hover:not(:disabled) { color: var(--danger); }
 .mcp-project-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .mcp-project-list li { padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 
@@ -971,7 +974,11 @@
   .mcp-import-button .mcp-btn-text { display: none; }
   .mcp-import-button { padding: 0 9px; }
   .mcp-search { flex-basis: 200px; }
-  .mcp-page { --mcp-col: 112px; }
+  .mcp-matrix { --mcp-col: 112px; }
+}
+@container mcp-page (max-width: 820px) {
+  .mcp-matrix { --mcp-col: 96px; }
+  .mcp-cell-word { font-size: calc(11.5px * var(--ui-text-scale, 1)); }
 }
 @container mcp-page (max-width: 760px) {
   .mcp-head { align-items: stretch; }

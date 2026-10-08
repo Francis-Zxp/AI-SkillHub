@@ -210,7 +210,9 @@ export function McpEditDrawer(props: Props) {
       name: detail.name,
       displayName: detail.displayName,
       transport: form.transport,
-      secrets: [...keepSecrets, ...added],
+      // A local command keeps env secrets, a remote address keeps header secrets; the other kind
+      // would be invalid in the client files after a transport switch (bugs MCP#1, MCP#4).
+      secrets: [...keepSecrets, ...added].filter(secret => (form.transport === "stdio" ? secret.kind === "env" : secret.kind === "header")),
       codexRequired: form.codexRequired,
       source: detail.source
     };
@@ -505,9 +507,11 @@ export function McpEditDrawer(props: Props) {
                 ))}
               </ul>
               <div className="mcp-inline-actions">
-                <button className="mcp-btn small quiet" onClick={() => setNewSecrets(rows => [...rows, { id: nextId(), kind: "env", name: "", envVar: "", value: "", mode: "user_env" }])} type="button">
-                  <Glyph name="plus" /> {t("mcp.add.addKey")}
-                </button>
+                {form.transport === "stdio" && (
+                  <button className="mcp-btn small quiet" onClick={() => setNewSecrets(rows => [...rows, { id: nextId(), kind: "env", name: "", envVar: "", value: "", mode: "user_env" }])} type="button">
+                    <Glyph name="plus" /> {t("mcp.add.addKey")}
+                  </button>
+                )}
                 {form.transport !== "stdio" && (
                   <button className="mcp-btn small quiet" onClick={() => setNewSecrets(rows => [...rows, { id: nextId(), kind: "header", name: "Authorization", envVar: "", value: "", mode: "user_env" }])} type="button">
                     <Glyph name="plus" /> {t("mcp.add.addBearer")}
@@ -554,14 +558,20 @@ export function McpEditDrawer(props: Props) {
                         title={cell.reason ? cellReasonText(cell.reason, t, client.label) : undefined}
                         type="button"
                       >
-                        <span className="mcp-chip-label">{client.label}</span>
                         <span className="mcp-cell-visual">{busy ? <Spinner /> : <span className={`mcp-dot ${cell.state === "on" ? "on" : "off"}`} />}</span>
-                        <span className="mcp-cell-word">{cellStateText(cell, t, client.label)}</span>
+                        <span className="mcp-chip-label">{client.label}</span>
+                        <span className="mcp-cell-word mcp-state-text">{cellStateText(cell, t, client.label)}</span>
                       </button>
                       <span className="mcp-client-tools">
                         {cell.presentInFile && client.writable && (
-                          <button className="mcp-link subtle" onClick={() => props.onRemoveFromClient(serverId, client.id)} type="button">
-                            {t("mcp.edit.removeFromFile")}
+                          <button
+                            aria-label={`${t("mcp.edit.removeFromFile")} · ${client.label}`}
+                            className="mcp-icon-button small danger-hover"
+                            onClick={() => props.onRemoveFromClient(serverId, client.id)}
+                            title={t("mcp.edit.removeFromFile")}
+                            type="button"
+                          >
+                            <Glyph name="trash" />
                           </button>
                         )}
                         <button
