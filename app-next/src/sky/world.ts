@@ -1376,6 +1376,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
         weather: weather.kind(),
         weatherDrawCalls: weather.drawCalls(),
         weatherParticles: weather.particleCount(),
+        flash: Number(weather.flash().toFixed(2)),
         drawCalls: renderer.info.render.calls,
         triangles: renderer.info.render.triangles,
         geometries: renderer.info.memory.geometries,

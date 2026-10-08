@@ -89,6 +89,15 @@ const hostData = page => page.evaluate(() => {
           await context.close();
         }
       }
+      // A few weathers in the morning and the golden hour too.
+      for (const [theme, weather] of [["sky-dawn", "fog"], ["sky-dawn", "rainbow"], ["sky-golden", "petals"], ["sky-golden", "cloudy"], ["sky-dawn", "snow"]]) {
+        const { context, page, errors } = await open(browser, { theme, weather, seed: process.env.SKY_SEED ?? "7", demo: 3 });
+        await page.waitForTimeout(2000);
+        const data = await hostData(page);
+        report.push({ name: `weather-${weather}-${theme}`, weather: data.weather, weatherCalls: data.weatherCalls, drawCalls: data.drawCalls, errors });
+        await shot(page, `weather-${weather}-${theme}`);
+        await context.close();
+      }
     }
     if (mode === "all" || mode === "perf") {
       for (const weather of ["clear", "storm"]) {

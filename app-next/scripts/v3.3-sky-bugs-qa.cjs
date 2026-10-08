@@ -120,6 +120,33 @@ async function pressLabel(page, index, hold) {
       const low = await page.evaluate(() => document.querySelector(".sky-scene-host").skyWorldStats());
       check("storm adds at most 4 draw calls", normal.weather === "storm" && normal.weatherDrawCalls <= 4, { weather: normal.weather, calls: normal.weatherDrawCalls });
       check("low power draws fewer weather particles", low.weatherParticles > 0 && low.weatherParticles < normal.weatherParticles, { normal: normal.weatherParticles, low: low.weatherParticles });
+      // Lightning: a storm flashes within about 15 s.
+      const brightest = await page.evaluate(async () => {
+        let best = 0;
+        for (let step = 0; step < 300; step++) {
+          best = Math.max(best, document.querySelector(".sky-scene-host").skyWorldStats().flash);
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        return best;
+      });
+      check("storm: lightning flashes", brightest > 0.2, { brightest });
+      allErrors.push(...errors);
+      await context.close();
+    }
+    {
+      // Reduced motion: a still frame, no lightning.
+      const { context, page, errors } = await open(browser, { reduced: true, storage: { "skillhub-sky-weather": "storm" } });
+      const result = await page.evaluate(async () => {
+        const host = document.querySelector(".sky-scene-host");
+        const first = host.skyWorldStats().frames;
+        let best = 0;
+        for (let step = 0; step < 100; step++) {
+          best = Math.max(best, host.skyWorldStats().flash);
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        return { frames: host.skyWorldStats().frames - first, best, weather: host.skyWorldStats().weather };
+      });
+      check("reduced motion: storm is one still frame without lightning", result.weather === "storm" && result.frames === 0 && result.best === 0, result);
       allErrors.push(...errors);
       await context.close();
     }
