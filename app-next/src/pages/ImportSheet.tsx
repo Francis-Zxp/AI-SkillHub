@@ -154,9 +154,16 @@ export function ImportSheet({
 
   useFocusTrap(sheetRef, close);
 
+  // The sheet can also go away without close(): 打开 on a duplicate, 去接管, the MCP hand-off, or a
+  // drop that opens a fresh sheet. A probe still running is cancelled and its staged copy is
+  // discarded then too, so nothing is left downloading or occupying disk in the background.
+  const phaseKindRef = useRef<Phase["kind"]>("idle");
+  phaseKindRef.current = phase.kind;
   useEffect(() => () => {
     if (parseTimer.current) window.clearTimeout(parseTimer.current);
     if (probeTimer.current) window.clearTimeout(probeTimer.current);
+    generationRef.current += 1;
+    if (phaseKindRef.current !== "installing") cleanupProbe();
     onBusyChange(false);
   }, []);
 
@@ -591,7 +598,7 @@ function ProbePreview({
       {duplicate && (
         <p className="import-notice" data-testid="import-duplicate">
           <Icon name="info" /> <span>{t("v33.alreadyInLibrary")}</span>
-          <button className="link-action" onClick={onOpenRow} type="button">{t("v33.open")}</button>
+          <button className="link-action" disabled={installing} onClick={onOpenRow} type="button">{t("v33.open")}</button>
         </p>
       )}
 
@@ -613,7 +620,7 @@ function ProbePreview({
               <div className="import-mcp-file" key={config.relativePath}>
                 <code>{config.relativePath}</code>
                 <span>{config.serverNames.join(" · ")}</span>
-                <button className="ghost-action small" onClick={() => onOpenMcp(config.relativePath)} type="button">{t("v33.addTheseMcp")}</button>
+                <button className="ghost-action small" disabled={installing} onClick={() => onOpenMcp(config.relativePath)} type="button">{t("v33.addTheseMcp")}</button>
               </div>
             ))}
             <p className="muted">{t("v33.mcpNeverRun")}</p>
@@ -684,7 +691,7 @@ function ProbePreview({
       {managedCount === 0 && !promptOnly && !blocked && (
         <p className="import-notice subtle">
           <span>{t("v33.noManagedHint")}</span>
-          <button className="link-action" onClick={onGoAgents} type="button">{t("v33.goTakeover")}</button>
+          <button className="link-action" disabled={installing} onClick={onGoAgents} type="button">{t("v33.goTakeover")}</button>
         </p>
       )}
 
