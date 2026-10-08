@@ -213,6 +213,11 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   renderer.toneMapping = THREE.NoToneMapping;
   renderer.shadowMap.enabled = !options.lowPower;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // Shadows depend on the sun and the casters, not the camera: they are
+  // redrawn when the light changes and, while villagers and animals walk,
+  // every other frame (sway and bobbing never reach the depth pass).
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true;
   const canvas = renderer.domElement;
   canvas.className = "sky-world-canvas";
   canvas.setAttribute("aria-hidden", "true");
@@ -669,6 +674,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
   /** Everything that follows the time of day, applied in place. */
   const applyPalette = (next: SkyPalette) => {
     palette = next;
+    renderer.shadowMap.needsUpdate = true;
     sunDirection.setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - next.sunElevation), THREE.MathUtils.degToRad(next.sunAzimuth));
     SHARED_UNIFORMS.uSunDirection.value.copy(sunDirection);
     SHARED_UNIFORMS.uGlow.value = 0.3 + next.night * 0.7;
@@ -1067,6 +1073,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       flock?.update(clock);
       driftClouds(clock);
       for (let index = 0; index < walkers.length; index++) walkers[index].update(delta);
+      if (walkers.length && frames % 2 === 0) renderer.shadowMap.needsUpdate = true;
     }
     const weatherBusy = weather.update(clock, delta, view.target, animating());
     let highlighting = false;
@@ -1296,6 +1303,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       lowPower = value;
       resolutionScale = 1;
       renderer.shadowMap.enabled = !value;
+      renderer.shadowMap.needsUpdate = true;
       sun.castShadow = !value;
       weather.setLowPower(value);
       smoke?.setLowPower(value);
