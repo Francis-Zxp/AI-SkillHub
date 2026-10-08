@@ -26,6 +26,27 @@ pub struct McpScanRequest {
     pub registered_codex_profiles: Vec<String>,
     #[serde(default)]
     pub platform: Option<String>,
+    /// `CLAUDE_CONFIG_DIR` when set (Claude Code keeps `.claude.json` there).
+    #[serde(default)]
+    pub claude_config_dir: Option<PathBuf>,
+    /// The Claude Desktop config directory resolved by the caller.
+    #[serde(default)]
+    pub claude_desktop_dir: Option<PathBuf>,
+}
+
+impl McpScanRequest {
+    /// A request for one home directory with no optional locations.
+    #[allow(dead_code)]
+    pub fn for_home(home_dir: PathBuf) -> Self {
+        Self {
+            home_dir,
+            registered_workspaces: Vec::new(),
+            registered_codex_profiles: Vec::new(),
+            platform: None,
+            claude_config_dir: None,
+            claude_desktop_dir: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -202,7 +223,7 @@ pub fn scan_read_only(request: &McpScanRequest) -> McpReadOnlySnapshot {
             McpHost {
                 id: "host-codex".to_string(),
                 adapter_key: "openai-codex".to_string(),
-                display_name: "ChatGPT Desktop / OpenAI Codex".to_string(),
+                display_name: "Codex".to_string(),
                 platform: platform.clone(),
                 detected: false,
                 config_count: 0,
@@ -211,6 +232,22 @@ pub fn scan_read_only(request: &McpScanRequest) -> McpReadOnlySnapshot {
                 id: "host-claude-code".to_string(),
                 adapter_key: "anthropic-claude-code".to_string(),
                 display_name: "Claude Code".to_string(),
+                platform: platform.clone(),
+                detected: false,
+                config_count: 0,
+            },
+            McpHost {
+                id: "host-claude-desktop".to_string(),
+                adapter_key: "anthropic-claude-desktop".to_string(),
+                display_name: "Claude Desktop".to_string(),
+                platform: platform.clone(),
+                detected: false,
+                config_count: 0,
+            },
+            McpHost {
+                id: "host-cursor".to_string(),
+                adapter_key: "cursor".to_string(),
+                display_name: "Cursor".to_string(),
                 platform,
                 detected: false,
                 config_count: 0,
@@ -226,6 +263,21 @@ pub fn scan_read_only(request: &McpScanRequest) -> McpReadOnlySnapshot {
 
     scan_codex(&mut accumulator);
     scan_claude(&mut accumulator);
+    scan_json_user_config(
+        &mut accumulator,
+        "host-claude-desktop",
+        request
+            .claude_desktop_dir
+            .clone()
+            .map(|dir| dir.join("claude_desktop_config.json")),
+        "Claude Desktop",
+    );
+    scan_json_user_config(
+        &mut accumulator,
+        "host-cursor",
+        Some(request.home_dir.join(".cursor").join("mcp.json")),
+        "Cursor",
+    );
 
     for host in &mut accumulator.hosts {
         host.config_count = accumulator
@@ -399,9 +451,72 @@ fn scan_codex_config(
     }
 }
 
+/// Read-only scan of a JSON client whose user config has a top-level
+/// `mcpServers` object (Claude Desktop, Cursor). JSONC stays readable here.
+fn scan_json_user_config(
+    accumulator: &mut ScanAccumulator<'_>,
+    host_id: &str,
+    path: Option<PathBuf>,
+    label: &str,
+) {
+    let Some(path) = path else {
+        return;
+    };
+    let path_display = display_config_path(accumulator.request, &path, None);
+    let Some(read_result) = read_existing_config(&path) else {
+        return;
+    };
+    let location_id = accumulator.add_location(host_id, None, "user", path_display.clone(), 30);
+    match read_result {
+        Ok(text) => match parse_json_or_jsonc(&text) {
+            Ok(root) => {
+                for binding in json_mcp_servers(root.get("mcpServers")) {
+                    accumulator.add_binding(
+                        host_id,
+                        &location_id,
+                        None,
+                        "user",
+                        &path_display,
+                        binding,
+                    );
+                }
+            }
+            Err(()) => {
+                accumulator.mark_location_error(&location_id);
+                accumulator.push_finding(
+                    host_id,
+                    Some(location_id),
+                    Some(path_display),
+                    "error",
+                    "json_user_config_parse_failed",
+                    &format!("{label} 的 MCP 配置格式无法解析"),
+                    "只读扫描已跳过该文件；原配置没有发生任何改变。",
+                );
+            }
+        },
+        Err(code) => {
+            accumulator.mark_location_error(&location_id);
+            accumulator.push_finding(
+                host_id,
+                Some(location_id),
+                Some(path_display),
+                "error",
+                code,
+                &format!("无法安全读取 {label} 的 MCP 配置"),
+                "配置未被修改；请检查文件大小、链接或读取权限。",
+            );
+        }
+    }
+}
+
 fn scan_claude(accumulator: &mut ScanAccumulator<'_>) {
     let mut project_targets: Vec<(PathBuf, Option<RegisteredWorkspace>, usize)> = Vec::new();
-    let user_path = accumulator.request.home_dir.join(".claude.json");
+    let user_path = accumulator
+        .request
+        .claude_config_dir
+        .as_ref()
+        .unwrap_or(&accumulator.request.home_dir)
+        .join(".claude.json");
     let user_display = display_config_path(accumulator.request, &user_path, None);
     if let Some(read_result) = read_existing_config(&user_path) {
         let location_id = accumulator.add_location(
@@ -862,9 +977,60 @@ fn parse_codex_mcp_toml(text: &str) -> Result<Vec<RawBinding>, ()> {
 }
 
 /// Validate syntax and the MCP structure without starting a server or
-/// returning credentials. Invalid/ambiguous documents remain unwritable.
+/// returning credentials, including Codex's per-transport rules (bugs MCP#1,
+/// MCP#4): a stdio entry must not carry remote keys and a remote entry must
+/// not carry process keys.
+#[allow(dead_code)]
 pub(crate) fn validate_codex_mcp_config(text: &str) -> bool {
+    if parse_codex_mcp_toml(text).is_err() {
+        return false;
+    }
+    let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
+        return false;
+    };
+    let Some(servers) = document
+        .get("mcp_servers")
+        .and_then(|item| item.as_table_like())
+    else {
+        return true;
+    };
+    let valid = servers
+        .iter()
+        .all(|(_, entry)| entry.as_table_like().is_some_and(codex_entry_shape_ok));
+    valid
+}
+
+/// Lenient structural check used before a write: the document parses and its
+/// MCP section has the expected types. Entries that an older version wrote
+/// with now-rejected noise stay editable, so SkillHub can clean them up.
+pub(crate) fn codex_mcp_config_readable(text: &str) -> bool {
     parse_codex_mcp_toml(text).is_ok()
+}
+
+const CODEX_REMOTE_ONLY_KEYS: [&str; 6] = [
+    "url",
+    "http_headers",
+    "env_http_headers",
+    "bearer_token_env_var",
+    "bearer_token",
+    "oauth",
+];
+const CODEX_PROCESS_ONLY_KEYS: [&str; 5] = ["command", "args", "env", "env_vars", "cwd"];
+
+/// Codex accepts an entry with exactly one of `command` / `url`, and only the
+/// keys valid for that transport.
+pub(crate) fn codex_entry_shape_ok(entry: &dyn toml_edit::TableLike) -> bool {
+    let has_command = entry.get("command").is_some();
+    let has_url = entry.get("url").is_some();
+    match (has_command, has_url) {
+        (true, false) => CODEX_REMOTE_ONLY_KEYS
+            .iter()
+            .all(|key| entry.get(key).is_none()),
+        (false, true) => CODEX_PROCESS_ONLY_KEYS
+            .iter()
+            .all(|key| entry.get(key).is_none()),
+        _ => false,
+    }
 }
 
 fn json_mcp_servers(value: Option<&JsonValue>) -> Vec<RawBinding> {
@@ -898,19 +1064,11 @@ fn json_mcp_binding(name: &str, value: &JsonValue) -> Option<RawBinding> {
         None => "unknown",
     };
     let mut requirements = Vec::new();
-    collect_json_inline_map_requirements(
-        object.get("env"),
-        "process-env-inline",
-        &mut requirements,
-    );
+    collect_json_inline_map_requirements(object.get("env"), false, &mut requirements);
     if let Some(url_value) = url.as_deref() {
         collect_url_secret_requirements(url_value, &mut requirements);
     }
-    collect_json_inline_map_requirements(
-        object.get("headers"),
-        "http-header-inline",
-        &mut requirements,
-    );
+    collect_json_inline_map_requirements(object.get("headers"), true, &mut requirements);
     let args = object
         .get("args")
         .and_then(JsonValue::as_array)
@@ -1020,7 +1178,7 @@ pub(crate) fn validate_claude_mcp_config_strict(text: &str) -> bool {
     serde_json::from_str::<JsonValue>(text).is_ok_and(|value| value.as_object().is_some())
 }
 
-fn strip_json_comments(input: &str) -> Result<String, ()> {
+pub(crate) fn strip_json_comments(input: &str) -> Result<String, ()> {
     let chars: Vec<char> = input.chars().collect();
     let mut output = String::with_capacity(input.len());
     let mut index = 0;
@@ -1083,7 +1241,7 @@ fn strip_json_comments(input: &str) -> Result<String, ()> {
     Ok(output)
 }
 
-fn strip_json_trailing_commas(input: &str) -> String {
+pub(crate) fn strip_json_trailing_commas(input: &str) -> String {
     let chars: Vec<char> = input.chars().collect();
     let mut output = String::with_capacity(input.len());
     let mut index = 0;
@@ -1125,21 +1283,65 @@ fn strip_json_trailing_commas(input: &str) -> String {
     output
 }
 
+/// Bug MCP#7: `${NAME}`, `${NAME:-default}` and `${env:NAME}` values are
+/// references (presence is checked), and a header `Bearer ${NAME}` is a
+/// bearer reference. Only literal values are inline secrets.
 fn collect_json_inline_map_requirements(
     value: Option<&JsonValue>,
-    use_kind: &str,
+    is_header: bool,
     requirements: &mut Vec<RawSecretRequirement>,
 ) {
     let Some(map) = value.and_then(JsonValue::as_object) else {
         return;
     };
-    for key in map.keys() {
+    for (key, value) in map {
+        let text = value.as_str().unwrap_or_default();
+        if let Some(name) = env_reference_name(text) {
+            requirements.push(env_requirement(
+                name,
+                if is_header {
+                    "http-header-env"
+                } else {
+                    "process-env"
+                },
+            ));
+            continue;
+        }
+        if is_header {
+            if let Some(name) = text
+                .strip_prefix("Bearer ")
+                .and_then(|rest| env_reference_name(rest.trim()))
+            {
+                requirements.push(env_requirement(name, "bearer-token-env"));
+                continue;
+            }
+        }
         requirements.push(RawSecretRequirement {
             key_name: key.clone(),
-            use_kind: use_kind.to_string(),
+            use_kind: if is_header {
+                "http-header-inline"
+            } else {
+                "process-env-inline"
+            }
+            .to_string(),
             presence_state: "inline-value-present".to_string(),
         });
     }
+}
+
+/// The variable name of a value that is exactly `${NAME}`,
+/// `${NAME:-default}` or `${env:NAME}`.
+pub(crate) fn env_reference_name(value: &str) -> Option<&str> {
+    let inner = value.trim().strip_prefix("${")?.strip_suffix('}')?;
+    let inner = inner.strip_prefix("env:").unwrap_or(inner);
+    let name = inner.split_once(":-").map_or(inner, |(name, _)| name);
+    let mut chars = name.chars();
+    let valid = name.len() <= 128
+        && chars
+            .next()
+            .is_some_and(|ch| ch == '_' || ch.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric());
+    valid.then_some(name)
 }
 
 fn auth_kind(requirements: &[RawSecretRequirement]) -> String {
@@ -1159,10 +1361,14 @@ fn auth_kind(requirements: &[RawSecretRequirement]) -> String {
 }
 
 fn env_requirement(name: &str, use_kind: &str) -> RawSecretRequirement {
+    // Process env, HKCU or HKLM (registry reads only, never a spawn). The
+    // process environment alone is stale after a key is saved in the app.
+    let present = env::var_os(name).is_some()
+        || crate::mcp_secrets::env_var_present(&crate::mcp_secrets::RegistryEnvStore, name);
     RawSecretRequirement {
         key_name: name.to_string(),
         use_kind: use_kind.to_string(),
-        presence_state: if env::var_os(name).is_some() {
+        presence_state: if present {
             "present"
         } else {
             "missing"
@@ -1385,7 +1591,7 @@ fn normalize_path(path: &Path) -> String {
         .join("/")
 }
 
-fn paths_equivalent(configured_path: &str, actual_path: &Path) -> bool {
+pub(crate) fn paths_equivalent(configured_path: &str, actual_path: &Path) -> bool {
     let normalize = |value: &str| {
         value
             .trim_start_matches(r"\\?\")
@@ -1455,10 +1661,8 @@ mod tests {
 
     fn request(home: &Path) -> McpScanRequest {
         McpScanRequest {
-            home_dir: home.to_path_buf(),
-            registered_workspaces: Vec::new(),
-            registered_codex_profiles: Vec::new(),
             platform: Some("test".to_string()),
+            ..McpScanRequest::for_home(home.to_path_buf())
         }
     }
 
@@ -1715,10 +1919,9 @@ url = "https://mcp.example.test/api?token=FIRST"
             path: PathBuf::from("/Users/example/Work/Paper"),
         };
         let request = McpScanRequest {
-            home_dir: mac_home,
             registered_workspaces: vec![workspace.clone()],
-            registered_codex_profiles: Vec::new(),
             platform: Some("macos".to_string()),
+            ..McpScanRequest::for_home(mac_home)
         };
         assert_eq!(
             display_config_path(

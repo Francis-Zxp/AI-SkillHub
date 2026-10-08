@@ -1,8 +1,15 @@
 #[path = "../src/mcp_center.rs"]
 #[allow(dead_code)]
 mod mcp_center;
+#[path = "../src/mcp_json_doc.rs"]
+#[allow(dead_code)]
+mod mcp_json_doc;
 #[path = "../src/mcp_mutation.rs"]
+#[allow(dead_code)]
 mod mcp_mutation;
+#[path = "../src/mcp_secrets.rs"]
+#[allow(dead_code)]
+mod mcp_secrets;
 
 #[test]
 fn mutation_module_exports_transactional_entry_points() {

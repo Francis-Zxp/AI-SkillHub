@@ -1,6 +1,9 @@
 #[path = "../src/mcp_center.rs"]
 #[allow(dead_code)]
 mod mcp_center;
+#[path = "../src/mcp_secrets.rs"]
+#[allow(dead_code)]
+mod mcp_secrets;
 
 #[test]
 fn command_facing_entry_point_is_available() {
@@ -9,10 +12,8 @@ fn command_facing_entry_point_is_available() {
         std::process::id()
     ));
     let request = mcp_center::McpScanRequest {
-        home_dir: temp_home.clone(),
-        registered_workspaces: Vec::new(),
-        registered_codex_profiles: Vec::new(),
         platform: Some("test".to_string()),
+        ..mcp_center::McpScanRequest::for_home(temp_home.clone())
     };
     let inventory: mcp_center::McpInventory = mcp_center::scan_connections(request);
     assert_eq!(inventory.summary.binding_count, 0);

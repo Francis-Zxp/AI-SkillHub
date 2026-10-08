@@ -8,6 +8,9 @@ mod mcp_center;
 mod mcp_github_import;
 mod mcp_mutation;
 mod mcp_recipes;
+// v3.3 MCP library, secrets, paste parser, connection test and templates.
+mod mcp_json_doc;
+mod mcp_secrets;
 mod metadata;
 mod migration_v4;
 mod prompt_launcher;
@@ -4580,11 +4583,14 @@ async fn scan_mcp_connections() -> Result<mcp_center::McpInventory, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let home_dir = resolve_mcp_home_dir()?;
         let root = resolve_legacy_root()?;
+        let context = mcp_mutation_context()?;
         Ok(mcp_center::scan_connections(mcp_center::McpScanRequest {
             home_dir,
             registered_workspaces: read_registered_mcp_workspaces(&root)?,
             registered_codex_profiles: Vec::new(),
             platform: Some(std::env::consts::OS.to_string()),
+            claude_config_dir: context.claude_config_dir.clone(),
+            claude_desktop_dir: Some(context.claude_desktop_dir()),
         }))
     })
     .await
@@ -4710,7 +4716,34 @@ fn mcp_mutation_context() -> Result<mcp_mutation::McpMutationContext, String> {
         home_dir: resolve_mcp_home_dir()?,
         registered_workspaces,
         private_state_dir: private_state_dir(&root),
+        claude_config_dir: resolve_claude_config_dir(),
+        app_data_dir: std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute()),
+        local_app_data_dir: std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute()),
     })
+}
+
+/// `CLAUDE_CONFIG_DIR` from the process environment or, because the process
+/// environment is stale after a user change, from HKCU\Environment. Registry
+/// reads only; no child process.
+fn resolve_claude_config_dir() -> Option<PathBuf> {
+    let raw = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            use mcp_secrets::EnvStore;
+            mcp_secrets::RegistryEnvStore
+                .get("CLAUDE_CONFIG_DIR")
+                .ok()
+                .flatten()
+                .filter(|value| !value.trim().is_empty())
+        })?;
+    let expanded = mcp_secrets::expand_percent_vars(&mcp_secrets::RegistryEnvStore, raw.trim());
+    let path = PathBuf::from(expanded);
+    path.is_absolute().then_some(path)
 }
 
 fn acquire_mcp_mutation_guard() -> Result<std::sync::MutexGuard<'static, ()>, String> {
