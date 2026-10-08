@@ -38,18 +38,25 @@ async function open(browser, { theme = "sky-noon", weather = "auto", seed = "", 
   });
   await page.goto(base, { waitUntil: "networkidle" });
   await page.waitForFunction(() => document.querySelector(".sky-islands")?.getAttribute("data-status") === "ready", null, { timeout: 45000 });
-  await page.waitForFunction(() => Number(document.querySelector(".sky-scene-host")?.dataset.frames ?? 0) > 20, null, { timeout: 30000 }).catch(() => undefined);
+  await page.waitForFunction(() => Number(document.querySelector(".sky-scene-host")?.skyWorldStats?.().frames ?? 0) > 20, null, { timeout: 30000 }).catch(() => undefined);
   return { context, page, errors };
 }
 
+/** Exact frames per second from the world's own counter (the host's
+ * dataset is only refreshed once a second). */
 async function frameRate(page, seconds = 4) {
-  const read = () => page.evaluate(() => Number(document.querySelector(".sky-scene-host")?.dataset.frames ?? 0));
+  const read = () => page.evaluate(() => ({ frames: Number(document.querySelector(".sky-scene-host")?.skyWorldStats?.().frames ?? 0), at: performance.now() }));
   const before = await read();
   await page.waitForTimeout(seconds * 1000);
-  return ((await read()) - before) / seconds;
+  const after = await read();
+  return Math.round((after.frames - before.frames) / ((after.at - before.at) / 1000) * 10) / 10;
 }
 
-const hostData = page => page.evaluate(() => ({ ...document.querySelector(".sky-scene-host")?.dataset, status: document.querySelector(".sky-islands")?.getAttribute("data-status") }));
+const hostData = page => page.evaluate(() => {
+  const host = document.querySelector(".sky-scene-host");
+  const stats = host?.skyWorldStats?.() ?? {};
+  return { ...host?.dataset, drawCalls: stats.drawCalls, weatherCalls: stats.weatherDrawCalls, triangles: stats.triangles, frames: stats.frames, status: document.querySelector(".sky-islands")?.getAttribute("data-status") };
+});
 
 (async () => {
   const browser = await chromium.launch({ channel: "chrome", args: ["--use-angle=d3d11", "--ignore-gpu-blocklist"] });
@@ -95,9 +102,9 @@ const hostData = page => page.evaluate(() => ({ ...document.querySelector(".sky-
       }
       // Reduced motion: a still frame, no lightning; low power: fewer pixels.
       const still = await open(browser, { theme: "sky-noon", weather: "storm", seed: "7", demo: 3, reduced: true });
-      const a = await still.page.evaluate(() => Number(document.querySelector(".sky-scene-host")?.dataset.frames ?? 0));
+      const a = await still.page.evaluate(() => Number(document.querySelector(".sky-scene-host")?.skyWorldStats?.().frames ?? 0));
       await still.page.waitForTimeout(2500);
-      const b = await still.page.evaluate(() => Number(document.querySelector(".sky-scene-host")?.dataset.frames ?? 0));
+      const b = await still.page.evaluate(() => Number(document.querySelector(".sky-scene-host")?.skyWorldStats?.().frames ?? 0));
       report.push({ name: "reduced-motion-storm", framesIn2500ms: b - a, pauseDisabled: await still.page.evaluate(() => document.querySelector(".sky-controls .sky-control-compact:nth-child(2)")?.disabled), storedPause: await still.page.evaluate(() => localStorage.getItem("skillhub-sky-paused")), errors: still.errors });
       await still.context.close();
     }

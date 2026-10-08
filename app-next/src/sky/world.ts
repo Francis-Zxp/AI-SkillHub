@@ -509,6 +509,13 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     // Their own materials: sharing the instanced kit materials with plain
     // meshes would switch shader programs back and forth every frame.
     const farTreeMaterials = tree.parts.map(part => track(toonMaterial({ color: part.role === "tint" ? "#73b257" : "#ffffff" })));
+    // Half dissolved in the sky: scenery in the haze, never mistaken for an
+    // unlabeled category (the fog now starts past the framed islands).
+    for (const material of [farMaterial, ...farTreeMaterials]) {
+      material.transparent = true;
+      material.opacity = 0.48;
+      material.depthWrite = false;
+    }
     for (let index = 0; index < 6; index++) {
       const radius = 5 + random() * 6;
       const shape = new IslandShape(radius, 9000 + index * 131);
@@ -1359,6 +1366,7 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
         climates: built.map(island => island.climate.id).join(","),
         weather: weather.kind(),
         weatherDrawCalls: weather.drawCalls(),
+        weatherParticles: weather.particleCount(),
         drawCalls: renderer.info.render.calls,
         triangles: renderer.info.render.triangles,
         geometries: renderer.info.memory.geometries,

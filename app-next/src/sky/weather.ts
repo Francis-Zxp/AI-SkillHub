@@ -41,10 +41,12 @@ const CLEAR: Look = { sun: 1, hemi: 1, fogNear: 1, fogFar: 1, fogGrey: 0, dim: 0
 const LOOKS: Record<SkyWeatherKind, Look> = {
   clear: CLEAR,
   cloudy: { ...CLEAR, sun: 0.8, hemi: 1.06, fogGrey: 0.22, dim: 0.22, cloudDark: 0.2, deck: 0.95, wind: 1.15 },
-  rain: { ...CLEAR, sun: 0.66, hemi: 0.94, fogNear: 0.85, fogFar: 0.85, fogGrey: 0.38, dim: 0.34, cloudDark: 0.3, deck: 0.9, wind: 1.5, rain: 0.7, particles: 1 },
+  // Light rain: fewer, fainter streaks than a storm.
+  rain: { ...CLEAR, sun: 0.66, hemi: 0.94, fogNear: 0.85, fogFar: 0.85, fogGrey: 0.38, dim: 0.34, cloudDark: 0.3, deck: 0.9, wind: 1.5, rain: 0.7, particles: 0.72 },
   storm: { ...CLEAR, sun: 0.42, hemi: 0.8, fogNear: 0.75, fogFar: 0.78, fogGrey: 0.55, dim: 0.58, cloudDark: 0.55, deck: 1, wind: 2.3, rain: 1, particles: 1 },
   snow: { ...CLEAR, sun: 0.86, hemi: 1.08, fogNear: 0.9, fogFar: 0.9, fogGrey: 0.25, dim: 0.2, cloudDark: 0.04, deck: 0.6, wind: 0.8, particles: 1 },
-  fog: { ...CLEAR, sun: 0.82, hemi: 1.06, fogNear: 0.4, fogFar: 0.58, fogGrey: 0.3, dim: 0.12, lift: 9, deck: 0.45, wind: 0.6 },
+  // Mist: a pale haze that softens the farther islands and low cloud banks.
+  fog: { ...CLEAR, sun: 0.82, hemi: 1.06, fogNear: 0.3, fogFar: 0.5, fogGrey: 0.14, dim: 0.12, lift: 9, deck: 0.62, wind: 0.6 },
   rainbow: { ...CLEAR, sun: 1.04, rainbow: 1, wind: 1.05 },
   petals: { ...CLEAR, wind: 1.3, particles: 1 },
   aurora: { ...CLEAR, aurora: 1, wind: 0.9 }
@@ -55,7 +57,7 @@ const PARTICLES: Record<SkyWeatherKind, Particles> = {
 };
 
 /** Particle counts at normal quality; low power keeps 40%. */
-const COUNTS: Record<Exclude<Particles, "none">, number> = { rain: 1800, snow: 900, petals: 260 };
+const COUNTS: Record<Exclude<Particles, "none">, number> = { rain: 1300, snow: 900, petals: 260 };
 const STORM_RAIN = 2600;
 
 export type WeatherTargets = {
@@ -91,6 +93,8 @@ export type Weather = {
   /** Advance; returns true while a transition or flash still needs frames. */
   update: (time: number, delta: number, target: THREE.Vector3, animating: boolean) => boolean;
   drawCalls: () => number;
+  /** Particles drawn now (0 when the weather has none), for diagnostics. */
+  particleCount: () => number;
   /** Current lightning brightness (0..1), for diagnostics. */
   flash: () => number;
   dispose: () => void;
@@ -350,7 +354,7 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
     const box = uniforms.uBox.value as THREE.Vector3;
     box.set(Math.max(60, home * 1.25), Math.max(40, home * 0.7), Math.max(60, home * 1.15));
     if (type === "rain") {
-      uniforms.uSize.value = home * (currentKind === "storm" ? 0.016 : 0.013);
+      uniforms.uSize.value = home * (currentKind === "storm" ? 0.016 : 0.011);
       uniforms.uSpeed.value = home * (currentKind === "storm" ? 1.25 : 0.95);
       uniforms.uDrift.value = home * 0.05;
       uniforms.uWobble.value = 0;
@@ -486,6 +490,7 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
       return busy;
     },
     drawCalls: () => (particles.visible ? 1 : 0) + (deck.visible ? 1 : 0),
+    particleCount: () => (particles.visible ? particleGeo.drawRange.count : 0),
     flash: () => lastFlash,
     dispose() {
       scene.remove(particles, deck);
