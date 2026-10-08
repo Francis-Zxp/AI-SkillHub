@@ -132,10 +132,10 @@ export class IslandShape {
       // A slightly rounded tip: a sharp cusp shows as a spike between vertices.
       const t = Math.min(1, Math.hypot(distance / (feature.radius * ridge), 0.05));
       if (feature.crater > 0) {
-        const cone = (u: number) => feature.height * (1 - u) ** 1.1;
-        if (t >= feature.crater) height = cone(t);
+        // Inline (no closure): walking animals reach this every frame.
+        if (t >= feature.crater) height = feature.height * (1 - t) ** 1.1;
         else {
-          const rim = cone(feature.crater);
+          const rim = feature.height * (1 - feature.crater) ** 1.1;
           const inner = t / feature.crater;
           height = rim - feature.height * feature.craterDepth * (1 - inner * inner);
         }
