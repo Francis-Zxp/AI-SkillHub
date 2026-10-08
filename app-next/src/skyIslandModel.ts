@@ -94,3 +94,19 @@ export function buildSkyIslands(
   if (unfiled.weight > 0) islands.push(unfiled);
   return islands;
 }
+
+const DEMO_NAMES = [
+  "安全审计", "数据分析", "UI 设计", "学术研究", "代码工程", "写作润色", "创意绘图", "日常工具",
+  "运维脚本", "旅行攻略", "知识库", "性能压测", "论文阅读", "提示词灵感", "营销内容", "数学推导"
+];
+
+/** Development only: extra demo islands to preview many climates at once. */
+export function demoSkyIslands(count: number): SkyIsland[] {
+  return Array.from({ length: Math.max(0, Math.min(80, Math.floor(count))) }, (_, index) => {
+    const id = `demo-island-${index}`;
+    const seed = stableSeed(id);
+    const skillCount = 2 + ((index * 37) % 23);
+    const name = DEMO_NAMES[index % DEMO_NAMES.length] + (index >= DEMO_NAMES.length ? ` ${Math.floor(index / DEMO_NAMES.length) + 1}` : "");
+    return { id, name, skillCount, promptCount: index % 5 === 0 ? 1 : 0, sourceCount: 1, weight: skillCount + (index % 5 === 0 ? 1 : 0), seed, biome: seed % 6 };
+  });
+}

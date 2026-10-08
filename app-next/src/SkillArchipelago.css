@@ -15,9 +15,15 @@
 .sky-controls button[aria-pressed="true"] { border-color: #f2b866; }
 .is-light .sky-controls button[aria-pressed="true"] { border-color: #47698a; }
 .sky-controls button span[aria-hidden] { font-size: 17px; line-height: 16px; }
+.sky-controls button:disabled { opacity: .62; cursor: not-allowed; }
 .sky-scene-host { position: absolute; inset: 0; }
-.sky-world-canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+/* Stacked: a world being replaced stays on top until its successor is ready. */
+.sky-world-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
 .sky-map-labels { position: absolute; inset: 0; pointer-events: none; }
+/* While the 3D world sleeps (or wakes up) a still of the last frame stands in. */
+.sky-world-still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; user-select: none; }
+/* A label the scene has not placed yet must not flash in the corner. */
+.sky-island-label:not([style*="translate"]) { visibility: hidden; }
 .sky-island-label { pointer-events: auto; position: absolute; left: 0; top: 0; width: max-content; max-width: 220px; border: 1px solid #ffffff1f; border-radius: 9px; padding: 6px 12px 7px; color: #f7f1ea; background: #131b2cdb; text-align: center; cursor: pointer; box-shadow: 0 2px 8px #0508122e; transition: background .16s, border-color .16s; will-change: transform; }
 .is-light .sky-island-label { color: #1f3242; background: #fffffff0; border-color: #ffffff; box-shadow: 0 2px 8px #29405a24; }
 .sky-island-label strong { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 600; white-space: nowrap; line-height: 1.55; }
@@ -25,6 +31,12 @@
 .sky-island-label b { font-weight: 600; }
 .sky-island-label.is-hovered, .sky-island-label:hover { background: #1f2b44; border-color: #f2b866; }
 .is-light .sky-island-label.is-hovered, .is-light .sky-island-label:hover { background: #fff; border-color: #47698a; }
+/* Hovering an island (or its label) names its climate in a small tag above
+ * the label; out of the layout, so labels keep their measured size. */
+.sky-island-climate { position: absolute; left: 50%; bottom: calc(100% + 5px); display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 3px; border-radius: 999px; color: #f7f1ea; background: #131b2ce6; font-size: 11px; font-style: normal; line-height: 1.5; white-space: nowrap; pointer-events: none; opacity: 0; transform: translate(-50%, 3px); transition: opacity .16s, transform .16s; }
+.sky-island-climate i { width: 8px; height: 8px; border-radius: 3px; box-shadow: inset 0 0 0 1px #00000026; }
+.is-light .sky-island-climate { color: #1f3242; background: #ffffffeb; box-shadow: 0 1px 5px #29405a26; }
+.sky-island-label.is-hovered .sky-island-climate, .sky-island-label:hover .sky-island-climate, .sky-island-label:focus-visible .sky-island-climate { opacity: 1; transform: translate(-50%, 0); }
 .sky-islands button:focus-visible, .sky-islands input:focus-visible { outline: 2px solid #f2b866; outline-offset: 3px; }
 .is-light.sky-islands button:focus-visible, .is-light.sky-islands input:focus-visible { outline-color: #2f5577; }
 .sky-navigation { position: absolute; right: 28px; top: 206px; bottom: 150px; width: 286px; z-index: 5; display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid #ffffff21; border-radius: 12px; background: #131b2cf2; box-shadow: 0 7px 20px #05081233; }
@@ -50,14 +62,16 @@
 .sky-caption span { padding: 4px 9px; border-radius: 6px; background: #131b2c99; }
 .is-light .sky-caption span { background: #ffffffb3; }
 .sky-empty { position: absolute; top: 44%; left: 15%; right: 15%; text-align: center; }
-.sky-islands .sky-empty p { font-size: 14px; line-height: 1.7; color: inherit; margin: 12px 0 20px; }
+.sky-islands .sky-empty h3 { margin: 0; font-size: 18px; font-weight: 600; }
+/* Outranks the dashboard hero's paragraph rules. */
+.dashboard-hero .sky-islands .sky-empty p, .sky-islands .sky-empty p { font-size: 14px; line-height: 1.7; color: inherit; margin: 12px auto 20px; max-width: 48ch; }
 .sky-loading { position: absolute; bottom: 145px; left: 32px; font-size: 12px; }
 .browser-preview-shell .sky-heading, .browser-preview-shell .sky-controls { top: 211px; }
-.browser-preview-shell .sky-navigation { top: 260px; }
+.browser-preview-shell .sky-navigation, .browser-preview-shell .sky-world-panel { top: 260px; }
 @media (min-width: 2100px) { .sky-heading { top: 160px; left: 45px; } .sky-island-label { max-width: 300px; padding: 10px 17px; } .sky-island-label strong { font-size: 16px; } .sky-island-label > span { font-size: 12px; } .sky-controls button { font-size: 14px; } }
-@media (max-width: 1000px) { .sky-heading { left: 22px; } .sky-controls { right: 20px; gap: 4px; } .sky-controls button { padding: 8px; } .sky-controls button:nth-child(-n+3) span:last-child { display: none; } .sky-island-label { padding: 5px 8px; max-width: 155px; } .sky-island-label strong { font-size: 12px; } .sky-island-label > span { font-size: 11px; } }
-@media (max-height: 750px) { .sky-heading { top: 146px; } .sky-heading p { display: none; } .sky-controls { top: 144px; } .sky-caption { bottom: 98px; } .sky-navigation { top: 187px; bottom: 128px; } }
-@media (prefers-reduced-motion: reduce) { .sky-island-label { transition: none; } }
+@media (max-width: 1000px) { .sky-heading { left: 22px; } .sky-controls { right: 20px; gap: 4px; } .sky-controls button { padding: 8px; } .sky-controls .sky-control-compact span:last-child { display: none; } .sky-island-label { padding: 5px 8px; max-width: 155px; } .sky-island-label strong { font-size: 12px; } .sky-island-label > span { font-size: 11px; } }
+@media (max-height: 750px) { .sky-heading { top: 146px; } .sky-heading p { display: none; } .sky-controls { top: 144px; } .sky-caption { bottom: 98px; } .sky-navigation, .sky-world-panel { top: 187px; } .sky-navigation { bottom: 128px; } }
+@media (prefers-reduced-motion: reduce) { .sky-island-label, .sky-island-climate { transition: none; } }
 .sky-credits-toggle { pointer-events: auto; margin-left: 10px; border: 0; padding: 0; color: inherit; background: none; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .sky-credits { position: absolute; right: 28px; bottom: 150px; z-index: 6; width: min(380px, calc(100% - 56px)); padding: 14px 16px; border: 1px solid #ffffff21; border-radius: 12px; color: #f5efe9; background: #131b2cf5; box-shadow: 0 7px 20px #05081233; font-size: 12px; line-height: 1.5; }
 .is-light .sky-credits { color: #1f3242; background: #fbfcfdf7; border-color: #cfdae4; }
@@ -67,6 +81,36 @@
 .sky-credits li span { display: block; }
 .sky-credits li small, .sky-credits p { opacity: .75; }
 .sky-credits p { margin: 10px 0 0; }
+
+/* World: weather, a re-roll and the climates on show, in one compact panel. */
+.sky-world-panel { position: absolute; right: 28px; top: 206px; z-index: 6; width: min(318px, calc(100% - 56px)); max-height: calc(100% - 360px); overflow-y: auto; scrollbar-width: thin; padding: 14px 14px 12px; border: 1px solid #ffffff21; border-radius: 12px; color: #f5efe9; background: #131b2cf2; box-shadow: 0 7px 20px #05081233; font-size: 12px; }
+.is-light .sky-world-panel { color: #1f3242; background: #fbfcfdf7; border-color: #cfdae4; }
+.sky-world-panel h3 { margin: 0 0 8px; font-size: 12px; font-weight: 600; opacity: .78; letter-spacing: 0; }
+.sky-world-panel h3:not(:first-child) { margin-top: 14px; }
+.sky-weather-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.sky-weather-options button { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 6px 8px; border: 1px solid transparent; border-radius: 7px; color: inherit; background: #ffffff0f; font: inherit; text-align: left; cursor: pointer; }
+.sky-weather-options button > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sky-weather-options button > span[aria-hidden] { flex: 0 0 16px; font-size: 14px; text-align: center; }
+.sky-weather-options .is-auto { grid-column: 1 / -1; }
+.is-light .sky-weather-options button { background: #2c64a60d; }
+.sky-weather-options button:hover:not(:disabled) { background: #ffffff1f; }
+.is-light .sky-weather-options button:hover:not(:disabled) { background: #2c64a61f; }
+.sky-weather-options button[aria-checked="true"] { border-color: #f2b866; background: #f2b86624; }
+.is-light .sky-weather-options button[aria-checked="true"] { border-color: #2c64a6; background: #2c64a61a; }
+.sky-weather-options button:disabled { opacity: .45; cursor: not-allowed; }
+.sky-phase-dawn .sky-weather-options button[aria-checked="true"] { border-color: #c96f4a; background: #c96f4a1a; }
+.sky-phase-golden .sky-weather-options button[aria-checked="true"] { border-color: #c8662c; background: #c8662c1a; }
+.sky-phase-dawn .sky-reroll { border-color: #c96f4a66; background: #c96f4a14; }
+.sky-phase-golden .sky-reroll { border-color: #c8662c66; background: #c8662c14; }
+.sky-reroll { width: 100%; margin-top: 10px; padding: 8px 10px; border: 1px solid #f2b86680; border-radius: 8px; color: inherit; background: #f2b8661f; font: inherit; font-weight: 600; cursor: pointer; }
+.is-light .sky-reroll { border-color: #2c64a659; background: #2c64a614; }
+.sky-reroll:hover:not(:disabled) { background: #f2b86638; }
+.is-light .sky-reroll:hover:not(:disabled) { background: #2c64a626; }
+.sky-reroll:disabled { opacity: .6; cursor: progress; }
+.sky-climate-legend { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.sky-climate-legend li { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.sky-climate-legend i { width: 10px; height: 10px; border-radius: 3px; box-shadow: inset 0 0 0 1px #0000001f; }
+.sky-climate-legend small { opacity: .7; font-variant-numeric: tabular-nums; }
 
 /* Time of day: the page behind the scene matches its sky, so nothing flashes. */
 .skill-archipelago.sky-islands.sky-phase-dawn { background: linear-gradient(180deg, #9fb8dd 0%, #f7d4c1 55%, #f6e3d8 100%); }

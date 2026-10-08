@@ -4,8 +4,11 @@
 // camera stays open; no tree stands in front of it; a worn path leads from
 // the door; ponds can spill over the edge as a waterfall; animals graze in
 // the open grass; nothing stands on paths, ponds or building pads.
+// The island's climate (climates.ts) swaps the ground, plants and water on
+// top of this: snowy pines, cacti and palms, lava instead of a pond.
 import { IslandShape } from "./terrain";
 import type { Pad, PathLine, Pond } from "./terrain";
+import type { ClimateId, ClimateSpec, WaterKind } from "./climates";
 import { hashString, seededRandom, smoothstep } from "./noise";
 
 export type ThemeId = "scholar" | "observatory" | "workshop" | "orchard" | "garden" | "meadow";
@@ -221,6 +224,8 @@ export type Placement = {
   sink: number;
   /** Instance colour for tinted kit parts (sRGB hex). */
   tint?: string;
+  /** Floating pieces hover this far above the ground (world units). */
+  lift?: number;
 };
 
 export type BuildingPlacement = { model: string; x: number; z: number; yaw: number; scale: number; roof: string };
@@ -229,6 +234,7 @@ export type AnimalPlacement = { name: AnimalName; x: number; z: number; seed: nu
 
 export type IslandPlan = {
   theme: ThemeId;
+  climate: ClimateId;
   shape: IslandShape;
   buildingScale: number;
   buildings: BuildingPlacement[];
@@ -236,7 +242,43 @@ export type IslandPlan = {
   walkers: Array<Array<[number, number]>>;
   animals: AnimalPlacement[];
   waterfall: Waterfall | null;
+  /** What fills the pond (and the fall): water, a lagoon, ice or lava. */
+  water: WaterKind;
+  /** A volcano's lava lake (island-local). */
+  crater: { x: number; z: number; radius: number; y: number } | null;
+  /** Where smoke rises from (island-local x, y, z). */
+  vents: Array<[number, number, number]>;
 };
+
+/** The temperate defaults: a plan with no climate keeps the theme's look. */
+const TEMPERATE: Pick<ClimateSpec, "id" | "profile" | "pond" | "waterfall" | "water" | "trees" | "leaves" | "treeDensity" | "bushes" | "bushTints" | "bushDensity" | "rocks" | "flowers" | "flowerColors" | "flowerScale" | "grass" | "mushrooms" | "palms" | "pillars" | "crystals" | "shards" | "smoke" | "animals"> = {
+  id: "temperate",
+  profile: "rolling",
+  pond: "theme",
+  waterfall: "theme",
+  water: "water",
+  trees: null,
+  leaves: null,
+  treeDensity: 1,
+  bushes: null,
+  bushTints: null,
+  bushDensity: 1,
+  rocks: null,
+  flowers: 1,
+  flowerColors: null,
+  flowerScale: 1,
+  grass: { models: ["grass-1", "grass-2"], tint: null, density: 1, rimOnly: false },
+  mushrooms: null,
+  palms: 0,
+  pillars: 0,
+  crystals: 0,
+  shards: 0,
+  smoke: false,
+  animals: true
+};
+
+const CRYSTAL_TINTS = ["#b58cf0", "#8fd0e8", "#f4a6c0", "#9fe0c8", "#c9a4ff"];
+const PILLAR_TINTS = ["#d99a66", "#e2ad7a", "#cf8a5a"];
 
 /** Footprints (width x depth) of the composed buildings, unscaled. */
 const BUILDING_FOOTPRINT: Record<string, [number, number]> = {
@@ -248,9 +290,10 @@ const BUILDING_FOOTPRINT: Record<string, [number, number]> = {
 
 type Occupant = { x: number; z: number; r: number };
 
-export function planIsland(radius: number, seed: number, theme: ThemeId): IslandPlan {
+export function planIsland(radius: number, seed: number, theme: ThemeId, climateSpec?: typeof TEMPERATE): IslandPlan {
   const spec = THEMES.find(item => item.id === theme) ?? THEMES[0];
-  const shape = new IslandShape(radius, seed);
+  const climate = climateSpec ?? TEMPERATE;
+  const shape = new IslandShape(radius, seed, climate.profile);
   const random = seededRandom(seed ^ hashString(theme));
   const range = (min: number, max: number) => min + random() * (max - min);
   const pick = <T,>(items: T[]) => items[Math.floor(random() * items.length)];
@@ -259,6 +302,9 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
   const occupied: Occupant[] = [];
   const free = (x: number, z: number, r: number) =>
     occupied.every(item => Math.hypot(x - item.x, z - item.z) > item.r + r) && shape.normalizedDistance(x, z) < 0.86;
+  // A mountain or volcano: nothing is built on its upper slopes.
+  const feature = shape.feature;
+  const onFeature = (x: number, z: number, limit: number) => shape.featureWeight(x, z) > limit;
 
   // 1. Buildings first: they decide pads, paths and what must stay clear.
   const buildings: BuildingPlacement[] = [];
@@ -268,9 +314,15 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
     const [width, depth] = BUILDING_FOOTPRINT[model];
     const half = Math.hypot(width, depth) * 0.5 * buildingScale;
     for (let attempt = 0; attempt < 40; attempt++) {
-      const x = index === 0 ? range(-0.28, 0.28) * radius : (random() < 0.5 ? -1 : 1) * range(0.35, 0.5) * radius;
-      const z = index === 0 ? range(-0.34, -0.12) * radius : range(-0.2, 0.15) * radius;
+      let x = index === 0 ? range(-0.28, 0.28) * radius : (random() < 0.5 ? -1 : 1) * range(0.35, 0.5) * radius;
+      let z = index === 0 ? range(-0.34, -0.12) * radius : range(-0.2, 0.15) * radius;
+      if (feature && index === 0) {
+        // Beside the cone, on the side away from it.
+        x = -Math.sign(feature.x || 1) * Math.abs(x) * 1.15;
+        z = z * 0.6 + radius * 0.06;
+      }
       if (!free(x, z, half + 0.4) || shape.normalizedDistance(x, z) > 0.7 - half / radius * 0.5) continue;
+      if (feature && Math.hypot(x - feature.x, z - feature.z) < feature.radius * 0.82 + half * 0.6) continue;
       const yaw = range(-0.32, 0.32) + (index === 1 ? (x > 0 ? -0.35 : 0.35) : 0);
       buildings.push({ model, x, z, yaw, scale: buildingScale, roof: spec.roof });
       pads.push({ x, z, radius: half * 0.92 });
@@ -279,15 +331,22 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
     }
   }
   shape.pads = pads;
+  if (feature) {
+    occupied.push({ x: feature.x, z: feature.z, r: feature.radius * 0.6 });
+    if (feature.shoulder) occupied.push({ x: feature.shoulder.x, z: feature.shoulder.z, r: feature.shoulder.radius * 0.55 });
+  }
 
   // 2. A pond; on waterfall themes it sits by the rim on the side facing the
-  // camera and spills over the edge.
+  // camera and spills over the edge. Climates can insist on one (an oasis, a
+  // lagoon, a lava pool) or forbid the fall (a frozen pond).
   const ponds: Pond[] = [];
   let waterfall: Waterfall | null = null;
-  if (spec.pond && radius >= 5) {
+  const wantsPond = climate.pond === "always" || (climate.pond === "theme" && spec.pond);
+  const wantsFall = climate.waterfall === "always" || (climate.waterfall === "theme" && spec.waterfall);
+  if (wantsPond && radius >= 5) {
     const pondRadius = Math.min(2.4, Math.max(1, radius * 0.17));
     for (let attempt = 0; attempt < 60; attempt++) {
-      const spill = spec.waterfall && attempt < 40;
+      const spill = wantsFall && attempt < 40;
       const angle = spill ? range(0.35, 1.2) * (random() < 0.5 ? 1 : -1) + Math.PI / 2 : range(0, Math.PI * 2);
       const rim = shape.rimRadius(angle);
       const distance = spill ? rim - pondRadius * 1.05 : range(0.25, 0.5) * radius;
@@ -371,12 +430,57 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
     occupied.push({ x, z, r: 1.2 });
   }
 
+  // Climate extras come before the trees so they get their spots: palms
+  // around the water, sandstone pillars, crystal clusters. Their own random
+  // stream keeps every shared step below stable.
+  const leaves = climate.leaves ?? spec.leaves;
+  const extra = seededRandom((seed ^ hashString(`climate:${climate.id}`)) >>> 0);
+  const extraRange = (min: number, max: number) => min + extra() * (max - min);
+  const extraPick = <T,>(items: T[]) => items[Math.floor(extra() * items.length)];
+  if (climate.palms > 0 && ponds.length) {
+    const pond = ponds[0];
+    for (let attempt = 0, count = 0; attempt < climate.palms * 14 && count < climate.palms; attempt++) {
+      const angle = extraRange(0, Math.PI * 2), distance = pond.radius + extraRange(0.6, 1.3) * unit;
+      const x = pond.x + Math.cos(angle) * distance, z = pond.z + Math.sin(angle) * distance;
+      if (shape.normalizedDistance(x, z) > 0.84 || !free(x, z, 0.7 * unit) || !clearOf(x, z, 0.3) || blocksView(x, z, 0.3)) continue;
+      placements.push({ library: "kit", model: extraPick(["palm-1", "palm-2"]), x, z, yaw: extraRange(0, Math.PI * 2), scale: 1, height: extraRange(2.6, 3.4) * unit, sink: 0.02, tint: extraPick(leaves) });
+      occupied.push({ x, z, r: 0.8 * unit });
+      count++;
+    }
+  }
+  if (climate.pillars > 0 && radius >= 4) {
+    for (let attempt = 0, count = 0; attempt < 60 && count < climate.pillars; attempt++) {
+      const angle = -Math.PI / 2 + extraRange(-1.4, 1.4);
+      const distance = shape.rimRadius(angle) * extraRange(0.55, 0.78);
+      const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
+      if (!free(x, z, 0.8 * unit) || !clearOf(x, z, 0.5)) continue;
+      placements.push({ library: "kit", model: extraPick(["pillar-1", "pillar-2"]), x, z, yaw: extraRange(0, Math.PI * 2), scale: 1, height: extraRange(2, 3.1) * unit, sink: 0.04, tint: extraPick(PILLAR_TINTS) });
+      occupied.push({ x, z, r: 0.9 * unit });
+      count++;
+    }
+  }
+  if (climate.crystals > 0) {
+    const target = Math.round(radius * 0.65 * climate.crystals) + 1;
+    for (let attempt = 0, count = 0; attempt < target * 20 && count < target; attempt++) {
+      const angle = extraRange(0, Math.PI * 2), distance = Math.sqrt(extra()) * radius * 0.8;
+      const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
+      if (!free(x, z, 0.45 * unit) || !clearOf(x, z, 0.4) || blocksView(x, z, 0.2)) continue;
+      placements.push({ library: "kit", model: extraPick(["crystal-1", "crystal-2"]), x, z, yaw: extraRange(0, Math.PI * 2), scale: 1, height: extraRange(1.1, 2.1) * unit, sink: 0.06, tint: extraPick(CRYSTAL_TINTS) });
+      occupied.push({ x, z, r: 0.6 * unit });
+      count++;
+    }
+  }
+
   // 5. Trees: framing the building from the back and sides, never in front.
-  const treeTarget = Math.round(spec.treeDensity * radius * radius * 0.085) + (radius < 3 ? 1 : 2);
+  const treeModels = climate.trees ?? spec.trees;
+  const treeTarget = Math.round(spec.treeDensity * climate.treeDensity * radius * radius * 0.085) + (radius < 3 ? 1 : 2);
+  // Palms stand tall, cacti and bare trees shorter than a leafy crown.
+  const treeHeight = (model: string, roll: number) =>
+    model.startsWith("palm") ? 2.7 + roll * 0.8 : model.startsWith("cactus") ? 1.25 + roll * 0.7 : model === "deadtree" ? 1.7 + roll * 0.8 : 2.1 + roll;
   let trees = 0;
   for (let attempt = 0; attempt < treeTarget * 30 && trees < treeTarget; attempt++) {
     let x: number, z: number;
-    if (spec.id === "orchard" && attempt < treeTarget * 12) {
+    if (spec.id === "orchard" && !climate.trees && attempt < treeTarget * 12) {
       const spacing = 2.4 * unit;
       x = (Math.round(range(-radius, radius) / spacing) + 0.5) * spacing;
       z = (Math.round(range(-radius, radius) / spacing) + 0.5) * spacing;
@@ -387,52 +491,56 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
     }
     const spread = 1.1 * unit;
     if (shape.normalizedDistance(x, z) > 0.8 || !free(x, z, spread) || !clearOf(x, z, 0.8) || blocksView(x, z, 0.6)) continue;
+    if (feature && onFeature(x, z, 0.55)) continue;
     if (z > radius * 0.3 && random() < 0.6) continue;
-    const model = pick(spec.trees);
-    placements.push({ library: "kit", model, x, z, yaw: range(0, Math.PI * 2), scale: 1, height: range(2.1, 3.1) * unit, sink: 0.02, tint: pick(spec.leaves) });
+    const model = pick(treeModels);
+    placements.push({ library: "kit", model, x, z, yaw: range(0, Math.PI * 2), scale: 1, height: treeHeight(model, random()) * unit, sink: 0.02, tint: pick(leaves) });
     occupied.push({ x, z, r: spread });
     trees++;
   }
 
   // 6. Bushes around trees and along the building sides.
-  const bushTarget = Math.round(radius * 0.9);
+  const bushTarget = Math.round(radius * 0.9 * climate.bushDensity);
+  const bushTints = climate.bushTints ?? leaves;
   for (let attempt = 0, count = 0; attempt < bushTarget * 25 && count < bushTarget; attempt++) {
     const angle = range(0, Math.PI * 2), distance = Math.sqrt(random()) * radius * 0.85;
     const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
     if (shape.normalizedDistance(x, z) > 0.86 || !free(x, z, 0.4) || !clearOf(x, z, 0.35)) continue;
-    placements.push({ library: "kit", model: pick(spec.bushes), x, z, yaw: range(0, Math.PI * 2), scale: range(0.8, 1.2) * unit, sink: 0.08, tint: pick(spec.leaves) });
+    placements.push({ library: "kit", model: pick(climate.bushes ?? spec.bushes), x, z, yaw: range(0, Math.PI * 2), scale: range(0.8, 1.2) * unit, sink: 0.08, tint: pick(bushTints) });
     occupied.push({ x, z, r: 0.5 });
     count++;
   }
 
   // 7. Rocks, half sunk near the rim.
-  const rockCount = Math.max(2, Math.round(spec.rocks * radius / 6));
+  const rockCount = Math.max(2, Math.round(spec.rocks * radius / 6 * (climate.rocks?.count ?? 1)));
+  const rockColor = climate.rocks?.color ?? spec.rockColor;
   for (let attempt = 0, count = 0; attempt < rockCount * 20 && count < rockCount; attempt++) {
     const angle = range(0, Math.PI * 2);
     const distance = shape.rimRadius(angle) * range(0.7, 0.85);
     const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
     if (!free(x, z, 0.8) || !clearOf(x, z, 0.5)) continue;
-    placements.push({ library: "kit", model: pick(["rock-1", "rock-2", "rock-4"]), x, z, yaw: range(0, Math.PI * 2), scale: range(0.65, 1.35) * unit, sink: 0.2, tint: spec.rockColor });
+    placements.push({ library: "kit", model: pick(["rock-1", "rock-2", "rock-4"]), x, z, yaw: range(0, Math.PI * 2), scale: range(0.65, 1.35) * unit, sink: 0.2, tint: rockColor });
     occupied.push({ x, z, r: 0.9 });
     count++;
   }
 
   // 8. Flower beds.
-  const patches = Math.round(spec.flowers * (1 + radius * 0.3));
+  const patches = Math.round(spec.flowers * climate.flowers * (1 + radius * 0.3));
+  const flowerColors = climate.flowerColors ?? spec.flowerColors;
   for (let patch = 0; patch < patches; patch++) {
     const angle = range(0, Math.PI * 2), distance = Math.sqrt(random()) * radius * 0.72;
     const cx = Math.cos(angle) * distance, cz = Math.sin(angle) * distance;
-    const tint = pick(spec.flowerColors);
+    const tint = pick(flowerColors);
     const count = 4 + Math.floor(random() * 6);
     for (let index = 0; index < count; index++) {
       const x = cx + range(-0.8, 0.8), z = cz + range(-0.8, 0.8);
       if (shape.normalizedDistance(x, z) > 0.9 || !clearOf(x, z, 0.25) || !free(x, z, 0.05)) continue;
-      placements.push({ library: "kit", model: "flower", x, z, yaw: range(0, Math.PI * 2), scale: range(0.9, 1.3) * unit, sink: 0.02, tint });
+      placements.push({ library: "kit", model: "flower", x, z, yaw: range(0, Math.PI * 2), scale: range(0.9, 1.3) * unit * climate.flowerScale, sink: 0.02, tint });
     }
   }
 
   // 9. Mushrooms in the shade of trees.
-  if (spec.mushrooms) {
+  if (climate.mushrooms ?? spec.mushrooms) {
     for (const tree of placements.filter(item => item.model.startsWith("pine") || item.model.startsWith("round")).slice(0, 6)) {
       const x = tree.x + range(-0.7, 0.7), z = tree.z + range(-0.7, 0.7);
       if (!clearOf(x, z, 0.2)) continue;
@@ -440,8 +548,12 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
     }
   }
 
-  // 10. A few grass tufts to break the surface, denser along the rim.
-  const grassTarget = Math.min(140, Math.round(radius * radius * 1.1));
+  // 10. A few grass tufts to break the surface, denser along the rim. Rice
+  // grows only on the flat terraces; snowy islands keep grass to the rim.
+  const grass = climate.grass;
+  const grassTarget = Math.min(140, Math.round(radius * radius * 1.1 * grass.density));
+  const level = (x: number, z: number) =>
+    Math.abs(shape.heightAt(x + 0.25, z) - shape.heightAt(x - 0.25, z)) + Math.abs(shape.heightAt(x, z + 0.25) - shape.heightAt(x, z - 0.25)) < 0.12;
   for (let index = 0; index < grassTarget; index++) {
     const rimBand = index % 3 === 0;
     const angle = range(0, Math.PI * 2);
@@ -450,19 +562,38 @@ export function planIsland(radius: number, seed: number, theme: ThemeId): Island
     const worn = shape.pathWeight(x, z);
     if (worn > 0.3 || shape.isInsidePond(x, z, 0.1)) continue;
     if (pads.some(pad => Math.hypot(x - pad.x, z - pad.z) < pad.radius * 0.95)) continue;
-    placements.push({ library: "kit", model: pick(["grass-1", "grass-2"]), x, z, yaw: range(0, Math.PI * 2), scale: range(0.8, 1.3) * unit * (1 - smoothstep(0.05, 0.3, worn)), sink: 0.05, tint: "grass" });
+    const model = pick(grass.models), yaw = range(0, Math.PI * 2), size = range(0.8, 1.3);
+    // Never past the grass lip (narrow rims): a tuft there would hang in air.
+    if (shape.normalizedDistance(x, z) > 0.96) continue;
+    if (grass.rimOnly && shape.normalizedDistance(x, z) < 0.76) continue;
+    if (feature && onFeature(x, z, 0.4)) continue;
+    if (model.startsWith("rice") && !level(x, z)) continue;
+    placements.push({ library: "kit", model, x, z, yaw, scale: size * unit * (1 - smoothstep(0.05, 0.3, worn)), sink: 0.05, tint: grass.tint ?? "grass" });
   }
 
   // 11. Animals graze in the open grass.
   const animals: AnimalPlacement[] = [];
-  const animalCount = radius < 4.2 ? 1 : radius < 8 ? 2 : 3;
+  const animalCount = climate.animals ? (radius < 4.2 ? 1 : radius < 8 ? 2 : 3) : 0;
   for (let attempt = 0; attempt < 80 && animals.length < animalCount && spec.animals.length; attempt++) {
     const angle = range(0, Math.PI * 2), distance = Math.sqrt(random()) * radius * 0.6;
     const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
     if (!free(x, z, 0.8) || !clearOf(x, z, 0.6)) continue;
+    if (feature && onFeature(x, z, 0.25)) continue;
     animals.push({ name: spec.animals[animals.length % spec.animals.length], x, z, seed: seed + attempt });
     occupied.push({ x, z, r: 0.9 });
   }
 
-  return { theme, shape, buildingScale, buildings, placements, walkers, animals, waterfall };
+  // 12. Floating shards over crystal islands, and the volcano's smoke.
+  if (climate.shards > 0 && radius >= 4) {
+    for (let index = 0; index < climate.shards; index++) {
+      const angle = extraRange(0, Math.PI * 2), distance = shape.rimRadius(angle) * extraRange(0.35, 0.8);
+      const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
+      if (blocksView(x, z, 0.4) || pads.some(pad => Math.hypot(x - pad.x, z - pad.z) < pad.radius + 1)) continue;
+      placements.push({ library: "kit", model: extraPick(["shard-1", "shard-2"]), x, z, yaw: extraRange(0, Math.PI * 2), scale: 1, height: extraRange(0.7, 1.15) * unit, sink: 0, tint: extraPick(CRYSTAL_TINTS), lift: extraRange(1.5, 2.6) * unit });
+    }
+  }
+  const crater = shape.craterLava();
+  const vents: Array<[number, number, number]> = climate.smoke && crater ? [[crater.x, crater.y, crater.z]] : [];
+
+  return { theme, climate: climate.id, shape, buildingScale, buildings, placements, walkers, animals, waterfall, water: climate.water, crater, vents };
 }

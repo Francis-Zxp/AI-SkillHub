@@ -76,5 +76,8 @@ test("star map backdrop: star field, soft core, session-random meteors, dashed s
   assert.match(universe, /const METEOR_SESSION_SEED = randomSessionSeed\(\);/);
   assert.match(universe, /length: 4 \+ \(METEOR_SESSION_SEED % 9\)/);
   // Sphere outlines are dashed so they never read as data links.
-  assert.match(universe, /context\.setLineDash\(front \? \[3, 5\] : \[1\.5, 7\]\)/);
+  // (v3.3: the dash patterns are shared constants, so no array is made per frame.)
+  assert.match(universe, /context\.setLineDash\(front \? FRONT_DASH : BACK_DASH\)/);
+  assert.match(universe, /const FRONT_DASH = \[3, 5\];/);
+  assert.match(universe, /const BACK_DASH = \[1\.5, 7\];/);
 });
