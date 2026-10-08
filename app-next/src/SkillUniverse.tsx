@@ -383,7 +383,8 @@ export function SkillUniverse({
       const scope = host.closest(".dashboard-hero") ?? host;
       const overlays = [
         ...scope.querySelectorAll(".skill-universe-modes, .atlas-intro-toggle, .atlas-immersive-toggle, .home-visual-switch, .atlas-hero-copy, .skill-universe-counter, .skill-universe-legend, .skill-universe-help"),
-        ...document.querySelectorAll(".atlas-touchbar, .sidebar, .topbar, .operation-banner")
+        // Blocks over the scene that opt in (the v3.3 home numbers, say).
+        ...document.querySelectorAll(".atlas-touchbar, .sidebar, .topbar, .operation-banner, [data-sky-overlay], .home-top")
       ];
       runtime.obstacles = overlays
         .map(element => element.getBoundingClientRect())

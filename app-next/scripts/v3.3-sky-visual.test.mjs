@@ -140,7 +140,8 @@ test("memory: GPU budget, release after upload and sleep when out of sight", () 
 });
 
 test("framing: overlay blocks opt in with data-sky-overlay and shift the view down", () => {
-  assert.match(world, /querySelectorAll\("\[data-sky-overlay\]"\)/);
+  assert.match(world, /querySelectorAll\("\[data-sky-overlay\], \.home-top"\)/);
+  assert.match(universe, /\[data-sky-overlay\], \.home-top"\)/, "star-map labels keep clear of the same blocks");
   assert.match(body(world, "const fitHome = () =>"), /camera\.setViewOffset\(width, height, -safeLeft \/ 2, -band\.shift, width, height\);/);
   assert.match(body(world, "const frameBand = () =>"), /const minimum = height \* 0\.3;/);
 });

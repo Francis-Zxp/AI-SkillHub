@@ -750,7 +750,8 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       else safeBottom = Math.max(safeBottom, hostRect.bottom - rect.top + 12);
     };
     options.host.closest(".sky-islands")?.querySelectorAll(".sky-heading, .sky-controls").forEach(element => consider(element, true));
-    (options.host.closest(".shell") ?? document.body).querySelectorAll("[data-sky-overlay]").forEach(element => {
+    // The v3.3 home block (.home-top) counts even before it opts in.
+    (options.host.closest(".shell") ?? document.body).querySelectorAll("[data-sky-overlay], .home-top").forEach(element => {
       consider(element, false);
       // A block that grows (a longer language, a wrapped row) reframes the view.
       if (!observedOverlays.has(element)) {
