@@ -3599,17 +3599,34 @@ pub(crate) fn import_from_clients(
                     servers.len() - 1
                 }
             };
-            let server = &servers[server_index];
-            touched_names.insert(server.name.clone());
-            let same = match project(ctx, &server.name, &server.spec, source.client) {
-                Ok(projected) => {
+            touched_names.insert(servers[server_index].name.clone());
+            let matches_file = |spec: &McpServerSpec| {
+                project(ctx, &servers[server_index].name, spec, source.client).map(|projected| {
                     let wanted = projected_node(source.client, &projected, Some(&source.entry));
                     entry_hash(&key, source.client, &wanted)
                         == entry_hash(&key, source.client, &source.entry)
                         || semantic_equal(source.client, &wanted, &source.entry)
+                })
+            };
+            let same = match matches_file(&servers[server_index].spec) {
+                Ok(same) => same,
+                // The same literal secret already sits in this client's own
+                // file (two clients configured with the same key): the user
+                // put it there, so it counts as consent for that client only.
+                Err(ProjectError::Blocked("needs-inline-consent")) => {
+                    let mut granted = servers[server_index].spec.clone();
+                    grant_inline(&mut granted, source.client);
+                    if matches_file(&granted) == Ok(true) {
+                        servers[server_index].spec = granted;
+                        save_server(&connection, &servers[server_index])?;
+                        true
+                    } else {
+                        false
+                    }
                 }
                 Err(_) => false,
             };
+            let server = &servers[server_index];
             if !added.contains(&server.name) || existing_index.is_some() {
                 let bucket = if same { &mut merged } else { &mut differing };
                 bucket

@@ -2685,3 +2685,31 @@ fn detected_client_without_config_folder_is_not_installed_not_unreadable() {
     );
     assert!(!fixture.home().join(".codex").exists());
 }
+
+/// Two clients already configured with the same literal key: import merges
+/// them (the key in each client's own file counts as consent for that client
+/// only) instead of blocking the second one.
+#[test]
+fn import_merges_the_same_literal_key_from_two_clients() {
+    let fixture = Fixture::new("same-literal");
+    fs::write(
+        fixture.codex(),
+        "[mcp_servers.brave]\ncommand = \"npx\"\nargs = [\"-y\", \"brave-mcp\"]\n\n[mcp_servers.brave.env]\nBRAVE_API_KEY = \"brave-literal-888\"\n",
+    )
+    .unwrap();
+    fs::write(
+        fixture.claude(),
+        r#"{"mcpServers":{"brave":{"type":"stdio","command":"cmd","args":["/c","npx","-y","brave-mcp"],"env":{"BRAVE_API_KEY":"brave-literal-888"}}}}"#,
+    )
+    .unwrap();
+    let report = fixture.import();
+    assert!(report.differing.is_empty(), "{:?}", report.differing.len());
+    assert_eq!(fixture.cell("brave", ClientId::Codex).state, "on");
+    assert_eq!(fixture.cell("brave", ClientId::ClaudeCode).state, "on");
+    // Other clients still need consent before they get the literal.
+    let cursor = fixture.cell("brave", ClientId::Cursor);
+    assert_eq!(
+        (cursor.state.as_str(), cursor.reason.as_deref()),
+        ("blocked", Some("needs-inline-consent"))
+    );
+}
