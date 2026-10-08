@@ -134,12 +134,14 @@ pub(crate) fn normalize_secret_value(value: &str) -> Result<String, &'static str
 
 /// In-memory store for tests and previews. Never touches the registry.
 #[derive(Default)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct MemoryEnvStore {
     user: Mutex<HashMap<String, String>>,
     machine: Mutex<HashMap<String, String>>,
     fail_writes: Mutex<bool>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl MemoryEnvStore {
     pub(crate) fn new() -> Self {
         Self::default()

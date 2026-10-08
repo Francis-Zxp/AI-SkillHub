@@ -2785,7 +2785,6 @@ pub(crate) struct EntryChange {
 /// The computed (not yet written) result of a set of entry changes on one file.
 pub(crate) struct EntryDryRun {
     pub target: ResolvedTarget,
-    pub existed: bool,
     pub current_sha256: String,
     pub before: Vec<(String, Option<Node>)>,
     pub after: Vec<(String, Option<Node>)>,
@@ -2799,7 +2798,6 @@ pub(crate) struct EntryApplyOutcome {
     pub changed: bool,
     pub snapshot_id: Option<String>,
     pub applied_sha256: String,
-    pub path_display: String,
     pub before: Vec<(String, Option<Node>)>,
     pub after: Vec<(String, Option<Node>)>,
 }
@@ -2817,6 +2815,7 @@ pub(crate) enum TargetReadStatus {
 }
 
 /// Read-only entries of one target container.
+#[derive(Clone)]
 pub(crate) struct TargetRead {
     pub status: TargetReadStatus,
     pub sha256: String,
@@ -2826,6 +2825,11 @@ pub(crate) struct TargetRead {
 }
 
 impl TargetRead {
+    /// An empty view of a file that does not exist.
+    pub(crate) fn missing() -> Self {
+        Self::with_status(TargetReadStatus::Missing)
+    }
+
     fn with_status(status: TargetReadStatus) -> Self {
         Self {
             status,
@@ -2840,10 +2844,6 @@ impl TargetRead {
             .iter()
             .find(|(existing, _)| existing == name)
             .map(|(_, node)| node)
-    }
-
-    pub(crate) fn writable(&self) -> bool {
-        matches!(self.status, TargetReadStatus::Ok | TargetReadStatus::Missing)
     }
 }
 
@@ -2919,6 +2919,20 @@ fn read_json_entries(target: &ResolvedTarget, text: &str) -> TargetRead {
         }
     }
     read
+}
+
+/// Reads a client JSON config (strict, or JSONC read-only) as a node.
+pub(crate) fn read_config_node(path: &Path) -> Option<Node> {
+    let file = read_regular_config(path, true).ok()??;
+    JsonDoc::parse(&file.text)
+        .map(|document| document.root)
+        .ok()
+        .or_else(|| crate::mcp_json_doc::parse_jsonc_node(&file.text).ok())
+}
+
+/// A TOML value for a node (used by the masked Codex export).
+pub(crate) fn node_to_toml(node: &Node) -> Option<TomlValue> {
+    node_to_toml_value(node)
 }
 
 /// Converts a TOML item to an order-preserving node (datetimes become text).
@@ -3341,7 +3355,6 @@ pub(crate) fn dry_run_entry_changes(
         None => after.iter().any(|(_, entry)| entry.is_some()),
     };
     Ok(EntryDryRun {
-        existed: original.is_some(),
         current_sha256: original
             .as_ref()
             .map(|file| file.fingerprint.sha256.clone())
@@ -3376,13 +3389,11 @@ pub(crate) fn apply_entry_changes_now(
             changed: false,
             snapshot_id: None,
             applied_sha256: dry_run.current_sha256,
-            path_display: dry_run.target.path_display.clone(),
             before: dry_run.before,
             after: dry_run.after,
         });
     }
     let path_binding_sha256 = target_path_binding(&dry_run.target.path)?;
-    let path_display = dry_run.target.path_display.clone();
     let final_bytes = if let Some(original) = &dry_run.original {
         // Keep a UTF-8 BOM exactly as it was.
         if original.bytes.starts_with(&[0xEF, 0xBB, 0xBF])
@@ -3419,7 +3430,6 @@ pub(crate) fn apply_entry_changes_now(
         changed: true,
         snapshot_id: Some(snapshot_id.to_string()),
         applied_sha256,
-        path_display,
         before: dry_run.before,
         after: dry_run.after,
     })
@@ -3937,7 +3947,7 @@ fn run_atomic_replace_test_hook(target: &Path) {
 }
 
 #[cfg(test)]
-fn install_atomic_replace_test_hook(target: PathBuf, bytes: Vec<u8>) {
+pub(crate) fn install_atomic_replace_test_hook(target: PathBuf, bytes: Vec<u8>) {
     *ATOMIC_REPLACE_TEST_HOOK
         .get_or_init(|| Mutex::new(None))
         .lock()

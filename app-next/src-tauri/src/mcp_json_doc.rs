@@ -68,10 +68,6 @@ impl ObjectMap {
         self.0.iter().map(|(key, value)| (key, value))
     }
 
-    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = (&String, &mut Node)> {
-        self.0.iter_mut().map(|(key, value)| (&*key, value))
-    }
-
     pub(crate) fn len(&self) -> usize {
         self.0.len()
     }
@@ -190,23 +186,6 @@ impl Node {
                     .map(|(key, value)| (key.clone(), value.to_value()))
                     .collect(),
             ),
-        }
-    }
-
-    pub(crate) fn from_value(value: &JsonValue) -> Self {
-        match value {
-            JsonValue::Null => Node::Null,
-            JsonValue::Bool(value) => Node::Bool(*value),
-            JsonValue::Number(value) => Node::Number(value.clone()),
-            JsonValue::String(value) => Node::String(value.clone()),
-            JsonValue::Array(items) => Node::Array(items.iter().map(Node::from_value).collect()),
-            JsonValue::Object(map) => {
-                let mut object = ObjectMap::new();
-                for (key, value) in map {
-                    object.insert(key.clone(), Node::from_value(value));
-                }
-                Node::Object(object)
-            }
         }
     }
 

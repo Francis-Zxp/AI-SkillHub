@@ -10,7 +10,11 @@ mod mcp_mutation;
 mod mcp_recipes;
 // v3.3 MCP library, secrets, paste parser, connection test and templates.
 mod mcp_json_doc;
+mod mcp_library;
+mod mcp_paste;
+mod mcp_probe;
 mod mcp_secrets;
+mod mcp_templates;
 mod metadata;
 mod migration_v4;
 mod prompt_launcher;
@@ -4787,10 +4791,12 @@ async fn rollback_mcp_snapshot(
     .await
 }
 
+/// Legacy listing (kept for one release). It no longer takes the in-process
+/// write guard (bug MCP#10); the engine still serialises with its
+/// cross-process lock and never fails because of a stuck transaction.
 #[tauri::command]
 async fn list_mcp_rollback_snapshots() -> Result<Vec<mcp_mutation::McpRollbackSnapshot>, String> {
     run_blocking_task(move || {
-        let _guard = acquire_mcp_mutation_guard()?;
         mcp_mutation::list_mcp_rollback_snapshots(&mcp_mutation_context()?)
     })
     .await
@@ -4802,7 +4808,274 @@ async fn list_mcp_mutation_targets() -> Result<Vec<mcp_mutation::McpMutationTarg
         .await
 }
 
-/// Strictly read-only. The probe does not execute Codex, PowerShell, npm,
+// ============================================================================
+// v3.3 MCP — library-driven matrix (docs/v3.3/mcp-contract.md §3).
+//
+// Every command takes one `request` object and fails with an
+// `mcp_library::McpError` object. Reads never take the write lock and never
+// run crash recovery (bug MCP#10). Writes wait up to 5 s for the in-process
+// lock, take the cross-process lock, then let the library run every client
+// file write through the transaction engine. Opening the page, importing,
+// pasting and GitHub import never start a child process; only the
+// user-confirmed connection test and "打开文件位置" do.
+// ============================================================================
+
+fn mcp_library_context() -> Result<mcp_library::McpLibraryContext, mcp_library::McpError> {
+    let mutation = mcp_mutation_context()
+        .map_err(|message| mcp_library::McpError::new("engine", message))?;
+    let root = resolve_legacy_root().map_err(|_| {
+        mcp_library::McpError::new("engine", "无法确定 AI SkillHub 数据目录；没有改动任何配置。")
+    })?;
+    Ok(mcp_library::McpLibraryContext {
+        mutation,
+        db_path: database_file(&root),
+        windows: cfg!(windows),
+        env: Arc::new(mcp_secrets::RegistryEnvStore),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+    })
+}
+
+fn mcp_task_stopped(_: tauri::Error) -> mcp_library::McpError {
+    mcp_library::McpError::new("engine", "MCP 后台任务意外停止；没有改动任何配置。")
+}
+
+async fn mcp_run_read<T, F>(task: F) -> Result<T, mcp_library::McpError>
+where
+    T: Send + 'static,
+    F: FnOnce(&mcp_library::McpLibraryContext) -> Result<T, mcp_library::McpError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        let context = mcp_library_context()?;
+        task(&context)
+    })
+    .await
+    .map_err(mcp_task_stopped)?
+}
+
+/// Bounded wait (§3.1): poll every 50 ms for up to 5 s, then `busy`.
+fn acquire_mcp_mutation_guard_bounded(
+) -> Result<std::sync::MutexGuard<'static, ()>, mcp_library::McpError> {
+    let lock = MCP_MUTATION_LOCK.get_or_init(|| Mutex::new(()));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match lock.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => return Ok(poisoned.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return Err(mcp_library::McpError::new(
+                        "busy",
+                        "另一项 MCP 操作还没完成，请稍候。",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+async fn mcp_run_write<T, F>(task: F) -> Result<T, mcp_library::McpError>
+where
+    T: Send + 'static,
+    F: FnOnce(&mcp_library::McpLibraryContext) -> Result<T, mcp_library::McpError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = acquire_mcp_mutation_guard_bounded()?;
+        let context = mcp_library_context()?;
+        let _process_lock = mcp_mutation::acquire_cross_process_mutation_lock(&context.mutation)
+            .map_err(|_| {
+                mcp_library::McpError::new("busy", "另一个 AI SkillHub 正在修改 MCP 配置，请稍候。")
+            })?;
+        mcp_library::prepare_write(&context)?;
+        task(&context)
+    })
+    .await
+    .map_err(mcp_task_stopped)?
+}
+
+fn mcp_emit_changed(app: &tauri::AppHandle, outcome: &mcp_library::McpWriteOutcome, reason: &str) {
+    if let Some(payload) = mcp_library::emit_payload(outcome, reason) {
+        let _ = app.emit(mcp_library::MCP_LIBRARY_CHANGED_EVENT, payload);
+    }
+}
+
+#[tauri::command]
+async fn mcp_library_snapshot(
+    request: mcp_library::McpEmptyRequest,
+) -> Result<mcp_library::McpLibrarySnapshot, mcp_library::McpError> {
+    let _ = request;
+    mcp_run_read(mcp_library::library_snapshot).await
+}
+
+#[tauri::command]
+async fn mcp_get_server(
+    request: mcp_library::McpGetServerRequest,
+) -> Result<mcp_library::McpServerDetail, mcp_library::McpError> {
+    mcp_run_read(move |context| mcp_library::get_server(context, request)).await
+}
+
+#[tauri::command]
+async fn mcp_list_templates(
+    request: mcp_library::McpEmptyRequest,
+) -> Result<Vec<Value>, mcp_library::McpError> {
+    let _ = request;
+    Ok(mcp_templates::list_templates())
+}
+
+#[tauri::command]
+async fn mcp_history(
+    request: mcp_library::McpHistoryRequest,
+) -> Result<Vec<mcp_library::McpHistoryEntry>, mcp_library::McpError> {
+    mcp_run_read(move |context| mcp_library::history(context, request)).await
+}
+
+#[tauri::command]
+async fn mcp_import_from_clients(
+    app: tauri::AppHandle,
+    request: mcp_library::McpImportRequest,
+) -> Result<mcp_library::McpImportReport, mcp_library::McpError> {
+    let report =
+        mcp_run_write(move |context| mcp_library::import_from_clients(context, request)).await?;
+    let _ = app.emit(
+        mcp_library::MCP_LIBRARY_CHANGED_EVENT,
+        serde_json::json!({
+            "generation": mcp_library::current_generation(),
+            "operationId": report.operation_id(),
+            "reason": "import",
+        }),
+    );
+    Ok(report)
+}
+
+macro_rules! mcp_write_command {
+    ($name:ident, $request:ty, $function:path, $reason:literal) => {
+        #[tauri::command]
+        async fn $name(
+            app: tauri::AppHandle,
+            request: $request,
+        ) -> Result<mcp_library::McpWriteOutcome, mcp_library::McpError> {
+            let outcome = mcp_run_write(move |context| $function(context, request)).await?;
+            mcp_emit_changed(&app, &outcome, $reason);
+            Ok(outcome)
+        }
+    };
+}
+
+mcp_write_command!(mcp_set_cell, mcp_library::McpSetCellRequest, mcp_library::set_cell, "write");
+mcp_write_command!(mcp_set_column, mcp_library::McpSetColumnRequest, mcp_library::set_column, "write");
+mcp_write_command!(mcp_set_row, mcp_library::McpSetRowRequest, mcp_library::set_row, "write");
+mcp_write_command!(mcp_add_servers, mcp_library::McpAddRequest, mcp_library::add_servers, "write");
+mcp_write_command!(mcp_update_server, mcp_library::McpUpdateRequest, mcp_library::update_server, "write");
+mcp_write_command!(mcp_remove_server, mcp_library::McpRemoveRequest, mcp_library::remove_server, "write");
+mcp_write_command!(mcp_undo, mcp_library::McpUndoRequest, mcp_library::undo, "undo");
+mcp_write_command!(mcp_rollback, mcp_library::McpRollbackRequest, mcp_library::rollback, "undo");
+mcp_write_command!(mcp_set_secret, mcp_library::McpSetSecretRequest, mcp_library::set_secret, "secret");
+mcp_write_command!(mcp_resync, mcp_library::McpResyncRequest, mcp_library::resync, "write");
+mcp_write_command!(
+    mcp_resolve_changed_outside,
+    mcp_library::McpResolveChangeRequest,
+    mcp_library::resolve_changed_outside,
+    "write"
+);
+mcp_write_command!(
+    mcp_resolve_stuck_transaction,
+    mcp_library::McpResolveStuckRequest,
+    mcp_library::resolve_stuck_transaction,
+    "write"
+);
+
+#[tauri::command]
+async fn mcp_parse_paste(
+    request: mcp_library::McpParsePasteRequest,
+) -> Result<mcp_library::McpPasteResult, mcp_library::McpError> {
+    mcp_run_read(move |context| mcp_library::parse_paste(context, request)).await
+}
+
+#[tauri::command]
+async fn mcp_import_github(
+    request: mcp_library::McpGithubRequest,
+) -> Result<mcp_library::McpPasteResult, mcp_library::McpError> {
+    mcp_run_read(move |context| {
+        let found = mcp_github_import::fetch_github_candidates(
+            &mcp_github_import::UreqFetch::new(),
+            &request.source,
+        )?;
+        mcp_library::candidates_from(
+            context,
+            mcp_library::CandidateSource {
+                format: found.format,
+                servers: found.servers,
+                skipped: found.skipped,
+                source: mcp_library::McpServerSource::Github { repo: found.repo },
+                source_display: Some(found.source_display),
+                notices: found.notices,
+                readme: found.readme,
+                preferred: found.preferred,
+            },
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+async fn mcp_test_preview(
+    request: mcp_library::McpTestPreviewRequest,
+) -> Result<mcp_probe::McpTestPreview, mcp_library::McpError> {
+    mcp_run_read(move |context| mcp_probe::test_preview(context, &request.server_id)).await
+}
+
+/// The only generic MCP start: user-clicked, after the command was shown;
+/// initialize + tools/list only, 20 s, process tree killed afterwards.
+#[tauri::command]
+async fn mcp_test_server(
+    app: tauri::AppHandle,
+    request: mcp_library::McpTestRequest,
+) -> Result<mcp_probe::McpTestResult, mcp_library::McpError> {
+    let progress_app = app.clone();
+    let result = mcp_run_read(move |context| {
+        let server_id = request.server_id.clone();
+        mcp_probe::run_test(context, &request.server_id, &request.preview_token, &|phase| {
+            let _ = progress_app.emit(
+                mcp_library::MCP_TEST_PROGRESS_EVENT,
+                serde_json::json!({ "serverId": server_id, "phase": phase }),
+            );
+        })
+    })
+    .await?;
+    let _ = app.emit(
+        mcp_library::MCP_LIBRARY_CHANGED_EVENT,
+        serde_json::json!({
+            "generation": mcp_library::current_generation(),
+            "operationId": null,
+            "reason": "test",
+        }),
+    );
+    Ok(result)
+}
+
+#[tauri::command]
+async fn mcp_export_json(
+    request: mcp_library::McpExportRequest,
+) -> Result<mcp_library::McpExportResult, mcp_library::McpError> {
+    mcp_run_read(move |context| mcp_library::export_json(context, request)).await
+}
+
+#[tauri::command]
+async fn mcp_open_config_location(
+    request: mcp_library::McpOpenLocationRequest,
+) -> Result<(), mcp_library::McpError> {
+    mcp_run_read(move |context| {
+        let path = mcp_library::config_location(context, &request)?;
+        open_path_with_system(&path)
+            .map_err(|_| mcp_library::McpError::new("engine", "没能打开文件位置。"))
+    })
+    .await
+}
+
+// ============================================================================
+// end v3.3 MCP
+// ============================================================================
+// Strictly read-only. The probe does not execute Codex, PowerShell, npm,
 /// setup.ps1, cached JavaScript, or the standalone desktop repair utility.
 #[tauri::command]
 async fn scan_codex_plugin_doctor() -> Result<codex_plugin_doctor::CodexPluginDoctorReport, String>
@@ -19277,6 +19550,31 @@ pub fn run() {
             rollback_mcp_snapshot,
             list_mcp_rollback_snapshots,
             list_mcp_mutation_targets,
+            // v3.3 MCP (docs/v3.3/mcp-contract.md §3.4)
+            mcp_library_snapshot,
+            mcp_get_server,
+            mcp_list_templates,
+            mcp_history,
+            mcp_import_from_clients,
+            mcp_set_cell,
+            mcp_set_column,
+            mcp_set_row,
+            mcp_parse_paste,
+            mcp_import_github,
+            mcp_add_servers,
+            mcp_update_server,
+            mcp_remove_server,
+            mcp_undo,
+            mcp_rollback,
+            mcp_set_secret,
+            mcp_test_preview,
+            mcp_test_server,
+            mcp_export_json,
+            mcp_resync,
+            mcp_resolve_changed_outside,
+            mcp_resolve_stuck_transaction,
+            mcp_open_config_location,
+            // end v3.3 MCP
             scan_codex_plugin_doctor,
             preview_source_import_candidate,
             stage_source_import_candidate,

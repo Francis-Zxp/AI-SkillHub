@@ -1171,13 +1171,6 @@ fn parse_json_or_jsonc(text: &str) -> Result<JsonValue, ()> {
     serde_json::from_str(&without_trailing_commas).map_err(|_| ())
 }
 
-/// Claude writes deliberately accept strict JSON only. The read-only scanner
-/// remains more tolerant, but a mutation must never erase JSONC comments or
-/// trailing commas as a side effect of serialisation.
-pub(crate) fn validate_claude_mcp_config_strict(text: &str) -> bool {
-    serde_json::from_str::<JsonValue>(text).is_ok_and(|value| value.as_object().is_some())
-}
-
 pub(crate) fn strip_json_comments(input: &str) -> Result<String, ()> {
     let chars: Vec<char> = input.chars().collect();
     let mut output = String::with_capacity(input.len());

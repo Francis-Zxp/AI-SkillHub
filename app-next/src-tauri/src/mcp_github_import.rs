@@ -2,8 +2,12 @@
 //! This module never starts a server, never uses GitHub credentials, and never
 //! returns or persists configuration values that could be credentials.
 
+use crate::mcp_library::McpError;
+use crate::mcp_mutation::{has_common_secret_prefix, is_sensitive_assignment};
+use crate::mcp_paste;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::time::Duration;
 
@@ -259,6 +263,11 @@ fn fetch_github_text(agent: &ureq::Agent, url: &str) -> Result<Option<String>, S
             return Err("无法连接 GitHub；请检查网络或代理后重试。".to_string())
         }
     };
+    // Bug MCP#11: redirects are never followed; a 3xx means the repository
+    // was renamed or transferred.
+    if (300..400).contains(&response.status()) {
+        return Err("该 GitHub 仓库已改名或迁移；请使用新的 owner/repo 后重试。".to_string());
+    }
     if response
         .header("content-length")
         .and_then(|value| value.parse::<usize>().ok())
@@ -316,15 +325,18 @@ fn parse_server(name: &str, value: &Value) -> Option<McpGithubImportCandidate> {
             let command = command?.trim();
             if command.is_empty()
                 || command.chars().any(char::is_control)
-                || contains_credential_like_value(command)
+                || has_common_secret_prefix(command)
             {
                 return None;
             }
             let args = string_array(object.get("args"))?;
             if args.len() > 64
                 || args.iter().any(|argument| {
+                    // Bug MCP#8: `--port=3000` and `task-master-ai` are not
+                    // credentials; only real secret shapes are.
                     argument.chars().any(char::is_control)
-                        || contains_credential_like_value(argument)
+                        || has_common_secret_prefix(argument)
+                        || is_sensitive_assignment(argument)
                         || matches!(
                             argument.to_ascii_lowercase().as_str(),
                             "--token"
@@ -412,13 +424,6 @@ fn safe_remote_url(value: &str) -> bool {
         && value.len() <= 1024
 }
 
-fn contains_credential_like_value(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    value.contains('=')
-        || ["sk-", "github_pat_", "ghp_", "xox", "aiza", "akia", "eyj"]
-            .iter()
-            .any(|prefix| lower.contains(prefix))
-}
 
 #[cfg(test)]
 mod tests {
@@ -617,5 +622,682 @@ mod tests {
             .candidates
             .iter()
             .all(|item| item.command.is_some() || item.url.is_some()));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v3.3 GitHub import (docs/v3.3/mcp-contract.md §3.8, M1-8)
+//
+// Still drafts only: no redirects followed, no token, nothing executed.
+// Network goes only to api.github.com and raw.githubusercontent.com.
+// ---------------------------------------------------------------------------
+
+pub(crate) const MAX_README_BYTES: usize = 512 * 1024;
+const USER_AGENT_V33: &str = "AI-SkillHub-MCP-Import/3.3";
+const CONFIG_FILES: [&str; 2] = [".mcp.json", "mcp.json"];
+const README_FILES: [&str; 2] = ["README.md", "readme.md"];
+
+/// `owner/repo`, a repository URL, or a `/tree/` / `/blob/` URL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GithubSourceForm {
+    Root,
+    Tree(Vec<String>),
+    Blob(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GithubSource {
+    pub owner: String,
+    pub repo: String,
+    pub form: GithubSourceForm,
+}
+
+pub(crate) fn parse_github_source(source: &str) -> Result<GithubSource, McpError> {
+    let invalid = || {
+        McpError::new(
+            "github-invalid-source",
+            "请输入 owner/repo，或 https://github.com/ 开头的仓库地址。",
+        )
+    };
+    let trimmed = source.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_SOURCE_LENGTH {
+        return Err(invalid());
+    }
+    if trimmed.contains(['?', '#', '@', '\\']) || !trimmed.is_ascii() {
+        return Err(invalid());
+    }
+    let path = if let Some(value) = trimmed.strip_prefix("https://github.com/") {
+        value
+    } else if trimmed.contains("://") {
+        return Err(invalid());
+    } else {
+        trimmed
+    };
+    let parts = path
+        .trim_end_matches('/')
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() < 2 {
+        return Err(invalid());
+    }
+    let owner = parts[0];
+    let repo = parts[1].trim_end_matches(".git");
+    if !valid_segment(owner) || !valid_segment(repo) {
+        return Err(invalid());
+    }
+    let rest = parts[2..]
+        .iter()
+        .map(|part| part.to_string())
+        .collect::<Vec<_>>();
+    if rest.iter().any(|part| !valid_segment(part)) {
+        return Err(invalid());
+    }
+    let form = match rest.split_first() {
+        None => GithubSourceForm::Root,
+        Some((kind, tail)) if kind == "tree" && !tail.is_empty() => {
+            GithubSourceForm::Tree(tail.to_vec())
+        }
+        Some((kind, tail)) if kind == "blob" && tail.len() >= 2 => {
+            GithubSourceForm::Blob(tail.to_vec())
+        }
+        _ => return Err(invalid()),
+    };
+    Ok(GithubSource {
+        owner: owner.to_string(),
+        repo: repo.to_string(),
+        form,
+    })
+}
+
+/// A fetch result without any response body details in errors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FetchError {
+    Moved,
+    RateLimited,
+    NotFound,
+    TooLarge,
+    Unreachable,
+    Other,
+}
+
+/// Network access, injectable for tests.
+pub(crate) trait GithubFetch {
+    fn get(&self, url: &str, limit: usize) -> Result<String, FetchError>;
+}
+
+pub(crate) struct UreqFetch {
+    agent: ureq::Agent,
+}
+
+impl UreqFetch {
+    pub(crate) fn new() -> Self {
+        Self {
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(Duration::from_secs(8))
+                .timeout_read(Duration::from_secs(12))
+                .timeout_write(Duration::from_secs(8))
+                .redirects(0)
+                .build(),
+        }
+    }
+}
+
+/// Maps an HTTP status to a fetch error (bug MCP#11: 3xx means moved).
+pub(crate) fn classify_status(status: u16) -> FetchError {
+    match status {
+        300..=399 => FetchError::Moved,
+        404 | 410 => FetchError::NotFound,
+        401 | 403 | 429 => FetchError::RateLimited,
+        500..=599 => FetchError::Unreachable,
+        _ => FetchError::Other,
+    }
+}
+
+impl GithubFetch for UreqFetch {
+    fn get(&self, url: &str, limit: usize) -> Result<String, FetchError> {
+        let response = match self
+            .agent
+            .get(url)
+            .set("User-Agent", USER_AGENT_V33)
+            .set("Accept", "application/vnd.github.raw+json")
+            .call()
+        {
+            Ok(response) => response,
+            Err(ureq::Error::Status(status, _)) => return Err(classify_status(status)),
+            Err(ureq::Error::Transport(_)) => return Err(FetchError::Unreachable),
+        };
+        if (300..400).contains(&response.status()) {
+            return Err(FetchError::Moved);
+        }
+        if response
+            .header("content-length")
+            .and_then(|value| value.parse::<usize>().ok())
+            .is_some_and(|length| length > limit)
+        {
+            return Err(FetchError::TooLarge);
+        }
+        let mut bytes = Vec::new();
+        response
+            .into_reader()
+            .take((limit + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| FetchError::Unreachable)?;
+        if bytes.len() > limit {
+            return Err(FetchError::TooLarge);
+        }
+        String::from_utf8(bytes).map_err(|_| FetchError::Other)
+    }
+}
+
+/// Candidates found in one repository.
+pub(crate) struct GithubCandidates {
+    pub format: Option<mcp_paste::PasteFormat>,
+    pub servers: Vec<mcp_paste::ParsedServer>,
+    pub preferred: Vec<bool>,
+    pub skipped: Vec<(String, &'static str)>,
+    pub source_display: String,
+    pub notices: Vec<&'static str>,
+    pub repo: String,
+    pub readme: bool,
+}
+
+fn fetch_error(error: FetchError, file: &str) -> McpError {
+    match error {
+        FetchError::Moved => McpError::new(
+            "github-moved",
+            "这个 GitHub 仓库已改名或迁移，请用新的 owner/repo。",
+        ),
+        FetchError::RateLimited => {
+            McpError::new("github-rate-limited", "GitHub 暂时限制了访问，请稍后再试。")
+        }
+        FetchError::NotFound => McpError::new("github-not-found", "没有找到这个仓库或路径。"),
+        FetchError::TooLarge => McpError::new(
+            "github-too-large",
+            format!("{file} 太大了，SkillHub 不读取。"),
+        )
+        .param("file", file),
+        FetchError::Unreachable | FetchError::Other => {
+            McpError::new("github-unreachable", "无法连接 GitHub；请检查网络或代理后重试。")
+        }
+    }
+}
+
+fn join_path(dir: &str, file: &str) -> String {
+    if dir.is_empty() {
+        file.to_string()
+    } else {
+        format!("{dir}/{file}")
+    }
+}
+
+/// raw.githubusercontent.com first; the contents API when raw is unreachable.
+fn fetch_file(
+    fetcher: &dyn GithubFetch,
+    source: &GithubSource,
+    reference: &str,
+    path: &str,
+    limit: usize,
+) -> Result<String, FetchError> {
+    let raw = format!(
+        "https://raw.githubusercontent.com/{}/{}/{reference}/{path}",
+        source.owner, source.repo
+    );
+    match fetcher.get(&raw, limit) {
+        Err(FetchError::Unreachable) => fetcher.get(
+            &format!(
+                "https://api.github.com/repos/{}/{}/contents/{path}?ref={reference}",
+                source.owner, source.repo
+            ),
+            limit,
+        ),
+        other => other,
+    }
+}
+
+fn default_branch(fetcher: &dyn GithubFetch, source: &GithubSource) -> Result<String, McpError> {
+    let url = format!(
+        "https://api.github.com/repos/{}/{}",
+        source.owner, source.repo
+    );
+    match fetcher.get(&url, MAX_CONFIG_BYTES) {
+        Ok(text) => Ok(serde_json::from_str::<Value>(&text)
+            .ok()
+            .and_then(|payload| {
+                payload
+                    .get("default_branch")
+                    .and_then(Value::as_str)
+                    .filter(|branch| branch.split('/').all(valid_segment))
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "HEAD".to_string())),
+        Err(FetchError::Moved) => Err(fetch_error(FetchError::Moved, "")),
+        Err(FetchError::NotFound) => Err(fetch_error(FetchError::NotFound, "")),
+        // Flaky API (transport error, 403/429, 5xx): use HEAD on raw.
+        Err(_) => Ok("HEAD".to_string()),
+    }
+}
+
+/// (ref, path) splits for `/tree/` and `/blob/` forms: a ref is one segment
+/// first, then the next one or two segments joined (refs with slashes).
+fn ref_splits(rest: &[String]) -> Vec<(String, String)> {
+    (1..=rest.len().min(3))
+        .map(|split| (rest[..split].join("/"), rest[split..].join("/")))
+        .collect()
+}
+
+pub(crate) fn fetch_github_candidates(
+    fetcher: &dyn GithubFetch,
+    source_text: &str,
+) -> Result<GithubCandidates, McpError> {
+    let source = parse_github_source(source_text)?;
+    let attempts: Vec<(String, Vec<String>, Option<String>)> = match &source.form {
+        GithubSourceForm::Root => vec![(default_branch(fetcher, &source)?, vec![String::new()], None)],
+        GithubSourceForm::Tree(rest) => ref_splits(rest)
+            .into_iter()
+            .map(|(reference, path)| {
+                let mut dirs = vec![path.clone()];
+                if !path.is_empty() {
+                    dirs.push(String::new());
+                }
+                (reference, dirs, None)
+            })
+            .collect(),
+        GithubSourceForm::Blob(rest) => ref_splits(rest)
+            .into_iter()
+            .filter(|(_, path)| !path.is_empty())
+            .map(|(reference, path)| (reference, Vec::new(), Some(path)))
+            .collect(),
+    };
+    let mut last_error = FetchError::NotFound;
+    for (reference, dirs, file) in attempts {
+        if let Some(path) = file {
+            let limit = if path.to_ascii_lowercase().ends_with(".md") {
+                MAX_README_BYTES
+            } else {
+                MAX_CONFIG_BYTES
+            };
+            match fetch_file(fetcher, &source, &reference, &path, limit) {
+                Ok(text) => {
+                    let readme = path.to_ascii_lowercase().ends_with(".md");
+                    return Ok(finish(&source, &path, &text, readme));
+                }
+                Err(FetchError::NotFound) => continue,
+                Err(error) => return Err(fetch_error(error, &path)),
+            }
+        }
+        let mut found_any = false;
+        for dir in &dirs {
+            for name in CONFIG_FILES {
+                let path = join_path(dir, name);
+                match fetch_file(fetcher, &source, &reference, &path, MAX_CONFIG_BYTES) {
+                    Ok(text) => {
+                        let result = finish(&source, &path, &text, false);
+                        if !result.servers.is_empty() || !result.skipped.is_empty() {
+                            return Ok(result);
+                        }
+                        found_any = true;
+                    }
+                    Err(FetchError::NotFound) => {}
+                    Err(error) => return Err(fetch_error(error, &path)),
+                }
+            }
+            for name in README_FILES {
+                let path = join_path(dir, name);
+                match fetch_file(fetcher, &source, &reference, &path, MAX_README_BYTES) {
+                    Ok(text) => {
+                        found_any = true;
+                        let result = finish(&source, &path, &text, true);
+                        if !result.servers.is_empty() || !result.skipped.is_empty() {
+                            return Ok(result);
+                        }
+                        break;
+                    }
+                    Err(FetchError::NotFound) => {}
+                    Err(error) => return Err(fetch_error(error, &path)),
+                }
+            }
+        }
+        if found_any {
+            last_error = FetchError::Other;
+            break;
+        }
+    }
+    match last_error {
+        FetchError::NotFound => Err(fetch_error(FetchError::NotFound, "")),
+        _ => Ok(GithubCandidates {
+            format: None,
+            servers: Vec::new(),
+            preferred: Vec::new(),
+            skipped: Vec::new(),
+            source_display: format!("github.com/{}/{}", source.owner, source.repo),
+            notices: vec!["configuration-only"],
+            repo: format!("{}/{}", source.owner, source.repo),
+            readme: false,
+        }),
+    }
+}
+
+fn finish(source: &GithubSource, path: &str, text: &str, readme: bool) -> GithubCandidates {
+    let (format, servers, preferred, skipped) = if readme {
+        let parsed = parse_readme_blocks(text);
+        (
+            Some(mcp_paste::PasteFormat::Readme),
+            parsed.0,
+            parsed.1,
+            parsed.2,
+        )
+    } else {
+        match mcp_paste::parse(text) {
+            Ok(outcome) => {
+                let count = outcome.servers.len();
+                (outcome.format, outcome.servers, vec![true; count], outcome.skipped)
+            }
+            Err(_) => (None, Vec::new(), Vec::new(), Vec::new()),
+        }
+    };
+    let mut notices = vec!["configuration-only"];
+    if readme {
+        notices.push("readme-example");
+    }
+    // The verified Origin recipe lives in Discover (§6.8).
+    if source.owner.eq_ignore_ascii_case("Ge-Shun") && source.repo.eq_ignore_ascii_case("origin-mcp") {
+        notices.push("has-verified-recipe");
+    }
+    GithubCandidates {
+        format,
+        servers,
+        preferred,
+        skipped,
+        source_display: format!("github.com/{}/{}/{path}", source.owner, source.repo),
+        notices,
+        repo: format!("{}/{}", source.owner, source.repo),
+        readme,
+    }
+}
+
+/// The first balanced `{…}` that mentions `mcpServers` / `mcp_servers`
+/// (JS/TS examples). Unquoted keys simply fail to parse and are skipped.
+fn balanced_object(text: &str) -> Option<&str> {
+    let anchor = text.find("mcpServers").or_else(|| text.find("mcp_servers"))?;
+    let bytes = text.as_bytes();
+    // The nearest opening brace before the anchor holds the example object.
+    let start = (0..anchor).rev().find(|index| bytes[*index] == b'{')?;
+    let mut depth = 0i32;
+    let mut in_string: Option<u8> = None;
+    let mut escaped = false;
+    for (index, byte) in bytes.iter().enumerate().skip(start) {
+        if let Some(quote) = in_string {
+            if escaped {
+                escaped = false;
+            } else if *byte == b'\\' {
+                escaped = true;
+            } else if *byte == quote {
+                in_string = None;
+            }
+            continue;
+        }
+        match byte {
+            b'"' | b'\'' | b'`' => in_string = Some(*byte),
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return text.get(start..=index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn same_server(left: &mcp_paste::ParsedServer, right: &mcp_paste::ParsedServer) -> bool {
+    let keys = |pairs: &[(String, String)]| {
+        let mut names = pairs.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>();
+        names.sort();
+        names
+    };
+    left.transport == right.transport
+        && left.command == right.command
+        && left.args == right.args
+        && left.url == right.url
+        && keys(&left.env) == keys(&right.env)
+        && keys(&left.headers) == keys(&right.headers)
+}
+
+fn preferred_variant(server: &mcp_paste::ParsedServer) -> bool {
+    let runner = server
+        .command
+        .as_deref()
+        .map(crate::mcp_mutation::command_stem)
+        .unwrap_or_default();
+    matches!(runner.as_str(), "npx" | "uvx")
+        && !server
+            .args
+            .iter()
+            .any(|arg| arg.contains("/Users/") || arg.contains("~/Library"))
+}
+
+/// Parses every fenced example block; one bad block never aborts the rest.
+/// Identical same-name examples merge; different ones become variants.
+pub(crate) fn parse_readme_blocks(
+    text: &str,
+) -> (
+    Vec<mcp_paste::ParsedServer>,
+    Vec<bool>,
+    Vec<(String, &'static str)>,
+) {
+    let mut fence: Option<(char, usize, Option<String>)> = None;
+    let mut block = String::new();
+    let mut servers: Vec<mcp_paste::ParsedServer> = Vec::new();
+    let mut skipped: Vec<(String, &'static str)> = Vec::new();
+    let accept = |language: &str| -> Option<String> {
+        let language = language.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        matches!(
+            language.as_str(),
+            "" | "json" | "jsonc" | "json5" | "js" | "javascript" | "ts" | "typescript" | "toml"
+        )
+        .then_some(language)
+    };
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some((marker, width, language)) = &fence {
+            let run = trimmed.chars().take_while(|ch| ch == marker).count();
+            if run >= *width && trimmed[run..].trim().is_empty() {
+                if let Some(language) = language {
+                    let body = if matches!(language.as_str(), "js" | "javascript" | "ts" | "typescript") {
+                        balanced_object(&block).map(str::to_string)
+                    } else {
+                        Some(block.clone())
+                    };
+                    if let Some(body) = body {
+                        if let Ok(outcome) = mcp_paste::parse(&body) {
+                            for server in outcome.servers {
+                                if servers.iter().any(|existing| {
+                                    existing.name.eq_ignore_ascii_case(&server.name)
+                                        && same_server(existing, &server)
+                                }) {
+                                    continue;
+                                }
+                                if servers.len() < mcp_paste::MAX_CANDIDATES {
+                                    servers.push(server);
+                                }
+                            }
+                            for skip in outcome.skipped {
+                                if !skipped.contains(&skip) {
+                                    skipped.push(skip);
+                                }
+                            }
+                        }
+                    }
+                }
+                fence = None;
+                block.clear();
+            } else if language.is_some() {
+                block.push_str(line);
+                block.push('\n');
+            }
+        } else if let Some(marker @ ('`' | '~')) = trimmed.chars().next() {
+            let width = trimmed.chars().take_while(|ch| *ch == marker).count();
+            if width >= 3 {
+                fence = Some((marker, width, accept(trimmed[width..].trim())));
+            }
+        }
+    }
+    // A skipped name that also has a usable example is not "skipped".
+    skipped.retain(|(name, _)| !servers.iter().any(|server| server.name.eq_ignore_ascii_case(name)));
+    let mut preferred = vec![false; servers.len()];
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, server) in servers.iter().enumerate() {
+        groups
+            .entry(server.name.to_ascii_lowercase())
+            .or_default()
+            .push(index);
+    }
+    for indexes in groups.values() {
+        let chosen = indexes
+            .iter()
+            .copied()
+            .find(|index| preferred_variant(&servers[*index]))
+            .unwrap_or(indexes[0]);
+        preferred[chosen] = true;
+    }
+    (servers, preferred, skipped)
+}
+
+#[cfg(test)]
+mod v33_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn fixture(name: &str) -> String {
+        std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/github-readmes")
+                .join(name),
+        )
+        .unwrap()
+    }
+
+    /// G1: excerpted README config blocks of the four most popular servers.
+    #[test]
+    fn github_readme_fixtures_yield_candidates() {
+        let (servers, preferred, _) = parse_readme_blocks(&fixture("github-mcp-server.md"));
+        assert!(servers.iter().any(|server| server.name == "github"));
+        assert!(preferred.iter().any(|flag| *flag));
+
+        let (servers, preferred, _) = parse_readme_blocks(&fixture("playwright-mcp.md"));
+        let playwright = servers
+            .iter()
+            .enumerate()
+            .filter(|(_, server)| server.name == "playwright")
+            .collect::<Vec<_>>();
+        assert!(playwright.len() >= 2, "variants expected");
+        let chosen = playwright
+            .iter()
+            .find(|(index, _)| preferred[*index])
+            .unwrap();
+        assert_eq!(chosen.1.command.as_deref(), Some("npx"));
+
+        let (servers, _, _) = parse_readme_blocks(&fixture("servers-memory.md"));
+        let memory = servers
+            .iter()
+            .filter(|server| server.name == "memory" && server.command.as_deref() == Some("npx"))
+            .count();
+        assert_eq!(memory, 1, "npx and cmd /c npx variants merge after unwrap");
+
+        let (servers, _, _) = parse_readme_blocks(&fixture("context7.md"));
+        assert!(servers.iter().any(|server| server.name == "context7"));
+
+        // A 200 KB README stays under the 512 KiB README cap.
+        let mut big = "lorem ipsum dolor sit amet\n".repeat(8000);
+        big.push_str("```json\n{\"mcpServers\":{\"big\":{\"command\":\"uvx\",\"args\":[\"big-mcp\"]}}}\n```\n");
+        assert!(big.len() > 200 * 1024 && big.len() < MAX_README_BYTES);
+        assert_eq!(parse_readme_blocks(&big).0.len(), 1);
+    }
+
+    struct FakeFetch(HashMap<String, Result<String, FetchError>>);
+
+    impl GithubFetch for FakeFetch {
+        fn get(&self, url: &str, limit: usize) -> Result<String, FetchError> {
+            match self.0.get(url) {
+                Some(Ok(text)) if text.len() > limit => Err(FetchError::TooLarge),
+                Some(result) => result.clone(),
+                None => Err(FetchError::NotFound),
+            }
+        }
+    }
+
+    /// G2: source forms and 3xx → github-moved (bug MCP#11).
+    #[test]
+    fn github_source_forms_and_3xx_moved() {
+        assert_eq!(
+            parse_github_source("https://github.com/owner/repo.git").unwrap().form,
+            GithubSourceForm::Root
+        );
+        assert_eq!(
+            parse_github_source("https://github.com/modelcontextprotocol/servers/tree/main/src/memory")
+                .unwrap()
+                .form,
+            GithubSourceForm::Tree(vec!["main".into(), "src".into(), "memory".into()])
+        );
+        assert_eq!(
+            parse_github_source("https://github.com/o/r/blob/main/docs/mcp.json").unwrap().form,
+            GithubSourceForm::Blob(vec!["main".into(), "docs".into(), "mcp.json".into()])
+        );
+        for bad in [
+            "https://github.com/o/r?x=1",
+            "https://github.com@evil.example/o/r",
+            "https://gitlab.com/o/r",
+            "o",
+            "https://github.com/o/r/issues/1",
+        ] {
+            assert!(parse_github_source(bad).is_err(), "{bad}");
+        }
+        assert_eq!(classify_status(301), FetchError::Moved);
+        assert_eq!(classify_status(429), FetchError::RateLimited);
+
+        let mut responses = HashMap::new();
+        responses.insert(
+            "https://api.github.com/repos/old/name".to_string(),
+            Err(FetchError::Moved),
+        );
+        let error = fetch_github_candidates(&FakeFetch(responses), "old/name")
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "github-moved");
+
+        // Flaky API: fall back to HEAD on raw; tree subpath with a README.
+        let mut responses = HashMap::new();
+        responses.insert(
+            "https://api.github.com/repos/modelcontextprotocol/servers".to_string(),
+            Err(FetchError::RateLimited),
+        );
+        responses.insert(
+            "https://raw.githubusercontent.com/modelcontextprotocol/servers/main/src/memory/README.md"
+                .to_string(),
+            Ok(fixture("servers-memory.md")),
+        );
+        let result = fetch_github_candidates(
+            &FakeFetch(responses),
+            "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+        )
+        .unwrap();
+        assert!(result.readme);
+        assert!(result.servers.iter().any(|server| server.name == "memory"));
+        assert!(result.source_display.ends_with("src/memory/README.md"));
+
+        let mut responses = HashMap::new();
+        responses.insert(
+            "https://api.github.com/repos/o/r".to_string(),
+            Err(FetchError::Unreachable),
+        );
+        responses.insert(
+            "https://raw.githubusercontent.com/o/r/HEAD/README.md".to_string(),
+            Ok(fixture("context7.md")),
+        );
+        let result = fetch_github_candidates(&FakeFetch(responses), "o/r").unwrap();
+        assert!(result.servers.iter().any(|server| server.name == "context7"));
     }
 }
