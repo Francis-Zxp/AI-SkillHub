@@ -9,8 +9,10 @@
 //! the current user's DPAPI key.
 
 use crate::mcp_center;
+use crate::mcp_json_doc::{JsonDoc, Node, ObjectMap};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map as JsonMap, Value as JsonValue};
+#[cfg(test)]
+use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
@@ -18,7 +20,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, Value as TomlValue};
+use toml_edit::{
+    value, Array, DocumentMut, InlineTable, Item, Table, TableLike, Value as TomlValue,
+};
 use uuid::Uuid;
 
 const MAX_CONFIG_BYTES: u64 = 2 * 1024 * 1024;
@@ -26,13 +30,22 @@ const MAX_JOURNAL_BYTES: u64 = 1024 * 1024;
 const MAX_CACHED_PLANS: usize = 64;
 const MAX_PLAN_CACHE_BYTES: usize = 8 * 1024 * 1024;
 const PLAN_CACHE_TTL_MS: u128 = 15 * 60 * 1000;
-const SNAPSHOT_TTL_MS: u128 = 7 * 24 * 60 * 60 * 1000;
-const MAX_ROLLBACK_SNAPSHOTS: usize = 16;
+pub(crate) const SNAPSHOT_TTL_MS: u128 = 7 * 24 * 60 * 60 * 1000;
+// v3.3: each library operation creates one snapshot per target file.
+const MAX_ROLLBACK_SNAPSHOTS: usize = 64;
 const MAX_SNAPSHOT_STORE_BYTES: u64 = 128 * 1024 * 1024;
 const PLAN_SCHEMA_VERSION: u8 = 3;
+/// Terminal state for an interrupted transaction whose target was changed
+/// externally afterwards. It never blocks reads or later writes (bug MCP#2).
+pub(crate) const ABANDONED_EXTERNAL_CHANGE: &str = "abandoned-external-change";
 
 pub const HOST_CODEX: &str = "host-codex";
 pub const HOST_CLAUDE_CODE: &str = "host-claude-code";
+pub const HOST_CLAUDE_DESKTOP: &str = "host-claude-desktop";
+pub const HOST_CURSOR: &str = "host-cursor";
+
+/// MSIX package folder of Claude Desktop (same package path as lib.rs).
+const CLAUDE_DESKTOP_PACKAGE_ROAMING: &str = "Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming";
 
 /// Trusted paths supplied by the Rust command wrapper, never by the webview.
 #[derive(Debug, Clone)]
@@ -40,6 +53,96 @@ pub struct McpMutationContext {
     pub home_dir: PathBuf,
     pub registered_workspaces: Vec<mcp_center::RegisteredWorkspace>,
     pub private_state_dir: PathBuf,
+    /// `CLAUDE_CONFIG_DIR` (process or HKCU) when set; `None` means `~`.
+    pub claude_config_dir: Option<PathBuf>,
+    /// `%APPDATA%` (Roaming) for Claude Desktop.
+    pub app_data_dir: Option<PathBuf>,
+    /// `%LOCALAPPDATA%` for the MSIX Claude Desktop package.
+    pub local_app_data_dir: Option<PathBuf>,
+}
+
+impl McpMutationContext {
+    /// A context with only the required paths; optional client locations are
+    /// derived from `home_dir` the way Windows lays them out.
+    #[allow(dead_code)]
+    pub fn basic(
+        home_dir: PathBuf,
+        registered_workspaces: Vec<mcp_center::RegisteredWorkspace>,
+        private_state_dir: PathBuf,
+    ) -> Self {
+        Self {
+            home_dir,
+            registered_workspaces,
+            private_state_dir,
+            claude_config_dir: None,
+            app_data_dir: None,
+            local_app_data_dir: None,
+        }
+    }
+
+    fn app_data(&self) -> PathBuf {
+        self.app_data_dir
+            .clone()
+            .unwrap_or_else(|| self.home_dir.join("AppData").join("Roaming"))
+    }
+
+    fn local_app_data(&self) -> PathBuf {
+        self.local_app_data_dir
+            .clone()
+            .unwrap_or_else(|| self.home_dir.join("AppData").join("Local"))
+    }
+
+    /// The Claude Code user config file and its display form.
+    pub(crate) fn claude_user_config(&self) -> (PathBuf, String) {
+        match &self.claude_config_dir {
+            Some(dir) => (
+                dir.join(".claude.json"),
+                redact_home_path(&dir.join(".claude.json"), &self.home_dir),
+            ),
+            None => (
+                self.home_dir.join(".claude.json"),
+                "~/.claude.json".to_string(),
+            ),
+        }
+    }
+
+    /// The Claude Desktop config directory: the MSIX LocalCache copy when that
+    /// directory exists, otherwise `%APPDATA%\Claude`.
+    pub(crate) fn claude_desktop_dir(&self) -> PathBuf {
+        let packaged = self
+            .local_app_data()
+            .join(CLAUDE_DESKTOP_PACKAGE_ROAMING)
+            .join("Claude");
+        if fs::symlink_metadata(&packaged).is_ok_and(|meta| meta.is_dir()) {
+            packaged
+        } else {
+            self.app_data().join("Claude")
+        }
+    }
+}
+
+/// `~`-relative display of a path; never a full path containing a user name.
+pub(crate) fn redact_home_path(path: &Path, home: &Path) -> String {
+    let normalize = |value: &Path| value.to_string_lossy().replace('\\', "/");
+    let path_text = normalize(path);
+    let home_text = normalize(home);
+    let home_text = home_text.trim_end_matches('/');
+    // `get` instead of slicing: a non-ASCII path outside the home folder
+    // (for example a redirected %APPDATA% under D:\资料) must never panic on
+    // a byte index inside a character. The prefix must also end at a folder
+    // boundary, so `C:/Users/ab` never redacts `C:/Users/abc/…`.
+    if let Some(prefix) = path_text
+        .get(..home_text.len())
+        .filter(|_| !home_text.is_empty())
+    {
+        let rest = &path_text[home_text.len()..];
+        if prefix.eq_ignore_ascii_case(home_text) && (rest.is_empty() || rest.starts_with('/')) {
+            return format!("~{rest}");
+        }
+    }
+    path.file_name()
+        .map(|name| format!("…/{}", name.to_string_lossy()))
+        .unwrap_or_else(|| "…".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -237,10 +340,13 @@ struct SnapshotManifest {
     state: String,
     rolled_back: bool,
     targets: Vec<SnapshotTarget>,
+    /// The user chose "keep the current files" for a stuck transaction.
+    #[serde(default)]
+    dismissed: bool,
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedTarget {
+pub(crate) struct ResolvedTarget {
     id: String,
     host_id: String,
     scope: String,
@@ -248,6 +354,16 @@ struct ResolvedTarget {
     workspace_path: Option<PathBuf>,
     path: PathBuf,
     path_display: String,
+}
+
+impl ResolvedTarget {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn path_display(&self) -> &str {
+        &self.path_display
+    }
 }
 
 #[derive(Debug)]
@@ -263,6 +379,9 @@ struct BindingSummary {
     exists: bool,
     enabled: bool,
     transport: String,
+    required: bool,
+    env_ref_count: usize,
+    header_ref_count: usize,
 }
 
 struct TargetGroup<'a> {
@@ -273,11 +392,29 @@ struct TargetGroup<'a> {
 struct PreparedWrite {
     target: ResolvedTarget,
     path_binding_sha256: String,
-    changes: Vec<McpBindingChange>,
+    verification: WriteVerification,
     original: Option<ConfigFile>,
     final_bytes: Vec<u8>,
     backup_path: Option<PathBuf>,
     applied_fingerprint: Option<FileFingerprint>,
+}
+
+/// Semantic read-back verification after the atomic write.
+enum WriteVerification {
+    Legacy(Vec<McpBindingChange>),
+    Entries(Vec<EntryChange>),
+}
+
+impl WriteVerification {
+    fn verify(&self, target: &ResolvedTarget, text: &str) -> Result<(), String> {
+        match self {
+            WriteVerification::Legacy(changes) => {
+                let refs = changes.iter().collect::<Vec<_>>();
+                verify_written_config(target, text, &refs)
+            }
+            WriteVerification::Entries(changes) => verify_entry_changes(target, text, changes),
+        }
+    }
 }
 
 struct RollbackPreparation {
@@ -292,9 +429,10 @@ struct CrashRecoveryItem {
     current: Option<ConfigFile>,
     original: Option<Vec<u8>>,
     needs_restore: bool,
+    externally_changed: bool,
 }
 
-struct CrossProcessMutationLock {
+pub(crate) struct CrossProcessMutationLock {
     file: File,
 }
 
@@ -408,7 +546,12 @@ pub fn list_mcp_mutation_targets(
 ) -> Result<Vec<McpMutationTargetOption>, String> {
     validate_context(context)?;
     let mut options = Vec::new();
-    let hosts_and_scopes = [(HOST_CODEX, "user", None), (HOST_CLAUDE_CODE, "user", None)];
+    let hosts_and_scopes = [
+        (HOST_CODEX, "user", None),
+        (HOST_CLAUDE_CODE, "user", None),
+        (HOST_CLAUDE_DESKTOP, "user", None),
+        (HOST_CURSOR, "user", None),
+    ];
     for (host_id, scope, workspace_id) in hosts_and_scopes {
         if let Ok(target) = derive_target(
             context,
@@ -453,7 +596,11 @@ pub fn list_mcp_rollback_snapshots(
     prune_snapshot_store(context, 0, 0)?;
     let mut snapshots = read_snapshot_manifests(context)?
         .into_iter()
-        .filter(|(_, manifest, _)| !manifest.rolled_back && manifest.state == "committed")
+        .filter(|(_, manifest, _)| {
+            !manifest.rolled_back
+                && manifest.state == "committed"
+                && manifest.plan_id.starts_with("mcp-plan-")
+        })
         .map(|(_, manifest, _)| McpRollbackSnapshot {
             snapshot_id: manifest.snapshot_id,
             created_at_unix_ms: manifest.created_at_unix_ms,
@@ -546,6 +693,7 @@ fn apply_mcp_plan_once(
         return Err("MCP 变更目标已漂移，请重新生成计划。".to_string());
     }
 
+    // Legacy preflight: plan journal, memory cache and recorded fingerprints.
     let snapshot_id = format!("mcp-snapshot-{}", plan_id.trim_start_matches("mcp-plan-"));
     let mut prepared = Vec::with_capacity(groups.len());
     for group in groups {
@@ -575,7 +723,7 @@ fn apply_mcp_plan_once(
         prepared.push(PreparedWrite {
             target: group.target,
             path_binding_sha256,
-            changes: group.changes.into_iter().cloned().collect(),
+            verification: WriteVerification::Legacy(group.changes.into_iter().cloned().collect()),
             original,
             final_bytes: final_text.into_bytes(),
             backup_path: None,
@@ -583,7 +731,36 @@ fn apply_mcp_plan_once(
         });
     }
 
-    // Every target is preflighted before the first protected snapshot or write.
+    let changed_targets = prepared.len();
+    execute_prepared_writes(
+        context,
+        &mut prepared,
+        &snapshot_id,
+        plan_id,
+        fail_after_write,
+        recover_on_error,
+    )?;
+    Ok(McpApplyResult {
+        plan_id: plan_id.to_string(),
+        snapshot_id,
+        changed_targets,
+        verified: true,
+    })
+}
+
+/// The core executor shared by the legacy plan path and the v3.3 library:
+/// protected snapshot store, DPAPI backups, manifest prepared → applying,
+/// per-target fingerprint recheck, atomic write with an expected fingerprint,
+/// byte and semantic read-back verification, manifest committed, and crash
+/// recovery on error. Every target must already be preflighted.
+fn execute_prepared_writes(
+    context: &McpMutationContext,
+    prepared: &mut [PreparedWrite],
+    snapshot_id: &str,
+    plan_id: &str,
+    fail_after_write: Option<usize>,
+    recover_on_error: bool,
+) -> Result<(), String> {
     let backup_count = prepared
         .iter()
         .filter(|item| item.original.is_some())
@@ -594,10 +771,10 @@ fn apply_mcp_plan_once(
         .map(|file| file.bytes.len() as u64)
         .sum::<u64>()
         .saturating_add(backup_count.saturating_mul(64 * 1024));
-    prepare_snapshot_store(context, backup_bytes, &snapshot_id)?;
+    prepare_snapshot_store(context, backup_bytes, snapshot_id)?;
     for (index, item) in prepared.iter_mut().enumerate() {
         let backup_result = if let Some(original) = &item.original {
-            let backup_path = snapshot_backup_path(context, &snapshot_id, index)?;
+            let backup_path = snapshot_backup_path(context, snapshot_id, index)?;
             create_private_backup(&backup_path, &original.bytes).map(|_| backup_path)
         } else {
             continue;
@@ -605,7 +782,7 @@ fn apply_mcp_plan_once(
         match backup_result {
             Ok(path) => item.backup_path = Some(path),
             Err(error) => {
-                cleanup_snapshot_dir(context, &snapshot_id);
+                cleanup_snapshot_dir(context, snapshot_id);
                 return Err(error);
             }
         }
@@ -614,7 +791,7 @@ fn apply_mcp_plan_once(
     let created_at_unix_ms = now_unix_ms();
     let mut manifest = SnapshotManifest {
         schema_version: PLAN_SCHEMA_VERSION,
-        snapshot_id: snapshot_id.clone(),
+        snapshot_id: snapshot_id.to_string(),
         plan_id: plan_id.to_string(),
         created_at_unix_ms,
         expires_at_unix_ms: created_at_unix_ms.saturating_add(SNAPSHOT_TTL_MS),
@@ -643,15 +820,16 @@ fn apply_mcp_plan_once(
                     .map(|name| name.to_string_lossy().to_string()),
             })
             .collect(),
+        dismissed: false,
     };
-    let manifest_path = snapshot_manifest_path(context, &snapshot_id)?;
+    let manifest_path = snapshot_manifest_path(context, snapshot_id)?;
     if let Err(error) = write_protected_journal(&manifest_path, &manifest) {
-        cleanup_snapshot_dir(context, &snapshot_id);
+        cleanup_snapshot_dir(context, snapshot_id);
         return Err(error);
     }
     manifest.state = "applying".to_string();
     if let Err(error) = write_replaceable_protected_journal(&manifest_path, &manifest) {
-        cleanup_snapshot_dir(context, &snapshot_id);
+        cleanup_snapshot_dir(context, snapshot_id);
         return Err(error);
     }
 
@@ -675,7 +853,7 @@ fn apply_mcp_plan_once(
                 &item.target.path,
                 &item.final_bytes,
                 item.original.as_ref(),
-                &snapshot_id,
+                snapshot_id,
                 Some(&expected),
             )?;
             written += 1;
@@ -684,8 +862,7 @@ fn apply_mcp_plan_once(
             if written_file.bytes != item.final_bytes {
                 return Err("MCP 写后字节验证失败。".to_string());
             }
-            let refs = item.changes.iter().collect::<Vec<_>>();
-            verify_written_config(&item.target, &written_file.text, &refs)?;
+            item.verification.verify(&item.target, &written_file.text)?;
             item.applied_fingerprint = Some(written_file.fingerprint.clone());
             manifest.targets[index].applied = Some(written_file.fingerprint);
             write_replaceable_protected_journal(&manifest_path, &manifest)?;
@@ -702,54 +879,79 @@ fn apply_mcp_plan_once(
         if !recover_on_error {
             return Err(error);
         }
-        return match recover_incomplete_snapshot(context, &snapshot_id) {
-            Ok(()) => Err(error),
+        if written == 0 {
+            // Nothing reached a target file: drop the unused snapshot instead
+            // of leaving a transaction that looks interrupted.
+            cleanup_snapshot_dir(context, snapshot_id);
+            return Err(error);
+        }
+        return match recover_incomplete_snapshot(context, snapshot_id) {
+            Ok(RecoveryOutcome::Restored) => Err(error),
+            Ok(RecoveryOutcome::ExternallyChanged) => Err(format!(
+                "{error}；目标文件在中断后又被外部修改，已保留外部改动。"
+            )),
             Err(restore_error) => Err(format!(
                 "{error}；崩溃安全恢复已停止（{restore_error}）。受保护恢复数据仍保存在应用私有状态中；请先处理外部改动后重新扫描。"
             )),
         };
     }
-
-    Ok(McpApplyResult {
-        plan_id: plan_id.to_string(),
-        snapshot_id,
-        changed_targets: prepared.len(),
-        verified: true,
-    })
+    Ok(())
 }
 
+/// Result of crash recovery for one interrupted transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecoveryOutcome {
+    /// Every target is back to its original bytes; the snapshot was removed.
+    Restored,
+    /// At least one target was changed outside SkillHub after the interruption.
+    /// That target was kept as is; the others were restored. The manifest is
+    /// now in the terminal `abandoned-external-change` state (bug MCP#2).
+    ExternallyChanged,
+}
+
+/// Recovers interrupted transactions before a write. Never fatal: a manifest
+/// that cannot be recovered stays visible as a stuck transaction and no longer
+/// blocks later reads or writes (bug MCP#2).
 fn recover_incomplete_snapshots(context: &McpMutationContext) -> Result<(), String> {
     let pending = read_snapshot_manifests(context)?
         .into_iter()
-        .filter(|(_, manifest, _)| !manifest.rolled_back && manifest.state != "committed")
+        .filter(|(_, manifest, _)| manifest_is_pending(manifest))
         .map(|(_, manifest, _)| manifest.snapshot_id)
         .collect::<Vec<_>>();
-    let mut first_error = None;
     for snapshot_id in pending {
-        if let Err(error) = recover_incomplete_snapshot(context, &snapshot_id) {
-            first_error.get_or_insert(error);
-        }
+        let _ = recover_incomplete_snapshot(context, &snapshot_id);
     }
-    if let Some(error) = first_error {
-        Err(format!(
-            "检测到未完成的 MCP 配置事务，需要关注：{error}。受保护恢复数据已保留，未覆盖外部改动。"
-        ))
-    } else {
-        Ok(())
-    }
+    Ok(())
+}
+
+fn manifest_is_pending(manifest: &SnapshotManifest) -> bool {
+    !manifest.rolled_back
+        && manifest.state != "committed"
+        && manifest.state != ABANDONED_EXTERNAL_CHANGE
+        && !manifest.dismissed
+}
+
+/// Public entry point for the v3.3 library write path (runs only inside write
+/// commands, never during reads).
+pub(crate) fn recover_before_write(context: &McpMutationContext) -> Result<(), String> {
+    validate_context(context)?;
+    recover_incomplete_snapshots(context)
 }
 
 fn recover_incomplete_snapshot(
     context: &McpMutationContext,
     snapshot_id: &str,
-) -> Result<(), String> {
+) -> Result<RecoveryOutcome, String> {
     let manifest_path = snapshot_manifest_path(context, snapshot_id)?;
     let mut manifest: SnapshotManifest = read_protected_journal(&manifest_path)?;
     if manifest.schema_version != PLAN_SCHEMA_VERSION || manifest.snapshot_id != snapshot_id {
         return Err("MCP 崩溃恢复清单无效或版本不受支持。".to_string());
     }
     if manifest.rolled_back || manifest.state == "committed" {
-        return Ok(());
+        return Ok(RecoveryOutcome::Restored);
+    }
+    if manifest.state == ABANDONED_EXTERNAL_CHANGE {
+        return Ok(RecoveryOutcome::ExternallyChanged);
     }
 
     let preflight = (|| -> Result<Vec<CrashRecoveryItem>, String> {
@@ -783,13 +985,9 @@ fn recover_incomplete_snapshot(
                 .as_ref()
                 .is_some_and(|applied| same_file_content(&current_fingerprint, applied));
             let matches_planned = same_file_content(&current_fingerprint, &recorded.planned);
-            if !already_original && !matches_applied && !matches_planned {
-                return Err(format!(
-                    "{} 在未完成事务后又被外部修改",
-                    recorded.path_display
-                ));
-            }
-            let original = if recorded.original.exists {
+            let externally_changed = !already_original && !matches_applied && !matches_planned;
+            let needs_restore = !already_original && !externally_changed;
+            let original = if needs_restore && recorded.original.exists {
                 let backup_name = recorded
                     .backup_file_name
                     .as_deref()
@@ -810,7 +1008,8 @@ fn recover_incomplete_snapshot(
                 target,
                 current,
                 original,
-                needs_restore: !already_original,
+                needs_restore,
+                externally_changed,
             });
         }
         Ok(items)
@@ -860,7 +1059,12 @@ fn recover_incomplete_snapshot(
         }
     }
 
+    let mut any_external = false;
     for (item, recorded) in items.iter().zip(&manifest.targets) {
+        if item.externally_changed {
+            any_external = true;
+            continue;
+        }
         let restored =
             current_fingerprint(&item.target.path)?.unwrap_or_else(FileFingerprint::missing);
         if !same_file_content(&restored, &recorded.original) {
@@ -869,8 +1073,13 @@ fn recover_incomplete_snapshot(
             return Err(format!("{} 未能恢复到原始内容", recorded.path_display));
         }
     }
+    if any_external {
+        manifest.state = ABANDONED_EXTERNAL_CHANGE.to_string();
+        write_replaceable_protected_journal(&manifest_path, &manifest)?;
+        return Ok(RecoveryOutcome::ExternallyChanged);
+    }
     cleanup_snapshot_dir(context, snapshot_id);
-    Ok(())
+    Ok(RecoveryOutcome::Restored)
 }
 
 pub fn rollback_mcp_snapshot(
@@ -1028,7 +1237,7 @@ fn rollback_mcp_snapshot_once(
     manifest.state = "rolled-back".to_string();
     if let Err(error) = write_replaceable_protected_journal(&manifest_path, &manifest) {
         return match recover_incomplete_snapshot(context, snapshot_id) {
-            Ok(()) => Err(error),
+            Ok(_) => Err(error),
             Err(recovery_error) => Err(format!(
                 "{error}；回滚完成状态恢复已安全停止（{recovery_error}）。不会覆盖外部改动，受保护快照仍保留在应用私有状态中。"
             )),
@@ -1111,9 +1320,25 @@ fn validate_batch(request: &McpMutationBatchRequest) -> Result<(), String> {
     Ok(())
 }
 
+fn is_known_host(host_id: &str) -> bool {
+    matches!(
+        host_id,
+        HOST_CODEX | HOST_CLAUDE_CODE | HOST_CLAUDE_DESKTOP | HOST_CURSOR
+    )
+}
+
+fn is_json_host(host_id: &str) -> bool {
+    matches!(
+        host_id,
+        HOST_CLAUDE_CODE | HOST_CLAUDE_DESKTOP | HOST_CURSOR
+    )
+}
+
 fn validate_change(change: &McpBindingChange) -> Result<(), String> {
-    if change.host_id != HOST_CODEX && change.host_id != HOST_CLAUDE_CODE {
-        return Err("仅支持 Codex 与 Claude Code MCP 配置。".to_string());
+    if !is_known_host(&change.host_id) {
+        return Err(
+            "仅支持 Codex、Claude Code、Claude Desktop 与 Cursor 的 MCP 配置。".to_string(),
+        );
     }
     validate_server_name(&change.host_id, &change.server_name)?;
     match change.action.as_str() {
@@ -1133,7 +1358,9 @@ fn validate_change(change: &McpBindingChange) -> Result<(), String> {
             }
         }
         "set-enabled" => {
-            if change.host_id == HOST_CLAUDE_CODE {
+            // Engine invariant: only Codex has an `enabled` flag. JSON clients
+            // express enable/disable as upsert/remove at the library layer.
+            if change.host_id != HOST_CODEX {
                 return Err("Claude Code 启停状态按项目管理；当前版本不支持直接修改。".to_string());
             }
             if change.draft.is_some() || change.enabled.is_none() {
@@ -1145,14 +1372,15 @@ fn validate_change(change: &McpBindingChange) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) const CLAUDE_RESERVED_NAMES: [&str; 5] = [
+    "workspace",
+    "claude-in-chrome",
+    "computer-use",
+    "claude preview",
+    "claude browser",
+];
+
 fn validate_server_name(host_id: &str, value: &str) -> Result<(), String> {
-    const CLAUDE_RESERVED_NAMES: [&str; 5] = [
-        "workspace",
-        "claude-in-chrome",
-        "computer-use",
-        "claude preview",
-        "claude browser",
-    ];
     if host_id == HOST_CLAUDE_CODE
         && CLAUDE_RESERVED_NAMES
             .iter()
@@ -1160,7 +1388,7 @@ fn validate_server_name(host_id: &str, value: &str) -> Result<(), String> {
     {
         return Err("这个名称由 Claude Code 保留，请使用其他 MCP Server 名称。".to_string());
     }
-    let allowed_punctuation = if host_id == HOST_CLAUDE_CODE {
+    let allowed_punctuation = if is_json_host(host_id) {
         b"_-".as_slice()
     } else {
         b"._-".as_slice()
@@ -1172,7 +1400,7 @@ fn validate_server_name(host_id: &str, value: &str) -> Result<(), String> {
         });
     if valid {
         Ok(())
-    } else if host_id == HOST_CLAUDE_CODE {
+    } else if is_json_host(host_id) {
         Err(
             "Claude Code MCP Server 名称只能使用 1–64 个字母、数字、下划线或短横线，并以字母或数字开头。"
                 .to_string(),
@@ -1189,16 +1417,24 @@ fn validate_draft(change: &McpBindingChange, draft: &McpBindingDraft) -> Result<
     if !matches!(draft.transport.as_str(), "stdio" | "http" | "sse") {
         return Err("MCP transport 只能是 stdio、http 或 sse。".to_string());
     }
-    if change.host_id == HOST_CLAUDE_CODE && draft.required {
+    if is_json_host(&change.host_id) && draft.required {
         return Err("Claude Code Binding 不支持 required 字段。".to_string());
     }
-    if change.host_id == HOST_CLAUDE_CODE && !draft.enabled {
+    if is_json_host(&change.host_id) && !draft.enabled {
         return Err(
             "Claude Code 启停状态按项目管理；新增或编辑时 enabled 必须为 true。".to_string(),
         );
     }
     if change.host_id == HOST_CODEX && draft.transport == "sse" {
         return Err("Codex Binding 不支持独立 sse transport；请使用 http。".to_string());
+    }
+    if change.host_id == HOST_CLAUDE_DESKTOP {
+        if draft.transport != "stdio" {
+            return Err("Claude Desktop 只支持本地命令方式的 MCP。".to_string());
+        }
+        if !draft.env_vars.is_empty() || !draft.header_env.is_empty() {
+            return Err("Claude Desktop 不支持引用环境变量。".to_string());
+        }
     }
     match draft.transport.as_str() {
         "stdio" => {
@@ -1209,6 +1445,11 @@ fn validate_draft(change: &McpBindingChange, draft: &McpBindingDraft) -> Result<
             validate_command(command)?;
             if command.starts_with('-') || draft.url.is_some() {
                 return Err("stdio MCP Server 的 command/url 组合无效。".to_string());
+            }
+            if !draft.header_env.is_empty() {
+                // Bug MCP#1: header references are meaningless for stdio and
+                // Codex refuses `env_http_headers` on stdio servers.
+                return Err("本地命令方式的 MCP 不接受请求头引用。".to_string());
             }
         }
         "http" | "sse" => {
@@ -1245,7 +1486,7 @@ fn validate_draft(change: &McpBindingChange, draft: &McpBindingDraft) -> Result<
     Ok(())
 }
 
-fn validate_plain_field(value: &str, max: usize, label: &str) -> Result<(), String> {
+pub(crate) fn validate_plain_field(value: &str, max: usize, label: &str) -> Result<(), String> {
     if value.is_empty()
         || value.chars().count() > max
         || value
@@ -1257,7 +1498,9 @@ fn validate_plain_field(value: &str, max: usize, label: &str) -> Result<(), Stri
     Ok(())
 }
 
-fn validate_command(value: &str) -> Result<(), String> {
+/// Strict command validation: a direct executable, never a shell or script
+/// host. Callers that pass only the command keep this behaviour.
+pub(crate) fn validate_command(value: &str) -> Result<(), String> {
     validate_plain_field(value, 512, "command")?;
     if value.trim() != value
         || value.contains(['"', '\'', '`', '&', '|', ';', '>', '<'])
@@ -1270,17 +1513,9 @@ fn validate_command(value: &str) -> Result<(), String> {
     if value.chars().any(char::is_whitespace) && !Path::new(value).is_absolute() {
         return Err("MCP command 不接受命令拼接；参数请逐项填写。".to_string());
     }
-    let executable = Path::new(value)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(value)
-        .to_ascii_lowercase();
-    let executable = executable
-        .strip_suffix(".exe")
-        .or_else(|| executable.strip_suffix(".com"))
-        .unwrap_or(&executable);
+    let executable = command_stem(value);
     if matches!(
-        executable,
+        executable.as_str(),
         "cmd"
             | "powershell"
             | "pwsh"
@@ -1293,12 +1528,65 @@ fn validate_command(value: &str) -> Result<(), String> {
             | "mshta"
             | "rundll32"
     ) {
-        return Err("MCP command 不接受 shell 或脚本宿主。".to_string());
+        return Err("MCP 命令不能是 shell 或脚本解释器。".to_string());
     }
     Ok(())
 }
 
-fn validate_arguments(arguments: &[String]) -> Result<(), String> {
+/// The lowercase file stem of a command with `.exe`, `.cmd`, `.bat` and
+/// `.com` stripped (`C:\nodejs\npx.cmd` → `npx`).
+pub(crate) fn command_stem(value: &str) -> String {
+    let file = value
+        .trim()
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(value)
+        .to_ascii_lowercase();
+    for suffix in [".exe", ".cmd", ".bat", ".com"] {
+        if let Some(stripped) = file.strip_suffix(suffix) {
+            return stripped.to_string();
+        }
+    }
+    file
+}
+
+/// Windows runners that need `cmd /c` to start from a GUI host (§2.5).
+pub(crate) const WINDOWS_WRAP_FAMILY: [&str; 7] =
+    ["npx", "npm", "pnpm", "yarn", "node", "bun", "deno"];
+
+pub(crate) fn is_wrap_family(command: &str) -> bool {
+    WINDOWS_WRAP_FAMILY.contains(&command_stem(command).as_str())
+}
+
+/// Like [`validate_command`], with one exception: `cmd` / `cmd.exe` is
+/// accepted only as `cmd /c <family runner> …`, and then no following
+/// argument may contain a character `cmd` interprets (bug #5).
+pub(crate) fn validate_command_with_args(command: &str, args: &[String]) -> Result<(), String> {
+    if command_stem(command) != "cmd" {
+        return validate_command(command);
+    }
+    validate_plain_field(command, 512, "command")?;
+    if !(command.eq_ignore_ascii_case("cmd") || command.eq_ignore_ascii_case("cmd.exe")) {
+        return Err("MCP 命令不能是 shell 或脚本解释器。".to_string());
+    }
+    let valid_wrapper = args.len() >= 2
+        && args[0].eq_ignore_ascii_case("/c")
+        && is_wrap_family(&args[1])
+        && validate_command(&args[1]).is_ok();
+    if !valid_wrapper {
+        return Err(
+            "cmd 只能以 cmd /c npx（或 npm、pnpm、yarn、node、bun、deno）的形式使用。".to_string(),
+        );
+    }
+    if args[1..].iter().any(|argument| {
+        argument.contains(['&', '|', '<', '>', '^', '%', '"', '(', ')', '!', '\r', '\n'])
+    }) {
+        return Err("cmd /c 后的参数包含 cmd 会解释的特殊字符，已拒绝。".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_arguments(arguments: &[String]) -> Result<(), String> {
     let mut index = 0usize;
     while index < arguments.len() {
         let argument = &arguments[index];
@@ -1326,7 +1614,7 @@ fn validate_arguments(arguments: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn is_sensitive_assignment(value: &str) -> bool {
+pub(crate) fn is_sensitive_assignment(value: &str) -> bool {
     let Some((name, _)) = value.split_once('=') else {
         return false;
     };
@@ -1357,7 +1645,7 @@ fn is_sensitive_assignment(value: &str) -> bool {
         || normalized.ends_with("_credentials")
 }
 
-fn is_sensitive_argument_key(value: &str) -> bool {
+pub(crate) fn is_sensitive_argument_key(value: &str) -> bool {
     let key = value
         .split_once('=')
         .map(|(key, _)| key)
@@ -1388,7 +1676,7 @@ fn is_sensitive_argument_key(value: &str) -> bool {
     )
 }
 
-fn has_common_secret_prefix(value: &str) -> bool {
+pub(crate) fn has_common_secret_prefix(value: &str) -> bool {
     let candidate = value.trim().trim_matches(['"', '\'']).to_ascii_lowercase();
     let prefixes = [
         "sk-",
@@ -1414,7 +1702,7 @@ fn has_common_secret_prefix(value: &str) -> bool {
         || (credential.starts_with("eyj") && credential.matches('.').count() == 2)
 }
 
-fn validate_safe_url(value: &str) -> Result<(), String> {
+pub(crate) fn validate_safe_url(value: &str) -> Result<(), String> {
     validate_plain_field(value, 2048, "URL")?;
     let lower = value.to_ascii_lowercase();
     if !(lower.starts_with("https://") || lower.starts_with("http://"))
@@ -1459,7 +1747,7 @@ fn validate_env_name(value: &str) -> Result<(), String> {
     }
 }
 
-fn validate_header_name(value: &str) -> Result<(), String> {
+pub(crate) fn validate_header_name(value: &str) -> Result<(), String> {
     let valid = !value.is_empty()
         && value.len() <= 128
         && value
@@ -1513,13 +1801,28 @@ fn target_path_binding(path: &Path) -> Result<String, String> {
     let leaf = path
         .file_name()
         .ok_or_else(|| "MCP 配置文件名无效。".to_string())?;
-    let canonical_parent =
-        fs::canonicalize(parent).map_err(|_| "MCP 配置父目录无法绑定到物理位置。".to_string())?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|_| "无法确认 MCP 配置文件夹的实际位置；没有写入。".to_string())?;
     let mut identity = canonical_parent.join(leaf).to_string_lossy().to_string();
     if cfg!(windows) {
         identity.make_ascii_lowercase();
     }
     Ok(sha256_hex(identity.as_bytes()))
+}
+
+/// Resolves the writable config file of a (host, scope, workspace) target.
+/// Never creates a client directory (I5); a config file may be created only
+/// inside an existing client config directory.
+pub(crate) fn resolve_target(
+    context: &McpMutationContext,
+    host_id: &str,
+    scope: &str,
+    workspace_id: Option<&str>,
+) -> Result<ResolvedTarget, String> {
+    derive_target(
+        context,
+        &target_probe_change(host_id, scope, workspace_id.map(str::to_string)),
+    )
 }
 
 fn derive_target(
@@ -1561,28 +1864,24 @@ fn derive_target(
             )
         }
         (HOST_CLAUDE_CODE, "user") if workspace.is_none() => {
-            let claude_dir = context.home_dir.join(".claude");
-            if !context.home_dir.join(".claude.json").is_file() {
+            let (path, display) = context.claude_user_config();
+            if !path.is_file() {
+                let claude_dir = context
+                    .claude_config_dir
+                    .clone()
+                    .unwrap_or_else(|| context.home_dir.join(".claude"));
                 validate_existing_directory(&claude_dir, "Claude Code 配置目录")?;
             }
-            (
-                context.home_dir.join(".claude.json"),
-                "~/.claude.json".to_string(),
-                None,
-            )
+            (path, display, None)
         }
         (HOST_CLAUDE_CODE, "local") => {
             let workspace =
                 workspace.ok_or_else(|| "Claude local scope 需要已注册工作区。".to_string())?;
-            let path = context.home_dir.join(".claude.json");
+            let (path, display) = context.claude_user_config();
             if !path.is_file() {
-                return Err("Claude local 配置尚不存在；不会创建假的宿主配置。".to_string());
+                return Err("Claude Code 的配置文件还不存在；SkillHub 不会替它新建。".to_string());
             }
-            (
-                path,
-                "~/.claude.json".to_string(),
-                Some(workspace.path.clone()),
-            )
+            (path, display, Some(workspace.path.clone()))
         }
         (HOST_CLAUDE_CODE, "project") => {
             let workspace =
@@ -1596,7 +1895,23 @@ fn derive_target(
                 Some(workspace.path.clone()),
             )
         }
-        _ => return Err("MCP Host 与作用域组合不受支持。".to_string()),
+        (HOST_CLAUDE_DESKTOP, "user") if workspace.is_none() => {
+            let directory = context.claude_desktop_dir();
+            validate_existing_directory(&directory, "Claude Desktop 配置目录")?;
+            let path = directory.join("claude_desktop_config.json");
+            let display = redact_home_path(&path, &context.home_dir);
+            (path, display, None)
+        }
+        (HOST_CURSOR, "user") if workspace.is_none() => {
+            let directory = context.home_dir.join(".cursor");
+            validate_existing_directory(&directory, "Cursor 配置目录")?;
+            (
+                directory.join("mcp.json"),
+                "~/.cursor/mcp.json".to_string(),
+                None,
+            )
+        }
+        _ => return Err("这个 AI 工具不支持这种作用域。".to_string()),
     };
     validate_target_parent(&path)?;
     let workspace_id = change.workspace_id.clone();
@@ -1630,7 +1945,7 @@ fn validate_target_parent(path: &Path) -> Result<(), String> {
     validate_existing_directory(parent, "MCP 配置父目录")
 }
 
-fn safe_label(value: &str) -> String {
+pub(crate) fn safe_label(value: &str) -> String {
     value
         .chars()
         .filter(|ch| ch.is_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '.'))
@@ -1720,15 +2035,22 @@ fn empty_config(target: &ResolvedTarget) -> &'static str {
     }
 }
 
+/// Validates the *current* document before a write. Codex documents only need
+/// to parse (entries written by older versions may carry noise that this
+/// write cleans up); the entries a write touches are checked strictly after
+/// the write (`verify_*`). JSON documents must be strict JSON objects.
 fn validate_host_document(target: &ResolvedTarget, text: &str) -> Result<(), String> {
     if target.host_id == HOST_CODEX {
         text.parse::<DocumentMut>()
             .map_err(|_| "Codex TOML 无法保真解析，已拒绝写入。".to_string())?;
-        if !mcp_center::validate_codex_mcp_config(text) {
+        if !mcp_center::codex_mcp_config_readable(text) {
             return Err("Codex MCP 静态回读验证失败。".to_string());
         }
     } else {
-        if !mcp_center::validate_claude_mcp_config_strict(text) {
+        let parsed = JsonDoc::parse(text).map_err(|_| {
+            "Claude MCP 写入仅支持严格 JSON；JSONC 注释或尾逗号文件保持只读。".to_string()
+        })?;
+        if parsed.root.as_object().is_none() {
             return Err(
                 "Claude MCP 写入仅支持严格 JSON；JSONC 注释或尾逗号文件保持只读。".to_string(),
             );
@@ -1753,18 +2075,18 @@ fn apply_changes_to_text(
         validate_host_document(target, &rendered)?;
         Ok(rendered)
     } else {
-        let mut root: JsonValue = serde_json::from_str(original).map_err(|_| {
+        let mut document = JsonDoc::parse(original).map_err(|_| {
             "Claude MCP 写入仅支持严格 JSON；JSONC 注释或尾逗号文件保持只读。".to_string()
         })?;
-        if !root.is_object() {
+        if document.root.as_object().is_none() {
             return Err("Claude MCP 配置根节点必须是对象。".to_string());
         }
         for change in changes {
-            apply_claude_change(&mut root, target, change)?;
+            apply_json_change(&mut document.root, target, change)?;
         }
-        let mut rendered = serde_json::to_string_pretty(&root)
+        let rendered = document
+            .render()
             .map_err(|_| "Claude MCP 配置序列化失败。".to_string())?;
-        rendered.push('\n');
         validate_host_document(target, &rendered)?;
         Ok(rendered)
     }
@@ -1772,14 +2094,27 @@ fn apply_changes_to_text(
 
 fn codex_servers_mut(document: &mut DocumentMut) -> Result<&mut Table, String> {
     if !document.as_table().contains_key("mcp_servers") {
+        let mut servers = Table::new();
+        servers.set_implicit(true);
         document
             .as_table_mut()
-            .insert("mcp_servers", Item::Table(Table::new()));
+            .insert("mcp_servers", Item::Table(servers));
     }
     document["mcp_servers"]
         .as_table_mut()
         .ok_or_else(|| "Codex mcp_servers 必须是 TOML table。".to_string())
 }
+
+fn codex_has_structured_env_vars(table: &dyn TableLike) -> bool {
+    table.get("env_vars").is_some_and(|item| {
+        item.as_value()
+            .and_then(TomlValue::as_array)
+            .is_none_or(|array| array.iter().any(|entry| !entry.is_str()))
+    })
+}
+
+const CODEX_STRUCTURED_ENV_MESSAGE: &str =
+    "这个 Codex MCP Server 使用当前版本无法安全编辑的对象式 env_vars；已保持只读。";
 
 fn apply_codex_change(document: &mut DocumentMut, change: &McpBindingChange) -> Result<(), String> {
     let servers = codex_servers_mut(document)?;
@@ -1805,46 +2140,82 @@ fn apply_codex_change(document: &mut DocumentMut, change: &McpBindingChange) -> 
                 .get_mut(&change.server_name)
                 .and_then(Item::as_table_mut)
                 .ok_or_else(|| "Codex MCP Server 不是可编辑 table。".to_string())?;
-            if table.get("env_vars").is_some_and(|item| {
-                item.as_value()
-                    .and_then(TomlValue::as_array)
-                    .is_none_or(|array| array.iter().any(|entry| !entry.is_str()))
-            }) {
-                return Err(
-                    "这个 Codex MCP Server 使用当前版本无法安全编辑的对象式 env_vars；已保持只读。"
-                        .to_string(),
-                );
+            if codex_has_structured_env_vars(&*table) {
+                return Err(CODEX_STRUCTURED_ENV_MESSAGE.to_string());
             }
             let draft = change.draft.as_ref().expect("validated draft");
-            table["enabled"] = value(draft.enabled);
-            table["required"] = value(draft.required);
-            if draft.transport == "stdio" {
-                table["command"] = value(draft.command.as_deref().unwrap_or_default());
-                table.remove("url");
-                let mut args = Array::new();
-                for argument in &draft.args {
-                    args.push(argument.as_str());
-                }
-                table["args"] = value(args);
-                let mut env_vars = Array::new();
-                for name in &draft.env_vars {
-                    env_vars.push(name.as_str());
-                }
-                table["env_vars"] = value(env_vars);
+            // Bug #40: never add `enabled = true` or `required = false` noise.
+            if !draft.enabled {
+                table["enabled"] = value(false);
+            } else if table.contains_key("enabled") {
+                table["enabled"] = value(true);
+            }
+            if draft.required {
+                table["required"] = value(true);
             } else {
+                table.remove("required");
+            }
+            if draft.transport == "stdio" {
+                // Bug MCP#4: a transport switch must not leave inline values
+                // Codex rejects; they are never silently deleted here.
+                if table.contains_key("http_headers") {
+                    return Err(
+                        "该配置包含远程方式的内联请求头；请删除后重新添加，或在新版 MCP 页面中编辑。"
+                            .to_string(),
+                    );
+                }
+                for key in [
+                    "url",
+                    "env_http_headers",
+                    "bearer_token_env_var",
+                    "bearer_token",
+                    "oauth",
+                ] {
+                    table.remove(key);
+                }
+                table["command"] = value(draft.command.as_deref().unwrap_or_default());
+                if draft.args.is_empty() {
+                    table.remove("args");
+                } else {
+                    let mut args = Array::new();
+                    for argument in &draft.args {
+                        args.push(argument.as_str());
+                    }
+                    table["args"] = value(args);
+                }
+                if draft.env_vars.is_empty() {
+                    table.remove("env_vars");
+                } else {
+                    let mut env_vars = Array::new();
+                    for name in &draft.env_vars {
+                        env_vars.push(name.as_str());
+                    }
+                    table["env_vars"] = value(env_vars);
+                }
+            } else {
+                if table.contains_key("env") {
+                    return Err(
+                        "该配置包含本地命令方式的内联环境变量；请删除后重新添加，或在新版 MCP 页面中编辑。"
+                            .to_string(),
+                    );
+                }
+                for key in ["command", "args", "env_vars", "cwd"] {
+                    table.remove(key);
+                }
                 table["url"] = value(draft.url.as_deref().unwrap_or_default());
-                table.remove("command");
-                table.remove("args");
-                table.remove("env_vars");
+                if draft.header_env.is_empty() {
+                    table.remove("env_http_headers");
+                } else {
+                    let mut header_refs = InlineTable::new();
+                    for reference in &draft.header_env {
+                        header_refs.insert(
+                            &reference.header_name,
+                            TomlValue::from(reference.env_var_name.as_str()),
+                        );
+                    }
+                    table["env_http_headers"] = value(header_refs);
+                }
             }
-            let mut header_refs = InlineTable::new();
-            for reference in &draft.header_env {
-                header_refs.insert(
-                    &reference.header_name,
-                    TomlValue::from(reference.env_var_name.as_str()),
-                );
-            }
-            table["env_http_headers"] = value(header_refs);
             // Existing `env` and `http_headers` entries may contain inline
             // values. They are deliberately left byte-preserved unless the
             // user explicitly deletes the entire binding.
@@ -1854,10 +2225,54 @@ fn apply_codex_change(document: &mut DocumentMut, change: &McpBindingChange) -> 
     Ok(())
 }
 
-fn claude_servers_mut<'a>(
-    root: &'a mut JsonValue,
+/// Resolves the `mcpServers` container of a JSON target. Claude local scope
+/// lives under `projects[<key>]`, where the key is matched after
+/// normalisation (bug MCP#5): exactly one equivalent key is used; none means
+/// the forward-slash form is inserted; several equivalent keys that carry
+/// `mcpServers` are refused instead of guessed.
+fn json_project_key(projects: &ObjectMap, workspace_path: &Path) -> Result<Option<String>, String> {
+    let matches = projects
+        .keys()
+        .filter(|key| mcp_center::paths_equivalent(key, workspace_path))
+        .cloned()
+        .collect::<Vec<_>>();
+    if matches.len() <= 1 {
+        return Ok(matches.into_iter().next());
+    }
+    let with_servers = matches
+        .iter()
+        .filter(|key| {
+            projects
+                .get(key)
+                .and_then(|project| project.get("mcpServers"))
+                .is_some()
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    match with_servers.len() {
+        0 => Ok(matches.into_iter().next()),
+        1 => Ok(with_servers.into_iter().next()),
+        _ => Err(AMBIGUOUS_PROJECT_MESSAGE.to_string()),
+    }
+}
+
+pub(crate) const AMBIGUOUS_PROJECT_MESSAGE: &str =
+    "~/.claude.json 里有多个指向同一项目的记录，SkillHub 不猜测，保持只读。";
+
+pub(crate) fn normalized_project_key(workspace_path: &Path) -> String {
+    let text = workspace_path.to_string_lossy();
+    let text = text.trim_start_matches(r"\\?\");
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text.to_string()
+    }
+}
+
+fn json_servers_mut<'a>(
+    root: &'a mut Node,
     target: &ResolvedTarget,
-) -> Result<&'a mut JsonMap<String, JsonValue>, String> {
+) -> Result<&'a mut ObjectMap, String> {
     let root = root
         .as_object_mut()
         .ok_or_else(|| "Claude MCP 配置根节点必须是对象。".to_string())?;
@@ -1865,16 +2280,19 @@ fn claude_servers_mut<'a>(
         let workspace_path = target
             .workspace_path
             .as_ref()
-            .ok_or_else(|| "Claude local 工作区丢失。".to_string())?
-            .to_string_lossy()
-            .to_string();
+            .ok_or_else(|| "Claude local 工作区丢失。".to_string())?;
         let projects = object_field_mut(root, "projects")?;
-        if !projects.contains_key(&workspace_path) {
-            projects.insert(workspace_path.clone(), JsonValue::Object(JsonMap::new()));
-        }
+        let key = match json_project_key(projects, workspace_path)? {
+            Some(key) => key,
+            None => {
+                let key = normalized_project_key(workspace_path);
+                projects.insert(key.clone(), Node::object());
+                key
+            }
+        };
         projects
-            .get_mut(&workspace_path)
-            .and_then(JsonValue::as_object_mut)
+            .get_mut(&key)
+            .and_then(Node::as_object_mut)
             .ok_or_else(|| "Claude local 工作区配置必须是对象。".to_string())?
     } else {
         root
@@ -1882,25 +2300,59 @@ fn claude_servers_mut<'a>(
     object_field_mut(container, "mcpServers")
 }
 
-fn object_field_mut<'a>(
-    object: &'a mut JsonMap<String, JsonValue>,
-    key: &str,
-) -> Result<&'a mut JsonMap<String, JsonValue>, String> {
+fn object_field_mut<'a>(object: &'a mut ObjectMap, key: &str) -> Result<&'a mut ObjectMap, String> {
     if !object.contains_key(key) {
-        object.insert(key.to_string(), JsonValue::Object(JsonMap::new()));
+        object.insert(key, Node::object());
     }
     object
         .get_mut(key)
-        .and_then(JsonValue::as_object_mut)
+        .and_then(Node::as_object_mut)
         .ok_or_else(|| format!("Claude {key} 必须是对象。"))
 }
 
-fn apply_claude_change(
-    root: &mut JsonValue,
+fn json_servers_ref<'a>(
+    root: &'a Node,
+    target: &ResolvedTarget,
+) -> Result<Option<&'a ObjectMap>, String> {
+    let root = root
+        .as_object()
+        .ok_or_else(|| "Claude MCP 配置根节点必须是对象。".to_string())?;
+    let container = if target.scope == "local" {
+        let workspace_path = target
+            .workspace_path
+            .as_ref()
+            .ok_or_else(|| "Claude local 工作区丢失。".to_string())?;
+        let Some(projects) = root.get("projects").and_then(Node::as_object) else {
+            return Ok(None);
+        };
+        let Some(key) = json_project_key(projects, workspace_path)? else {
+            return Ok(None);
+        };
+        let Some(project) = projects.get(&key).and_then(Node::as_object) else {
+            return Ok(None);
+        };
+        project
+    } else {
+        root
+    };
+    Ok(container.get("mcpServers").and_then(Node::as_object))
+}
+
+/// The reference form each JSON host uses for an environment variable.
+fn json_env_reference(host_id: &str, name: &str) -> String {
+    if host_id == HOST_CURSOR {
+        format!("${{env:{name}}}")
+    } else {
+        format!("${{{name}}}")
+    }
+}
+
+fn apply_json_change(
+    root: &mut Node,
     target: &ResolvedTarget,
     change: &McpBindingChange,
 ) -> Result<(), String> {
-    let servers = claude_servers_mut(root, target)?;
+    let servers = json_servers_mut(root, target)?;
     match change.action.as_str() {
         "delete" => {
             if servers.remove(&change.server_name).is_none() {
@@ -1912,40 +2364,30 @@ fn apply_claude_change(
         }
         "upsert" => {
             if !servers.contains_key(&change.server_name) {
-                servers.insert(
-                    change.server_name.clone(),
-                    JsonValue::Object(JsonMap::new()),
-                );
+                servers.insert(change.server_name.clone(), Node::object());
             }
             let binding = servers
                 .get_mut(&change.server_name)
-                .and_then(JsonValue::as_object_mut)
+                .and_then(Node::as_object_mut)
                 .ok_or_else(|| "Claude MCP Server 不是可编辑对象。".to_string())?;
             let draft = change.draft.as_ref().expect("validated draft");
-            binding.insert(
-                "type".to_string(),
-                JsonValue::String(draft.transport.clone()),
-            );
+            if target.host_id == HOST_CLAUDE_CODE || binding.contains_key("type") {
+                binding.insert("type", Node::string(draft.transport.clone()));
+            }
             if draft.transport == "stdio" {
                 binding.insert(
-                    "command".to_string(),
-                    JsonValue::String(draft.command.clone().unwrap_or_default()),
+                    "command",
+                    Node::string(draft.command.clone().unwrap_or_default()),
                 );
-                binding.insert(
-                    "args".to_string(),
-                    JsonValue::Array(draft.args.iter().cloned().map(JsonValue::String).collect()),
-                );
+                binding.insert("args", Node::string_array(draft.args.iter().cloned()));
                 binding.remove("url");
             } else {
-                binding.insert(
-                    "url".to_string(),
-                    JsonValue::String(draft.url.clone().unwrap_or_default()),
-                );
+                binding.insert("url", Node::string(draft.url.clone().unwrap_or_default()));
                 binding.remove("command");
                 binding.remove("args");
             }
-            replace_claude_env_refs(binding, &draft.env_vars)?;
-            replace_claude_header_refs(binding, &draft.header_env)?;
+            replace_json_env_refs(binding, &target.host_id, &draft.env_vars)?;
+            replace_json_header_refs(binding, &target.host_id, &draft.header_env)?;
             // Unknown keys and inline env/header values remain intact. Exact
             // `${ENV}` references are the fields managed by this form.
         }
@@ -1954,21 +2396,9 @@ fn apply_claude_change(
     Ok(())
 }
 
-fn json_object_value_mut<'a>(
-    object: &'a mut JsonMap<String, JsonValue>,
-    key: &str,
-) -> Result<&'a mut JsonMap<String, JsonValue>, String> {
-    if !object.contains_key(key) {
-        object.insert(key.to_string(), JsonValue::Object(JsonMap::new()));
-    }
-    object
-        .get_mut(key)
-        .and_then(JsonValue::as_object_mut)
-        .ok_or_else(|| format!("Claude MCP {key} 字段必须是对象；现有值已保留。"))
-}
-
-fn replace_claude_env_refs(
-    binding: &mut JsonMap<String, JsonValue>,
+fn replace_json_env_refs(
+    binding: &mut ObjectMap,
+    host_id: &str,
     names: &[String],
 ) -> Result<(), String> {
     let remove_empty = if let Some(value) = binding.get_mut("env") {
@@ -1978,17 +2408,23 @@ fn replace_claude_env_refs(
             }
             return Err("Claude MCP env 字段必须是对象；现有值已保留。".to_string());
         };
-        env.retain(|key, value| simple_env_reference(value) != Some(key.as_str()));
+        env.retain(|key, value| simple_env_reference(value) != Some(key));
         for name in names {
-            env.insert(name.clone(), JsonValue::String(format!("${{{name}}}")));
+            env.insert(
+                name.clone(),
+                Node::string(json_env_reference(host_id, name)),
+            );
         }
         env.is_empty()
     } else if names.is_empty() {
         false
     } else {
-        let env = json_object_value_mut(binding, "env")?;
+        let env = object_field_mut(binding, "env")?;
         for name in names {
-            env.insert(name.clone(), JsonValue::String(format!("${{{name}}}")));
+            env.insert(
+                name.clone(),
+                Node::string(json_env_reference(host_id, name)),
+            );
         }
         false
     };
@@ -1998,8 +2434,9 @@ fn replace_claude_env_refs(
     Ok(())
 }
 
-fn replace_claude_header_refs(
-    binding: &mut JsonMap<String, JsonValue>,
+fn replace_json_header_refs(
+    binding: &mut ObjectMap,
+    host_id: &str,
     references: &[McpHeaderEnvRef],
 ) -> Result<(), String> {
     let remove_empty = if let Some(value) = binding.get_mut("headers") {
@@ -2013,18 +2450,18 @@ fn replace_claude_header_refs(
         for reference in references {
             headers.insert(
                 reference.header_name.clone(),
-                JsonValue::String(format!("${{{}}}", reference.env_var_name)),
+                Node::string(json_env_reference(host_id, &reference.env_var_name)),
             );
         }
         headers.is_empty()
     } else if references.is_empty() {
         false
     } else {
-        let headers = json_object_value_mut(binding, "headers")?;
+        let headers = object_field_mut(binding, "headers")?;
         for reference in references {
             headers.insert(
                 reference.header_name.clone(),
-                JsonValue::String(format!("${{{}}}", reference.env_var_name)),
+                Node::string(json_env_reference(host_id, &reference.env_var_name)),
             );
         }
         false
@@ -2035,9 +2472,34 @@ fn replace_claude_header_refs(
     Ok(())
 }
 
-fn simple_env_reference(value: &JsonValue) -> Option<&str> {
-    let reference = value.as_str()?.strip_prefix("${")?.strip_suffix('}')?;
+/// `${NAME}` or `${env:NAME}` with a valid variable name.
+fn simple_env_reference(value: &Node) -> Option<&str> {
+    let inner = value.as_str()?.strip_prefix("${")?.strip_suffix('}')?;
+    let reference = inner.strip_prefix("env:").unwrap_or(inner);
     validate_env_name(reference).is_ok().then_some(reference)
+}
+
+fn count_json_references(binding: &ObjectMap) -> (usize, usize) {
+    let count = |key: &str| {
+        binding
+            .get(key)
+            .and_then(Node::as_object)
+            .map(|map| {
+                map.iter()
+                    .filter(|(_, value)| {
+                        simple_env_reference(value).is_some()
+                            || value
+                                .as_str()
+                                .and_then(|text| text.strip_prefix("Bearer "))
+                                .is_some_and(|rest| {
+                                    simple_env_reference(&Node::string(rest)).is_some()
+                                })
+                    })
+                    .count()
+            })
+            .unwrap_or_default()
+    };
+    (count("env"), count("headers"))
 }
 
 fn build_diffs(
@@ -2078,17 +2540,28 @@ fn build_diffs(
                 &after.enabled.to_string(),
             );
         }
-        if let Some(draft) = &change.draft {
+        if before.required != after.required {
+            push_diff(
+                &mut diffs,
+                target,
+                change,
+                "required",
+                &before.required.to_string(),
+                &after.required.to_string(),
+            );
+        }
+        // Bug MCP#6: real before/after reference counts, never a "preserved"
+        // placeholder.
+        let before_refs = before.env_ref_count + before.header_ref_count;
+        let after_refs = after.env_ref_count + after.header_ref_count;
+        if before_refs != after_refs {
             push_diff(
                 &mut diffs,
                 target,
                 change,
                 "secretReferences",
-                "preserved",
-                &format!(
-                    "{} environment/header reference(s)",
-                    draft.env_vars.len() + draft.header_env.len()
-                ),
+                &before_refs.to_string(),
+                &after_refs.to_string(),
             );
         }
     }
@@ -2103,7 +2576,7 @@ fn push_diff(
     before: &str,
     after: &str,
 ) {
-    if before == after && field != "secretReferences" {
+    if before == after {
         return;
     }
     diffs.push(McpFieldDiff {
@@ -2142,9 +2615,9 @@ fn binding_summary(
             .map_err(|_| "Codex TOML 无法解析。".to_string())?;
         let Some(table) = document
             .get("mcp_servers")
-            .and_then(Item::as_table)
+            .and_then(Item::as_table_like)
             .and_then(|servers| servers.get(server_name))
-            .and_then(Item::as_table)
+            .and_then(Item::as_table_like)
         else {
             return Ok(BindingSummary::default());
         };
@@ -2153,6 +2626,11 @@ fn binding_summary(
             .and_then(Item::as_value)
             .and_then(TomlValue::as_bool)
             .unwrap_or(true);
+        let required = table
+            .get("required")
+            .and_then(Item::as_value)
+            .and_then(TomlValue::as_bool)
+            .unwrap_or(false);
         let transport = if table.get("url").is_some() {
             "http"
         } else if table.get("command").is_some() {
@@ -2160,18 +2638,31 @@ fn binding_summary(
         } else {
             "unknown"
         };
+        let env_ref_count = table
+            .get("env_vars")
+            .and_then(Item::as_array)
+            .map(|array| array.len())
+            .unwrap_or_default();
+        let header_ref_count = table
+            .get("env_http_headers")
+            .and_then(Item::as_table_like)
+            .map(|map| map.len())
+            .unwrap_or_default()
+            + usize::from(table.get("bearer_token_env_var").is_some());
         Ok(BindingSummary {
             exists: true,
             enabled,
             transport: transport.to_string(),
+            required,
+            env_ref_count,
+            header_ref_count,
         })
     } else {
-        let root: JsonValue =
-            serde_json::from_str(text).map_err(|_| "Claude JSON 无法解析。".to_string())?;
-        let servers = claude_servers_ref(&root, target)?;
+        let document = JsonDoc::parse(text).map_err(|_| "Claude JSON 无法解析。".to_string())?;
+        let servers = json_servers_ref(&document.root, target)?;
         let Some(binding) = servers
             .and_then(|servers| servers.get(server_name))
-            .and_then(JsonValue::as_object)
+            .and_then(Node::as_object)
         else {
             return Ok(BindingSummary::default());
         };
@@ -2179,54 +2670,30 @@ fn binding_summary(
         // mutation layer therefore treats a binding as configured here and
         // leaves any legacy/unknown `enabled` or `disabled` keys untouched.
         let enabled = true;
-        let transport = binding
-            .get("type")
-            .and_then(JsonValue::as_str)
-            .map(|value| match value {
-                "streamable-http" => "http",
-                other => other,
-            })
-            .unwrap_or_else(|| {
-                if binding.get("url").is_some() {
-                    "http"
-                } else {
-                    "stdio"
-                }
-            });
+        let transport = json_entry_transport(binding).to_string();
+        let (env_ref_count, header_ref_count) = count_json_references(binding);
         Ok(BindingSummary {
             exists: true,
             enabled,
-            transport: transport.to_string(),
+            transport,
+            required: false,
+            env_ref_count,
+            header_ref_count,
         })
     }
 }
 
-fn claude_servers_ref<'a>(
-    root: &'a JsonValue,
-    target: &ResolvedTarget,
-) -> Result<Option<&'a JsonMap<String, JsonValue>>, String> {
-    let root = root
-        .as_object()
-        .ok_or_else(|| "Claude MCP 配置根节点必须是对象。".to_string())?;
-    let container = if target.scope == "local" {
-        let workspace_path = target
-            .workspace_path
-            .as_ref()
-            .ok_or_else(|| "Claude local 工作区丢失。".to_string())?
-            .to_string_lossy();
-        let Some(project) = root
-            .get("projects")
-            .and_then(JsonValue::as_object)
-            .and_then(|projects| projects.get(workspace_path.as_ref()))
-            .and_then(JsonValue::as_object)
-        else {
-            return Ok(None);
-        };
-        project
-    } else {
-        root
-    };
-    Ok(container.get("mcpServers").and_then(JsonValue::as_object))
+/// The transport of a JSON entry: `type` when present (`streamable-http`
+/// means `http`), otherwise inferred from `url` / `command`.
+pub(crate) fn json_entry_transport(binding: &ObjectMap) -> &str {
+    match binding.get("type").and_then(Node::as_str) {
+        Some("streamable-http") | Some("streamableHttp") | Some("http") => "http",
+        Some("sse") => "sse",
+        Some("stdio") => "stdio",
+        Some(_) => "unknown",
+        None if binding.get("url").is_some() && binding.get("command").is_none() => "http",
+        None => "stdio",
+    }
 }
 
 fn verify_written_config(
@@ -2254,6 +2721,7 @@ fn verify_written_config(
                 if summary.enabled != draft.enabled || summary.transport != expected_transport {
                     return Err("MCP 写后 Binding 状态不匹配。".to_string());
                 }
+                verify_codex_entry_shape(target, text, &change.server_name)?;
             }
             "set-enabled" => {
                 let enabled = change.enabled.expect("validated enabled state");
@@ -2265,6 +2733,1004 @@ fn verify_written_config(
         }
     }
     Ok(())
+}
+
+/// Bugs MCP#1/#4: a Codex entry this write touched must be exactly valid for
+/// its transport, or the read-back verification rejects the write.
+fn verify_codex_entry_shape(
+    target: &ResolvedTarget,
+    text: &str,
+    server_name: &str,
+) -> Result<(), String> {
+    if target.host_id != HOST_CODEX {
+        return Ok(());
+    }
+    let document = text
+        .parse::<DocumentMut>()
+        .map_err(|_| "Codex TOML 无法解析。".to_string())?;
+    let Some(entry) = document
+        .get("mcp_servers")
+        .and_then(Item::as_table_like)
+        .and_then(|servers| servers.get(server_name))
+        .and_then(Item::as_table_like)
+    else {
+        return Ok(());
+    };
+    if mcp_center::codex_entry_shape_ok(entry) {
+        Ok(())
+    } else {
+        Err("MCP 写后验证发现 Codex 不接受的字段组合，已停止。".to_string())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v3.3 entry-level operations (docs/v3.3/mcp-contract.md §4.2)
+// ---------------------------------------------------------------------------
+
+/// Managed keys of a projected entry. Built only inside Rust from the
+/// library spec; deliberately not `Deserialize`, so the webview can never send
+/// one.
+#[derive(Clone, Default)]
+pub(crate) struct ProjectedEntry {
+    /// Managed keys set in place (insert keeps an existing key's position).
+    pub set: Vec<(String, Node)>,
+    /// Keys that are set only when the existing entry already has them.
+    pub set_if_present: Vec<(String, Node)>,
+    /// Managed keys that must be absent after the write.
+    pub remove: Vec<String>,
+    /// Codex: `Some(false)` writes `enabled = false`; `Some(true)` sets `true`
+    /// only when the key exists (never adds noise).
+    pub codex_enabled: Option<bool>,
+    /// Starting object (unknown keys, or a stashed entry) for an absent entry.
+    pub base: Option<Node>,
+}
+
+#[derive(Clone)]
+pub(crate) enum EntryOp {
+    Upsert(ProjectedEntry),
+    /// Replace the entry verbatim (undo of an earlier change).
+    Restore(Node),
+    Remove,
+    SetCodexEnabled(bool),
+}
+
+#[derive(Clone)]
+pub(crate) struct EntryChange {
+    pub host_id: String,
+    pub scope: String,
+    pub workspace_id: Option<String>,
+    pub server_name: String,
+    pub op: EntryOp,
+}
+
+/// The computed (not yet written) result of a set of entry changes on one file.
+pub(crate) struct EntryDryRun {
+    pub target: ResolvedTarget,
+    pub current_sha256: String,
+    pub before: Vec<(String, Option<Node>)>,
+    pub after: Vec<(String, Option<Node>)>,
+    pub changed: bool,
+    original: Option<ConfigFile>,
+    final_text: String,
+}
+
+/// Result of [`apply_entry_changes_now`].
+pub(crate) struct EntryApplyOutcome {
+    pub changed: bool,
+    pub snapshot_id: Option<String>,
+    pub applied_sha256: String,
+    pub before: Vec<(String, Option<Node>)>,
+    pub after: Vec<(String, Option<Node>)>,
+}
+
+/// Status of a client config file for read-only views.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetReadStatus {
+    Ok,
+    Missing,
+    Jsonc,
+    ParseFailed,
+    TooLarge,
+    Unreadable,
+    Ambiguous,
+}
+
+/// Read-only entries of one target container.
+#[derive(Clone)]
+pub(crate) struct TargetRead {
+    pub status: TargetReadStatus,
+    pub sha256: String,
+    pub entries: Vec<(String, Node)>,
+    /// Codex entries with structured `env_vars` objects (kept read-only).
+    pub structured_env: Vec<String>,
+}
+
+impl TargetRead {
+    /// An empty view of a file that does not exist.
+    pub(crate) fn missing() -> Self {
+        Self::with_status(TargetReadStatus::Missing)
+    }
+
+    fn with_status(status: TargetReadStatus) -> Self {
+        Self {
+            status,
+            sha256: String::new(),
+            entries: Vec::new(),
+            structured_env: Vec::new(),
+        }
+    }
+
+    pub(crate) fn entry(&self, name: &str) -> Option<&Node> {
+        self.entries
+            .iter()
+            .find(|(existing, _)| existing == name)
+            .map(|(_, node)| node)
+    }
+}
+
+/// Reads the entries of a target container without writing anything. Never
+/// fails: problems become a status. JSONC files are readable but not writable.
+pub(crate) fn read_target_entries(target: &ResolvedTarget) -> TargetRead {
+    let file = match read_regular_config(&target.path, true) {
+        Ok(Some(file)) => file,
+        Ok(None) => return TargetRead::with_status(TargetReadStatus::Missing),
+        Err(error) if error.contains("2 MB") => {
+            return TargetRead::with_status(TargetReadStatus::TooLarge)
+        }
+        Err(_) => return TargetRead::with_status(TargetReadStatus::Unreadable),
+    };
+    let sha256 = file.fingerprint.sha256.clone();
+    let mut read = if target.host_id == HOST_CODEX {
+        read_codex_entries(&file.text)
+    } else {
+        read_json_entries(target, &file.text)
+    };
+    read.sha256 = sha256;
+    read
+}
+
+fn read_codex_entries(text: &str) -> TargetRead {
+    let Ok(document) = text.parse::<DocumentMut>() else {
+        return TargetRead::with_status(TargetReadStatus::ParseFailed);
+    };
+    if !mcp_center::codex_mcp_config_readable(text) {
+        return TargetRead::with_status(TargetReadStatus::ParseFailed);
+    }
+    let mut read = TargetRead::with_status(TargetReadStatus::Ok);
+    if let Some(servers) = document.get("mcp_servers").and_then(Item::as_table_like) {
+        for (name, item) in servers.iter() {
+            let Some(table) = item.as_table_like() else {
+                continue;
+            };
+            if codex_has_structured_env_vars(table) {
+                read.structured_env.push(name.to_string());
+            }
+            if let Some(node) = toml_item_to_node(item) {
+                read.entries.push((name.to_string(), node));
+            }
+        }
+    }
+    read
+}
+
+fn read_json_entries(target: &ResolvedTarget, text: &str) -> TargetRead {
+    let (root, status) = match JsonDoc::parse(text) {
+        Ok(document) if document.root.as_object().is_some() => {
+            (document.root, TargetReadStatus::Ok)
+        }
+        Ok(_) => return TargetRead::with_status(TargetReadStatus::ParseFailed),
+        Err(()) => match crate::mcp_json_doc::parse_jsonc_node(text) {
+            Ok(root) if root.as_object().is_some() => (root, TargetReadStatus::Jsonc),
+            _ => return TargetRead::with_status(TargetReadStatus::ParseFailed),
+        },
+    };
+    let servers = match json_servers_ref(&root, target) {
+        Ok(servers) => servers,
+        Err(error) if error == AMBIGUOUS_PROJECT_MESSAGE => {
+            return TargetRead::with_status(TargetReadStatus::Ambiguous)
+        }
+        Err(_) => return TargetRead::with_status(TargetReadStatus::ParseFailed),
+    };
+    let mut read = TargetRead::with_status(status);
+    if let Some(servers) = servers {
+        for (name, node) in servers.iter() {
+            if node.as_object().is_some() {
+                read.entries.push((name.clone(), node.clone()));
+            }
+        }
+    }
+    read
+}
+
+/// Reads a client JSON config (strict, or JSONC read-only) as a node.
+pub(crate) fn read_config_node(path: &Path) -> Option<Node> {
+    let file = read_regular_config(path, true).ok()??;
+    JsonDoc::parse(&file.text)
+        .map(|document| document.root)
+        .ok()
+        .or_else(|| crate::mcp_json_doc::parse_jsonc_node(&file.text).ok())
+}
+
+/// A TOML value for a node (used by the masked Codex export).
+pub(crate) fn node_to_toml(node: &Node) -> Option<TomlValue> {
+    node_to_toml_value(node)
+}
+
+/// Converts a TOML item to an order-preserving node (datetimes become text).
+pub(crate) fn toml_item_to_node(item: &Item) -> Option<Node> {
+    match item {
+        Item::None => None,
+        Item::Value(value) => Some(toml_value_to_node(value)),
+        Item::Table(table) => {
+            let mut map = ObjectMap::new();
+            for (key, child) in table.iter() {
+                if let Some(node) = toml_item_to_node(child) {
+                    map.insert(key, node);
+                }
+            }
+            Some(Node::Object(map))
+        }
+        Item::ArrayOfTables(array) => Some(Node::Array(
+            array
+                .iter()
+                .filter_map(|table| toml_item_to_node(&Item::Table(table.clone())))
+                .collect(),
+        )),
+    }
+}
+
+fn toml_value_to_node(value: &TomlValue) -> Node {
+    match value {
+        TomlValue::String(text) => Node::String(text.value().clone()),
+        TomlValue::Integer(number) => Node::Number((*number.value()).into()),
+        TomlValue::Float(number) => serde_json::Number::from_f64(*number.value())
+            .map(Node::Number)
+            .unwrap_or(Node::Null),
+        TomlValue::Boolean(flag) => Node::Bool(*flag.value()),
+        TomlValue::Datetime(datetime) => Node::String(datetime.value().to_string()),
+        TomlValue::Array(array) => Node::Array(array.iter().map(toml_value_to_node).collect()),
+        TomlValue::InlineTable(table) => {
+            let mut map = ObjectMap::new();
+            for (key, child) in table.iter() {
+                map.insert(key, toml_value_to_node(child));
+            }
+            Node::Object(map)
+        }
+    }
+}
+
+fn node_to_toml_value(node: &Node) -> Option<TomlValue> {
+    Some(match node {
+        Node::Null => return None,
+        Node::Bool(flag) => TomlValue::from(*flag),
+        Node::Number(number) => {
+            if let Some(integer) = number.as_i64() {
+                TomlValue::from(integer)
+            } else {
+                TomlValue::from(number.as_f64()?)
+            }
+        }
+        Node::String(text) => TomlValue::from(text.as_str()),
+        Node::Array(items) => {
+            let mut array = Array::new();
+            for item in items {
+                array.push(node_to_toml_value(item)?);
+            }
+            TomlValue::Array(array)
+        }
+        Node::Object(map) => {
+            let mut table = InlineTable::new();
+            for (key, child) in map.iter() {
+                if let Some(value) = node_to_toml_value(child) {
+                    table.insert(key, value);
+                }
+            }
+            TomlValue::InlineTable(table)
+        }
+    })
+}
+
+/// Sets one Codex key in place. An existing `[x.env]`-style sub-table keeps
+/// its shape (user config shape, §2.4).
+fn codex_set_key(table: &mut Table, key: &str, node: &Node) -> Result<(), String> {
+    if let (Some(Item::Table(existing)), Node::Object(map)) = (table.get_mut(key), node) {
+        let wanted = map.keys().cloned().collect::<HashSet<_>>();
+        let stale = existing
+            .iter()
+            .map(|(name, _)| name.to_string())
+            .filter(|name| !wanted.contains(name))
+            .collect::<Vec<_>>();
+        for name in stale {
+            existing.remove(&name);
+        }
+        for (name, child) in map.iter() {
+            let value = node_to_toml_value(child)
+                .ok_or_else(|| "Codex MCP 字段值无法转换为 TOML。".to_string())?;
+            existing[name.as_str()] = Item::Value(value);
+        }
+        return Ok(());
+    }
+    let value =
+        node_to_toml_value(node).ok_or_else(|| "Codex MCP 字段值无法转换为 TOML。".to_string())?;
+    table[key] = Item::Value(value);
+    Ok(())
+}
+
+fn apply_projection_to_codex_table(
+    table: &mut Table,
+    projected: &ProjectedEntry,
+) -> Result<(), String> {
+    for key in &projected.remove {
+        table.remove(key);
+    }
+    for (key, node) in &projected.set {
+        codex_set_key(table, key, node)?;
+    }
+    for (key, node) in &projected.set_if_present {
+        if table.contains_key(key) {
+            codex_set_key(table, key, node)?;
+        }
+    }
+    match projected.codex_enabled {
+        Some(false) => table["enabled"] = value(false),
+        Some(true) if table.contains_key("enabled") => table["enabled"] = value(true),
+        _ => {}
+    }
+    Ok(())
+}
+
+fn apply_projection_to_json_entry(entry: &mut ObjectMap, projected: &ProjectedEntry) {
+    for key in &projected.remove {
+        entry.remove(key);
+    }
+    for (key, node) in &projected.set {
+        entry.insert(key.clone(), node.clone());
+    }
+    for (key, node) in &projected.set_if_present {
+        if entry.contains_key(key) {
+            entry.insert(key.clone(), node.clone());
+        }
+    }
+}
+
+fn apply_entry_change_codex(
+    document: &mut DocumentMut,
+    change: &EntryChange,
+) -> Result<(), String> {
+    let servers = codex_servers_mut(document)?;
+    match &change.op {
+        EntryOp::Remove => {
+            servers.remove(&change.server_name);
+        }
+        EntryOp::SetCodexEnabled(enabled) => {
+            let table = servers
+                .get_mut(&change.server_name)
+                .and_then(Item::as_table_mut)
+                .ok_or_else(|| "要启停的 Codex MCP Server 不存在或结构无效。".to_string())?;
+            if !enabled {
+                table["enabled"] = value(false);
+            } else if table.contains_key("enabled") {
+                table["enabled"] = value(true);
+            }
+        }
+        EntryOp::Upsert(projected) => {
+            if !servers.contains_key(&change.server_name) {
+                let mut table = Table::new();
+                if let Some(Node::Object(base)) = &projected.base {
+                    for (key, node) in base.iter() {
+                        codex_set_key(&mut table, key, node)?;
+                    }
+                }
+                servers.insert(&change.server_name, Item::Table(table));
+            }
+            let table = servers
+                .get_mut(&change.server_name)
+                .and_then(Item::as_table_mut)
+                .ok_or_else(|| "Codex MCP Server 不是可编辑 table。".to_string())?;
+            if codex_has_structured_env_vars(&*table) {
+                return Err(CODEX_STRUCTURED_ENV_MESSAGE.to_string());
+            }
+            apply_projection_to_codex_table(table, projected)?;
+        }
+        EntryOp::Restore(node) => {
+            let Node::Object(map) = node else {
+                return Err("MCP 撤销内容无效。".to_string());
+            };
+            if !servers.contains_key(&change.server_name) {
+                servers.insert(&change.server_name, Item::Table(Table::new()));
+            }
+            let table = servers
+                .get_mut(&change.server_name)
+                .and_then(Item::as_table_mut)
+                .ok_or_else(|| "Codex MCP Server 不是可编辑 table。".to_string())?;
+            let wanted = map.keys().cloned().collect::<HashSet<_>>();
+            let stale = table
+                .iter()
+                .map(|(name, _)| name.to_string())
+                .filter(|name| !wanted.contains(name))
+                .collect::<Vec<_>>();
+            for name in stale {
+                table.remove(&name);
+            }
+            for (key, child) in map.iter() {
+                codex_set_key(table, key, child)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn apply_entry_change_json(
+    root: &mut Node,
+    target: &ResolvedTarget,
+    change: &EntryChange,
+) -> Result<(), String> {
+    if matches!(change.op, EntryOp::Remove) {
+        // Removing an absent entry never creates containers.
+        let present = json_servers_ref(root, target)?
+            .is_some_and(|servers| servers.contains_key(&change.server_name));
+        if !present {
+            return Ok(());
+        }
+    }
+    let servers = json_servers_mut(root, target)?;
+    match &change.op {
+        EntryOp::Remove => {
+            servers.remove(&change.server_name);
+        }
+        EntryOp::SetCodexEnabled(_) => {
+            return Err("Claude Code 启停状态按项目管理；当前版本不支持直接修改。".to_string());
+        }
+        EntryOp::Upsert(projected) => {
+            if !servers.contains_key(&change.server_name) {
+                let base = match &projected.base {
+                    Some(base @ Node::Object(_)) => base.clone(),
+                    _ => Node::object(),
+                };
+                servers.insert(change.server_name.clone(), base);
+            }
+            let entry = servers
+                .get_mut(&change.server_name)
+                .and_then(Node::as_object_mut)
+                .ok_or_else(|| "Claude MCP Server 不是可编辑对象。".to_string())?;
+            apply_projection_to_json_entry(entry, projected);
+        }
+        EntryOp::Restore(node) => {
+            if node.as_object().is_none() {
+                return Err("MCP 撤销内容无效。".to_string());
+            }
+            servers.insert(change.server_name.clone(), node.clone());
+        }
+    }
+    Ok(())
+}
+
+fn apply_entry_changes_to_text(
+    target: &ResolvedTarget,
+    original: &str,
+    changes: &[EntryChange],
+) -> Result<String, String> {
+    if target.host_id == HOST_CODEX {
+        let mut document = original
+            .parse::<DocumentMut>()
+            .map_err(|_| "Codex TOML 无法保真解析，已拒绝写入。".to_string())?;
+        for change in changes {
+            apply_entry_change_codex(&mut document, change)?;
+        }
+        let rendered = document.to_string();
+        validate_host_document(target, &rendered)?;
+        Ok(rendered)
+    } else {
+        let mut document = JsonDoc::parse(original).map_err(|_| {
+            "Claude MCP 写入仅支持严格 JSON；JSONC 注释或尾逗号文件保持只读。".to_string()
+        })?;
+        if document.root.as_object().is_none() {
+            return Err("Claude MCP 配置根节点必须是对象。".to_string());
+        }
+        for change in changes {
+            apply_entry_change_json(&mut document.root, target, change)?;
+        }
+        let rendered = document
+            .render()
+            .map_err(|_| "Claude MCP 配置序列化失败。".to_string())?;
+        validate_host_document(target, &rendered)?;
+        Ok(rendered)
+    }
+}
+
+fn entries_of(
+    target: &ResolvedTarget,
+    text: &str,
+    names: &[&str],
+) -> Result<Vec<(String, Option<Node>)>, String> {
+    let read = if target.host_id == HOST_CODEX {
+        read_codex_entries(text)
+    } else {
+        read_json_entries(target, text)
+    };
+    if read.status == TargetReadStatus::Ambiguous {
+        return Err(AMBIGUOUS_PROJECT_MESSAGE.to_string());
+    }
+    if !matches!(read.status, TargetReadStatus::Ok) {
+        return Err("MCP 配置无法解析。".to_string());
+    }
+    Ok(names
+        .iter()
+        .map(|name| (name.to_string(), read.entry(name).cloned()))
+        .collect())
+}
+
+/// Semantic read-back verification of entry changes (managed keys equal the
+/// projection, removed keys absent, Codex entries valid for their transport).
+fn verify_entry_changes(
+    target: &ResolvedTarget,
+    text: &str,
+    changes: &[EntryChange],
+) -> Result<(), String> {
+    validate_host_document(target, text)?;
+    let names = changes
+        .iter()
+        .map(|change| change.server_name.as_str())
+        .collect::<Vec<_>>();
+    let entries = entries_of(target, text, &names)?;
+    for (change, (_, entry)) in changes.iter().zip(entries) {
+        match (&change.op, entry) {
+            (EntryOp::Remove, None) => {}
+            (EntryOp::Remove, Some(_)) => {
+                return Err("MCP 写后验证发现已删除的配置仍存在。".to_string())
+            }
+            (_, None) => return Err("MCP 写后验证找不到目标配置。".to_string()),
+            (EntryOp::SetCodexEnabled(enabled), Some(entry)) => {
+                let actual = entry.get("enabled").and_then(Node::as_bool).unwrap_or(true);
+                if actual != *enabled {
+                    return Err("MCP 写后启停状态不匹配。".to_string());
+                }
+            }
+            (EntryOp::Upsert(projected), Some(entry)) => {
+                for (key, expected) in &projected.set {
+                    if !nodes_equivalent(entry.get(key), Some(expected)) {
+                        return Err("MCP 写后配置内容不匹配。".to_string());
+                    }
+                }
+                for key in &projected.remove {
+                    if entry.get(key).is_some() {
+                        return Err("MCP 写后验证发现不应保留的字段。".to_string());
+                    }
+                }
+                if projected.codex_enabled == Some(false)
+                    && entry.get("enabled").and_then(Node::as_bool) != Some(false)
+                {
+                    return Err("MCP 写后启停状态不匹配。".to_string());
+                }
+            }
+            (EntryOp::Restore(expected), Some(entry)) => {
+                if !nodes_equivalent(Some(&entry), Some(expected)) {
+                    return Err("MCP 撤销后配置内容不匹配。".to_string());
+                }
+            }
+        }
+        verify_codex_entry_shape(target, text, &change.server_name)?;
+    }
+    Ok(())
+}
+
+/// Order-insensitive equality (TOML/JSON number forms compare by value).
+pub(crate) fn nodes_equivalent(left: Option<&Node>, right: Option<&Node>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => left.to_value() == right.to_value(),
+        _ => false,
+    }
+}
+
+/// Computes the result of `changes` on their single target file without
+/// writing (used for confirmation descriptors and confirm tokens).
+pub(crate) fn dry_run_entry_changes(
+    context: &McpMutationContext,
+    changes: &[EntryChange],
+) -> Result<EntryDryRun, String> {
+    validate_context(context)?;
+    let first = changes
+        .first()
+        .ok_or_else(|| "MCP 写入没有任何变更。".to_string())?;
+    if changes.len() > 64 {
+        return Err("一次 MCP 写入最多包含 64 项变更。".to_string());
+    }
+    let target = resolve_target(
+        context,
+        &first.host_id,
+        &first.scope,
+        first.workspace_id.as_deref(),
+    )?;
+    let mut seen = HashSet::new();
+    for change in changes {
+        if change.host_id != first.host_id
+            || change.scope != first.scope
+            || change.workspace_id != first.workspace_id
+        {
+            return Err("一次 MCP 写入只能修改一个配置文件。".to_string());
+        }
+        if !seen.insert(change.server_name.to_ascii_lowercase()) {
+            return Err("同一 MCP 在一次写入中只能修改一次。".to_string());
+        }
+        if change.server_name.is_empty()
+            || change.server_name.len() > 64
+            || change.server_name.chars().any(char::is_control)
+        {
+            return Err("MCP 名称无效。".to_string());
+        }
+    }
+    let original = read_regular_config(&target.path, true)?;
+    let original_text = original
+        .as_ref()
+        .map(|file| file.text.clone())
+        .unwrap_or_else(|| empty_config(&target).to_string());
+    validate_host_document(&target, &original_text)?;
+    let names = changes
+        .iter()
+        .map(|change| change.server_name.as_str())
+        .collect::<Vec<_>>();
+    let before = entries_of(&target, &original_text, &names)?;
+    let final_text = apply_entry_changes_to_text(&target, &original_text, changes)?;
+    if final_text.len() as u64 > MAX_CONFIG_BYTES {
+        return Err("MCP 配置变更后超过 2 MB，已停止。".to_string());
+    }
+    verify_entry_changes(&target, &final_text, changes)?;
+    let after = entries_of(&target, &final_text, &names)?;
+    let changed = match &original {
+        Some(file) => file.text != final_text,
+        // A missing file is created only when an entry is actually added.
+        None => after.iter().any(|(_, entry)| entry.is_some()),
+    };
+    Ok(EntryDryRun {
+        current_sha256: original
+            .as_ref()
+            .map(|file| file.fingerprint.sha256.clone())
+            .unwrap_or_default(),
+        before,
+        after,
+        changed,
+        original,
+        final_text,
+        target,
+    })
+}
+
+/// One target file per call: read + fingerprint, compute the final text with
+/// `mcp_json_doc` / `toml_edit`, validate and verify, then run the shared
+/// executor (DPAPI snapshot, atomic write with fingerprint recheck, read-back).
+/// The caller holds the cross-process lock.
+pub(crate) fn apply_entry_changes_now(
+    context: &McpMutationContext,
+    changes: Vec<EntryChange>,
+    operation_id: &str,
+    target_index: usize,
+) -> Result<EntryApplyOutcome, String> {
+    validate_stored_id(operation_id, "operation")?;
+    let snapshot_id = &format!(
+        "mcp-snapshot-{}-{target_index}",
+        operation_id.trim_start_matches("mcp-op-")
+    );
+    let dry_run = dry_run_entry_changes(context, &changes)?;
+    if !dry_run.changed {
+        return Ok(EntryApplyOutcome {
+            changed: false,
+            snapshot_id: None,
+            applied_sha256: dry_run.current_sha256,
+            before: dry_run.before,
+            after: dry_run.after,
+        });
+    }
+    let path_binding_sha256 = target_path_binding(&dry_run.target.path)?;
+    let final_bytes = if let Some(original) = &dry_run.original {
+        // Keep a UTF-8 BOM exactly as it was.
+        if original.bytes.starts_with(&[0xEF, 0xBB, 0xBF])
+            && !dry_run.final_text.starts_with('\u{feff}')
+        {
+            let mut bytes = vec![0xEF, 0xBB, 0xBF];
+            bytes.extend_from_slice(dry_run.final_text.as_bytes());
+            bytes
+        } else {
+            dry_run.final_text.clone().into_bytes()
+        }
+    } else {
+        dry_run.final_text.clone().into_bytes()
+    };
+    let applied_sha256 = sha256_hex(&final_bytes);
+    let mut prepared = vec![PreparedWrite {
+        target: dry_run.target,
+        path_binding_sha256,
+        verification: WriteVerification::Entries(changes),
+        original: dry_run.original,
+        final_bytes,
+        backup_path: None,
+        applied_fingerprint: None,
+    }];
+    execute_prepared_writes(
+        context,
+        &mut prepared,
+        snapshot_id,
+        operation_id,
+        None,
+        true,
+    )?;
+    Ok(EntryApplyOutcome {
+        changed: true,
+        snapshot_id: Some(snapshot_id.to_string()),
+        applied_sha256,
+        before: dry_run.before,
+        after: dry_run.after,
+    })
+}
+
+/// Restores the bytes a single-target snapshot saved, when the file still
+/// holds exactly the bytes that snapshot's write produced (byte-identical
+/// undo, M0-3). Returns `Ok(false)` when the snapshot is gone or the file has
+/// changed since; the caller then falls back to entry-level undo.
+pub(crate) fn restore_snapshot_if_unchanged(
+    context: &McpMutationContext,
+    snapshot_id: &str,
+) -> Result<bool, String> {
+    validate_stored_id(snapshot_id, "snapshot")?;
+    let manifest_path = snapshot_manifest_path(context, snapshot_id)?;
+    let Ok(mut manifest) = read_protected_journal::<SnapshotManifest>(&manifest_path) else {
+        return Ok(false);
+    };
+    if manifest.rolled_back
+        || manifest.state != "committed"
+        || manifest.targets.len() != 1
+        || now_unix_ms() > manifest.expires_at_unix_ms
+    {
+        return Ok(false);
+    }
+    let recorded = manifest.targets[0].clone();
+    let target = resolve_target(
+        context,
+        &recorded.host_id,
+        &recorded.scope,
+        recorded.workspace_id.as_deref(),
+    )?;
+    if target.id != recorded.id
+        || target_path_binding(&target.path)? != recorded.path_binding_sha256
+    {
+        return Ok(false);
+    }
+    let Some(applied) = recorded.applied.as_ref() else {
+        return Ok(false);
+    };
+    let Some(current) = read_regular_config(&target.path, true)? else {
+        return Ok(false);
+    };
+    if !same_file_content(&current.fingerprint, applied) {
+        return Ok(false);
+    }
+    let original = if recorded.original.exists {
+        let backup_name = recorded
+            .backup_file_name
+            .as_deref()
+            .ok_or_else(|| "MCP 撤销备份记录不完整。".to_string())?;
+        let backup = read_private_backup(&snapshot_backup_path_by_name(
+            context,
+            snapshot_id,
+            backup_name,
+        )?)?;
+        if sha256_hex(&backup) != recorded.original.sha256 {
+            return Err("MCP 撤销备份校验失败。".to_string());
+        }
+        Some(backup)
+    } else {
+        None
+    };
+    manifest.state = "rolling-back".to_string();
+    write_replaceable_protected_journal(&manifest_path, &manifest)?;
+    let result = match &original {
+        Some(bytes) => write_atomic(
+            &target.path,
+            bytes,
+            Some(&current),
+            snapshot_id,
+            Some(&current.fingerprint),
+        )
+        .and_then(|_| {
+            let restored = read_regular_config(&target.path, false)?
+                .ok_or_else(|| "MCP 撤销后未找到配置文件。".to_string())?;
+            if restored.bytes != *bytes {
+                return Err("MCP 撤销后字节验证失败。".to_string());
+            }
+            Ok(())
+        }),
+        None => ensure_target_fingerprint(
+            &target.path,
+            &current.fingerprint,
+            "MCP 配置在撤销前又被外部修改；已停止且不会覆盖外部改动。",
+        )
+        .and_then(|_| {
+            fs::remove_file(&target.path)
+                .map_err(|_| "无法移除由 MCP 写入新建的配置文件。".to_string())
+        }),
+    };
+    if let Err(error) = result {
+        manifest.state = "committed".to_string();
+        let _ = write_replaceable_protected_journal(&manifest_path, &manifest);
+        return Err(error);
+    }
+    manifest.rolled_back = true;
+    manifest.state = "rolled-back".to_string();
+    let _ = write_replaceable_protected_journal(&manifest_path, &manifest);
+    cleanup_snapshot_dir(context, snapshot_id);
+    Ok(true)
+}
+
+/// A non-committed transaction that recovery could not finish, for display.
+#[derive(Debug, Clone)]
+pub(crate) struct StuckTransaction {
+    pub snapshot_id: String,
+    pub host_ids: Vec<String>,
+    pub path_displays: Vec<String>,
+}
+
+/// Lists stuck transactions read-only: no lock, no recovery (bug MCP#10).
+pub(crate) fn list_stuck_transactions(context: &McpMutationContext) -> Vec<StuckTransaction> {
+    let Ok(manifests) = read_snapshot_manifests_quiet(context) else {
+        return Vec::new();
+    };
+    manifests
+        .into_iter()
+        .filter(|manifest| {
+            !manifest.rolled_back && manifest.state != "committed" && !manifest.dismissed
+        })
+        .map(|manifest| StuckTransaction {
+            snapshot_id: manifest.snapshot_id,
+            host_ids: manifest
+                .targets
+                .iter()
+                .map(|target| target.host_id.clone())
+                .collect(),
+            path_displays: manifest
+                .targets
+                .iter()
+                .map(|target| target.path_display.clone())
+                .collect(),
+        })
+        .collect()
+}
+
+/// "保留现在的文件": marks a non-committed manifest as abandoned so it no
+/// longer blocks anything. The current files are kept as they are.
+pub(crate) fn resolve_stuck_transaction(
+    context: &McpMutationContext,
+    snapshot_id: &str,
+) -> Result<(), String> {
+    validate_stored_id(snapshot_id, "snapshot")?;
+    let manifest_path = snapshot_manifest_path(context, snapshot_id)?;
+    let mut manifest: SnapshotManifest = read_protected_journal(&manifest_path)
+        .map_err(|_| "没有找到这次中断的写入记录。".to_string())?;
+    if manifest.state == "committed" || manifest.rolled_back {
+        return Err("没有找到这次中断的写入记录。".to_string());
+    }
+    for recorded in &manifest.targets {
+        if let Ok(target) = resolve_target(
+            context,
+            &recorded.host_id,
+            &recorded.scope,
+            recorded.workspace_id.as_deref(),
+        ) {
+            let _ = cleanup_known_atomic_temp(&target.path, snapshot_id, recorded);
+        }
+    }
+    manifest.state = ABANDONED_EXTERNAL_CHANGE.to_string();
+    manifest.dismissed = true;
+    write_replaceable_protected_journal(&manifest_path, &manifest)
+}
+
+/// A pre-3.3 plan/apply snapshot, listed read-only for the history drawer.
+#[derive(Debug, Clone)]
+pub(crate) struct LegacySnapshotInfo {
+    pub snapshot_id: String,
+    pub created_at_unix_ms: u128,
+    pub host_ids: Vec<String>,
+    pub path_displays: Vec<String>,
+    /// Every target still holds exactly the bytes that snapshot wrote.
+    pub restorable: bool,
+}
+
+/// Legacy committed snapshots (plan ids `mcp-plan-…`), read-only: no lock,
+/// no recovery, no pruning.
+pub(crate) fn list_legacy_snapshots(context: &McpMutationContext) -> Vec<LegacySnapshotInfo> {
+    let Ok(manifests) = read_snapshot_manifests_quiet(context) else {
+        return Vec::new();
+    };
+    let now = now_unix_ms();
+    let mut result = manifests
+        .into_iter()
+        .filter(|manifest| {
+            manifest.plan_id.starts_with("mcp-plan-")
+                && !manifest.rolled_back
+                && manifest.state == "committed"
+                && now <= manifest.expires_at_unix_ms
+        })
+        .map(|manifest| {
+            let restorable = manifest.targets.iter().all(|recorded| {
+                let Ok(target) = resolve_target(
+                    context,
+                    &recorded.host_id,
+                    &recorded.scope,
+                    recorded.workspace_id.as_deref(),
+                ) else {
+                    return false;
+                };
+                let current = current_fingerprint(&target.path)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(FileFingerprint::missing);
+                recorded
+                    .applied
+                    .as_ref()
+                    .is_some_and(|applied| same_file_content(&current, applied))
+            });
+            LegacySnapshotInfo {
+                snapshot_id: manifest.snapshot_id,
+                created_at_unix_ms: manifest.created_at_unix_ms,
+                host_ids: manifest
+                    .targets
+                    .iter()
+                    .map(|target| target.host_id.clone())
+                    .collect(),
+                path_displays: manifest
+                    .targets
+                    .iter()
+                    .map(|target| target.path_display.clone())
+                    .collect(),
+                restorable,
+            }
+        })
+        .collect::<Vec<_>>();
+    result.sort_by_key(|item| std::cmp::Reverse(item.created_at_unix_ms));
+    result
+}
+
+/// Legacy rollback for a caller that already holds the cross-process lock.
+pub(crate) fn rollback_legacy_snapshot_locked(
+    context: &McpMutationContext,
+    snapshot_id: &str,
+) -> Result<McpRollbackResult, String> {
+    validate_context(context)?;
+    rollback_mcp_snapshot_once(context, snapshot_id, None, true)
+}
+
+/// Reads manifests without creating directories or failing on odd entries.
+fn read_snapshot_manifests_quiet(
+    context: &McpMutationContext,
+) -> Result<Vec<SnapshotManifest>, String> {
+    let root = snapshots_dir(context);
+    let entries = match fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut result = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if validate_stored_id(name, "snapshot").is_err() {
+            continue;
+        }
+        let Ok(manifest) = read_protected_journal::<SnapshotManifest>(&path.join("manifest.bin"))
+        else {
+            continue;
+        };
+        if manifest.schema_version == PLAN_SCHEMA_VERSION && manifest.snapshot_id == name {
+            result.push(manifest);
+        }
+    }
+    Ok(result)
 }
 
 fn create_private_backup(path: &Path, original: &[u8]) -> Result<(), String> {
@@ -2305,7 +3771,7 @@ fn read_private_backup(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(windows)]
-fn protect_private_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn protect_private_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
@@ -2345,7 +3811,7 @@ fn protect_private_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(windows)]
-fn unprotect_private_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn unprotect_private_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
     use std::ptr::{null, null_mut};
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
@@ -2385,12 +3851,12 @@ fn unprotect_private_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(not(windows))]
-fn protect_private_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn protect_private_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
     Ok(bytes.to_vec())
 }
 
 #[cfg(not(windows))]
-fn unprotect_private_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn unprotect_private_backup(bytes: &[u8]) -> Result<Vec<u8>, String> {
     Ok(bytes.to_vec())
 }
 
@@ -2513,8 +3979,31 @@ fn run_atomic_replace_test_hook(target: &Path) {
     }
 }
 
+/// Test-only: turns a committed snapshot back into an interrupted one (as if
+/// the app stopped between the write and the commit record).
 #[cfg(test)]
-fn install_atomic_replace_test_hook(target: PathBuf, bytes: Vec<u8>) {
+pub(crate) fn mark_snapshot_interrupted_for_test(context: &McpMutationContext, snapshot_id: &str) {
+    let path = snapshot_manifest_path(context, snapshot_id).unwrap();
+    let mut manifest: SnapshotManifest = read_protected_journal(&path).unwrap();
+    manifest.state = "applying".to_string();
+    write_replaceable_protected_journal(&path, &manifest).unwrap();
+}
+
+/// Test-only: the ids of every snapshot directory in the private store.
+#[cfg(test)]
+pub(crate) fn snapshot_ids_for_test(context: &McpMutationContext) -> Vec<String> {
+    fs::read_dir(snapshots_dir(context))
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+pub(crate) fn install_atomic_replace_test_hook(target: PathBuf, bytes: Vec<u8>) {
     *ATOMIC_REPLACE_TEST_HOOK
         .get_or_init(|| Mutex::new(None))
         .lock()
@@ -2813,6 +4302,11 @@ fn prune_snapshot_store(
             {
                 remove_private_snapshot_dir(&root, &path)?
             }
+            Ok(manifest) if now > manifest.created_at_unix_ms.saturating_add(SNAPSHOT_TTL_MS) => {
+                // A non-committed transaction older than the retention
+                // window no longer counts as a protected orphan (bug MCP#2).
+                remove_private_snapshot_dir(&root, &path)?
+            }
             Ok(_) => {
                 protected_orphan_bytes =
                     protected_orphan_bytes.saturating_add(private_directory_size(&path)?);
@@ -2928,7 +4422,7 @@ fn remove_private_snapshot_dir(root: &Path, path: &Path) -> Result<(), String> {
     fs::remove_dir_all(path).map_err(|_| "MCP 私有快照清理失败。".to_string())
 }
 
-fn acquire_cross_process_mutation_lock(
+pub(crate) fn acquire_cross_process_mutation_lock(
     context: &McpMutationContext,
 ) -> Result<CrossProcessMutationLock, String> {
     ensure_private_directory(&context.private_state_dir)?;
@@ -2946,7 +4440,7 @@ fn acquire_cross_process_mutation_lock(
     Ok(CrossProcessMutationLock { file })
 }
 
-fn ensure_private_directory(path: &Path) -> Result<(), String> {
+pub(crate) fn ensure_private_directory(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path).map_err(|_| "MCP 私有状态目录无法创建。".to_string())?;
     let metadata =
         fs::symlink_metadata(path).map_err(|_| "MCP 私有状态目录不可读。".to_string())?;
@@ -3133,14 +4627,14 @@ fn remove_cached_plan(plan_id: &str) {
         .remove(plan_id);
 }
 
-fn now_unix_ms() -> u128 {
+pub(crate) fn now_unix_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default()
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -3163,15 +4657,15 @@ mod tests {
         fs::create_dir_all(home.join(".codex")).unwrap();
         fs::create_dir_all(home.join(".claude")).unwrap();
         fs::create_dir_all(workspace.join(".codex")).unwrap();
-        let context = McpMutationContext {
-            home_dir: home,
-            registered_workspaces: vec![mcp_center::RegisteredWorkspace {
+        let context = McpMutationContext::basic(
+            home,
+            vec![mcp_center::RegisteredWorkspace {
                 id: "workspace-one".to_string(),
                 display_name: "Workspace One".to_string(),
                 path: workspace,
             }],
-            private_state_dir: root.join("private"),
-        };
+            root.join("private"),
+        );
         (root, context)
     }
 
@@ -3662,13 +5156,36 @@ command = "obsolete"
         fs::write(&path, external).unwrap();
         remove_cached_plan(&plan.plan_id);
 
-        let error = list_mcp_rollback_snapshots(&context).unwrap_err();
-        assert!(error.contains("需要关注"));
+        // R19: the external change is kept, the transaction becomes terminal
+        // and neither reads nor later writes are blocked (bug MCP#2).
+        assert!(list_mcp_rollback_snapshots(&context).unwrap().is_empty());
         assert_eq!(fs::read_to_string(&path).unwrap(), external);
         let manifest: SnapshotManifest =
             read_protected_journal(&snapshot_manifest_path(&context, &snapshot_id).unwrap())
                 .unwrap();
-        assert_eq!(manifest.state, "recovery-needed");
+        assert_eq!(manifest.state, ABANDONED_EXTERNAL_CHANGE);
+        let stuck = list_stuck_transactions(&context);
+        assert_eq!(stuck.len(), 1);
+        assert_eq!(stuck[0].snapshot_id, snapshot_id);
+        let next = plan_mcp_changes(
+            &context,
+            request(vec![McpBindingChange {
+                host_id: HOST_CODEX.to_string(),
+                scope: "user".to_string(),
+                workspace_id: None,
+                action: "set-enabled".to_string(),
+                server_name: "demo".to_string(),
+                draft: None,
+                enabled: Some(false),
+            }]),
+        )
+        .unwrap();
+        apply_mcp_plan(&context, &next.plan_id).unwrap();
+        assert!(fs::read_to_string(&path)
+            .unwrap()
+            .contains("enabled = false"));
+        resolve_stuck_transaction(&context, &snapshot_id).unwrap();
+        assert!(list_stuck_transactions(&context).is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -4204,6 +5721,7 @@ env_vars = [{ name = "REMOTE_TOKEN", source = "remote" }]
                 state: "committed".to_string(),
                 rolled_back: false,
                 targets: Vec::new(),
+                dismissed: false,
             };
             write_protected_journal(&directory.join("manifest.bin"), &manifest).unwrap();
         }
@@ -4221,6 +5739,7 @@ env_vars = [{ name = "REMOTE_TOKEN", source = "remote" }]
                 state: "committed".to_string(),
                 rolled_back: false,
                 targets: Vec::new(),
+                dismissed: false,
             },
         )
         .unwrap();
@@ -4228,7 +5747,10 @@ env_vars = [{ name = "REMOTE_TOKEN", source = "remote" }]
         let listed = list_mcp_rollback_snapshots(&context).unwrap();
         assert_eq!(listed.len(), MAX_ROLLBACK_SNAPSHOTS);
         assert!(!expired_dir.exists());
-        assert_eq!(listed[0].snapshot_id, "mcp-snapshot-retention-17");
+        assert_eq!(
+            listed[0].snapshot_id,
+            format!("mcp-snapshot-retention-{:02}", MAX_ROLLBACK_SNAPSHOTS + 1)
+        );
         assert!(!snapshot_dir_path(&context, "mcp-snapshot-retention-00")
             .unwrap()
             .exists());
@@ -4265,7 +5787,7 @@ env_vars = [{ name = "REMOTE_TOKEN", source = "remote" }]
                 path_display: "~/.codex/config.toml".to_string(),
             },
             path_binding_sha256: target_path_binding(&path).unwrap(),
-            changes: Vec::new(),
+            verification: WriteVerification::Legacy(Vec::new()),
             original: Some(original),
             final_bytes,
             backup_path: None,
@@ -4449,5 +5971,31 @@ env_vars = [{ name = "REMOTE_TOKEN", source = "remote" }]
         apply_mcp_plan(&context, &latest.plan_id).unwrap();
         assert!(!latest_path.exists());
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// A path outside the home folder with non-ASCII characters (a redirected
+    /// %APPDATA%, a CLAUDE_CONFIG_DIR or a runner under D:\工具) never panics,
+    /// and only a real folder prefix is shown as `~`.
+    #[test]
+    fn home_redaction_never_panics_on_non_ascii_paths_outside_home() {
+        let home = PathBuf::from(r"C:\Users\abcd");
+        for path in [
+            r"D:\用户数据\Claude\claude_desktop_config.json",
+            r"C:\Users\用户\x.json",
+            r"C:\Users\abcde\x.json",
+        ] {
+            let shown = redact_home_path(Path::new(path), &home);
+            assert!(!shown.starts_with('~'), "{path} -> {shown}");
+        }
+        assert_eq!(
+            redact_home_path(Path::new(r"C:\Users\ABCD\.cursor\mcp.json"), &home),
+            "~/.cursor/mcp.json"
+        );
+        assert_eq!(redact_home_path(Path::new(r"C:\Users\abcd"), &home), "~");
+        let chinese_home = PathBuf::from(r"C:\Users\张三");
+        assert_eq!(
+            redact_home_path(Path::new(r"C:\Users\张三\.claude.json"), &chinese_home),
+            "~/.claude.json"
+        );
     }
 }

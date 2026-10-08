@@ -15,11 +15,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -1018,13 +1018,10 @@ pub(crate) fn install(context: &RecipeContext, base_python: &Path) -> Result<Rec
     Ok(detect(context))
 }
 
-/// Line-delimited JSON-RPC over the server's stdio, bounded by `deadline`.
-struct StdioSession {
-    child: std::process::Child,
-    stdin: std::process::ChildStdin,
-    lines: mpsc::Receiver<String>,
-    deadline: Instant,
-}
+/// The shared stdio JSON-RPC session from `mcp_probe`, started with the
+/// recipe's isolated runtime (`python -m origin_mcp`). Dropping it kills the
+/// whole process tree.
+struct StdioSession(crate::mcp_probe::StdioSession);
 
 impl StdioSession {
     fn start(
@@ -1032,85 +1029,29 @@ impl StdioSession {
         extra_env: &[(&str, String)],
         timeout: Duration,
     ) -> Result<Self, String> {
-        let mut command = Command::new(python);
-        command
-            .args(["-m", "origin_mcp"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env("PYTHONIOENCODING", "utf-8");
-        for (name, value) in extra_env {
-            command.env(name, value);
-        }
-        crate::configure_background_command(&mut command);
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("无法启动 MCP 服务器：{error}"))?;
-        let stdin = child.stdin.take().ok_or("无法连接 MCP 服务器输入。")?;
-        let stdout = child.stdout.take().ok_or("无法读取 MCP 服务器输出。")?;
-        if let Some(stderr) = child.stderr.take() {
-            // Drain stderr so a chatty server can never block on a full pipe.
-            thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
-        }
-        let (sender, lines) = mpsc::channel();
-        thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if sender.send(line).is_err() {
-                    break;
-                }
-            }
-        });
-        Ok(Self {
-            child,
-            stdin,
-            lines,
-            deadline: Instant::now() + timeout,
-        })
+        let mut env = vec![(OsString::from("PYTHONIOENCODING"), OsString::from("utf-8"))];
+        env.extend(
+            extra_env
+                .iter()
+                .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+        );
+        crate::mcp_probe::StdioSession::start(
+            python,
+            &[OsString::from("-m"), OsString::from("origin_mcp")],
+            &env,
+            None,
+            timeout,
+        )
+        .map(Self)
+        .map_err(|error| format!("无法启动 MCP 服务器：{error}"))
     }
 
     fn send(&mut self, message: &Value) -> Result<(), String> {
-        let mut line = serde_json::to_string(message).map_err(|error| error.to_string())?;
-        line.push('\n');
-        self.stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| self.stdin.flush())
-            .map_err(|error| format!("MCP 服务器已关闭输入：{error}"))
+        self.0.send(message)
     }
 
     fn request(&mut self, id: u64, method: &str, params: Value) -> Result<Value, String> {
-        self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))?;
-        loop {
-            let remaining = self.deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(format!("MCP 服务器在限定时间内没有响应 {method}。"));
-            }
-            let line = self
-                .lines
-                .recv_timeout(remaining)
-                .map_err(|_| format!("MCP 服务器在限定时间内没有响应 {method}。"))?;
-            let Ok(message) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            if message.get("id").and_then(Value::as_u64) != Some(id) {
-                continue;
-            }
-            if let Some(error) = message.get("error") {
-                return Err(format!(
-                    "{method} 返回错误：{}",
-                    error
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown")
-                ));
-            }
-            return Ok(message.get("result").cloned().unwrap_or(Value::Null));
-        }
-    }
-}
-
-impl Drop for StdioSession {
-    fn drop(&mut self) {
-        crate::terminate_child_process_tree(&mut self.child);
+        self.0.request(id, method, params)
     }
 }
 

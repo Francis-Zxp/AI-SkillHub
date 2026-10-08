@@ -1631,3 +1631,42 @@ Rewrite or retire the old suites:
 - A project registration shortcut (M2-5).
 - Relaunching apps (M2-6).
 - Anything that weakens the skills security gate or changes the default expansion of the skill tree (DECISIONS.md:149).
+
+---
+
+## 9. Backend implementation notes (mcp-backend, 2026-10-08)
+
+These clarify how the backend implements the contract. Nothing here changes a request or response shape in §3.2.
+
+1. **Hash vs. meaning (§1.4, §4.6).** The stored cell hash keeps a Windows `cmd /c` wrapper, so a Claude entry written without it can be told apart and offered as `windowsFixAvailable`. Semantic comparison (`semantic_equal_ignoring_cmd_wrap`, import "merged") unwraps both sides.
+2. **Disable keeps the whole entry.** Turning off a JSON client stores the removed entry (DPAPI, inside the spec, for that client only). Re-enabling writes it back field for field and in the same key order, with the managed keys re-projected from the library.
+3. **Codex documents.** The current file only has to parse (older versions wrote `env_http_headers = {}` / `required = false`; a write cleans those up). Every entry a write touches is checked strictly for its transport before and after the atomic write. `validate_codex_mcp_config` is the strict whole-document check.
+4. **Prefill-safe updates (M1-7).** In `mcp_update_server`, an omitted `args`, `cwd`, `env`, `secrets`, `displayName` or `codexRequired` keeps the stored value; `cwd: ""` clears it. A `SECRET_MASK` argument, or an argument equal to the stored one at the same index, keeps the stored argument.
+5. **Add conflicts.** `onConflict` omitted with a same-name library server → `name-taken`. `"skip"` leaves that server untouched (results `skipped`, reason `entry-added-outside`); a same-name, different entry in a client file with `"skip"` skips that client. `"overwrite"` counts as the confirmation and also re-projects the other enabled clients.
+6. **Transport switch to an unsupported client.** After an update, a JSON client that no longer supports the transport (for example Claude Desktop and a remote server) has its entry removed and the cell turns off; Codex gets `enabled = false`.
+7. **Onboarding without import.** `mcp_import_from_clients({reason:"onboarding", clientIds: []})` sets `libraryInitialized` without importing anything.
+8. **Undo results.** Restored targets report `status:"undone"`. Entries changed after the operation are reported as a separate `failed` result with `error.code:"undo-conflict"` (`params.server` lists the names); the other clients still undo. Undo operations are themselves undoable.
+9. **History.** Pre-3.3 snapshots appear as `kind:"legacy"` with `operationId:"legacy-<id>"` and `legacySnapshotId`; roll them back with `mcp_rollback({legacySnapshotId})`.
+10. **Arguments `cmd` interprets.** If an argument of an npx-family command contains `& | < > ^ % " ( ) !`, the Claude entry is written without `cmd /c` instead of handing those characters to the shell.
+11. **Opener allow-list.** `capabilities/default.json` now also allows the install-guide URLs (§3.10) and the template docs/help URLs (§3.7), so "安装指引" opens in the browser instead of falling back to copy.
+12. **Legacy listing.** `list_mcp_rollback_snapshots` no longer takes the in-process write guard (bug MCP#10); stuck manifests never make it fail (bug MCP#2).
+13. **Tests never touch the real machine.** Library tests use a temp home and an in-memory environment store; scanner tests do not read the registry; R25 (`real_hkcu_roundtrip`) stays `#[ignore]` and uses a unique `SKH_TEST_ONLY_…` name with cleanup.
+
+### 9.1 Review notes (mcp-backend review, 2026-10-08)
+
+No request or response shape changed. These pin down behaviour the frontend can rely on.
+
+1. **Inline values are the ones being saved.** When an add, `mcp_set_secret` or `mcp_update_server` saves a `user_env` value, a client that receives the literal by consent (Claude Desktop, a Codex non-Authorization Bearer header) gets that new value in the same write.
+2. **Keys inside an imported URL are secrets.** A URL with a query, fragment or account part (`…/mcp?api_key=…`, `https://user:pass@…`) is shown masked in `mcp_get_server.url` and in `mcp_export_json` (for example `https://host/mcp?••••••••`). Other clients get it only with inline consent (`blocked: needs-inline-consent`). An update that sends the masked or the unchanged stored URL keeps the stored one. A new URL still must have no query, fragment or account part.
+3. **Both reasons in one dialog.** Enabling a cell that needs inline consent whose entry was also changed outside returns `kinds: ["changed-outside", "inline-secret"]`. With `allowInline: true`, only `changed-outside` is asked.
+4. **Env-var boxes in the removal dialog.** The `deleteEnvVars` the user ticks are not part of the confirm token. Resend the first dialog's token together with the ticked names; no second dialog appears.
+5. **"保留现在的文件" keeps the files.** `mcp_resolve_stuck_transaction` runs under both locks but without crash recovery first. If the record is already gone, the error is `not-found`; refresh the snapshot.
+6. **Undo and environment variables.** Undo restores a variable only while it still holds the value the operation wrote. A value the user changed afterwards is kept as it is.
+7. **Optional keys are not missing.** `missingSecretCount` and `mcp_test_preview.missingSecrets` count only secrets with `required: true`. An optional key that is not set (context7's `CONTEXT7_API_KEY`) does not block the test. Secrets imported from client files are `required: true`.
+8. **References with defaults.** An imported `${NAME:-value}` is kept as written, as a plain value, and is never turned into a `${NAME}` reference.
+9. **Keep a reference when editing.** If `envVar` is omitted for an env secret that references a differently named variable (`"KEY": "${OTHER}"`), the edit keeps `OTHER`. A header's `envVar` must be a valid variable name (`secret-name-invalid`).
+10. **Same literal key in two clients.** On import, a literal key that already sits in a client's own file counts as consent for that client only, so two clients configured with the same key merge.
+11. **Not installed vs unreadable.** A client detected on the AI 工具 page whose config folder does not exist yet is reported as `client-not-installed`, never `config-unreadable`. The folder is still never created.
+12. **Integration notes for the frontend.**
+    - Manual and template adds send `onConflict: "skip"`. When the library already has that name, the add is skipped (`noop`) instead of returning `name-taken`. Omit `onConflict` for manual adds to get `name-taken`.
+    - The edit drawer omits `cwd` when the field is empty, which keeps the stored `cwd`. Send `cwd: ""` to clear it.

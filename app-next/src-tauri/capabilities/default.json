@@ -21,6 +21,36 @@
         },
         {
           "url": "https://docs.github.com/*"
+        },
+        {
+          "url": "https://nodejs.org/"
+        },
+        {
+          "url": "https://docs.astral.sh/uv/getting-started/installation/"
+        },
+        {
+          "url": "https://docs.docker.com/desktop/setup/install/windows-install/"
+        },
+        {
+          "url": "https://www.python.org/downloads/windows/"
+        },
+        {
+          "url": "https://context7.com/dashboard"
+        },
+        {
+          "url": "https://github.com/upstash/context7"
+        },
+        {
+          "url": "https://github.com/modelcontextprotocol/servers/*"
+        },
+        {
+          "url": "https://github.com/microsoft/playwright-mcp"
+        },
+        {
+          "url": "https://github.com/github/github-mcp-server"
+        },
+        {
+          "url": "https://github.com/settings/personal-access-tokens"
         }
       ]
     },
