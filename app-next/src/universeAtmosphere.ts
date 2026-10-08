@@ -19,13 +19,22 @@ export function starFieldOpacity(x: number, y: number, centerX: number, centerY:
   return edge * (1 - smooth((distance - 0.2) / 0.85)) * 0.62;
 }
 
-/** Head travel and tail share one pixel-space vector at every aspect ratio. */
-export function meteorSegment(meteor: { x: number; y: number; direction: number; slope: number; length: number }, progress: number, width: number, height: number) {
+export type MeteorSegment = { headX: number; headY: number; tailX: number; tailY: number };
+
+/** Head travel and tail share one pixel-space vector at every aspect ratio.
+ * The frame loop passes `out` so nothing is allocated per meteor per frame. */
+export function meteorSegment(
+  meteor: { x: number; y: number; direction: number; slope: number; length: number }, progress: number, width: number, height: number,
+  out: MeteorSegment = { headX: 0, headY: 0, tailX: 0, tailY: 0 }
+): MeteorSegment {
   const magnitude = Math.hypot(meteor.direction, meteor.slope);
   const dx = meteor.direction / magnitude, dy = meteor.slope / magnitude;
   const travel = progress * Math.min(width, height) * 0.38;
-  const headX = meteor.x * width + travel * dx, headY = meteor.y * height + travel * dy;
-  return { headX, headY, tailX: headX - meteor.length * dx, tailY: headY - meteor.length * dy };
+  out.headX = meteor.x * width + travel * dx;
+  out.headY = meteor.y * height + travel * dy;
+  out.tailX = out.headX - meteor.length * dx;
+  out.tailY = out.headY - meteor.length * dy;
+  return out;
 }
 
 const patterns = new WeakMap<CanvasRenderingContext2D, CanvasPattern>();

@@ -81,10 +81,11 @@ function loadRaw(): Promise<RawLibrary> {
       mesh.castShadow = true;
     });
     toonify(villager);
+    mergeSkinnedParts(villager, () => new THREE.MeshToonMaterial({ gradientMap: toonGradient(), color: 0xffffff, vertexColors: true, name: "villager" }));
     animals.forEach(gltf => {
       repairFarmHoofWeights(gltf);
       toonify(gltf, true);
-      mergeSkinnedParts(gltf);
+      mergeSkinnedParts(gltf, () => new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.82, metalness: 0, name: "animal" }));
     });
     loaded = { buildings, props, villager, gull, animals: new Map(ANIMALS.map((name, index) => [name, animals[index]])) };
     return loaded;
@@ -179,40 +180,98 @@ function mergeByMaterial(gltf: GLTF) {
   gltf.scene.updateMatrixWorld(true);
 }
 
+/** Same transform, to float precision. */
+function sameMatrix(a: THREE.Matrix4, b: THREE.Matrix4) {
+  for (let index = 0; index < 16; index++) if (Math.abs(a.elements[index] - b.elements[index]) > 1e-5) return false;
+  return true;
+}
+
+/** Two skinned meshes drive the same joints the same way. */
+function sameSkin(a: THREE.SkinnedMesh, b: THREE.SkinnedMesh) {
+  const left = a.skeleton, right = b.skeleton;
+  if (left.bones.length !== right.bones.length) return false;
+  for (let index = 0; index < left.bones.length; index++) {
+    if (left.bones[index] !== right.bones[index] || !sameMatrix(left.boneInverses[index], right.boneInverses[index])) return false;
+  }
+  // Parts may sit in different groups (one per glTF mesh); what matters is
+  // that they end up in the same place.
+  return sameMatrix(a.matrixWorld, b.matrixWorld) && sameMatrix(a.bindMatrix, b.bindMatrix);
+}
+
+/** Plain floats (normalised integers read back as 0..1), non-indexed order. */
+function floatCopy(attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute, size = attribute.itemSize) {
+  const array = new Float32Array(attribute.count * size);
+  for (let vertex = 0; vertex < attribute.count; vertex++) {
+    array[vertex * size] = attribute.getX(vertex);
+    if (size > 1) array[vertex * size + 1] = attribute.getY(vertex);
+    if (size > 2) array[vertex * size + 2] = attribute.getZ(vertex);
+    if (size > 3) array[vertex * size + 3] = attribute.getW(vertex);
+  }
+  return new THREE.Float32BufferAttribute(array, size);
+}
+
 /**
- * The converted animals arrive as dozens of skinned sub-meshes (one per
- * material range of the original FBX). Sub-meshes sharing a skeleton and a
- * colour are merged, so each animal draws in one call per colour.
+ * Characters arrive as several skinned parts (the villager as ten: head,
+ * body, legs, feet in five colours; each animal as two or three). Every part
+ * is a draw call, a shadow draw and its own skeleton update each frame. Parts
+ * that share a skeleton are merged into one mesh with their colours baked
+ * into vertex colours, so each character draws once. Parts with a texture,
+ * transparency or glow keep their own mesh.
  */
-function mergeSkinnedParts(gltf: GLTF) {
-  const groups = new Map<string, THREE.SkinnedMesh[]>();
+function mergeSkinnedParts(gltf: GLTF, makeMaterial: () => THREE.Material) {
+  gltf.scene.updateMatrixWorld(true);
+  const candidates: THREE.SkinnedMesh[] = [];
   gltf.scene.traverse(object => {
     const mesh = object as THREE.SkinnedMesh;
     if (!mesh.isSkinnedMesh || Array.isArray(mesh.material)) return;
-    const material = mesh.material as THREE.MeshToonMaterial;
-    const key = `${mesh.skeleton.bones[0]?.uuid}:${mesh.parent?.uuid}:${material.color.getHexString()}:${material.map?.uuid ?? ""}`;
-    groups.set(key, [...(groups.get(key) ?? []), mesh]);
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    if (material.map || material.transparent || (material.emissive && material.emissive.getHex() !== 0)) return;
+    if (!mesh.geometry.getAttribute("skinIndex") || !mesh.geometry.getAttribute("skinWeight") || !mesh.geometry.getAttribute("normal")) return;
+    candidates.push(mesh);
   });
-  for (const meshes of groups.values()) {
+  const groups: THREE.SkinnedMesh[][] = [];
+  for (const mesh of candidates) {
+    const group = groups.find(list => sameSkin(list[0], mesh));
+    if (group) group.push(mesh);
+    else groups.push([mesh]);
+  }
+  for (const meshes of groups) {
     if (meshes.length < 2) continue;
-    // Ranges differ in which attributes they carry; keep the common skinned
-    // set, non-indexed, with consistent types, so they can merge.
-    const uniform = meshes.map(mesh => {
+    const pieces = meshes.map(mesh => {
       const source = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry;
       const plain = new THREE.BufferGeometry();
-      for (const name of ["position", "normal", "skinWeight", "uv", "color"]) {
-        const attribute = source.getAttribute(name);
-        if (attribute) plain.setAttribute(name, new THREE.Float32BufferAttribute(Array.from(attribute.array as ArrayLike<number>), attribute.itemSize));
-      }
+      plain.setAttribute("position", floatCopy(source.getAttribute("position"), 3));
+      plain.setAttribute("normal", floatCopy(source.getAttribute("normal"), 3));
+      plain.setAttribute("skinWeight", floatCopy(source.getAttribute("skinWeight"), 4));
       const skinIndex = source.getAttribute("skinIndex");
-      if (skinIndex) plain.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(Array.from(skinIndex.array as ArrayLike<number>), skinIndex.itemSize));
+      const joints = new Uint16Array(skinIndex.count * 4);
+      for (let vertex = 0; vertex < skinIndex.count; vertex++) {
+        joints[vertex * 4] = skinIndex.getX(vertex);
+        joints[vertex * 4 + 1] = skinIndex.getY(vertex);
+        joints[vertex * 4 + 2] = skinIndex.getZ(vertex);
+        joints[vertex * 4 + 3] = skinIndex.getW(vertex);
+      }
+      plain.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(joints, 4));
+      // The part's colour (times its own vertex colours, if any), in the
+      // same linear space the material colour multiplies in.
+      const tint = (mesh.material as THREE.MeshStandardMaterial).color ?? new THREE.Color(1, 1, 1);
+      const own = source.getAttribute("color");
+      const count = source.getAttribute("position").count;
+      const colours = new Float32Array(count * 3);
+      for (let vertex = 0; vertex < count; vertex++) {
+        colours[vertex * 3] = (own ? own.getX(vertex) : 1) * tint.r;
+        colours[vertex * 3 + 1] = (own ? own.getY(vertex) : 1) * tint.g;
+        colours[vertex * 3 + 2] = (own ? own.getZ(vertex) : 1) * tint.b;
+      }
+      plain.setAttribute("color", new THREE.Float32BufferAttribute(colours, 3));
+      if (source !== mesh.geometry) source.dispose();
       return plain;
     });
-    if (uniform.some(item => !item.getAttribute("skinIndex") || !item.getAttribute("normal"))) continue;
-    const geometry = mergeGeometries(uniform, false);
+    const geometry = mergeGeometries(pieces, false);
+    for (const piece of pieces) piece.dispose();
     if (!geometry) continue;
     const first = meshes[0];
-    const merged = new THREE.SkinnedMesh(geometry, first.material);
+    const merged = new THREE.SkinnedMesh(geometry, makeMaterial());
     merged.name = first.name;
     merged.position.copy(first.position);
     merged.quaternion.copy(first.quaternion);
@@ -221,8 +280,12 @@ function mergeSkinnedParts(gltf: GLTF) {
     first.parent!.add(merged);
     merged.bind(first.skeleton, first.bindMatrix);
     for (const mesh of meshes) {
-      mesh.parent?.remove(mesh);
+      const parent = mesh.parent;
+      mesh.removeFromParent();
       mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+      // A glTF mesh group left empty goes too.
+      if (parent && parent !== merged.parent && !parent.children.length && !(parent as THREE.Bone).isBone) parent.removeFromParent();
     }
   }
 }

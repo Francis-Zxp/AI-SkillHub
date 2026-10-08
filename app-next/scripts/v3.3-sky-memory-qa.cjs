@@ -57,6 +57,30 @@ async function allocationRate(cdp, seconds) {
   return { kbPerSecond: Math.round(total / 1024 / seconds), top: sites.slice(0, 8).map(item => `${Math.round(item.bytes / 1024 / seconds)} KB/s ${item.site}`) };
 }
 
+/** The JS heap as the page lives with it (no forced GC): CDP
+ * Performance.getMetrics sampled every 500 ms, plus performance.memory. */
+async function liveHeap(cdp, page, seconds) {
+  await cdp.send("Performance.enable");
+  const used = [];
+  let total = 0;
+  for (let step = 0; step < seconds * 2; step++) {
+    const { metrics } = await cdp.send("Performance.getMetrics");
+    const read = name => metrics.find(metric => metric.name === name)?.value ?? 0;
+    used.push(read("JSHeapUsedSize") / MB);
+    total = Math.max(total, read("JSHeapTotalSize") / MB);
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  const memory = await page.evaluate(() => performance.memory ? { used: performance.memory.usedJSHeapSize, total: performance.memory.totalJSHeapSize } : null);
+  const round = value => Math.round(value * 10) / 10;
+  return {
+    usedAvgMB: round(used.reduce((sum, value) => sum + value, 0) / used.length),
+    usedMaxMB: round(Math.max(...used)),
+    usedMinMB: round(Math.min(...used)),
+    totalMaxMB: round(total),
+    performanceMemoryMB: memory ? { used: round(memory.used / MB), total: round(memory.total / MB) } : null
+  };
+}
+
 async function heapAfterGc(cdp) {
   await cdp.send("HeapProfiler.collectGarbage");
   await cdp.send("HeapProfiler.collectGarbage");
@@ -103,6 +127,7 @@ const sceneState = page => page.evaluate(() => ({
     await page.waitForTimeout(8000);
 
     report.islandsAnimating = {
+      liveHeap: await liveHeap(cdp, page, 10),
       allocation: await allocationRate(cdp, 10),
       heapAfterGcMB: await heapAfterGc(cdp),
       process: processMemory(),
@@ -123,7 +148,9 @@ const sceneState = page => page.evaluate(() => ({
     // The shell reports a minimised window.
     await page.evaluate(() => window.dispatchEvent(new CustomEvent("skillhub-app-hidden", { detail: true })));
     await page.waitForTimeout(17000);
-    report.appHidden17s = { heapAfterGcMB: await heapAfterGc(cdp), process: processMemory(), scene: await sceneState(page) };
+    report.appHidden17s = { liveHeap: await liveHeap(cdp, page, 4), heapAfterGcMB: await heapAfterGc(cdp), process: processMemory(), scene: await sceneState(page) };
+    await page.waitForTimeout(10000);
+    report.appHidden30s = { process: processMemory(), scene: await sceneState(page) };
     await page.evaluate(() => window.dispatchEvent(new CustomEvent("skillhub-app-hidden", { detail: false })));
     await page.waitForTimeout(3000);
     report.appShown = { scene: await sceneState(page) };
@@ -131,7 +158,7 @@ const sceneState = page => page.evaluate(() => ({
     // Star map.
     await page.locator(".home-visual-switch button").nth(1).click();
     await page.waitForTimeout(8000);
-    report.starMap = { allocation: await allocationRate(cdp, 10), heapAfterGcMB: await heapAfterGc(cdp), process: processMemory() };
+    report.starMap = { liveHeap: await liveHeap(cdp, page, 10), allocation: await allocationRate(cdp, 10), heapAfterGcMB: await heapAfterGc(cdp), process: processMemory() };
     await page.screenshot({ path: path.join(path.dirname(outFile), "memory-star-map.png") });
     report.errors = errors;
   } finally {

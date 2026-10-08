@@ -7,10 +7,10 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const read = file => readFile(new URL(`../src/${file}`, import.meta.url), "utf8");
-const [archipelago, world, weather, materials, universe, labelLayer, theme, refinements, archipelagoCss, assets, fauna, memory, effects] = await Promise.all([
+const [archipelago, world, weather, materials, universe, labelLayer, theme, refinements, archipelagoCss, assets, fauna, memory, effects, scene] = await Promise.all([
   read("SkillArchipelago.tsx"), read("sky/world.ts"), read("sky/weather.ts"), read("sky/materials.ts"), read("SkillUniverse.tsx"),
   read("universeLabelLayer.ts"), read("sky-theme.css"), read("refinements.css"), read("SkillArchipelago.css"), read("sky/assets.ts"),
-  read("sky/fauna.ts"), read("sky/memory.ts"), read("sky/effects.ts")
+  read("sky/fauna.ts"), read("sky/memory.ts"), read("sky/effects.ts"), read("skyScene.ts")
 ]);
 
 /** The body of a function or method named `name` (brace matched). */
@@ -129,7 +129,12 @@ test("memory: GPU budget, release after upload and sleep when out of sight", () 
   // Picking keeps its geometry.
   assert.doesNotMatch(world, /releaseAfterUpload\(pickGeometry\)/);
   assert.match(archipelago, /return override > 0 \? override : 15_000;/);
-  assert.match(archipelago, /export const APP_HIDDEN_EVENT = "skillhub-app-hidden";/);
+  assert.match(scene, /export const APP_HIDDEN_EVENT = "skillhub-app-hidden";/);
+  assert.match(scene, /export const APP_VISIBLE_EVENTS = \["skillhub-app-visible", "skillhub-app-shown"\] as const;/);
+  for (const source of [archipelago, universe]) {
+    assert.match(source, /addEventListener\(APP_HIDDEN_EVENT, /);
+    assert.match(source, /for \(const name of APP_VISIBLE_EVENTS\) window\.addEventListener\(name, /);
+  }
   assert.match(archipelago, /const awake = visible && !pageHidden && !appHidden;/);
   assert.match(archipelago, /onFirstFrame: clearStill/);
   assert.match(body(world, "    dispose() {"), /renderer\.forceContextLoss\(\);/);
@@ -147,12 +152,36 @@ test("framing: overlay blocks opt in with data-sky-overlay and shift the view do
 });
 
 test("climate and weather controls: one compact world panel", () => {
-  assert.match(archipelago, /className="sky-world-panel" role="dialog"/);
-  assert.match(archipelago, /\(\["auto", \.\.\.SKY_WEATHER_KINDS\] as SkyWeatherSetting\[\]\)/);
+  assert.match(archipelago, /className="sky-world-panel" id=\{worldPanelId\} role="dialog"/);
+  assert.match(archipelago, /const WEATHER_OPTIONS: SkyWeatherSetting\[\] = \["auto", \.\.\.SKY_WEATHER_KINDS\];/);
+  // A real radio group: one tab stop, arrow keys move and choose, Home/End.
+  assert.match(archipelago, /role="radiogroup" aria-labelledby=\{`\$\{worldPanelId\}-weather`\} onKeyDown=\{onWeatherKey\}/);
+  assert.match(archipelago, /tabIndex=\{kind === weatherFocus \? 0 : -1\}/);
+  assert.match(body(archipelago, "const onWeatherKey = "), /ArrowRight[\s\S]*ArrowLeft[\s\S]*Home[\s\S]*End/);
+  assert.match(archipelago, /aria-controls=\{worldPanel \? worldPanelId : undefined\}/);
+  // Hovering an island names its climate in a tag above its label.
+  assert.match(archipelago, /className="sky-island-climate" aria-hidden="true"/);
+  assert.match(archipelagoCss, /\.sky-island-label\.is-hovered \.sky-island-climate/);
   assert.match(archipelago, /className="sky-reroll" onClick=\{reroll\}/);
   assert.match(archipelago, /className="sky-climate-legend"/);
   assert.match(archipelago, /title=\{climate \? `\$\{island\.name\} · \$\{climate\}` : island\.name\}/);
   // Weather is shader-driven and small: at most two extra draw calls.
   assert.match(weather, /drawCalls: \(\) => \(particles\.visible \? 1 : 0\) \+ \(deck\.visible \? 1 : 0\)/);
   assert.match(weather, /if \(currentKind === "storm" && animating && !options\.reducedMotion\(\)\)/);
+});
+
+test("memory: each character draws once; star-map colours and labels allocate nothing per call", () => {
+  // Villager (10 parts) and animals (2-3 parts) merge into one skinned mesh
+  // each, colours baked into vertex colours: fewer draws, skeleton updates
+  // and bone textures.
+  assert.match(assets, /mergeSkinnedParts\(villager, \(\) => new THREE\.MeshToonMaterial\(\{[^}]*vertexColors: true/);
+  assert.match(assets, /mergeSkinnedParts\(gltf, \(\) => new THREE\.MeshStandardMaterial\(\{[^}]*vertexColors: true/);
+  assert.match(body(assets, "function sameSkin("), /boneInverses/);
+  // Fixed-arity colour lookups: no rest arrays or closures per node per frame.
+  assert.doesNotMatch(universe, /\(\.\.\.args: A\)/);
+  assert.match(universe, /return nodes\.get\(id\) \?\? rememberColour\(nodes, id, /);
+  assert.match(universe, /meteorSegment\(meteor, progress, width, height, METEOR_SCRATCH\)/);
+  assert.match(body(labelLayer, "  end() {"), /for \(const view of this\.views\.values\(\)\)/);
+  // The first flash of a storm is timed from the scene clock.
+  assert.match(weather, /nextFlash = sceneTime \+ 2 \+ flashRandom\(\) \* 4;/);
 });

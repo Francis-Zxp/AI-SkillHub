@@ -58,6 +58,10 @@ const PARTICLES: Record<SkyWeatherKind, Particles> = {
 
 /** Particle counts at normal quality; low power keeps 40%. */
 const COUNTS: Record<Exclude<Particles, "none">, number> = { rain: 1300, snow: 900, petals: 260 };
+
+/** A falling petal (round, notched) or leaf (pointed, with a rib). */
+export type Petal = { color: string; leaf: boolean };
+const DEFAULT_PETALS: Petal[] = [{ color: "#f4a6c0", leaf: false }, { color: "#ffffff", leaf: false }, { color: "#f7c3d4", leaf: false }];
 const STORM_RAIN = 2600;
 
 export type WeatherTargets = {
@@ -74,8 +78,8 @@ export type WeatherOptions = {
   lowPower: boolean;
   /** Reduced motion: one still frame and no lightning. */
   reducedMotion: () => boolean;
-  /** Petal colours: garden blossom, autumn leaves or both. */
-  petals: string[];
+  /** Up to three petal colours: garden blossom, autumn leaves or both. */
+  petals: Petal[];
   /** Scene time the world starts at (a woken world keeps its clock). */
   startTime?: number;
 };
@@ -113,6 +117,7 @@ const PARTICLE_VERTEX = `
   uniform float uWobble;
   uniform float uFlutter;
   uniform float uSpin;
+  uniform float uMaxSize;
   varying float vSeed;
   varying float vFade;
   varying float vAngle;
@@ -140,7 +145,7 @@ const PARTICLE_VERTEX = `
     vec4 mvPosition = viewMatrix * vec4(world, 1.0);
     gl_Position = projectionMatrix * mvPosition;
     float size = uSize * (0.7 + 0.6 * fract(aSeed * 13.7)) * uScale / max(1.0, -mvPosition.z);
-    gl_PointSize = clamp(size, 1.0, 96.0);
+    gl_PointSize = clamp(size, 1.0, uMaxSize);
     vPixels = gl_PointSize;
     #include <fog_vertex>
   }`;
@@ -153,6 +158,7 @@ const PARTICLE_FRAGMENT = `
   uniform vec3 uPetalA;
   uniform vec3 uPetalB;
   uniform vec3 uPetalC;
+  uniform vec3 uLeaf;
   varying float vSeed;
   varying float vFade;
   varying float vAngle;
@@ -179,15 +185,32 @@ const PARTICLE_FRAGMENT = `
       colour = mix(colour, vec3(1.0), smoothstep(0.3, 0.0, d) * 0.4);
       alpha *= 0.88;
     } else {
-      // Petals and leaves: a tumbling ellipse with a darker middle rib.
+      // Petals and leaves tumble: the width foreshortens as one turns over.
+      // A blossom petal is round at the tip with a small notch and a paler
+      // base; a leaf is pointed at both ends with a darker midrib.
       float s = sin(vAngle), k = cos(vAngle);
       vec2 r = vec2(c.x * k - c.y * s, c.x * s + c.y * k);
-      float squash = 0.45 + 0.4 * abs(sin(vAngle * 1.7));
-      float d = length(r / vec2(0.46, 0.46 * squash));
-      alpha = 1.0 - smoothstep(0.85, 1.0, d);
+      float squash = 0.32 + 0.68 * abs(sin(vAngle * 1.7));
       float pick = fract(vSeed * 17.0);
       colour = pick < 0.34 ? uPetalA : pick < 0.67 ? uPetalB : uPetalC;
-      colour *= 0.88 + 0.22 * smoothstep(-0.2, 0.3, r.y) - 0.12 * (1.0 - smoothstep(0.0, 0.06, abs(r.x)));
+      float leaf = pick < 0.34 ? uLeaf.x : pick < 0.67 ? uLeaf.y : uLeaf.z;
+      float y = r.y / 0.47;
+      float x = abs(r.x) / (0.47 * squash);
+      // One screen pixel in these units, for a crisp but smooth edge.
+      float pixel = 1.6 / max(1.0, vPixels * 0.47 * squash);
+      float inside;
+      if (leaf > 0.5) {
+        inside = 0.56 * (1.0 - y * y) - x;
+        colour *= 0.84 + 0.24 * smoothstep(-0.9, 0.7, y);
+        colour *= 1.0 - 0.24 * (1.0 - smoothstep(0.0, 0.1, x)) * step(abs(y), 0.86);
+      } else {
+        float width = 0.7 * sqrt(max(0.0, 1.0 - y * y)) * (0.5 + 0.5 * smoothstep(-1.0, 0.35, y));
+        float notch = length(vec2(x * 1.15, y - 0.97)) - 0.17;
+        inside = min(width - x, notch);
+        colour = mix(min(colour * 1.12 + 0.06, vec3(1.0)), colour, smoothstep(-0.95, -0.15, y));
+        colour *= 0.9 + 0.12 * smoothstep(-0.4, 0.9, y);
+      }
+      alpha = smoothstep(0.0, pixel, inside);
     }
     alpha *= vFade * uOpacity;
     if (alpha < 0.01) discard;
@@ -254,7 +277,9 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
   // Particles: one geometry sized for the heaviest weather, one material.
   const maxCount = STORM_RAIN;
   const particleGeo = particleGeometry(maxCount, hashString(`particles:${options.seed}`));
-  const petalColors = (options.petals.length ? options.petals : ["#f4a6c0", "#ffffff", "#f7c3d4"]).map(value => new THREE.Color(value));
+  const petals = options.petals.length ? options.petals : DEFAULT_PETALS;
+  const petalColors = petals.map(petal => new THREE.Color(petal.color));
+  const leafFlag = (index: number) => (petals[index % petals.length].leaf ? 1 : 0);
   const particleMaterial = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -277,7 +302,9 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
       uColor: { value: new THREE.Color(1, 1, 1) },
       uPetalA: { value: petalColors[0] },
       uPetalB: { value: petalColors[1 % petalColors.length] },
-      uPetalC: { value: petalColors[2 % petalColors.length] }
+      uPetalC: { value: petalColors[2 % petalColors.length] },
+      uLeaf: { value: new THREE.Vector3(leafFlag(0), leafFlag(1), leafFlag(2)) },
+      uMaxSize: { value: 96 }
     },
     vertexShader: PARTICLE_VERTEX,
     fragmentShader: PARTICLE_FRAGMENT
@@ -314,7 +341,7 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
   // Lightning: a double flash every 6-14 s of scene time (storm only).
   const flashRandom = seededRandom(hashString(`flash:${options.seed}`));
   const startTime = options.startTime ?? 0;
-  let nextFlash = startTime + 3 + flashRandom() * 5, flashAt = -100, boltAzimuth = 0, boltSeed = 0, lastFlash = 0;
+  let nextFlash = startTime + 3 + flashRandom() * 5, flashAt = -100, boltAzimuth = 0, boltSeed = 0, lastFlash = 0, sceneTime = startTime;
 
   // Colours parsed once per palette, never in the frame loop.
   const GREY_DAY = new THREE.Color("#9aa6b2"), GREY_NIGHT = new THREE.Color("#2a3550");
@@ -353,6 +380,8 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
     const uniforms = particleMaterial.uniforms;
     const box = uniforms.uBox.value as THREE.Vector3;
     box.set(Math.max(60, home * 1.25), Math.max(40, home * 0.7), Math.max(60, home * 1.15));
+    // Petals near the camera stay petal sized instead of filling the view.
+    uniforms.uMaxSize.value = type === "petals" ? 44 : 96;
     if (type === "rain") {
       uniforms.uSize.value = home * (currentKind === "storm" ? 0.016 : 0.011);
       uniforms.uSpeed.value = home * (currentKind === "storm" ? 1.25 : 0.95);
@@ -368,7 +397,7 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
       uniforms.uFlutter.value = 0.6;
       uniforms.uSpin.value = 0;
     } else if (type === "petals") {
-      uniforms.uSize.value = home * 0.0075;
+      uniforms.uSize.value = home * 0.0086;
       uniforms.uSpeed.value = home * 0.035;
       uniforms.uDrift.value = home * 0.05;
       uniforms.uWobble.value = home * 0.018;
@@ -421,7 +450,8 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
     if (instant) Object.assign(look, goal);
     // A new particle kind fades in from nothing rather than swapping shape.
     else if (previous !== PARTICLES[currentKind]) look.particles = 0;
-    nextFlash = 2 + flashRandom() * 4;
+    // The first flash of a new storm comes a few seconds in, never at once.
+    nextFlash = sceneTime + 2 + flashRandom() * 4;
     apply(0);
   };
 
@@ -455,6 +485,7 @@ export function createWeather(scene: THREE.Scene, bounds: THREE.Box3, palette: S
       configureParticles();
     },
     update(time, delta, target, animating) {
+      sceneTime = time;
       (particleMaterial.uniforms.uCenter.value as THREE.Vector3).copy(target);
       let busy = false, changed = false;
       const ease = animating ? 1 - Math.exp(-delta * 1.8) : 1;

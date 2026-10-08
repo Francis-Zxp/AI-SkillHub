@@ -5,6 +5,18 @@ const WORLD_SEED_SETTING = "skillhub-sky-world-seed";
 const WEATHER_SETTING = "skillhub-sky-weather";
 export const SKY_SCENE_EVENT = "skillhub-sky-scene-change";
 
+/** The shell tells the page when the window is minimised or hidden
+ * (`skillhub-app-hidden`; `detail: false` means shown again) and when it is
+ * back (`skillhub-app-visible`; `skillhub-app-shown` is an older alias). The
+ * home scenes sleep while hidden and wake on either "back" event. */
+export const APP_HIDDEN_EVENT = "skillhub-app-hidden";
+export const APP_VISIBLE_EVENTS = ["skillhub-app-visible", "skillhub-app-shown"] as const;
+
+/** Whether an `APP_HIDDEN_EVENT` means hidden (a plain Event or detail true). */
+export function appHiddenFromEvent(event: Event): boolean {
+  return (event as CustomEvent<boolean | undefined>).detail !== false;
+}
+
 /** Archipelago-wide weather. "auto" picks one from the world seed, the date
  * and the time of day; anything else pins that weather. */
 export const SKY_WEATHER_KINDS = ["clear", "cloudy", "rain", "storm", "snow", "fog", "rainbow", "petals", "aurora"] as const;

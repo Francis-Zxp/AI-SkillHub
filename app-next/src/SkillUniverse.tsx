@@ -10,6 +10,7 @@ import {
 import { Icon } from "./icons";
 import { categoryName, getLang, t } from "./i18n";
 import { localizedSkillDescription } from "./localizedDescriptions";
+import { APP_HIDDEN_EVENT, APP_VISIBLE_EVENTS, appHiddenFromEvent } from "./skyScene";
 import { sourcePresentation } from "./sourceIdentity";
 import { createStarField, drawAtmosphereDither, meteorSegment, starFieldOpacity } from "./universeAtmosphere";
 import "./SkillUniverse.css";
@@ -466,7 +467,7 @@ export function SkillUniverse({
       watchVisibility();
     };
     const onAppHidden = (event: Event) => {
-      appHidden = (event as CustomEvent<boolean | undefined>).detail !== false;
+      appHidden = appHiddenFromEvent(event);
       runtime.lastFrame = 0;
       watchVisibility();
     };
@@ -546,8 +547,8 @@ export function SkillUniverse({
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);
-    window.addEventListener("skillhub-app-hidden", onAppHidden);
-    window.addEventListener("skillhub-app-shown", onAppShown);
+    window.addEventListener(APP_HIDDEN_EVENT, onAppHidden);
+    for (const name of APP_VISIBLE_EVENTS) window.addEventListener(name, onAppShown);
     motionQuery.addEventListener("change", onMotionPreference);
     canvas.addEventListener("contextlost", onContextLost);
     canvas.addEventListener("contextrestored", onContextRestored);
@@ -563,8 +564,8 @@ export function SkillUniverse({
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("blur", onBlur);
-      window.removeEventListener("skillhub-app-hidden", onAppHidden);
-      window.removeEventListener("skillhub-app-shown", onAppShown);
+      window.removeEventListener(APP_HIDDEN_EVENT, onAppHidden);
+      for (const name of APP_VISIBLE_EVENTS) window.removeEventListener(name, onAppShown);
       window.clearTimeout(releaseTimer);
       motionQuery.removeEventListener("change", onMotionPreference);
       canvas.removeEventListener("contextlost", onContextLost);
@@ -1234,6 +1235,8 @@ function drawUniverseAtmosphere(
   context.restore();
 }
 
+const METEOR_SCRATCH = { headX: 0, headY: 0, tailX: 0, tailY: 0 };
+
 /** A few meteors per session, each with its own size, angle and timing. */
 function drawUniverseMeteors(
   context: CanvasRenderingContext2D,
@@ -1250,7 +1253,7 @@ function drawUniverseMeteors(
     if (phase > meteor.duration) continue;
     const progress = phase / meteor.duration;
     const fade = Math.sin(progress * Math.PI);
-    const { headX, headY, tailX, tailY } = meteorSegment(meteor, progress, width, height);
+    const { headX, headY, tailX, tailY } = meteorSegment(meteor, progress, width, height, METEOR_SCRATCH);
     const trail = context.createLinearGradient(tailX, tailY, headX, headY);
     trail.addColorStop(0, `${palette.meteor}0)`);
     trail.addColorStop(1, `${palette.meteor}${(fade * meteor.opacity).toFixed(3)})`);
@@ -1385,40 +1388,45 @@ const byLabelScore = (a: ProjectedNode, b: ProjectedNode) => b.labelScore - a.la
 /** Colour strings are built once and reused: thousands of nodes and edges
  * per frame would otherwise make thousands of new strings every frame.
  * Alpha is kept to 1/200 and the depth-driven saturation and lightness are
- * whole percentages already, so nothing visible changes. */
-function colourCache<A extends unknown[]>(make: (...args: A) => string, key: (...args: A) => number) {
-  const cache = new Map<number, string>();
-  return (...args: A) => {
-    const id = key(...args);
-    let value = cache.get(id);
-    if (value === undefined) {
-      if (cache.size > 40_000) cache.clear();
-      value = make(...args);
-      cache.set(id, value);
-    }
-    return value;
-  };
+ * whole percentages already, so nothing visible changes. Lookups take fixed
+ * arguments (no rest arrays or closures per call). */
+function rememberColour(cache: Map<number, string>, id: number, value: string) {
+  if (cache.size > 40_000) cache.clear();
+  cache.set(id, value);
+  return value;
 }
 const alphaStep = (alpha: number) => Math.round(Math.max(0, Math.min(1, alpha)) * 200);
 const KIND_INDEX: Record<UniverseNodeKind, number> = { source: 0, router: 1, skill: 2 };
 
 function withColourCaches(base: Omit<StarPalette, "gridFront" | "gridBack" | "edgeHotAt" | "conflictAt" | "mutedAt">, lightTheme: boolean): StarPalette {
   const node = base.node, edge = base.edge;
+  const nodes = new Map<number, string>(), edges = new Map<number, string>();
+  const hot = new Map<number, string>(), conflicts = new Map<number, string>(), muted = new Map<number, string>();
   return {
     ...base,
     gridFront: `${base.grid}${lightTheme ? 0.2 : 0.17})`,
     gridBack: `${base.grid}${lightTheme ? 0.07 : 0.055})`,
-    node: colourCache(
-      (hue: number, kind: UniverseNodeKind, alpha: number, depth: number) => node(hue, kind, alphaStep(alpha) / 200, depth),
-      (hue: number, kind: UniverseNodeKind, alpha: number, depth: number) => ((Math.round(hue) * 3 + KIND_INDEX[kind]) * 201 + alphaStep(alpha)) * 101 + Math.round(Math.max(0, Math.min(1, depth)) * 100)
-    ),
-    edge: colourCache(
-      (hue: number, alpha: number) => edge(hue, alphaStep(alpha) / 200),
-      (hue: number, alpha: number) => Math.round(hue) * 201 + alphaStep(alpha)
-    ),
-    edgeHotAt: colourCache((alpha: number) => `${base.edgeHot}${alphaStep(alpha) / 200})`, alphaStep),
-    conflictAt: colourCache((alpha: number) => `${base.conflict}${alphaStep(alpha) / 200})`, alphaStep),
-    mutedAt: colourCache((alpha: number) => `${base.muted}${alphaStep(alpha) / 200})`, alphaStep)
+    node: (hue, kind, alpha, depth) => {
+      const step = alphaStep(alpha);
+      const id = ((Math.round(hue) * 3 + KIND_INDEX[kind]) * 201 + step) * 101 + Math.round(Math.max(0, Math.min(1, depth)) * 100);
+      return nodes.get(id) ?? rememberColour(nodes, id, node(hue, kind, step / 200, depth));
+    },
+    edge: (hue, alpha) => {
+      const step = alphaStep(alpha), id = Math.round(hue) * 201 + step;
+      return edges.get(id) ?? rememberColour(edges, id, edge(hue, step / 200));
+    },
+    edgeHotAt: alpha => {
+      const step = alphaStep(alpha);
+      return hot.get(step) ?? rememberColour(hot, step, `${base.edgeHot}${step / 200})`);
+    },
+    conflictAt: alpha => {
+      const step = alphaStep(alpha);
+      return conflicts.get(step) ?? rememberColour(conflicts, step, `${base.conflict}${step / 200})`);
+    },
+    mutedAt: alpha => {
+      const step = alphaStep(alpha);
+      return muted.get(step) ?? rememberColour(muted, step, `${base.muted}${step / 200})`);
+    }
   };
 }
 

@@ -662,7 +662,9 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     lowPower: options.lowPower,
     reducedMotion: () => reduced.matches,
     startTime: startClock,
-    petals: hasAutumn ? ["#f2a03c", "#f4a6c0", "#e8743a"] : ["#f4a6c0", "#ffffff", "#f7c3d4"]
+    petals: hasAutumn
+      ? [{ color: "#f2a03c", leaf: true }, { color: "#f4a6c0", leaf: false }, { color: "#e0662f", leaf: true }]
+      : [{ color: "#f6aac4", leaf: false }, { color: "#fff6f8", leaf: false }, { color: "#f9c8d8", leaf: false }]
   });
   track(weather);
 

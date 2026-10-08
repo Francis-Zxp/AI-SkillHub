@@ -1,5 +1,6 @@
 import "./HomeScene.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { getLang } from "./i18n";
 import { buildSkyIslands, demoSkyIslands } from "./skyIslandModel";
 import type { SkyWorld, SkyWorldInfo, SkyWorldView } from "./sky/world";
@@ -7,8 +8,8 @@ import type { SkillUniverseProps } from "./SkillUniverse";
 import { CLIMATES, climateCounts } from "./sky/climates";
 import { WEATHER_GLYPHS, skyWords } from "./sky/skyI18n";
 import {
-  SKY_SCENE_EVENT as SCENE_EVENT, SKY_WEATHER_KINDS, probeGraphics, readSetting, rerollWorld, setSkySceneEnabled, setSkyWeatherSetting,
-  skySceneEnabled, skyWeatherSetting, worldSeed, writeSetting
+  APP_HIDDEN_EVENT, APP_VISIBLE_EVENTS, SKY_SCENE_EVENT as SCENE_EVENT, SKY_WEATHER_KINDS, appHiddenFromEvent, probeGraphics, readSetting,
+  rerollWorld, setSkySceneEnabled, setSkyWeatherSetting, skySceneEnabled, skyWeatherSetting, worldSeed, writeSetting
 } from "./skyScene";
 import type { SkyWeatherSetting } from "./skyScene";
 import "./SkillArchipelago.css";
@@ -35,12 +36,8 @@ const ASSET_CREDITS = [
 ];
 
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
+const WEATHER_OPTIONS: SkyWeatherSetting[] = ["auto", ...SKY_WEATHER_KINDS];
 
-/** The shell tells the page when the window is minimised or restored:
- * `skillhub-app-hidden` with `detail: true` (or no detail) when hidden,
- * `detail: false` or a `skillhub-app-shown` event when shown again. */
-export const APP_HIDDEN_EVENT = "skillhub-app-hidden";
-export const APP_SHOWN_EVENT = "skillhub-app-shown";
 
 /** Out of sight this long, the 3D world sleeps: a still image stays on screen
  * and every GPU resource (and the WebGL context) is released. */
@@ -136,6 +133,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   const [asleep, setAsleep] = useState(false);
   const awake = visible && !pageHidden && !appHidden;
   const worldPanelRef = useRef<HTMLDivElement>(null), worldToggleRef = useRef<HTMLButtonElement>(null);
+  const worldPanelId = useId();
   const visibleIslands = islands.filter(island => island.name.toLocaleLowerCase().includes(query.toLocaleLowerCase().trim()));
   const totalSkills = islands.reduce((sum, island) => sum + island.skillCount, 0);
   const hasSnapshot = Boolean(snapshot);
@@ -151,17 +149,17 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
 
   useEffect(() => {
     const onVisibility = () => setPageHidden(document.hidden);
-    const onHidden = (event: Event) => setAppHidden((event as CustomEvent<boolean | undefined>).detail !== false);
+    const onHidden = (event: Event) => setAppHidden(appHiddenFromEvent(event));
     const onShown = () => setAppHidden(false);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener(APP_HIDDEN_EVENT, onHidden);
-    window.addEventListener(APP_SHOWN_EVENT, onShown);
+    for (const name of APP_VISIBLE_EVENTS) window.addEventListener(name, onShown);
     // A restored window takes focus again even if the shell says nothing.
     window.addEventListener("focus", onShown);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener(APP_HIDDEN_EVENT, onHidden);
-      window.removeEventListener(APP_SHOWN_EVENT, onShown);
+      for (const name of APP_VISIBLE_EVENTS) window.removeEventListener(name, onShown);
       window.removeEventListener("focus", onShown);
     };
   }, []);
@@ -322,7 +320,12 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
   const labelText = islands.map(island => `${island.name}:${island.skillCount}:${island.promptCount}`).join("|");
   useEffect(() => { world.current?.relayout(); }, [lang, labelText]);
 
-  // The world panel closes on Escape or a click elsewhere.
+  // The world panel takes focus on its checked weather when it opens, and
+  // closes on Escape (focus back on its button) or a click elsewhere.
+  useEffect(() => {
+    if (!worldPanel) return;
+    worldPanelRef.current?.querySelector<HTMLButtonElement>('[role="radio"][tabindex="0"]')?.focus();
+  }, [worldPanel]);
   useEffect(() => {
     if (!worldPanel) return;
     const onKey = (event: KeyboardEvent) => {
@@ -356,6 +359,20 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
     setSkyWeatherSetting(value);
     setWeatherSetting(value);
   };
+  // The weather choices are one radio group: Tab reaches the checked one,
+  // arrow keys move and choose (aurora only at night), Home/End jump.
+  const weatherAvailable = (kind: SkyWeatherSetting) => kind !== "aurora" || timeOfDay === "night";
+  const weatherFocus: SkyWeatherSetting = weatherAvailable(weatherSetting) ? weatherSetting : "auto";
+  const onWeatherKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const choices = WEATHER_OPTIONS.filter(weatherAvailable);
+    const index = Math.max(0, choices.indexOf(weatherFocus));
+    const step = event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 0;
+    const next = event.key === "Home" ? choices[0] : event.key === "End" ? choices[choices.length - 1] : step ? choices[(index + step + choices.length) % choices.length] : null;
+    if (!next) return;
+    event.preventDefault();
+    chooseWeather(next);
+    event.currentTarget.querySelector<HTMLButtonElement>(`[data-weather="${next}"]`)?.focus();
+  };
   const reroll = () => {
     setRerolling(true);
     rerollWorld();
@@ -384,19 +401,19 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
       <button type="button" className="sky-control-compact" onClick={() => { world.current?.reset(); setQuery(""); setHovered(null); }} title={words.reset} aria-label={words.reset}><span aria-hidden="true">⌖</span><span>{words.reset}</span></button>
       <button type="button" className="sky-control-compact" aria-pressed={still3d} disabled={reducedMotion} onClick={togglePaused} title={reducedMotion ? sky.reducedMotion : still3d ? words.play : words.pause}><span aria-hidden="true">{still3d ? "▷" : "Ⅱ"}</span><span>{still3d ? words.play : words.pause}</span></button>
       <button type="button" className="sky-control-compact" aria-pressed={lowPower} onClick={toggleLowPower} title={words.lowPowerHint}><span aria-hidden="true">◐</span><span>{words.lowPower}</span></button>
-      {status !== "fallback" && <button ref={worldToggleRef} type="button" className="sky-control-compact sky-world-toggle" aria-haspopup="dialog" aria-expanded={worldPanel} onClick={() => showPanel("world")} title={sky.worldTitle}><span aria-hidden="true">{WEATHER_GLYPHS[info?.weather ?? "auto"]}</span><span>{sky.world}</span></button>}
+      {status !== "fallback" && <button ref={worldToggleRef} type="button" className="sky-control-compact sky-world-toggle" aria-haspopup="dialog" aria-expanded={worldPanel} aria-controls={worldPanel ? worldPanelId : undefined} onClick={() => showPanel("world")} title={sky.worldTitle}><span aria-hidden="true">{WEATHER_GLYPHS[info?.weather ?? "auto"]}</span><span>{sky.world}</span></button>}
       <button type="button" aria-expanded={navigation} onClick={() => showPanel("navigation")}>{navigation ? words.collapse : words.browse}<span aria-hidden="true">{navigation ? "−" : "+"}</span></button>
       </>}
       <button type="button" aria-pressed={!sceneOn} onClick={() => setSkySceneEnabled(!sceneOn)} title={words.sceneHint}><span aria-hidden="true">{sceneOn ? "▦" : "◒"}</span><span>{sceneOn ? words.sceneOff : words.sceneOn}</span></button>
     </div>
-    {worldPanel && threeD && status !== "fallback" && <div className="sky-world-panel" role="dialog" aria-label={sky.worldTitle} ref={worldPanelRef}>
-      <h3>{sky.weather}</h3>
-      <div className="sky-weather-options" role="radiogroup" aria-label={sky.weather}>
-        {(["auto", ...SKY_WEATHER_KINDS] as SkyWeatherSetting[]).map(kind => {
-          const night = timeOfDay === "night";
-          const disabled = kind === "aurora" && !night;
+    {worldPanel && threeD && status !== "fallback" && <div className="sky-world-panel" id={worldPanelId} role="dialog" aria-label={sky.worldTitle} ref={worldPanelRef}>
+      <h3 id={`${worldPanelId}-weather`}>{sky.weather}</h3>
+      <div className="sky-weather-options" role="radiogroup" aria-labelledby={`${worldPanelId}-weather`} onKeyDown={onWeatherKey}>
+        {WEATHER_OPTIONS.map(kind => {
+          const disabled = !weatherAvailable(kind);
           const name = kind === "auto" ? (weatherSetting === "auto" && weatherName ? sky.autoNow(weatherName) : sky.auto) : sky.weathers[kind];
-          return <button key={kind} type="button" role="radio" aria-checked={weatherSetting === kind} disabled={disabled} title={disabled ? sky.auroraNight : name} className={kind === "auto" ? "is-auto" : undefined} onClick={() => chooseWeather(kind)}>
+          return <button key={kind} type="button" role="radio" data-weather={kind} aria-checked={weatherSetting === kind} tabIndex={kind === weatherFocus ? 0 : -1}
+            disabled={disabled} title={disabled ? sky.auroraNight : name} className={kind === "auto" ? "is-auto" : undefined} onClick={() => chooseWeather(kind)}>
             <span aria-hidden="true">{WEATHER_GLYPHS[kind]}</span><span>{name}</span>
           </button>;
         })}
@@ -426,6 +443,7 @@ export function SkillArchipelago({ lightTheme, snapshot, onOpenFolder, onAdd, ph
           onFocus={event => { if (event.currentTarget.matches(":focus-visible")) world.current?.focus(island.id); }}
           title={climate ? `${island.name} · ${climate}` : island.name} aria-label={`${words.open} ${island.name} · ${label(island)}${climate ? ` · ${climate}` : ""}`}>
           <strong>{island.name}</strong><span>{label(island)}</span>
+          {climate && <em className="sky-island-climate" aria-hidden="true"><i style={{ background: CLIMATES[info!.climates[island.id]].swatch }} />{climate}</em>}
         </button>;
       })}</div>
     </div>

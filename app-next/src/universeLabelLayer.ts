@@ -1,4 +1,5 @@
 type LabelView = {
+  id: string;
   element: HTMLDivElement;
   title: HTMLSpanElement;
   owner: HTMLSpanElement;
@@ -45,7 +46,7 @@ export class UniverseLabelLayer {
       element.append(titleElement, ownerElement);
       this.host.append(element);
       view = {
-        element, title: titleElement, owner: ownerElement, text: "", ownerText: "", width: -1, height: -1, size: -1, weight: -1,
+        id, element, title: titleElement, owner: ownerElement, text: "", ownerText: "", width: -1, height: -1, size: -1, weight: -1,
         focused: false, color: "", halo: "", chip: "", border: "", x: Number.NaN, y: Number.NaN, opacity: -1, visible: false
       };
       this.views.set(id, view);
@@ -78,11 +79,12 @@ export class UniverseLabelLayer {
   }
 
   end() {
-    for (const [id, view] of this.views) {
-      if (this.shown.has(id)) continue;
+    // Values only: no [key, value] pair per label per frame.
+    for (const view of this.views.values()) {
+      if (this.shown.has(view.id)) continue;
       if (view.visible) { view.element.style.opacity = "0"; view.visible = false; view.opacity = 0; }
       // Keep common labels cached, but don't retain every child ever hovered.
-      if (this.views.size > 64) { view.element.remove(); this.views.delete(id); }
+      if (this.views.size > 64) { view.element.remove(); this.views.delete(view.id); }
     }
   }
 

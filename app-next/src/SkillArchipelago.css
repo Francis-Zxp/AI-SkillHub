@@ -31,6 +31,12 @@
 .sky-island-label b { font-weight: 600; }
 .sky-island-label.is-hovered, .sky-island-label:hover { background: #1f2b44; border-color: #f2b866; }
 .is-light .sky-island-label.is-hovered, .is-light .sky-island-label:hover { background: #fff; border-color: #47698a; }
+/* Hovering an island (or its label) names its climate in a small tag above
+ * the label; out of the layout, so labels keep their measured size. */
+.sky-island-climate { position: absolute; left: 50%; bottom: calc(100% + 5px); display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 3px; border-radius: 999px; color: #f7f1ea; background: #131b2ce6; font-size: 11px; font-style: normal; line-height: 1.5; white-space: nowrap; pointer-events: none; opacity: 0; transform: translate(-50%, 3px); transition: opacity .16s, transform .16s; }
+.sky-island-climate i { width: 8px; height: 8px; border-radius: 3px; box-shadow: inset 0 0 0 1px #00000026; }
+.is-light .sky-island-climate { color: #1f3242; background: #ffffffeb; box-shadow: 0 1px 5px #29405a26; }
+.sky-island-label.is-hovered .sky-island-climate, .sky-island-label:hover .sky-island-climate, .sky-island-label:focus-visible .sky-island-climate { opacity: 1; transform: translate(-50%, 0); }
 .sky-islands button:focus-visible, .sky-islands input:focus-visible { outline: 2px solid #f2b866; outline-offset: 3px; }
 .is-light.sky-islands button:focus-visible, .is-light.sky-islands input:focus-visible { outline-color: #2f5577; }
 .sky-navigation { position: absolute; right: 28px; top: 206px; bottom: 150px; width: 286px; z-index: 5; display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid #ffffff21; border-radius: 12px; background: #131b2cf2; box-shadow: 0 7px 20px #05081233; }
@@ -65,7 +71,7 @@
 @media (min-width: 2100px) { .sky-heading { top: 160px; left: 45px; } .sky-island-label { max-width: 300px; padding: 10px 17px; } .sky-island-label strong { font-size: 16px; } .sky-island-label > span { font-size: 12px; } .sky-controls button { font-size: 14px; } }
 @media (max-width: 1000px) { .sky-heading { left: 22px; } .sky-controls { right: 20px; gap: 4px; } .sky-controls button { padding: 8px; } .sky-controls .sky-control-compact span:last-child { display: none; } .sky-island-label { padding: 5px 8px; max-width: 155px; } .sky-island-label strong { font-size: 12px; } .sky-island-label > span { font-size: 11px; } }
 @media (max-height: 750px) { .sky-heading { top: 146px; } .sky-heading p { display: none; } .sky-controls { top: 144px; } .sky-caption { bottom: 98px; } .sky-navigation, .sky-world-panel { top: 187px; } .sky-navigation { bottom: 128px; } }
-@media (prefers-reduced-motion: reduce) { .sky-island-label { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .sky-island-label, .sky-island-climate { transition: none; } }
 .sky-credits-toggle { pointer-events: auto; margin-left: 10px; border: 0; padding: 0; color: inherit; background: none; font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .sky-credits { position: absolute; right: 28px; bottom: 150px; z-index: 6; width: min(380px, calc(100% - 56px)); padding: 14px 16px; border: 1px solid #ffffff21; border-radius: 12px; color: #f5efe9; background: #131b2cf5; box-shadow: 0 7px 20px #05081233; font-size: 12px; line-height: 1.5; }
 .is-light .sky-credits { color: #1f3242; background: #fbfcfdf7; border-color: #cfdae4; }
