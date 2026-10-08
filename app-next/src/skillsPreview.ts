@@ -452,7 +452,8 @@ function buildDeliveryState(library: LegacySnapshot): SkillDeliveryState {
         ? target.error?.action ?? { kind: "retry", payload: {} }
         : target.status === "conflict"
           ? { kind: "resolve-conflict", payload: { unitId: target.unitId, agentId: target.agentId } }
-          : { kind: "retry", payload: { unitId: target.unitId, agentId: target.agentId } }
+          // Same as the backend: a leftover entry of a missing tool carries no action; the UI offers 移除入口.
+          : null
     });
   }
   const agents: SkillAgent[] = AGENT_SEEDS.map(seed => {

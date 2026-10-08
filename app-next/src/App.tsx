@@ -2037,6 +2037,10 @@ export function App() {
                   agents={delivery?.agents ?? []}
                   onAction={(action, problem) => runErrorAction(action, problem)}
                   onClose={closeProblems}
+                  onRemoveEntry={problem => {
+                    setProblemsOpen(false);
+                    if (problem.unitId && problem.agentId) void setTarget(problem.unitId, problem.agentId, false);
+                  }}
                   problems={delivery?.problems ?? []}
                   unitName={unitId => {
                     const row = rows.find(item => item.key === unitId);

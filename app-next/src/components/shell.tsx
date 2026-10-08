@@ -194,12 +194,15 @@ export function ProblemsPopover({
   agents,
   onAction,
   onClose,
+  onRemoveEntry,
   unitName
 }: {
   problems: DeliveryProblem[];
   agents: SkillAgent[];
   onAction: (action: ErrorAction, problem: DeliveryProblem) => void;
   onClose: () => void;
+  /** Leftover entry of a tool that is gone (the backend sends no action for it): remove it. */
+  onRemoveEntry: (problem: DeliveryProblem) => void;
   /** Library name of a unit id, for problems that mention a skill pack. */
   unitName: (unitId: string) => string;
 }) {
@@ -234,17 +237,26 @@ export function ProblemsPopover({
             <li key={problem.id} data-testid={`problem-${problem.id}`}>
               {problem.agentId && <AgentGlyph agentId={problem.agentId} name={agentName(problem.agentId)} size="sm" />}
               <p>{problemText(problem, agents, unitName)}</p>
-              {problem.action && (
+              {problem.action ? (
                 <button className="ghost-action small" data-testid="problem-action" onClick={() => onAction(problem.action!, problem)} type="button">
                   {t(`err.action.${problem.action.kind}`)}
                 </button>
-              )}
+              ) : isLeftoverEntry(problem) ? (
+                <button className="ghost-action small" data-testid="problem-action" onClick={() => onRemoveEntry(problem)} type="button">
+                  {t("v33.removeEntry")}
+                </button>
+              ) : null}
             </li>
           ))}
         </ul>
       )}
     </div>
   );
+}
+
+/** An entry SkillHub left in a tool that is no longer installed (target status "orphan"). */
+function isLeftoverEntry(problem: DeliveryProblem) {
+  return problem.code === "AGENT_NOT_INSTALLED" && Boolean(problem.unitId && problem.agentId);
 }
 
 /* ---------- Error banner (S1-9) ---------- */
