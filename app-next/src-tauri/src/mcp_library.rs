@@ -4069,7 +4069,8 @@ impl WritePlan {
     }
 
     fn has_effect(&self) -> bool {
-        !self.targets.is_empty()
+        self.undo_restore.is_some()
+            || !self.targets.is_empty()
             || !self.servers_after.is_empty()
             || !self.servers_soft_deleted.is_empty()
             || !self.servers_hard_deleted.is_empty()
@@ -4395,6 +4396,11 @@ fn execute_plan(
                 .map(|row| row.key.clone()),
         );
     }
+    if let Some(restore) = &plan.undo_restore {
+        // Undo of an undo must be able to bring back everything it restores.
+        touched_servers.extend(restore.servers_before.iter().map(|(id, _)| id.clone()));
+        touched_rows.extend(restore.rows_before.iter().map(|(key, _)| key.clone()));
+    }
     let mut blob = UndoBlob {
         servers_before: touched_servers
             .iter()
@@ -4644,6 +4650,9 @@ fn execute_plan(
             }
         }
         let changes = entry_changes(target);
+        if changes.is_empty() && !target.conflicts.is_empty() {
+            continue;
+        }
         let server_ids = target
             .items
             .iter()

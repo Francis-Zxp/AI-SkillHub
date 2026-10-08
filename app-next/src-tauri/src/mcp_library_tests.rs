@@ -1856,3 +1856,55 @@ fn update_keeps_omitted_fields_and_masked_arguments() {
         .unwrap()
         .contains("sk-imported-secret-1234"));
 }
+
+/// Undo of an undo restores the change again (undo is itself undoable), and a
+/// library-only add (no AI 工具 selected) is undoable too.
+#[test]
+fn undo_is_itself_undoable_and_library_only_add_undoes() {
+    let fixture = Fixture::new("redo");
+    fixture.import();
+    let outcome = add(
+        &fixture,
+        stdio_input("context7", "npx", &["-y", "@upstash/context7-mcp"]),
+        &[ClientId::Cursor],
+    );
+    let (_, _, token) = done(&outcome);
+    let undone = fixture.write_op(undo(
+        &fixture.ctx,
+        McpUndoRequest {
+            undo_token: token.clone().unwrap(),
+        },
+    ));
+    let (_, _, redo_token) = done(&undone);
+    assert!(fixture.snapshot().servers.is_empty());
+    let redone = fixture.write_op(undo(
+        &fixture.ctx,
+        McpUndoRequest {
+            undo_token: redo_token.clone().unwrap(),
+        },
+    ));
+    done(&redone);
+    assert_eq!(fixture.cell("context7", ClientId::Cursor).state, "on");
+    assert!(json_file(&fixture.cursor())["mcpServers"]["context7"].is_object());
+
+    let library_only = add(&fixture, stdio_input("solo", "uvx", &["solo-mcp"]), &[]);
+    let (_, results, token) = done(&library_only);
+    assert!(results.is_empty());
+    assert!(fixture
+        .snapshot()
+        .servers
+        .iter()
+        .any(|server| server.name == "solo"));
+    let undone = fixture.write_op(undo(
+        &fixture.ctx,
+        McpUndoRequest {
+            undo_token: token.clone().unwrap(),
+        },
+    ));
+    done(&undone);
+    assert!(!fixture
+        .snapshot()
+        .servers
+        .iter()
+        .any(|server| server.name == "solo"));
+}
