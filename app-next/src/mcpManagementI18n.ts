@@ -554,7 +554,9 @@ const zh: Dictionary = {
   "mcp.resolve.added.takeLibrary": "从 {client} 拿掉",
   "mcp.resolve.added.takeLibraryHint": "从 {client} 的配置里拿掉这一项，列表里保持未启用。",
   "mcp.matrix.serverColumnCount": "MCP · {n}",
-  "mcp.matrix.serverColumnFiltered": "MCP · {shown}/{n}"
+  "mcp.matrix.serverColumnFiltered": "MCP · {shown}/{n}",
+  "mcp.add.plainEnvLooksSecret": "{name} 像是密钥。普通环境变量会以明文写进每个 AI 工具的配置。",
+  "mcp.add.moveToKey": "改填到 API Key"
 };
 
 const en: Dictionary = {
@@ -1077,7 +1079,9 @@ const en: Dictionary = {
   "mcp.resolve.added.takeLibrary": "Remove it from {client}",
   "mcp.resolve.added.takeLibraryHint": "Take this entry out of {client}'s config; it stays off in your list.",
   "mcp.matrix.serverColumnCount": "MCP · {n}",
-  "mcp.matrix.serverColumnFiltered": "MCP · {shown}/{n}"
+  "mcp.matrix.serverColumnFiltered": "MCP · {shown}/{n}",
+  "mcp.add.plainEnvLooksSecret": "{name} looks like a key. Plain variables are written as text into every AI tool's config.",
+  "mcp.add.moveToKey": "Move it to API Key"
 };
 
 const ko: Dictionary = {
@@ -1600,7 +1604,9 @@ const ko: Dictionary = {
   "mcp.resolve.added.takeLibrary": "{client}에서 빼기",
   "mcp.resolve.added.takeLibraryHint": "{client}의 설정에서 이 항목을 빼고 목록에서는 꺼진 상태로 둡니다.",
   "mcp.matrix.serverColumnCount": "MCP · {n}",
-  "mcp.matrix.serverColumnFiltered": "MCP · {shown}/{n}"
+  "mcp.matrix.serverColumnFiltered": "MCP · {shown}/{n}",
+  "mcp.add.plainEnvLooksSecret": "{name}은(는) 키로 보입니다. 일반 환경 변수는 각 AI 도구 설정에 평문으로 저장됩니다.",
+  "mcp.add.moveToKey": "API 키로 옮기기"
 };
 
 const dictionaries: Record<Lang, Dictionary> = { en, zh, ko };

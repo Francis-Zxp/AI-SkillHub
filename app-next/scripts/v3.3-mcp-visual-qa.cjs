@@ -449,6 +449,29 @@ async function shot(page, name) {
       await manual.close();
     });
 
+    await check("22 a key typed as a plain variable is flagged and moves to API Key", async () => {
+      const sheetPage = await context.newPage();
+      sheetPage.on("pageerror", error => pageErrors.push(error.message));
+      await open(sheetPage, "?view=connections&mcpInitialized=1");
+      await sheetPage.locator(".mcp-head").getByRole("button", { name: "添加 MCP", exact: true }).click();
+      const sheet = sheetPage.locator(".mcp-sheet");
+      await sheet.waitFor();
+      await sheet.getByRole("textbox", { name: "命令或地址" }).fill("npx -y @example/weather-mcp");
+      await sheet.locator(".mcp-advanced > summary").click();
+      await sheet.getByRole("button", { name: /普通环境变量|环境变量/ }).last().click();
+      await sheet.getByRole("textbox", { name: "变量名" }).last().fill("WEATHER_API_KEY");
+      await sheet.getByRole("textbox", { name: "值" }).last().fill("abc123");
+      const hint = sheet.locator(".mcp-env-entry .mcp-field-hint", { hasText: "WEATHER_API_KEY 像是密钥" });
+      await hint.waitFor();
+      await shot(sheetPage, "22-plain-env-secret");
+      await hint.getByRole("button", { name: "改填到 API Key" }).click();
+      const moved = sheet.locator(".mcp-secret-row input[type='password']");
+      await moved.first().waitFor();
+      assert.equal(await moved.first().inputValue(), "abc123");
+      assert.equal(await sheet.locator(".mcp-env-entry").count(), 0);
+      await sheetPage.close();
+    });
+
     await check("16 no page errors", async () => {
       assert.deepEqual(pageErrors, []);
     });

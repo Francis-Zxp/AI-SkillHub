@@ -823,6 +823,8 @@
 .mcp-advanced-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; align-items: end; }
 .mcp-plain-env { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
 .mcp-env-row { display: flex; align-items: center; gap: 6px; }
+.mcp-env-entry { display: flex; flex-direction: column; gap: 4px; }
+.mcp-env-entry .mcp-field-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; }
 .mcp-env-row input:first-child { flex: 0 1 200px; }
 
 .mcp-targets { display: flex; flex-direction: column; gap: 6px; }

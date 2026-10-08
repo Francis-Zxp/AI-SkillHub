@@ -102,6 +102,13 @@ function emptySecret(kind: "env" | "header" = "env"): SecretRow {
   };
 }
 
+// Whole-word secret names (MY_TOKEN, API_KEY, DB_PASSWORD); GITHUB_OAUTH_CALLBACK_PORT is not one.
+const SECRET_NAME_WORD = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|PWD|APIKEY|KEY|PAT|AUTH|CREDENTIALS?|COOKIE|SESSION)(?:_|$)/i;
+
+function looksLikeSecretName(name: string) {
+  return SECRET_NAME_WORD.test(name.trim());
+}
+
 type AddCandidate = McpAddRequest["candidates"][number];
 
 /**
@@ -1027,11 +1034,23 @@ export function McpAddSheet({ snapshot, initialText = "", initialTemplate, initi
                   <div className="mcp-plain-env">
                     <span className="mcp-section-label">{t("mcp.add.plainEnv")}</span>
                     {envRows.map(row => (
-                      <div className="mcp-env-row" key={row.id}>
-                        <input aria-label={t("mcp.add.envName")} autoComplete="off" onChange={event => setEnvRows(rows => rows.map(item => (item.id === row.id ? { ...item, name: event.target.value } : item)))} placeholder="PORT" spellCheck={false} value={row.name} />
-                        <span aria-hidden="true">=</span>
-                        <input aria-label={t("mcp.add.envValue")} autoComplete="off" onChange={event => setEnvRows(rows => rows.map(item => (item.id === row.id ? { ...item, value: event.target.value } : item)))} placeholder="8085" spellCheck={false} value={row.value} />
-                        <button aria-label={t("mcp.add.removeSecret")} className="mcp-icon-button small" onClick={() => setEnvRows(rows => rows.filter(item => item.id !== row.id))} type="button"><Glyph name="close" /></button>
+                      <div className="mcp-env-entry" key={row.id}>
+                        <div className="mcp-env-row">
+                          <input aria-label={t("mcp.add.envName")} autoComplete="off" onChange={event => setEnvRows(rows => rows.map(item => (item.id === row.id ? { ...item, name: event.target.value } : item)))} placeholder="PORT" spellCheck={false} value={row.name} />
+                          <span aria-hidden="true">=</span>
+                          <input aria-label={t("mcp.add.envValue")} autoComplete="off" onChange={event => setEnvRows(rows => rows.map(item => (item.id === row.id ? { ...item, value: event.target.value } : item)))} placeholder="8085" spellCheck={false} value={row.value} />
+                          <button aria-label={t("mcp.add.removeSecret")} className="mcp-icon-button small" onClick={() => setEnvRows(rows => rows.filter(item => item.id !== row.id))} type="button"><Glyph name="close" /></button>
+                        </div>
+                        {/* A plain value is written as text into every AI tool's file; a key belongs in API Key. */}
+                        {looksLikeSecretName(row.name) && (
+                          <p className="mcp-field-hint warn">
+                            {t("mcp.add.plainEnvLooksSecret", { name: row.name.trim() })}
+                            <button className="mcp-link" onClick={() => {
+                              setEnvRows(rows => rows.filter(item => item.id !== row.id));
+                              setSecrets(rows => [...rows, { ...emptySecret("env"), name: row.name.trim(), value: row.value }]);
+                            }} type="button">{t("mcp.add.moveToKey")}</button>
+                          </p>
+                        )}
                       </div>
                     ))}
                     {envProblem && attempted && <p className="mcp-field-error">{t(envProblem)}</p>}
