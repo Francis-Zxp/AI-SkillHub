@@ -51,6 +51,14 @@ async function waitIdle(page) {
   await page.waitForTimeout(250);
 }
 
+async function closeOverlays(page) {
+  // A failed step must not leave a drawer or dialog open for the next one.
+  for (let attempt = 0; attempt < 4 && (await page.locator(".mcp-overlay").count()) > 0; attempt += 1) {
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+  }
+}
+
 async function shot(page, name) {
   await page.waitForTimeout(260); // let the 200 ms slide-in finish
   await page.screenshot({ path: path.join(SHOTS, `${name}.png`) });
@@ -375,6 +383,7 @@ async function shot(page, name) {
     });
 
     await check("18 deleting with its env var ticked finishes after one confirmation", async () => {
+      await closeOverlays(page);
       await page.getByRole("button", { name: "context7 的更多操作" }).click();
       await page.getByRole("menuitem", { name: "删除" }).click();
       const dialog = page.getByRole("dialog", { name: "删除 context7？" });
@@ -388,15 +397,21 @@ async function shot(page, name) {
     });
 
     await check("19 a template's optional key left empty is not added as a missing key", async () => {
-      await page.locator(".mcp-head").getByRole("button", { name: "添加 MCP", exact: true }).click();
-      await page.locator(".mcp-template-chip", { hasText: "context7" }).click();
-      const submit = page.locator(".mcp-sheet-foot").getByRole("button", { name: /添加到 \d 个 AI 工具/ });
+      // A fresh page, so this does not depend on step 18 having removed context7.
+      const fresh = await context.newPage();
+      fresh.on("pageerror", error => pageErrors.push(error.message));
+      await open(fresh, "?view=connections&mcpInitialized=1");
+      await fresh.locator(".mcp-head").getByRole("button", { name: "添加 MCP", exact: true }).click();
+      await fresh.locator(".mcp-template-chip", { hasText: "context7" }).click();
+      await fresh.locator(".mcp-sheet").getByRole("textbox", { name: "名称", exact: true }).first().fill("context7-docs");
+      const submit = fresh.locator(".mcp-sheet-foot").getByRole("button", { name: /添加到 \d 个 AI 工具/ });
       await submit.waitFor();
       await submit.click();
-      await page.locator(".mcp-toast", { hasText: "已添加 context7" }).waitFor({ timeout: 6000 });
-      const row = page.locator("tr", { has: page.locator(".mcp-name", { hasText: /^context7$/ }) });
+      await fresh.locator(".mcp-toast", { hasText: "已添加 context7-docs" }).waitFor({ timeout: 6000 });
+      const row = fresh.locator("tr", { has: fresh.locator(".mcp-name", { hasText: /^context7-docs$/ }) });
       await row.waitFor();
       assert.equal(await row.locator(".mcp-key-chip").count(), 0, "optional key shown as missing");
+      await fresh.close();
     });
 
     await check("20 Origin card switches the listed origin on in more tools (bug #24)", async () => {
@@ -423,7 +438,7 @@ async function shot(page, name) {
       await manual.locator(".mcp-head").getByRole("button", { name: "添加 MCP", exact: true }).click();
       const sheet = manual.locator(".mcp-sheet");
       await sheet.waitFor();
-      await sheet.getByRole("textbox", { name: "名称" }).fill("sqlite");
+      await sheet.getByRole("textbox", { name: "名称", exact: true }).first().fill("sqlite");
       await sheet.getByRole("textbox", { name: "命令或地址" }).fill("uvx mcp-server-sqlite");
       await sheet.locator(".mcp-sheet-foot").getByRole("button", { name: /添加到 \d 个 AI 工具/ }).click();
       const dialog = manual.getByRole("dialog", { name: "覆盖 Cursor 里同名的 sqlite？" });
