@@ -127,7 +127,8 @@ export function Overlay({ label, onClose, children, initialFocus, className = ""
   const ref = useRef<HTMLDivElement>(null);
   useFocusTrap(ref, onClose, initialFocus);
   return createPortal(
-    <div className={`mcp-overlay mcp-overlay-${variant}`}>
+    // data-overlay keeps the shell quiet (Ctrl+K, global paste) while an MCP overlay is open.
+    <div className={`mcp-overlay mcp-overlay-${variant}`} data-overlay="mcp">
       <div aria-hidden="true" className="mcp-backdrop" onClick={closeOnBackdrop ? onClose : undefined} />
       <div aria-label={label} aria-modal="true" className={`mcp-${variant} ${className}`.trim()} ref={ref} role="dialog" tabIndex={-1}>
         {children}

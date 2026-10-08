@@ -89,6 +89,22 @@ type WriteOptions = {
 let firstRunImportStarted = false;
 const dismissedIssues = new Set<string>();
 
+// The Skills shell keeps a pasted MCP config in memory in src/mcpBridge.ts (takePendingMcpPaste).
+// import.meta.glob resolves to {} when that module is absent, so this branch builds on its own and
+// the hand-off works once both tracks are merged, without App.tsx passing a prop.
+const bridgeModules = import.meta.glob<{ takePendingMcpPaste?: () => string | null }>("../mcpBridge.ts");
+
+async function takeBridgePaste(): Promise<string> {
+  const load = bridgeModules["../mcpBridge.ts"];
+  if (!load) return "";
+  try {
+    const bridge = await load();
+    return bridge.takePendingMcpPaste?.() ?? "";
+  } catch {
+    return "";
+  }
+}
+
 function readAcks(): string[] {
   try {
     const raw = window.localStorage.getItem(TEST_ACK_STORAGE_KEY);
@@ -247,17 +263,27 @@ export function McpPage({ runtimeAvailable = isDesktop(), initialPaste, takePend
 
   // ---------- paste hand-off from the shell ----------
   useEffect(() => {
-    const handed = (initialPaste ?? "").trim() || (takePendingPaste?.() ?? "").trim();
-    if (handed) openAdd({ text: handed });
-    function onOpenAdd(event: Event) {
-      const fromBridge = takePendingPaste?.() ?? "";
+    let disposed = false;
+    void (async () => {
+      const handed = (initialPaste ?? "").trim() || (takePendingPaste?.() ?? "").trim() || (await takeBridgePaste()).trim();
+      // No "disposed" guard: the text is consumed exactly once, and in StrictMode the first effect
+      // run is torn down before this resolves; the state setter still reaches the same component.
+      if (handed) openAdd({ text: handed });
+    })();
+    async function onOpenAdd(event: Event) {
+      const fromShell = takePendingPaste?.() ?? "";
+      const fromBridge = fromShell ? "" : await takeBridgePaste();
       const detail = (event as CustomEvent<{ text?: string }>).detail;
-      const text = (fromBridge || detail?.text || "").trim();
+      const text = (fromShell || fromBridge || detail?.text || "").trim();
+      if (disposed) return;
       setTab("mine");
       openAdd(text ? { text } : {});
     }
     window.addEventListener(OPEN_MCP_ADD_EVENT, onOpenAdd);
-    return () => window.removeEventListener(OPEN_MCP_ADD_EVENT, onOpenAdd);
+    return () => {
+      disposed = true;
+      window.removeEventListener(OPEN_MCP_ADD_EVENT, onOpenAdd);
+    };
     // The hand-off is read once per mount and per event.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

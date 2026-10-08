@@ -335,7 +335,23 @@ async function shot(page, name) {
       await large.close();
     });
 
-    await check("15 no page errors", async () => {
+    await check("15 the shell's paste hand-off opens the add sheet with that text", async () => {
+      const handoff = await context.newPage();
+      handoff.on("pageerror", error => pageErrors.push(error.message));
+      await open(handoff, "?view=connections&mcpInitialized=1");
+      const sample = JSON.stringify({ mcpServers: { "brave-search": { command: "npx", args: ["-y", "@modelcontextprotocol/server-brave-search"] } } });
+      // Same event the Skills shell dispatches from "+ 添加" / Ctrl+V (mcpBridge.requestOpenMcpAdd).
+      await handoff.evaluate(text => window.dispatchEvent(new CustomEvent("ai-skillhub-open-mcp-add", { detail: { text } })), sample);
+      await handoff.locator(".mcp-sheet .mcp-candidate").first().waitFor({ timeout: 6000 });
+      assert.match(await handoff.locator(".mcp-candidates").innerText(), /brave-search[\s\S]*新的/);
+      // Nothing of the pasted text reaches browser storage.
+      const stored = await handoff.evaluate(() => JSON.stringify({ ...window.localStorage }) + JSON.stringify({ ...window.sessionStorage }));
+      assert.ok(!stored.includes("server-brave-search"), "pasted text persisted");
+      await shot(handoff, "15-handoff");
+      await handoff.close();
+    });
+
+    await check("16 no page errors", async () => {
       assert.deepEqual(pageErrors, []);
     });
   } finally {

@@ -228,6 +228,10 @@ test("F10 McpCenter re-exports the new page so App.tsx needs no change", () => {
   // Hand-off from "+ 添加": memory only, opened once per mount or per event.
   assert.match(code["McpPage.tsx"], /export const OPEN_MCP_ADD_EVENT = "ai-skillhub-open-mcp-add";/);
   assert.match(code["McpPage.tsx"], /window\.addEventListener\(OPEN_MCP_ADD_EVENT, onOpenAdd\)/);
+  // With the Skills shell merged, its in-memory takePendingMcpPaste() is used without an App.tsx prop.
+  assert.match(code["McpPage.tsx"], /import\.meta\.glob<\{ takePendingMcpPaste\?: \(\) => string \| null \}>\("\.\.\/mcpBridge\.ts"\)/);
+  // MCP overlays tell the shell to keep its global shortcuts and paste routing quiet.
+  assert.match(code["mcpUi.tsx"], /data-overlay="mcp"/);
 });
 
 test("page rules: one write at a time, generation guard, no polling while hidden", () => {

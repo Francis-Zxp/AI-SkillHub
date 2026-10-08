@@ -5,8 +5,8 @@ import { readAppSource } from "./app-source.mjs";
 
 const files = {
   app: await readAppSource(),
-  mcpUi: await readFile(new URL("../src/mcp/McpPage.tsx", import.meta.url), "utf8"),
-  mcpLogic: await readFile(new URL("../src/mcp/mcpLogic.ts", import.meta.url), "utf8"),
+  mcpUi: (await readFile(new URL("../src/mcp/McpPage.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n"),
+  mcpLogic: (await readFile(new URL("../src/mcp/mcpLogic.ts", import.meta.url), "utf8")).replace(/\r\n/g, "\n"),
   i18n: await readFile(new URL("../src/i18n.ts", import.meta.url), "utf8"),
   styles: await readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
   doctorUi: await readFile(new URL("../src/CodexPluginDoctorPanel.tsx", import.meta.url), "utf8"),
