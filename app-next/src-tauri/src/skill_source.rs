@@ -1395,7 +1395,7 @@ fn adopt_selected(
                             false,
                         )?;
                     } else {
-                        crate::write_install_targets(&connection, &source.id, None, "adopt")?;
+                        crate::write_adopt_targets(&connection, &source.id, &candidate.agent_ids)?;
                     }
                     results.push(AdoptItemResult {
                         candidate_id: candidate.id.clone(),

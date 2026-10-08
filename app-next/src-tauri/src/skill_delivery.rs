@@ -572,8 +572,9 @@ pub(crate) fn upsert_target(
             ],
         )
         .map_err(|error| format!("Cannot save target: {error}"))?;
-    // A brand-new row that is "off" is still a change of intent: it stops the
-    // default materialization from re-adding the pack.
+    // A brand-new "off" row is stored (it stops the default materialization
+    // from re-adding the pack) but is not a change of desired state: a missing
+    // row already meant off, so it alone needs no delivery job.
     Ok(previous.is_some() || enabled)
 }
 

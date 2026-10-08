@@ -21418,6 +21418,33 @@ fn write_install_targets(
     Ok(written)
 }
 
+/// Adopt (S0-11): the adopted copy goes to every taken-over, auto-adding tool
+/// except the ones it was found in. Those already hold the original, which is
+/// never touched (I-2), so a SkillHub entry there could only ever be a
+/// same-name conflict reported as a problem right after "全部纳入管理".
+fn write_adopt_targets(
+    connection: &Connection,
+    unit_id: &str,
+    found_in: &[String],
+) -> Result<usize, String> {
+    let takeover = skill_delivery::read_takeover(connection)?;
+    let evidence = snapshot_delivery_evidence(connection);
+    let mut written = 0;
+    for agent in skill_delivery::DELIVERABLE_AGENTS {
+        if !skill_delivery::takeover_enabled(&takeover, agent) {
+            continue;
+        }
+        let holds_original = skill_delivery::agent_group(agent, evidence.real_shared)
+            .iter()
+            .any(|member| found_in.iter().any(|id| id == member));
+        let wanted = !holds_original && takeover.get(*agent).is_some_and(|row| row.auto_add_new);
+        if skill_delivery::upsert_target(connection, unit_id, agent, wanted, "adopt")? {
+            written += 1;
+        }
+    }
+    Ok(written)
+}
+
 fn install_skill_source_blocking(
     app: Option<tauri::AppHandle>,
     request: InstallSkillSourceRequest,
@@ -29010,6 +29037,32 @@ name: beta
             &active,
             &active
         ));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn adopted_skills_skip_the_tools_that_already_hold_the_original() {
+        // S0-11 + I-2: the original stays in the tool it came from, so that
+        // tool gets an explicit off; every other taken-over tool gets it.
+        let root = v33_temp_root("adopt-targets");
+        let connection = open_index_database(&root).unwrap();
+        for agent in ["claude", "workbuddy", "antigravity"] {
+            skill_delivery::upsert_takeover(&connection, agent, true, "user").unwrap();
+        }
+        // A new explicit off is written but is not a change of desired state.
+        let written = write_adopt_targets(&connection, "pack", &["claude".to_string()]).unwrap();
+        assert_eq!(written, 2);
+        let targets = skill_delivery::read_targets(&connection).unwrap();
+        let enabled = |agent: &str| {
+            targets
+                .get(&("pack".to_string(), agent.to_string()))
+                .map(|row| (row.enabled, row.origin.clone()))
+        };
+        assert_eq!(enabled("claude"), Some((false, "adopt".to_string())));
+        assert_eq!(enabled("workbuddy"), Some((true, "adopt".to_string())));
+        assert_eq!(enabled("antigravity"), Some((true, "adopt".to_string())));
+        assert_eq!(enabled("cursor"), None);
+        drop(connection);
         let _ = fs::remove_dir_all(root);
     }
 }
