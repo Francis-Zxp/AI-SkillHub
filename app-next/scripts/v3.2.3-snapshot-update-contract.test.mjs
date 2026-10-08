@@ -79,6 +79,8 @@ test("light themes never paint the star map backdrop as a grey shadow", () => {
   assert.doesNotMatch(atmosphere, /fillRect\(0, 0/);
   assert.match(atmosphere, /lightTheme \? 0\.95 : 1/);
   assert.match(atmosphere, /lightTheme \? 0\.06 : 0\.11/);
-  assert.match(atmosphere, /lightTheme \? 0\.2 : 0\.17/);
+  // (v3.3: the great-circle strokes are built once per palette.)
+  assert.match(atmosphere, /context\.strokeStyle = front \? palette\.gridFront : palette\.gridBack;/);
+  assert.match(universe, /gridFront: `\$\{base\.grid\}\$\{lightTheme \? 0\.2 : 0\.17\}\)`/);
   assert.match(styles, /--hero-grad: radial-gradient\(circle at 66% 48%, rgba\(22, 121, 111, \.05\), transparent 52%\);/);
 });

@@ -24,8 +24,9 @@ test("star map nodes are flat shapes with explicit focus states and placed label
   assert.match(universe, /type UniverseNodeFocus = "active" \| "selected" \| "neighbor" \| "muted" \| "normal";/);
   assert.match(universe, /function drawUniverseLabels\(/);
   // Labels skip any side that would overlap a placed label or an HTML control.
-  assert.match(universe, /runtime\.obstacles\.some\(/);
-  assert.match(universe, /!placed\.some\(/);
+  // (v3.3: plain loops over reused arrays, no closures per label per frame.)
+  assert.match(universe, /const other = runtime\.obstacles\[index\];/);
+  assert.match(universe, /const other = placed\[index\];/);
   // Project name first, owner de-emphasised.
   assert.match(universe, /label: sourcePresentation\(source\)\.title/);
   assert.match(universe, /onClick=\{selectNode\}/);
