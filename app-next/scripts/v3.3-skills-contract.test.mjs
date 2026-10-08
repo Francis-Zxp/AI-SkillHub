@@ -302,3 +302,12 @@ test("review: the home scene's own controls sit under the measured home block", 
   // 首页场景: 关闭 spans the window without depending on the 3D stylesheet.
   assert.match(homeCss, /\.v33\.theme-family-atlas\.page-dashboard \.workspace \{ grid-column: 1 \/ -1; grid-row: 1; \}/);
 });
+
+test("review: pasted MCP text and add-sheet drafts never reach disk storage", async () => {
+  const bridge = await read("../src/mcpBridge.ts");
+  // WebView2 persists sessionStorage/localStorage in the user-data folder; MCP configs can hold keys.
+  assert.doesNotMatch(bridge, /window.(sessionStorage|localStorage)/);
+  assert.match(bridge, /export function takePendingMcpPaste\(\): string \| null/);
+  assert.ok(importSheetSource.includes("/[\\r\\n]/.test(value.trim()) || looksLikeMcpConfig(value)"), "multi-line text and MCP configs are never drafts");
+  assert.match(importSheetSource, /if \(value && draftLooksSecret\(value\)\) \{\s*window\.localStorage\.removeItem\(DRAFT_KEY\);/);
+});

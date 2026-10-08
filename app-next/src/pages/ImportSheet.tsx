@@ -33,6 +33,7 @@ import { CATEGORY_IDS, displayCategoryName, inferCategoryIds, parseTagInput } fr
 import { useFocusTrap } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
 import { chipDisabledReason, invalidSkillReason } from "../agentText";
+import { looksLikeMcpConfig } from "../mcpBridge";
 import "./import.css";
 
 const DRAFT_KEY = "ai-skillhub-import-draft-v33";
@@ -52,15 +53,25 @@ type Phase =
 
 function readDraft(): string {
   try {
-    return window.localStorage.getItem(DRAFT_KEY)?.slice(0, 2048) ?? "";
+    const value = window.localStorage.getItem(DRAFT_KEY)?.slice(0, 2048) ?? "";
+    // A draft stored before these rules existed is dropped rather than offered again.
+    if (value && draftLooksSecret(value)) {
+      window.localStorage.removeItem(DRAFT_KEY);
+      return "";
+    }
+    return value;
   } catch {
     return "";
   }
 }
 
-/** A draft that carries a credential (a token, or a URL with user:password@) is never stored. */
+/**
+ * Only an address is kept as a draft (localStorage is written to disk). Never a credential (a token,
+ * a URL with user:password@) and never a pasted MCP config or other multi-line text, which can
+ * carry API keys in forms the token patterns don't recognise.
+ */
 function draftLooksSecret(value: string) {
-  return redactSecrets(value) !== value || /\/\/[^/\s@]+@/.test(value);
+  return redactSecrets(value) !== value || /\/\/[^/\s@]+@/.test(value) || /[\r\n]/.test(value.trim()) || looksLikeMcpConfig(value);
 }
 
 function writeDraft(value: string) {

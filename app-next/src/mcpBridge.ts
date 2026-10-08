@@ -7,8 +7,14 @@ export type McpSummary = { servers: number; issues: number; unimported: number; 
 
 /** Dispatched on window when a pasted MCP config should open the MCP add sheet. */
 export const OPEN_MCP_ADD_EVENT = "ai-skillhub-open-mcp-add";
-/** The MCP page reads (and clears) this once on mount, so a hand-off survives the lazy load. */
-export const PENDING_MCP_PASTE_KEY = "ai-skillhub-pending-mcp-paste";
+const PENDING_TTL_MS = 2 * 60_000;
+
+/**
+ * The hand-off text lives in memory only. A pasted MCP config can carry API keys, and WebView2
+ * writes sessionStorage and localStorage to disk in the user-data folder (MCP contract D7: no
+ * token may be found there). The MCP page takes it once on mount; it expires after two minutes.
+ */
+let pendingPaste: { text: string; at: number } | null = null;
 
 type LooseSnapshot = {
   servers?: unknown[];
@@ -52,12 +58,15 @@ export async function importMcpFromClients(reason: "onboarding" | "user"): Promi
 }
 
 export function requestOpenMcpAdd(text: string) {
-  try {
-    window.sessionStorage.setItem(PENDING_MCP_PASTE_KEY, text.slice(0, 256 * 1024));
-  } catch {
-    // Session storage can be unavailable; the event below still reaches a mounted page.
-  }
+  pendingPaste = { text: text.slice(0, 256 * 1024), at: Date.now() };
   window.dispatchEvent(new CustomEvent(OPEN_MCP_ADD_EVENT, { detail: { text } }));
+}
+
+/** For the MCP page (MCP track): the text handed over from 添加 / Ctrl+V, at most once. */
+export function takePendingMcpPaste(): string | null {
+  const value = pendingPaste && Date.now() - pendingPaste.at < PENDING_TTL_MS ? pendingPaste.text : null;
+  pendingPaste = null;
+  return value;
 }
 
 /** Same detection as skills contract §4.7 row "mcp-config", used for Ctrl+V outside inputs. */
