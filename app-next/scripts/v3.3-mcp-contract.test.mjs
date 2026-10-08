@@ -526,3 +526,12 @@ test("the preview mock follows the backend's add and token rules", () => {
   // Omitted secrets on update keep the stored keys.
   assert.match(mcpPreview, /if \(request\.input\.secrets === undefined\) \{/);
 });
+
+test("an unquoted Windows program path with spaces stays one command", () => {
+  assert.deepEqual(splitCommandLine("C:\\Program Files\\nodejs\\npx.cmd -y @scope/pkg"), { command: "C:\\Program Files\\nodejs\\npx.cmd", args: ["-y", "@scope/pkg"] });
+  assert.deepEqual(splitCommandLine("D:/工具/My Python/python.exe -m origin_mcp"), { command: "D:/工具/My Python/python.exe", args: ["-m", "origin_mcp"] });
+  assert.deepEqual(splitCommandLine('"C:\\Program Files\\nodejs\\node.exe" "C:\\My Servers\\server.js"'), { command: "C:\\Program Files\\nodejs\\node.exe", args: ["C:\\My Servers\\server.js"] });
+  assert.deepEqual(splitCommandLine("C:\\tools\\uvx.exe mcp-server-fetch"), { command: "C:\\tools\\uvx.exe", args: ["mcp-server-fetch"] });
+  assert.deepEqual(normalizeCommand("C:\\Windows\\System32\\cmd.exe", ["/C", "npx.cmd", "-y", "pkg"]), { kind: "ok", command: "npx.cmd", args: ["-y", "pkg"], unwrapped: true });
+  assert.equal(normalizeCommand("cmd", ["/c", "powershell", "-c", "x"]).kind, "shell");
+});

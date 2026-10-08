@@ -83,13 +83,23 @@ export function isRemoteTarget(text: string): boolean {
   return /^\s*https?:\/\//i.test(text);
 }
 
+// An unquoted Windows program path with spaces, e.g. C:\Program Files\nodejs\npx.cmd -y pkg:
+// everything up to the first ".exe/.cmd/.bat/.com" is the program, as Windows itself reads it.
+const UNQUOTED_WINDOWS_PROGRAM = /^([A-Za-z]:[\\/][^"'\r\n]*?\.(?:exe|cmd|bat|com))(?=\s|$)/i;
+
 /** Splits "npx -y @scope/pkg" into command + args, honouring simple quotes. */
 export function splitCommandLine(text: string): { command: string; args: string[] } {
+  const trimmed = text.trim();
+  const program = trimmed.match(UNQUOTED_WINDOWS_PROGRAM);
+  if (program && /\s/.test(program[1])) {
+    const rest = splitCommandLine(`x ${trimmed.slice(program[1].length)}`);
+    return { command: program[1], args: rest.args };
+  }
   const tokens: string[] = [];
   let current = "";
   let quote: '"' | "'" | null = null;
   let hasToken = false;
-  for (const char of text.trim()) {
+  for (const char of trimmed) {
     if (quote) {
       if (char === quote) quote = null;
       else current += char;
