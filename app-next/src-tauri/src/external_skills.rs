@@ -326,7 +326,7 @@ fn scan_roots(roots: Vec<ScanRoot>, managed_roots: &[PathBuf]) -> ExternalAgentS
     result
 }
 
-fn display_path(path: &Path) -> String {
+pub(crate) fn display_path(path: &Path) -> String {
     let value = path.to_string_lossy();
     if let Some(unc) = value.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{unc}")

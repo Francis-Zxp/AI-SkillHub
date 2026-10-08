@@ -243,14 +243,29 @@ fn home_dir() -> PathBuf {
 }
 
 fn local_candidate(text: &str) -> Option<PathBuf> {
-    if let Some(rest) = text.strip_prefix("file:///") {
+    // `file://localhost/C:/x` is the same local path as `file:///C:/x`.
+    let lower = text.to_ascii_lowercase();
+    let local_file_url = if lower.starts_with("file:///") {
+        Some(&text["file:///".len()..])
+    } else if lower.starts_with("file://localhost/") {
+        Some(&text["file://localhost/".len()..])
+    } else {
+        None
+    };
+    if let Some(rest) = local_file_url {
         let decoded = crate::sparse_scope::percent_decode(rest);
-        return Some(PathBuf::from(decoded.replace('/', "\\")));
+        if cfg!(not(windows)) {
+            return Some(PathBuf::from(format!("/{decoded}")));
+        }
+        let path = decoded.replace('/', "\\");
+        // `file:///docs/x` has no drive: never resolve it against SkillHub's
+        // own working folder (the caller reports PATH_NOT_ABSOLUTE).
+        return is_windows_absolute(&path).then(|| PathBuf::from(path));
     }
-    if let Some(rest) = text.strip_prefix("file://") {
+    if lower.starts_with("file://") {
         // `file://server/share/x` names a network share, never a path that is
         // relative to SkillHub's own working folder.
-        let decoded = crate::sparse_scope::percent_decode(rest);
+        let decoded = crate::sparse_scope::percent_decode(&text["file://".len()..]);
         return Some(PathBuf::from(format!("\\\\{}", decoded.replace('/', "\\"))));
     }
     if let Some(rest) = text.strip_prefix("~\\").or_else(|| text.strip_prefix("~/")) {
@@ -623,11 +638,11 @@ pub(crate) fn probe_security(
         || findings
             .iter()
             .any(|finding| finding.category == "path-boundary");
+    // Only a scan that ran and passed may sync. A scan that did not run is
+    // never treated as clean (I-5 fails closed).
     let status = match status {
         "passed" => "passed",
-        "blocked" if structural => "blocked",
-        "not-run" if structural => "blocked",
-        "not-run" => "passed",
+        "blocked" | "not-run" if structural => "blocked",
         _ => "review",
     };
     let finding_count = findings.len();
@@ -1035,12 +1050,20 @@ pub(crate) fn read_probe_file(
     if !listed || !path_is_inside(&path, staged) || !path.is_file() {
         return Err(SkillHubError::code("PATH_NOT_FOUND").with_path(relative_path.to_string()));
     }
-    let bytes = fs::read(&path).map_err(|_| SkillHubError::code("PATH_NOT_FOUND"))?;
+    // Read at most the preview budget: a listed prompt document can be large,
+    // and only its first 96 KiB is ever shown.
+    let mut bytes = Vec::new();
+    fs::File::open(&path)
+        .and_then(|file| {
+            use std::io::Read;
+            file.take(MAX_PROBE_FILE_BYTES + 1).read_to_end(&mut bytes)
+        })
+        .map_err(|_| SkillHubError::code("PATH_NOT_FOUND"))?;
     let truncated = bytes.len() as u64 > MAX_PROBE_FILE_BYTES;
-    let bytes = &bytes[..bytes.len().min(MAX_PROBE_FILE_BYTES as usize)];
+    bytes.truncate(MAX_PROBE_FILE_BYTES as usize);
     Ok(ProbeFileText {
         relative_path: relative_path.to_string(),
-        text: String::from_utf8_lossy(bytes).to_string(),
+        text: String::from_utf8_lossy(&bytes).to_string(),
         truncated,
     })
 }
@@ -1510,12 +1533,11 @@ pub(crate) fn list_agent_skills(
                     } else {
                         "personal"
                     };
-                    let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-                    let canonical = canonical
-                        .to_string_lossy()
-                        .strip_prefix(r"\\?\")
-                        .map(str::to_string)
-                        .unwrap_or_else(|| canonical.to_string_lossy().to_string());
+                    // Same form as the adopt preview (`\\?\UNC\…` → `\\…`), so
+                    // the candidate id matches for folders on a network share too.
+                    let canonical = crate::external_skills::display_path(
+                        &path.canonicalize().unwrap_or_else(|_| path.clone()),
+                    );
                     entries.push(AgentSkillEntry {
                         name: parsed
                             .as_ref()
@@ -1602,10 +1624,16 @@ pub(crate) fn read_library_skill_document(
         return Err(SkillHubError::code("UNIT_NOT_FOUND"));
     }
     let manifest = canonical.join("SKILL.md");
-    let bytes = fs::read(&manifest).map_err(|_| SkillHubError::code("UNIT_NOT_FOUND"))?;
+    let mut bytes = Vec::new();
+    fs::File::open(&manifest)
+        .and_then(|file| {
+            use std::io::Read;
+            file.take(MAX_DOCUMENT_BYTES + 1).read_to_end(&mut bytes)
+        })
+        .map_err(|_| SkillHubError::code("UNIT_NOT_FOUND"))?;
     let truncated = bytes.len() as u64 > MAX_DOCUMENT_BYTES;
-    let content =
-        String::from_utf8_lossy(&bytes[..bytes.len().min(MAX_DOCUMENT_BYTES as usize)]).to_string();
+    bytes.truncate(MAX_DOCUMENT_BYTES as usize);
+    let content = String::from_utf8_lossy(&bytes).to_string();
     let mut files = Vec::new();
     let mut stack = vec![canonical.clone()];
     while let Some(current) = stack.pop() {
@@ -1741,6 +1769,16 @@ mod tests {
             local_candidate("file://server/share/skills"),
             Some(PathBuf::from(r"\\server\share\skills"))
         );
+        if cfg!(windows) {
+            // file://localhost/ is the local machine (RFC 8089), any case.
+            assert_eq!(
+                local_candidate("FILE://localhost/C:/My%20Skills"),
+                Some(PathBuf::from(r"C:\My Skills"))
+            );
+            // A drive-less file URL never resolves against the app's folder.
+            assert_eq!(local_candidate("file:///docs/skills"), None);
+            assert_eq!(code("file:///docs/skills"), "PATH_NOT_ABSOLUTE");
+        }
 
         assert_eq!(code(""), "INPUT_EMPTY");
         assert_eq!(code("   \"\"  "), "INPUT_EMPTY");

@@ -28678,6 +28678,10 @@ mod tests {
         assert!(!structural.can_add_to_library);
         let link = skill_source::probe_security("blocked", 3, &[finding("path-boundary")], &[]);
         assert_eq!(link.status, "blocked");
+        // A scan that never ran is not a clean scan.
+        let not_run = skill_source::probe_security("not-run", 0, &[], &[]);
+        assert_eq!(not_run.status, "review");
+        assert!(!not_run.can_sync_to_agents);
     }
 
     #[test]
@@ -28761,6 +28765,54 @@ mod tests {
         );
         skill_source::discard_probe(&review.probe_id);
         skill_source::discard_probe(&blocked.probe_id);
+    }
+
+    #[test]
+    fn probe_file_preview_reads_only_listed_files_within_the_budget() {
+        let staged = std::env::temp_dir().join(format!(
+            "skillhub-probe-file-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(staged.join("docs")).unwrap();
+        fs::write(staged.join("docs/big.md"), "a".repeat(200 * 1024)).unwrap();
+        fs::write(staged.join("secret.txt"), "not listed").unwrap();
+        let probe_id = format!("probe-file-{}", uuid::Uuid::new_v4().simple());
+        skill_source::store_probe(skill_source::ProbeRecord {
+            probe: skill_source::SkillSourceProbe {
+                probe_id: probe_id.clone(),
+                operation_id: "op".to_string(),
+                parsed: skill_source::parse_skill_source_input("owner/prompt-pack"),
+                display_name: "prompt-pack".to_string(),
+                owner: "owner".to_string(),
+                source_type: "prompt".to_string(),
+                skill_groups: Vec::new(),
+                skill_count: 0,
+                prompt_docs: vec![skill_source::ProbePromptDoc {
+                    relative_path: "docs/big.md".to_string(),
+                    title: "Big".to_string(),
+                }],
+                mcp_configs: Vec::new(),
+                security: skill_source::probe_security("passed", 2, &[], &[]),
+                agent_chips: Vec::new(),
+                duplicate: None,
+                download_method: "copy".to_string(),
+                expires_at: String::new(),
+                warnings: Vec::new(),
+            },
+            import_kind: "local".to_string(),
+            staged_path: Some(staged.clone()),
+            scope_root: String::new(),
+            created: Instant::now(),
+        });
+        let preview = skill_source::read_probe_file(&probe_id, "docs/big.md").unwrap();
+        assert!(preview.truncated);
+        assert_eq!(preview.text.len(), 96 * 1024);
+        let refused = skill_source::read_probe_file(&probe_id, "secret.txt").unwrap_err();
+        assert_eq!(refused.code, "PATH_NOT_FOUND");
+        let escaped = skill_source::read_probe_file(&probe_id, "../outside.md").unwrap_err();
+        assert_eq!(escaped.code, "PATH_NOT_FOUND");
+        assert!(skill_source::discard_probe(&probe_id));
+        assert!(!staged.exists());
     }
 
     #[test]
