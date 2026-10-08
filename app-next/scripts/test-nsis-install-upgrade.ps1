@@ -518,7 +518,7 @@ INSERT OR REPLACE INTO source_overrides (
     if (Test-Path -LiteralPath $uninstall -PathType Leaf) {
       $uninstallExit = Invoke-BoundedProcess `
         -FilePath $uninstall `
-        -ArgumentList @('/S') `
+        -ArgumentList @('/S', "_?=$InstallRoot") `
         -Label 'NSIS uninstall cleanup' `
         -TimeoutSeconds $InstallerTimeoutSeconds
       if ($uninstallExit -ne 0) {
