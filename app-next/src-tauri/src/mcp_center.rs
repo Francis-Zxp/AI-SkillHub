@@ -1356,13 +1356,24 @@ fn auth_kind(requirements: &[RawSecretRequirement]) -> String {
 fn env_requirement(name: &str, use_kind: &str) -> RawSecretRequirement {
     // Process env, HKCU or HKLM (registry reads only, never a spawn). The
     // process environment alone is stale after a key is saved in the app.
-    let present = env::var_os(name).is_some()
-        || crate::mcp_secrets::env_var_present(&crate::mcp_secrets::RegistryEnvStore, name);
+    let present = env::var_os(name).is_some() || user_or_machine_env_present(name);
     RawSecretRequirement {
         key_name: name.to_string(),
         use_kind: use_kind.to_string(),
         presence_state: if present { "present" } else { "missing" }.to_string(),
     }
+}
+
+/// HKCU or HKLM presence (registry reads only). Tests stay hermetic: they
+/// never read the real user's registry.
+#[cfg(not(test))]
+fn user_or_machine_env_present(name: &str) -> bool {
+    crate::mcp_secrets::env_var_present(&crate::mcp_secrets::RegistryEnvStore, name)
+}
+
+#[cfg(test)]
+fn user_or_machine_env_present(_name: &str) -> bool {
+    false
 }
 
 fn collect_url_secret_requirements(url: &str, requirements: &mut Vec<RawSecretRequirement>) {

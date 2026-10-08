@@ -7,7 +7,7 @@
 //! atomic write → read-back), one file per transaction.
 //!
 //! Invariants kept here:
-//! - no child process is started (no `Command::new`, no `.spawn(`);
+//! - no child process is ever started from this module;
 //! - credential values never appear in returned structs, errors, logs,
 //!   operation summaries or plaintext SQLite columns;
 //! - import is read-only for client files;
@@ -3222,8 +3222,13 @@ pub(crate) fn library_snapshot(ctx: &McpLibraryContext) -> Result<McpLibrarySnap
                 .to_string(),
             });
         }
-        for (name, _) in &state.read.entries {
-            if !library_names.contains(&name.to_ascii_lowercase()) {
+        for (name, entry) in &state.read.entries {
+            // Entries import would skip (structured env, unsupported shapes or
+            // names) are not offered again and again.
+            let importable = !state.read.structured_env.contains(name)
+                && name_supported(state.client, name)
+                && spec_from_entry(state.client, entry).is_ok();
+            if importable && !library_names.contains(&name.to_ascii_lowercase()) {
                 unimported.push(UnimportedEntry {
                     client_id: state.client,
                     name: name.clone(),
@@ -5320,7 +5325,14 @@ fn spec_from_input(
         spec.client_extra = old.client_extra.clone();
         spec.secret_arg_clients = old.secret_arg_clients.clone();
     }
-    spec.codex_required = input.codex_required.unwrap_or(false);
+    // Prefill-safe edits (M1-7): a field the request omits keeps its stored
+    // value; an explicit empty value clears it.
+    spec.codex_required = input
+        .codex_required
+        .or(old.map(|old| old.codex_required))
+        .unwrap_or(false);
+    let old_stdio = old.filter(|old| old.transport == Transport::Stdio);
+    let old_remote = old.filter(|old| old.transport != Transport::Stdio);
     let mut build = SpecBuild {
         spec: McpServerSpec::empty(input.transport),
         env_ops: Vec::new(),
@@ -5345,7 +5357,21 @@ fn spec_from_input(
             engine::validate_command(command).map_err(|_| {
                 McpError::invalid("命令无效：请只填写一个可执行程序，参数逐项填写。")
             })?;
-            let args = input.args.clone().unwrap_or_default();
+            let args = match (&input.args, old_stdio) {
+                (Some(args), _) => args.clone(),
+                (None, Some(old)) => old
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        if arg.secret {
+                            SECRET_MASK.to_string()
+                        } else {
+                            arg.value.clone()
+                        }
+                    })
+                    .collect(),
+                (None, None) => Vec::new(),
+            };
             if args.len() > mcp_paste::MAX_ARGS {
                 return Err(McpError::invalid("参数最多 64 个。"));
             }
@@ -5354,12 +5380,18 @@ fn spec_from_input(
             let mut plain = Vec::new();
             for (index, value) in args.iter().enumerate() {
                 if value == SECRET_MASK {
+                    // A masked argument keeps its stored value as is.
                     let kept = old_args
                         .get(index)
-                        .filter(|arg| arg.secret)
                         .cloned()
                         .ok_or_else(|| McpError::invalid("被隐藏的参数已经变化，请重新填写。"))?;
                     new_args.push(kept);
+                } else if let Some(stored) =
+                    old_args.get(index).filter(|stored| &stored.value == value)
+                {
+                    // Unchanged stored arguments (e.g. an imported flag before
+                    // a masked value) are kept as they are.
+                    new_args.push(stored.clone());
                 } else {
                     plain.push(value.clone());
                     new_args.push(SpecArg {
@@ -5373,18 +5405,30 @@ fn spec_from_input(
             })?;
             spec.command = Some(command.to_string());
             spec.args = new_args;
-            if let Some(cwd) = input
-                .cwd
-                .as_deref()
-                .map(str::trim)
-                .filter(|cwd| !cwd.is_empty())
-            {
-                if invalid_text(cwd, 1024) || !Path::new(cwd).is_absolute() {
+            let cwd = match &input.cwd {
+                Some(cwd) => Some(cwd.trim().to_string()).filter(|cwd| !cwd.is_empty()),
+                None => old_stdio.and_then(|old| old.cwd.clone()),
+            };
+            if let Some(cwd) = cwd {
+                if invalid_text(&cwd, 1024) || !Path::new(&cwd).is_absolute() {
                     return Err(McpError::invalid("工作目录需要是完整的文件夹路径。"));
                 }
-                spec.cwd = Some(cwd.to_string());
+                spec.cwd = Some(cwd);
             }
-            for item in input.env.clone().unwrap_or_default() {
+            let literal_env = match (&input.env, old_stdio) {
+                (Some(env), _) => env.clone(),
+                (None, Some(old)) => old
+                    .env
+                    .iter()
+                    .filter(|item| !item.secret)
+                    .map(|item| McpNameValueInput {
+                        name: item.name.clone(),
+                        value: item.value.clone().unwrap_or_default(),
+                    })
+                    .collect(),
+                (None, None) => Vec::new(),
+            };
+            for item in literal_env {
                 mcp_secrets::validate_env_name(&item.name).map_err(|_| {
                     McpError::invalid(format!("{} 不是有效的环境变量名。", item.name))
                 })?;
@@ -5647,6 +5691,34 @@ fn spec_from_input(
                 inline_clients,
                 required,
             });
+        }
+    }
+    if input.secrets.is_none() {
+        // Secrets omitted entirely: keep the stored ones that still apply.
+        if spec.transport == Transport::Stdio {
+            if let Some(old) = old_stdio {
+                spec.env
+                    .extend(old.env.iter().filter(|item| item.secret).cloned());
+            }
+        } else if let Some(old) = old_remote {
+            spec.headers = old.headers.clone();
+        }
+    } else if spec.transport != Transport::Stdio {
+        // Literal (non-secret) headers are not part of `secrets`: keep them.
+        if let Some(old) = old_remote {
+            for header in old
+                .headers
+                .iter()
+                .filter(|header| header.template == HeaderTemplate::Literal)
+            {
+                if !spec
+                    .headers
+                    .iter()
+                    .any(|item| item.name.eq_ignore_ascii_case(&header.name))
+                {
+                    spec.headers.push(header.clone());
+                }
+            }
         }
     }
     if spec.env.len() > 64 || spec.headers.len() > 64 {
@@ -5973,6 +6045,21 @@ pub(crate) fn add_servers(
                 row_override: None,
             });
         }
+        if let Some(existing) = existing.filter(|_| overwrite) {
+            // Overwriting keeps every other enabled AI 工具 in step.
+            reproject_enabled(
+                ctx,
+                &key,
+                &mut plan,
+                existing,
+                &record,
+                &states,
+                &rows,
+                ItemAction::Update,
+                "overwrite-different",
+                &request.client_ids,
+            );
+        }
         record.updated_at = ns_text(now_ns());
         plan.servers_after.push(record);
     }
@@ -6096,14 +6183,14 @@ fn reproject_enabled(
     rows: &[ClientRow],
     action: ItemAction,
     confirm_kind: &'static str,
-    skip_client: Option<ClientId>,
+    skip_clients: &[ClientId],
 ) {
     let sources = project_sources(ctx);
     for row in rows
         .iter()
         .filter(|row| row.key.server_id == new.id && row.enabled)
     {
-        if Some(row.key.client) == skip_client && row.key.scope == Scope::User {
+        if skip_clients.contains(&row.key.client) && row.key.scope == Scope::User {
             continue;
         }
         if row.key.scope == Scope::User {
@@ -6200,7 +6287,10 @@ pub(crate) fn update_server(
     let spec_changed = build.spec.without_extras() != server.spec.without_extras();
     let mut updated = ServerRecord {
         spec: build.spec,
-        display_name: sanitize_display_name(request.input.display_name.as_deref()),
+        display_name: match request.input.display_name.as_deref() {
+            Some(name) => sanitize_display_name(Some(name)),
+            None => server.display_name.clone(),
+        },
         ..server.clone()
     };
     if spec_changed {
@@ -6220,7 +6310,7 @@ pub(crate) fn update_server(
         &rows,
         ItemAction::Update,
         "changed-outside",
-        None,
+        &[],
     );
     updated.updated_at = ns_text(now_ns());
     plan.servers_after.push(updated);
@@ -6542,7 +6632,7 @@ pub(crate) fn set_secret(
         &rows,
         ItemAction::Update,
         "changed-outside",
-        None,
+        &[],
     );
     updated.updated_at = ns_text(now_ns());
     plan.servers_after.push(updated);
@@ -6821,7 +6911,7 @@ pub(crate) fn resolve_changed_outside(
                         &rows,
                         ItemAction::Update,
                         "resync",
-                        Some(request.client_id),
+                        &[request.client_id],
                     );
                     if plan.targets.iter().any(|target| {
                         target.client != request.client_id && !target.items.is_empty()

@@ -1795,3 +1795,64 @@ fn env_write_failure_stops_before_any_client_write() {
     assert!(!fixture.cursor().exists());
     assert!(fixture.snapshot().servers.is_empty());
 }
+
+/// M1-7: an edit that omits fields keeps the stored values (secrets,
+/// arguments, cwd); a masked argument keeps its stored value.
+#[test]
+fn update_keeps_omitted_fields_and_masked_arguments() {
+    let fixture = Fixture::new("prefill");
+    fs::write(
+        fixture.codex(),
+        "[mcp_servers.legacy]\ncommand = \"npx\"\nargs = [\"-y\", \"legacy-mcp\", \"--api-key\", \"sk-imported-secret-1234\"]\ncwd = \"C:/work\"\nenv_vars = [\"LEGACY_TOKEN\"]\n",
+    )
+    .unwrap();
+    fixture.import();
+    let id = fixture.server_id("legacy");
+    let detail = get_server(
+        &fixture.ctx,
+        McpGetServerRequest {
+            server_id: id.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(detail.args[3].value, SECRET_MASK);
+    assert!(detail.args[3].masked);
+    assert_eq!(detail.secrets.len(), 1);
+    // The drawer sends the masked arguments back plus a display name only.
+    let input = McpServerInput {
+        name: "legacy".to_string(),
+        display_name: Some("Legacy".to_string()),
+        transport: Transport::Stdio,
+        command: Some("npx".to_string()),
+        args: Some(detail.args.iter().map(|arg| arg.value.clone()).collect()),
+        cwd: None,
+        url: None,
+        env: None,
+        secrets: None,
+        codex_required: None,
+        source: McpServerSource::Manual,
+    };
+    let outcome = fixture.write_op(update_server(
+        &fixture.ctx,
+        McpUpdateRequest {
+            server_id: id.clone(),
+            input,
+            expected_revision: detail.spec_revision,
+            confirm_token: None,
+        },
+    ));
+    assert!(matches!(
+        outcome,
+        McpWriteOutcome::Done { .. } | McpWriteOutcome::Noop { .. }
+    ));
+    let codex = fs::read_to_string(fixture.codex()).unwrap();
+    assert!(codex.contains("sk-imported-secret-1234"));
+    assert!(codex.contains("env_vars = [\"LEGACY_TOKEN\"]"));
+    assert!(codex.contains("cwd = \"C:/work\""));
+    let after = get_server(&fixture.ctx, McpGetServerRequest { server_id: id }).unwrap();
+    assert_eq!(after.display_name, "Legacy");
+    assert_eq!(after.secrets.len(), 1);
+    assert!(!serde_json::to_string(&after)
+        .unwrap()
+        .contains("sk-imported-secret-1234"));
+}
