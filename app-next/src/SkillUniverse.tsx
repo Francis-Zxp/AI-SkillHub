@@ -65,7 +65,10 @@ type ProjectedNode = UniverseNode & {
   rendered: boolean;
   screenX: number;
   screenY: number;
+  /** Label priority this frame (higher first). */
+  labelScore: number;
 };
+type LabelMetrics = { text: string; ownerText: string; titleWidth: number; ownerWidth: number };
 type UniverseRuntime = {
   centerX: number;
   centerY: number;
@@ -80,9 +83,16 @@ type UniverseRuntime = {
   /** Screen areas covered by HTML controls; labels are not drawn there. */
   obstacles: Array<{ left: number; top: number; right: number; bottom: number }>;
   refreshObstacles: () => void;
+  /** The page, the window or the home view was shown or hidden. */
+  visibilityChanged: () => void;
   labelStates: Map<string, LabelState>;
   labelLayer: UniverseLabelLayer;
-  labelMetrics: Map<string, { text: string; ownerText: string; titleWidth: number; ownerWidth: number }>;
+  /** Measured label text per node id, focused and unfocused. */
+  labelMetrics: Map<string, LabelMetrics>;
+  focusedLabelMetrics: Map<string, LabelMetrics>;
+  /** Reused every frame by the label pass. */
+  labelCandidates: ProjectedNode[];
+  labelRects: Array<{ left: number; top: number; right: number; bottom: number }>;
   font: string;
   railWidth: number;
   paintAtmosphere: (palette: StarPalette, x: number, y: number, radius: number) => void;
@@ -173,7 +183,7 @@ export function SkillUniverse({
   const modeRef = useRef(mode);
   const centeredRef = useRef(centered);
   const visibleRef = useRef(visible); visibleRef.current = visible;
-  useEffect(() => { runtimeRef.current?.requestDraw(); }, [visible]);
+  useEffect(() => { runtimeRef.current?.visibilityChanged(); }, [visible]);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const atmosphereRef = useRef<HTMLCanvasElement | null>(null);
   const labelsRef = useRef<HTMLDivElement | null>(null);
@@ -184,7 +194,12 @@ export function SkillUniverse({
   const hoverRef = useRef("");
   const cachedModelRef = useRef<UniverseModel | null>(readUniverseModelCache());
   const [promotingCache, setPromotingCache] = useState(false);
-  const liveModel = useMemo(() => snapshot ? buildUniverseModel(snapshot) : null, [snapshot]);
+  const builtModel = useMemo(() => snapshot ? buildUniverseModel(snapshot) : null, [snapshot]);
+  // The app replaces the snapshot object on every sync round, scan and
+  // popularity refresh. Identical content keeps the same model, so the star
+  // map is not rebuilt (and its view and selection are not reset).
+  const builtModelKey = useMemo(() => builtModel ? universeModelKey(builtModel) : "", [builtModel]);
+  const liveModel = useMemo(() => builtModel, [builtModelKey]);
   const model = liveModel ?? cachedModelRef.current ?? emptyUniverseModel();
   const showingCachedModel = !snapshot && Boolean(cachedModelRef.current);
   modeRef.current = mode;
@@ -224,7 +239,8 @@ export function SkillUniverse({
       radius: 0,
       rendered: false,
       screenX: 0,
-      screenY: 0
+      screenY: 0,
+      labelScore: 0
     }));
     const runtime: UniverseRuntime = {
       centerX: 0,
@@ -239,9 +255,13 @@ export function SkillUniverse({
       selectedId: model.nodes.some(node => node.id === viewRef.current?.selectedId) ? viewRef.current!.selectedId : "",
       obstacles: [],
       refreshObstacles: () => undefined,
+      visibilityChanged: () => undefined,
       labelStates: new Map(),
       labelLayer: new UniverseLabelLayer(labelsRef.current),
       labelMetrics: new Map(),
+      focusedLabelMetrics: new Map(),
+      labelCandidates: [],
+      labelRects: [],
       font: getComputedStyle(host).getPropertyValue("--ui-font").trim() || "sans-serif",
       railWidth: 0,
       paintAtmosphere: () => undefined,
@@ -281,15 +301,20 @@ export function SkillUniverse({
     let width = 1;
     let height = 1;
     let dpr = 1;
-    let atmosphereKey = "";
+    // The static backdrop (glow, dither, stars) is soft by nature: it keeps
+    // half the main canvas's resolution, a quarter of its memory.
+    let backdropScale = 0.5;
+    let atmosphereX = Number.NaN, atmosphereY = Number.NaN, atmosphereRadius = Number.NaN;
     const backdrop = atmosphereRef.current;
     const backdropContext = backdrop?.getContext("2d");
+    const resetAtmosphere = () => { atmosphereX = Number.NaN; };
     runtime.paintAtmosphere = (palette, x, y, radius) => {
       if (!backdropContext) return;
-      // Position changes below 0.25px are invisible; stop repainting at rest.
-      const key = [width, height, x.toFixed(2), y.toFixed(2), radius.toFixed(2)].join(":");
-      if (key === atmosphereKey) return;
-      atmosphereKey = key;
+      // Position changes below a quarter pixel are invisible; stop repainting at rest.
+      if (Math.abs(x - atmosphereX) < 0.005 && Math.abs(y - atmosphereY) < 0.005 && Math.abs(radius - atmosphereRadius) < 0.005) return;
+      atmosphereX = x;
+      atmosphereY = y;
+      atmosphereRadius = radius;
       backdropContext.clearRect(0, 0, width, height);
       drawUniverseBackdrop(backdropContext, palette, x, y, radius, width, height, lightTheme);
     };
@@ -304,7 +329,33 @@ export function SkillUniverse({
       frame = 0;
     };
 
-    const canRender = () => visibleRef.current && pageVisible && intersecting && contextReady;
+    // Out of sight for a while (another page, a hidden tab, a minimised
+    // window), the canvases give their pixels back; showing again redraws.
+    let appHidden = false;
+    let released = false;
+    let releaseTimer = 0;
+    const canRender = () => visibleRef.current && pageVisible && !appHidden && intersecting && contextReady;
+    const releaseCanvases = () => {
+      if (canRender()) return;
+      released = true;
+      canvas.width = canvas.height = 1;
+      if (backdrop) backdrop.width = backdrop.height = 1;
+      resetAtmosphere();
+    };
+    const watchVisibility = () => {
+      window.clearTimeout(releaseTimer);
+      if (canRender()) {
+        if (released) {
+          released = false;
+          resize();
+        }
+        scheduleDraw(true);
+      } else {
+        cancelScheduledDraw();
+        releaseTimer = window.setTimeout(releaseCanvases, 15_000);
+      }
+    };
+    runtime.visibilityChanged = watchVisibility;
     const hasInteractiveMotion = () => {
       const now = performance.now();
       return runtime.dragging ||
@@ -341,7 +392,7 @@ export function SkillUniverse({
     };
     runtime.refreshObstacles = refreshObstacles;
 
-    const resize = () => {
+    const sizeCanvases = () => {
       const rect = host.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
       width = Math.max(1, Math.floor(rect.width));
@@ -356,13 +407,19 @@ export function SkillUniverse({
       canvas.style.height = `${height}px`;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
       if (backdrop && backdropContext) {
-        backdrop.width = canvas.width; backdrop.height = canvas.height;
-        backdropContext.setTransform(dpr, 0, 0, dpr, 0, 0);
-        atmosphereKey = "";
+        backdropScale = Math.max(0.5, dpr / 2);
+        backdrop.width = Math.max(1, Math.floor(width * backdropScale));
+        backdrop.height = Math.max(1, Math.floor(height * backdropScale));
+        backdropContext.setTransform(backdropScale, 0, 0, backdropScale, 0, 0);
+        resetAtmosphere();
       }
       canvas.dataset.renderScale = String(dpr);
       refreshObstacles();
       scheduleDraw(true);
+    };
+    const resize = () => {
+      if (released) return;
+      sizeCanvases();
     };
 
     const draw = (time: number) => {
@@ -392,8 +449,9 @@ export function SkillUniverse({
       const drawDuration = performance.now() - drawStarted;
       runtime.drawMs = runtime.drawMs ? runtime.drawMs * 0.86 + drawDuration * 0.14 : drawDuration;
       if (animationTime > 0) {
-        runtime.frameSamples.push(runtime.frameMs);
-        if (runtime.frameSamples.length > 90) runtime.frameSamples.shift();
+        // A fixed ring of samples: no array growth or shifting per frame.
+        if (runtime.frameSamples.length < 90) runtime.frameSamples.push(runtime.frameMs);
+        else runtime.frameSamples[runtime.frameIndex % 90] = runtime.frameMs;
       }
       if (reducedMotion || runtime.frameIndex % 30 === 0) updateUniverseDiagnostics(canvas, runtime);
       if (!reducedMotion && focused) scheduleDraw();
@@ -404,13 +462,24 @@ export function SkillUniverse({
       pageVisible = !document.hidden;
       cancelScheduledDraw();
       runtime.lastFrame = 0;
-      if (pageVisible) scheduleDraw(true);
+      watchVisibility();
+    };
+    const onAppHidden = (event: Event) => {
+      appHidden = (event as CustomEvent<boolean | undefined>).detail !== false;
+      runtime.lastFrame = 0;
+      watchVisibility();
+    };
+    const onAppShown = () => {
+      if (!appHidden) return;
+      appHidden = false;
+      watchVisibility();
     };
 
     const onFocus = () => {
       focused = true;
       runtime.lastFrame = 0;
       lastDrawAt = 0;
+      onAppShown();
       scheduleDraw(true);
     };
 
@@ -444,6 +513,7 @@ export function SkillUniverse({
     const onFontsLoaded = () => {
       runtime.font = getComputedStyle(host).getPropertyValue("--ui-font").trim() || "sans-serif";
       runtime.labelMetrics.clear();
+      runtime.focusedLabelMetrics.clear();
       scheduleDraw(true);
     };
     document.fonts.addEventListener("loadingdone", onFontsLoaded);
@@ -475,6 +545,8 @@ export function SkillUniverse({
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("focus", onFocus);
     window.addEventListener("blur", onBlur);
+    window.addEventListener("skillhub-app-hidden", onAppHidden);
+    window.addEventListener("skillhub-app-shown", onAppShown);
     motionQuery.addEventListener("change", onMotionPreference);
     canvas.addEventListener("contextlost", onContextLost);
     canvas.addEventListener("contextrestored", onContextRestored);
@@ -490,6 +562,9 @@ export function SkillUniverse({
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("blur", onBlur);
+      window.removeEventListener("skillhub-app-hidden", onAppHidden);
+      window.removeEventListener("skillhub-app-shown", onAppShown);
+      window.clearTimeout(releaseTimer);
       motionQuery.removeEventListener("change", onMotionPreference);
       canvas.removeEventListener("contextlost", onContextLost);
       canvas.removeEventListener("contextrestored", onContextRestored);
@@ -982,7 +1057,7 @@ function drawUniverse(
   runtime.lod = lod;
   const rotationY = runtime.rotationY;
   const rotationX = runtime.rotationX + (time === 0 ? 0 : Math.sin(time * 0.00009) * 0.025);
-  const palette = starPalette(tone, lightTheme);
+  const palette = cachedStarPalette(tone, lightTheme);
   const focusId = runtime.hoverId || runtime.selectedId;
 
   runtime.paintAtmosphere(palette, centerX, centerY, radius);
@@ -1037,20 +1112,20 @@ function drawUniverse(
     context.moveTo(from.screenX, from.screenY);
     context.quadraticCurveTo(controlX, controlY, to.screenX, to.screenY);
     context.strokeStyle = edge.kind === "conflict"
-      ? `${palette.conflict}${alpha})`
+      ? palette.conflictAt(alpha)
       : highlighted
-        ? `${palette.edgeHot}${alpha})`
+        ? palette.edgeHotAt(alpha)
         : palette.edge(to.hue, alpha);
     context.lineWidth = highlighted ? 1.3 : edge.kind === "parent" ? 0.7 : 0.5;
-    if (edge.kind === "conflict") context.setLineDash([4, 5]);
+    if (edge.kind === "conflict") context.setLineDash(CONFLICT_DASH);
     context.stroke();
-    context.setLineDash([]);
+    if (edge.kind === "conflict") context.setLineDash(NO_DASH);
     runtime.drawnEdges += 1;
   }
   context.restore();
 
   if (lod < 2 || !interactive || runtime.frameIndex % 2 === 0) {
-    runtime.projected.sort((a, b) => a.depth - b.depth);
+    runtime.projected.sort(byDepth);
   }
   const focusNeighbors = focusId ? model.neighbors.get(focusId) : undefined;
   const skillStride = lod === 2 ? Math.max(2, Math.ceil(model.nodes.length / 760)) : 1;
@@ -1126,8 +1201,8 @@ function drawUniverseAtmosphere(
   const cosY = Math.cos(rotationY), sinY = Math.sin(rotationY);
   context.lineWidth = 0.75;
   for (const [axisA, axisB] of GREAT_CIRCLES) {
-    for (const front of [false, true]) {
-      context.setLineDash(front ? [3, 5] : [1.5, 7]);
+    for (const front of BACK_THEN_FRONT) {
+      context.setLineDash(front ? FRONT_DASH : BACK_DASH);
       context.beginPath();
       let drawing = false;
       for (let step = 0; step <= 96; step += 1) {
@@ -1150,11 +1225,11 @@ function drawUniverseAtmosphere(
           drawing = false;
         }
       }
-      context.strokeStyle = `${palette.grid}${front ? (lightTheme ? 0.2 : 0.17) : (lightTheme ? 0.07 : 0.055)})`;
+      context.strokeStyle = front ? palette.gridFront : palette.gridBack;
       context.stroke();
     }
   }
-  context.setLineDash([]);
+  context.setLineDash(NO_DASH);
   context.restore();
 }
 
@@ -1211,22 +1286,21 @@ function drawUniverseNode(
   const { screenX: x, screenY: y } = node;
   // Near nodes carry full colour and light, far nodes fade into the core.
   const depth = active || focus === "neighbor" ? 1 : node.depth;
-  const tint = (kind: UniverseNodeKind, value: number) => palette.node(node.hue, kind, value, depth);
   context.save();
   if (!node.enabled) {
     context.beginPath();
     context.arc(x, y, Math.max(1.6, radius), 0, Math.PI * 2);
-    context.setLineDash([2, 2]);
-    context.strokeStyle = `${palette.muted}${alpha})`;
+    context.setLineDash(DISABLED_DASH);
+    context.strokeStyle = palette.mutedAt(alpha);
     context.lineWidth = 1;
     context.stroke();
-    context.setLineDash([]);
+    context.setLineDash(NO_DASH);
   } else if (node.kind === "source") {
     context.beginPath();
     context.arc(x, y, radius, 0, Math.PI * 2);
     const surface = context.createRadialGradient(x + radius * 0.3, y - radius * 0.32, radius * 0.05, x, y, radius);
     surface.addColorStop(0, palette.node(node.hue, "source", alpha, Math.min(1, depth + 0.3)));
-    surface.addColorStop(0.6, tint("source", alpha));
+    surface.addColorStop(0.6, palette.node(node.hue, "source", alpha, depth));
     surface.addColorStop(1, palette.node(node.hue, "source", alpha, Math.max(0, depth - 0.35)));
     context.fillStyle = surface;
     context.fill();
@@ -1243,24 +1317,24 @@ function drawUniverseNode(
     if (lod < 2 || active) {
       context.beginPath();
       context.arc(x, y, radius + 3.5, 0, Math.PI * 2);
-      context.strokeStyle = tint("source", alpha * 0.32);
+      context.strokeStyle = palette.node(node.hue, "source", alpha * 0.32, depth);
       context.lineWidth = 1;
       context.stroke();
     }
   } else if (node.kind === "router") {
     context.beginPath();
     context.arc(x, y, radius, 0, Math.PI * 2);
-    context.strokeStyle = tint("router", alpha);
+    context.strokeStyle = palette.node(node.hue, "router", alpha, depth);
     context.lineWidth = 1.6;
     context.stroke();
     context.beginPath();
     context.arc(x, y, Math.max(1.2, radius * 0.36), 0, Math.PI * 2);
-    context.fillStyle = tint("router", alpha);
+    context.fillStyle = palette.node(node.hue, "router", alpha, depth);
     context.fill();
   } else {
     context.beginPath();
     context.arc(x, y, Math.max(1.1, radius), 0, Math.PI * 2);
-    context.fillStyle = tint("skill", alpha);
+    context.fillStyle = palette.node(node.hue, "skill", alpha, depth);
     context.fill();
   }
   if (active) {
@@ -1276,9 +1350,15 @@ function drawUniverseNode(
 type StarPalette = {
   star: string;
   grid: string;
+  /** Great-circle strokes, in front of and behind the sphere. */
+  gridFront: string;
+  gridBack: string;
   edge: (hue: number, alpha: number) => string;
   edgeHot: string;
+  edgeHotAt: (alpha: number) => string;
   conflict: string;
+  conflictAt: (alpha: number) => string;
+  mutedAt: (alpha: number) => string;
   /** Colour by category hue; `depth` 0 (far) .. 1 (near) sets saturation and light. */
   node: (hue: number, kind: UniverseNodeKind, alpha: number, depth: number) => string;
   core: string;
@@ -1292,9 +1372,69 @@ type StarPalette = {
   chipBorder: string;
 };
 
+const NO_DASH: number[] = [];
+const CONFLICT_DASH = [4, 5];
+const DISABLED_DASH = [2, 2];
+const FRONT_DASH = [3, 5];
+const BACK_DASH = [1.5, 7];
+const BACK_THEN_FRONT = [false, true];
+const byDepth = (a: ProjectedNode, b: ProjectedNode) => a.depth - b.depth;
+const byLabelScore = (a: ProjectedNode, b: ProjectedNode) => b.labelScore - a.labelScore || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+
+/** Colour strings are built once and reused: thousands of nodes and edges
+ * per frame would otherwise make thousands of new strings every frame.
+ * Alpha is kept to 1/200 and the depth-driven saturation and lightness are
+ * whole percentages already, so nothing visible changes. */
+function colourCache<A extends unknown[]>(make: (...args: A) => string, key: (...args: A) => number) {
+  const cache = new Map<number, string>();
+  return (...args: A) => {
+    const id = key(...args);
+    let value = cache.get(id);
+    if (value === undefined) {
+      if (cache.size > 40_000) cache.clear();
+      value = make(...args);
+      cache.set(id, value);
+    }
+    return value;
+  };
+}
+const alphaStep = (alpha: number) => Math.round(Math.max(0, Math.min(1, alpha)) * 200);
+const KIND_INDEX: Record<UniverseNodeKind, number> = { source: 0, router: 1, skill: 2 };
+
+function withColourCaches(base: Omit<StarPalette, "gridFront" | "gridBack" | "edgeHotAt" | "conflictAt" | "mutedAt">, lightTheme: boolean): StarPalette {
+  const node = base.node, edge = base.edge;
+  return {
+    ...base,
+    gridFront: `${base.grid}${lightTheme ? 0.2 : 0.17})`,
+    gridBack: `${base.grid}${lightTheme ? 0.07 : 0.055})`,
+    node: colourCache(
+      (hue: number, kind: UniverseNodeKind, alpha: number, depth: number) => node(hue, kind, alphaStep(alpha) / 200, depth),
+      (hue: number, kind: UniverseNodeKind, alpha: number, depth: number) => ((Math.round(hue) * 3 + KIND_INDEX[kind]) * 201 + alphaStep(alpha)) * 101 + Math.round(Math.max(0, Math.min(1, depth)) * 100)
+    ),
+    edge: colourCache(
+      (hue: number, alpha: number) => edge(hue, alphaStep(alpha) / 200),
+      (hue: number, alpha: number) => Math.round(hue) * 201 + alphaStep(alpha)
+    ),
+    edgeHotAt: colourCache((alpha: number) => `${base.edgeHot}${alphaStep(alpha) / 200})`, alphaStep),
+    conflictAt: colourCache((alpha: number) => `${base.conflict}${alphaStep(alpha) / 200})`, alphaStep),
+    mutedAt: colourCache((alpha: number) => `${base.muted}${alphaStep(alpha) / 200})`, alphaStep)
+  };
+}
+
+const STAR_PALETTES = new Map<string, StarPalette>();
+function cachedStarPalette(tone: UniverseTone, lightTheme: boolean): StarPalette {
+  const key = `${tone}:${lightTheme ? 1 : 0}`;
+  let palette = STAR_PALETTES.get(key);
+  if (!palette) {
+    palette = withColourCaches(starPalette(tone, lightTheme), lightTheme);
+    STAR_PALETTES.set(key, palette);
+  }
+  return palette;
+}
+
 /** Restrained colours: category hue at moderate saturation; the warm Sky and
  * Parchment tones highlight in amber/terracotta, the cool ones in blue. */
-function starPalette(tone: UniverseTone, lightTheme: boolean): StarPalette {
+function starPalette(tone: UniverseTone, lightTheme: boolean): Omit<StarPalette, "gridFront" | "gridBack" | "edgeHotAt" | "conflictAt" | "mutedAt"> {
   // Warm accents belong to daylight; a night sky stays cool and clean.
   const warm = tone === "parchment" || (tone === "sky" && lightTheme);
   if (lightTheme) {
@@ -1356,63 +1496,73 @@ function drawUniverseLabels(
   const now = performance.now();
   const limit = 32;
   runtime.labelLayer.begin();
-  const candidates = runtime.projected
-    .filter(node => node.rendered && (focusId
-      ? node.id === focusId || node.id === runtime.selectedId || neighbors?.has(node.id)
-      : node.kind === "source"))
-    .map(node => ({
-      node,
-      score: (node.id === focusId ? 1e7 : 0) + (node.id === runtime.selectedId ? 1e6 : 0) +
-        (node.kind === "source" ? 1e4 : node.kind === "router" ? 1e3 : 0) + Math.log2(node.childCount + 1) * 40
-    }))
-    .sort((a, b) => b.score - a.score || a.node.id.localeCompare(b.node.id));
-  const placed: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+  // Reused arrays and objects: this runs every frame.
+  const candidates = runtime.labelCandidates;
+  candidates.length = 0;
+  for (const node of runtime.projected) {
+    if (!node.rendered) continue;
+    if (focusId ? !(node.id === focusId || node.id === runtime.selectedId || neighbors?.has(node.id)) : node.kind !== "source") continue;
+    node.labelScore = (node.id === focusId ? 1e7 : 0) + (node.id === runtime.selectedId ? 1e6 : 0) +
+      (node.kind === "source" ? 1e4 : node.kind === "router" ? 1e3 : 0) + Math.log2(node.childCount + 1) * 40;
+    candidates.push(node);
+  }
+  candidates.sort(byLabelScore);
+  const placed = runtime.labelRects;
+  let placedCount = 0;
   context.save();
   context.textBaseline = "middle";
   let count = 0;
-  for (const { node } of candidates) {
-
+  for (const node of candidates) {
     const focused = node.id === focusId || node.id === runtime.selectedId;
     const size = focused ? 12.5 : node.kind === "source" ? 12 : 11;
-    context.font = `${focused || node.kind === "source" ? 600 : 500} ${size}px ${runtime.font}`;
-    const titleFont = context.font;
-    const ownerFont = `400 ${size - 1}px ${runtime.font}`;
-    const metricKey = `${node.id}:${focused}`;
-    let metrics = runtime.labelMetrics.get(metricKey);
+    const metricsById = focused ? runtime.focusedLabelMetrics : runtime.labelMetrics;
+    let metrics = metricsById.get(node.id);
     if (!metrics) {
+      context.font = `${focused || node.kind === "source" ? 600 : 500} ${size}px ${runtime.font}`;
       const text = truncateText(context, node.kind === "source" ? node.label : `/${node.label}`, focused ? 280 : 200);
       const titleWidth = context.measureText(text).width;
-      context.font = ownerFont;
+      context.font = `400 ${size - 1}px ${runtime.font}`;
       const ownerText = node.kind === "source" && node.owner ? truncateText(context, ` ${node.owner}`, 120) : "";
       metrics = { text, titleWidth, ownerText, ownerWidth: ownerText ? context.measureText(ownerText).width : 0 };
-      runtime.labelMetrics.set(metricKey, metrics);
+      metricsById.set(node.id, metrics);
     }
     const { text, titleWidth, ownerText, ownerWidth } = metrics;
-    context.font = titleFont;
     const textWidth = titleWidth + ownerWidth;
     const padX = focused ? 9 : 3, boxHeight = size + (focused ? 12 : 6);
     const boxWidth = textWidth + padX * 2;
     const gap = node.radius + (focused ? 10 : 6);
-    const options = [
-      { left: node.screenX + gap, top: node.screenY - boxHeight / 2 },
-      { left: node.screenX - gap - boxWidth, top: node.screenY - boxHeight / 2 },
-      { left: node.screenX - boxWidth / 2, top: node.screenY - gap - boxHeight },
-      { left: node.screenX - boxWidth / 2, top: node.screenY + gap }
-    ];
-    const available = options.map(option => {
-      if (count >= limit) return false;
-      const rect = { left: option.left, top: option.top, right: option.left + boxWidth, bottom: option.top + boxHeight };
-      if (rect.left < 8 || rect.right > width - 8 || rect.top < 8 || rect.bottom > height - 8) return false;
-      if (runtime.obstacles.some(other => rect.left < other.right && rect.right > other.left && rect.top < other.bottom && rect.bottom > other.top)) return false;
-      return !placed.some(other => rect.left < other.right + 4 && rect.right + 4 > other.left && rect.top < other.bottom + 2 && rect.bottom + 2 > other.top);
-    });
-    const state = runtime.labelStates.get(node.id) ?? { side: Math.max(0, available.findIndex(Boolean)), opacity: reducedMotion ? 1 : 0, blockedSince: 0, updatedAt: now - 16 };
-    advanceLabel(state, available, now, reducedMotion);
-    runtime.labelStates.set(node.id, state);
+    LABEL_SPOTS[0].left = node.screenX + gap; LABEL_SPOTS[0].top = node.screenY - boxHeight / 2;
+    LABEL_SPOTS[1].left = node.screenX - gap - boxWidth; LABEL_SPOTS[1].top = node.screenY - boxHeight / 2;
+    LABEL_SPOTS[2].left = node.screenX - boxWidth / 2; LABEL_SPOTS[2].top = node.screenY - gap - boxHeight;
+    LABEL_SPOTS[3].left = node.screenX - boxWidth / 2; LABEL_SPOTS[3].top = node.screenY + gap;
+    for (let side = 0; side < 4; side++) {
+      const left = LABEL_SPOTS[side].left, top = LABEL_SPOTS[side].top, right = left + boxWidth, bottom = top + boxHeight;
+      let free = count < limit && left >= 8 && right <= width - 8 && top >= 8 && bottom <= height - 8;
+      for (let index = 0; free && index < runtime.obstacles.length; index++) {
+        const other = runtime.obstacles[index];
+        if (left < other.right && right > other.left && top < other.bottom && bottom > other.top) free = false;
+      }
+      for (let index = 0; free && index < placedCount; index++) {
+        const other = placed[index];
+        if (left < other.right + 4 && right + 4 > other.left && top < other.bottom + 2 && bottom + 2 > other.top) free = false;
+      }
+      LABEL_FREE[side] = free;
+    }
+    let state = runtime.labelStates.get(node.id);
+    if (!state) {
+      state = { side: Math.max(0, LABEL_FREE.indexOf(true)), opacity: reducedMotion ? 1 : 0, blockedSince: 0, updatedAt: now - 16 };
+      runtime.labelStates.set(node.id, state);
+    }
+    advanceLabel(state, LABEL_FREE, now, reducedMotion);
     if (state.opacity <= 0.01) continue;
-    const spot = options[state.side];
+    const spot = LABEL_SPOTS[state.side];
     context.globalAlpha = state.opacity;
-    placed.push({ left: spot.left, top: spot.top, right: spot.left + boxWidth, bottom: spot.top + boxHeight });
+    const rect = placed[placedCount] ?? (placed[placedCount] = { left: 0, top: 0, right: 0, bottom: 0 });
+    rect.left = spot.left;
+    rect.top = spot.top;
+    rect.right = spot.left + boxWidth;
+    rect.bottom = spot.top + boxHeight;
+    placedCount++;
     count += 1;
     const opacity = state.opacity * (focused ? 1 : neighbors?.has(node.id) ? 0.95 : 0.5 + node.depth * 0.45);
     runtime.labelLayer.place(node.id, text, ownerText, spot.left, spot.top, boxWidth, boxHeight,
@@ -1421,6 +1571,20 @@ function drawUniverseLabels(
   }
   runtime.labelLayer.end();
   context.restore();
+}
+
+/** The four sides a label may take, and whether each is free this frame. */
+const LABEL_SPOTS = [{ left: 0, top: 0 }, { left: 0, top: 0 }, { left: 0, top: 0 }, { left: 0, top: 0 }];
+const LABEL_FREE = [false, false, false, false];
+
+/** What a model shows: identical keys draw identical star maps. */
+function universeModelKey(model: UniverseModel): string {
+  const parts: string[] = [String(model.edges.length), String(model.parentEdges), String(model.relationEdges)];
+  for (const node of model.nodes) {
+    parts.push(`${node.id}\u0001${node.label}\u0001${node.owner ?? ""}\u0001${node.kind}\u0001${node.enabled ? 1 : 0}\u0001${node.health}\u0001${node.rating}\u0001${node.stars}\u0001${node.childCount}\u0001${node.category}\u0001${node.sourceName}\u0001${node.description}`);
+  }
+  for (const edge of model.edges) parts.push(`${edge.from}\u0002${edge.to}\u0002${edge.kind}`);
+  return parts.join("\u0003");
 }
 
 function resolveUniverseLod(nodeCount: number, quality: number, interactive: boolean): UniverseLod {

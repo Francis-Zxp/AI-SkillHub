@@ -44,7 +44,11 @@ export const APP_SHOWN_EVENT = "skillhub-app-shown";
 
 /** Out of sight this long, the 3D world sleeps: a still image stays on screen
  * and every GPU resource (and the WebGL context) is released. */
-const SLEEP_AFTER_MS = 15_000;
+const SLEEP_AFTER_MS = (() => {
+  // Development only: QA may shorten the wait (localStorage skillhub-sky-sleep-ms).
+  const override = import.meta.env.DEV ? Number(readSetting("skillhub-sky-sleep-ms")) : 0;
+  return override > 0 ? override : 15_000;
+})();
 
 type Still = { key: string; url: string; view: SkyWorldView; width: number; height: number };
 /** The last still image, kept across remounts: home unmounts when another

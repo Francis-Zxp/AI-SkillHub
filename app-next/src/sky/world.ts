@@ -8,7 +8,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { SkyWeatherKind, SkyWeatherSetting } from "../skyScene";
-import { loadSkyLibrary } from "./assets";
+import { loadSkyLibrary, releaseSharedGpuListeners } from "./assets";
 import type { ModelTemplate, SkyLibrary } from "./assets";
 import { assignThemes, planIsland, themeTone } from "./biomes";
 import type { IslandPlan, Placement } from "./biomes";
@@ -25,7 +25,7 @@ import { layoutIslands } from "./layout";
 import type { LayoutIsland } from "./layout";
 import { releaseAfterUpload, releaseInstanceMatrix } from "./memory";
 import {
-  SHARED_UNIFORMS, cloudMaterial, kitShader, lavaMaterial, paletteGround, phaseFilter, resetSharedUniforms, setSkyDomePalette,
+  SHARED_UNIFORMS, cloudMaterial, kitShader, lavaMaterial, paletteGround, phaseFilter, resetSharedUniforms, setSkyDomePalette, toonGradient,
   setTerrainGround, setWaterColors, setWaterfallColor, skyDomeMaterial, terrainMaterial, toonMaterial, waterColors,
   waterMaterial, waterfallMaterial
 } from "./materials";
@@ -119,6 +119,16 @@ type BuiltIsland = {
 
 const UP = new THREE.Vector3(0, 1, 0);
 const WHITE = new THREE.Color(1, 1, 1);
+/** Worlds alive right now (a re-roll briefly has two). */
+let liveWorlds = 0;
+/** After the last world is gone: drop the listeners every renderer left on
+ * the cached models and the shared toon gradient, which otherwise keep each
+ * disposed WebGL context alive. */
+function releaseShared() {
+  if (liveWorlds > 0) return;
+  releaseSharedGpuListeners();
+  toonGradient().dispose();
+}
 const NOON = SKY_DIRECTIONS.noon.palette;
 const PHASES: SkyPhaseName[] = ["dawn", "noon", "golden", "night"];
 /** Above this many islands, small ones skip villagers and animals. */
@@ -212,8 +222,10 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
     library = await loadSkyLibrary(palette);
   } catch (error) {
     renderer.dispose();
+    renderer.forceContextLoss();
     throw error;
   }
+  liveWorlds++;
   options.host.prepend(canvas);
 
   const scene = new THREE.Scene();
@@ -1396,6 +1408,8 @@ export async function createSkyWorld(options: SkyWorldOptions): Promise<SkyWorld
       renderer.forceContextLoss();
       canvas.remove();
       delete (options.host as HostWithStats).skyWorldStats;
+      liveWorlds--;
+      releaseShared();
       // Shared uniforms are not reset here: a successor world may already
       // own them (a re-roll disposes the old world after the new one is up).
     }

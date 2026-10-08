@@ -132,6 +132,7 @@ const sceneState = page => page.evaluate(() => ({
     await page.locator(".home-visual-switch button").nth(1).click();
     await page.waitForTimeout(8000);
     report.starMap = { allocation: await allocationRate(cdp, 10), heapAfterGcMB: await heapAfterGc(cdp), process: processMemory() };
+    await page.screenshot({ path: path.join(path.dirname(outFile), "memory-star-map.png") });
     report.errors = errors;
   } finally {
     await context.close();

@@ -31,6 +31,8 @@ export type SkyLibrary = {
 };
 
 let pending: Promise<RawLibrary> | null = null;
+/** The same files once loaded, for synchronous release. */
+let loaded: RawLibrary | null = null;
 
 type RawLibrary = {
   buildings: GLTF;
@@ -84,12 +86,43 @@ function loadRaw(): Promise<RawLibrary> {
       toonify(gltf, true);
       mergeSkinnedParts(gltf);
     });
-    return { buildings, props, villager, gull, animals: new Map(ANIMALS.map((name, index) => [name, animals[index]])) };
+    loaded = { buildings, props, villager, gull, animals: new Map(ANIMALS.map((name, index) => [name, animals[index]])) };
+    return loaded;
   });
   pending.catch(() => {
     pending = null;
   });
   return pending;
+}
+
+/** Fires `dispose` on everything in the cached files, keeping their data. */
+function disposeScenes(raw: RawLibrary) {
+  const textures = new Set<THREE.Texture>();
+  const materials = new Set<THREE.Material>();
+  for (const gltf of [raw.buildings, raw.props, raw.villager, raw.gull, ...raw.animals.values()]) {
+    gltf.scene.traverse(object => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.geometry.dispose();
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) materials.add(material);
+    });
+  }
+  for (const material of materials) {
+    for (const value of Object.values(material)) if (value instanceof THREE.Texture) textures.add(value);
+    material.dispose();
+  }
+  for (const texture of textures) texture.dispose();
+}
+
+/**
+ * Every renderer that drew the cached models left a `dispose` listener on
+ * them, and through it kept its whole WebGL context alive after the world
+ * was gone (about 8 MB of GPU memory per rebuilt world). Firing `dispose`
+ * once no world is left lets those listeners go; the cached data stays and
+ * the next world uploads it again.
+ */
+export function releaseSharedGpuListeners() {
+  if (loaded) disposeScenes(loaded);
 }
 
 /** Copies an attribute as plain floats, in index order when indexed. */
