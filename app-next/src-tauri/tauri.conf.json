@@ -18,7 +18,8 @@
         "minWidth": 860,
         "minHeight": 680,
         "resizable": true,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-features=NetworkServiceInProcess2 --js-flags=--max-semi-space-size=2"
       }
     ],
     "security": {

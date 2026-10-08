@@ -13,6 +13,7 @@ mod mcp_center;
 mod mcp_github_import;
 mod mcp_mutation;
 mod mcp_recipes;
+mod memory_saver;
 mod metadata;
 mod migration_v4;
 mod prompt_launcher;
@@ -22008,11 +22009,15 @@ pub fn run() {
         // Folder and .zip picker, called from Rust only: the webview gets no
         // `dialog:*` permission (DECISIONS.md capability gate).
         .plugin(tauri_plugin_dialog::init())
+        .manage(std::sync::Arc::new(memory_saver::MemorySaver::default()))
         .setup(|app| {
             delivery_queue::start(app.handle().clone(), run_delivery_job);
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Minimized or long unfocused: hide the WebView and ask for the
+            // Low memory target (memory_saver.rs); restore on return.
+            memory_saver::on_window_event(window, event);
             // Native file drop (needs `dragDropEnabled: true`, §3.9). Only
             // existing folders and .zip/.skill files, at most five.
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {

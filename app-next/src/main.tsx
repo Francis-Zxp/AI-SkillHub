@@ -6,12 +6,16 @@ import "./sky-theme.css";
 import "./refinements.css";
 import { App } from "./App";
 import { loadTelemetry } from "./telemetry";
+import { startAppVisibilityRelay } from "./appVisibility";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />
   </React.StrictMode>
 );
+
+// Window minimized/background → page events, so heavy views can release memory.
+startAppVisibilityRelay();
 
 // Third-party usage statistics load after first paint and only while the switch is on.
 window.setTimeout(loadTelemetry, 4_000);
