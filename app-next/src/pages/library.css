@@ -132,8 +132,12 @@
 .target-icon.look-dim .agent-glyph, .target-icon.look-paused .agent-glyph { opacity: .45; filter: grayscale(.7); }
 .target-icon.look-amber .agent-glyph { box-shadow: 0 0 0 2px var(--warning); }
 .target-icon.look-blocked .agent-glyph { opacity: .4; filter: grayscale(1); }
-.target-icon.look-spin .agent-glyph { opacity: .6; }
-.target-spin { position: absolute; inset: 2px; border: 2px solid var(--info); border-right-color: transparent; border-radius: 10px; animation: ui-refresh-spin 820ms linear infinite; }
+/* Syncing: the glyph breathes and a small ring turns in its corner (a whole rotating
+   square border read as spinning "C" shapes). */
+.target-icon.look-spin .agent-glyph { animation: target-breathe 1.4s ease-in-out infinite; }
+.target-spin { position: absolute; right: 0; bottom: 0; width: 11px; height: 11px; border: 2px solid var(--info); border-right-color: transparent; border-radius: 50%; background: var(--surface-elevated); box-shadow: 0 0 0 1.5px var(--surface-elevated); animation: ui-spinner-turn 760ms linear infinite; }
+@keyframes target-breathe { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }
+@media (prefers-reduced-motion: reduce) { .target-icon.look-spin .agent-glyph { animation: none; opacity: .6; } .target-spin { animation-duration: 2.4s; } }
 .target-badge { position: absolute; right: 0; bottom: 0; display: grid; place-items: center; width: 12px; height: 12px; border-radius: 50%; background: var(--surface-elevated); }
 .target-badge .ui-icon { width: 10px; height: 10px; }
 .target-badge.red { background: var(--danger); box-shadow: 0 0 0 2px var(--bg); }
@@ -217,3 +221,19 @@
 .drawer .drawer-form .field.check { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; text-align: left; }
 .drawer .drawer-form .field.check input { flex: 0 0 auto; width: 18px; height: 18px; padding: 0; accent-color: var(--brand); }
 .drawer .drawer-form .field.check span { color: var(--text); font-weight: 600; }
+
+/* Prompt material in the drawer (PromptPanel). */
+.prompt-panel { display: grid; gap: 12px; }
+.prompt-panel h4 { margin: 0 0 6px; color: var(--text-soft); font-size: 12px; font-weight: 700; }
+.prompt-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.prompt-list li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 10px; background: var(--surface-soft); font-size: 13px; }
+.prompt-list li strong { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-list li small { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.prompt-list .ui-icon { width: 14px; height: 14px; color: var(--text-muted); }
+.prompt-dot { width: 8px; height: 8px; border-radius: 50%; justify-self: center; }
+.prompt-dot.ok { background: var(--success); }
+.prompt-dot.warn { background: var(--warning); }
+.prompt-warnings { margin: 0; padding-left: 18px; color: var(--warning); font-size: 12.5px; }
+.prompt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip.chip-action-prompt { cursor: pointer; }
+.chip.chip-action-prompt:hover { filter: brightness(1.08); }

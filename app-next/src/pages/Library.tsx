@@ -729,7 +729,7 @@ function LibraryRowView({
       </div>
       <span className="lib-badges">
         {row.kind === "prompt" ? (
-          <span className="chip chip-prompt">{t("v33.promptChip")}</span>
+          <button className="chip chip-prompt chip-action-prompt" data-testid={`library-row-prompt-${row.key}`} onClick={() => onOpen("overview")} title={t("lib.promptNotSkill")} type="button">{t("v33.promptChip")}</button>
         ) : row.kind === "empty" ? (
           <span className="chip chip-warn">{t("v33.noSkillsChip")}</span>
         ) : (

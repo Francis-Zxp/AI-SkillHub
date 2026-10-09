@@ -363,6 +363,10 @@ fn compute_is_router_hub(
     false
 }
 
+fn source_tree_skill_is_router(description: &str) -> bool {
+    description.contains(ROUTER_HUB_MARKER) || description.contains(CONFLICT_DISPATCHER_MARKER)
+}
+
 fn resolve_skill_source_id(
     skill: &SkillCard,
     source_ids: &HashMap<String, String>,
@@ -18860,13 +18864,11 @@ fn scan_source_tree_skills(
                 .unwrap_or_else(|| "auto".to_string());
             let description = inferred.summary.clone();
             let relative_path = source_tree_relative_path(sources_dir, &skill_dir);
-            let is_router_hub = compute_is_router_hub(
-                &description,
-                &relative_path,
-                &source.name,
-                &folder_name,
-                &name,
-            );
+            // A SKILL.md inside a downloaded repo is a real skill, even when the repo
+            // root is the skill and so shares the pack's name (cell_cns_figure--yrui-cmd).
+            // Only the generator's markers make it a router here; the same-name rule is
+            // for SkillHub's own entries in the active skills folder.
+            let is_router_hub = source_tree_skill_is_router(&description);
 
             known_identity_keys.insert(identity_key);
             skills.push(SkillCard {
@@ -22754,6 +22756,24 @@ mod tests {
             "# test agent link runner",
         )
         .expect("agent link marker should be written");
+    }
+
+    #[test]
+    fn a_repo_whose_root_is_the_skill_is_not_a_router() {
+        // cell_cns_figure--yrui-cmd: the repo root holds SKILL.md, so the real skill's
+        // folder shares the pack's name. It used to be marked as the router, leaving
+        // the pack with no callable skill ("没有技能").
+        assert!(!source_tree_skill_is_router(
+            "把科研文字或参考图制作成可编辑的 PPT"
+        ));
+        assert!(source_tree_skill_is_router("[ROUTER-HUB] generated parent"));
+        assert!(compute_is_router_hub(
+            "plain",
+            "skills/cell_cns_figure--yrui-cmd",
+            "cell_cns_figure--yrui-cmd",
+            "cell_cns_figure--yrui-cmd",
+            "cell_cns_figure"
+        ));
     }
 
     #[test]

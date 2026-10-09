@@ -1933,7 +1933,7 @@ export function App() {
           key: row.key,
           name: row.source.name,
           kind: row.kind,
-          meta: row.kind === "prompt" ? t("v33.promptChip") : t("v33.skillsInPack", { n: row.skills.length }),
+          meta: row.kind === "prompt" ? t("v33.promptKind") : t("v33.skillsInPack", { n: row.skills.length }),
           score: sourceSearchScore(row.source, query)
         });
       }
@@ -2355,6 +2355,7 @@ export function App() {
             onMoveSkillToFolder={(skillId, folderId) => runSkillFolderCommand("move_skill_to_folder", { skillId, folderId }, "")}
             onMoveSourceToFolder={(sourceId, folderId) => runSkillFolderCommand("move_source_skills_to_folder", { sourceId, folderId }, "")}
             onOpenAgentFolder={agentId => void openAgentFolder(agentId)}
+            onReloadLibrary={refreshLocalIndex}
             onRefreshVersion={refreshSourceVersionStatus}
             onReview={sourceId => setReviewSourceId(sourceId)}
             onRollbackVersion={rollbackSourceVersion}

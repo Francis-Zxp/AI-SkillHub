@@ -37,6 +37,7 @@ import {
 } from "../appShared";
 import { Dialog, Drawer, StarRating, ToggleSwitch, useConfirm } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
+import { PromptPanel } from "./PromptPanel";
 import "./library.css";
 
 type Tab = "overview" | "versions" | "settings";
@@ -70,6 +71,7 @@ export function SkillDrawer({
   onMoveSourceToFolder,
   onOpenAgentFolder,
   onRefreshVersion,
+  onReloadLibrary,
   onReview,
   onRollbackVersion,
   onSaveSkillMetadata,
@@ -98,6 +100,8 @@ export function SkillDrawer({
   onMoveSourceToFolder: (sourceId: string, folderId: string) => Promise<LegacySnapshot | null>;
   onOpenAgentFolder: (agentId: string) => void;
   onRefreshVersion: (source: SourceCard) => Promise<boolean>;
+  /** Re-reads the library (a prompt's Skill launcher was created). */
+  onReloadLibrary: () => Promise<unknown>;
   onReview: (sourceId: string) => void;
   onRollbackVersion: (source: SourceCard) => Promise<boolean>;
   onSaveSkillMetadata: (skill: SkillCard, draft: SkillDraft) => Promise<"failed" | "partial" | "preview" | "saved">;
@@ -143,7 +147,7 @@ export function SkillDrawer({
 
   return (
     <Drawer
-      eyebrow={row.kind === "prompt" ? t("v33.promptChip") : row.kind === "standalone" ? t("v33.standaloneSkill") : t("v33.skillPack")}
+      eyebrow={row.kind === "prompt" ? t("v33.promptKind") : row.kind === "standalone" ? t("v33.standaloneSkill") : t("v33.skillPack")}
       headerExtra={entry ? (
         <button
           className="ghost-action small"
@@ -188,6 +192,7 @@ export function SkillDrawer({
           entry={entry}
           onOpenAgentFolder={onOpenAgentFolder}
           onEnablePack={source => void onSetLibraryEnabled(source, true, false)}
+          onReloadLibrary={onReloadLibrary}
           onReview={onReview}
           onSetChildEnabled={onSetChildEnabled}
           onTargetClick={target => onTargetClick(row, target)}
@@ -266,6 +271,7 @@ function OverviewTab({
   childBusy,
   entry,
   onEnablePack,
+  onReloadLibrary,
   onOpenAgentFolder,
   onReview,
   onSetChildEnabled,
@@ -279,6 +285,7 @@ function OverviewTab({
   childBusy: ReadonlySet<string>;
   entry: SkillCard | null;
   onEnablePack: (source: SourceCard) => void;
+  onReloadLibrary: () => Promise<unknown>;
   onOpenAgentFolder: (agentId: string) => void;
   onReview: (sourceId: string) => void;
   onSetChildEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
@@ -323,6 +330,7 @@ function OverviewTab({
 
   return (
     <div className="drawer-section-stack" data-testid="drawer-overview">
+      {row.kind === "prompt" && row.source && <PromptPanel onCreated={onReloadLibrary} sourceId={row.source.id} />}
       {reason === "security-review" && row.source && (
         <section className="drawer-notice warn">
           <Icon name="shield" />
