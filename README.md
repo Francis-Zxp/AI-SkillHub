@@ -24,7 +24,7 @@
 
 ### 关系图谱 · 沉浸视图
 
-关系图谱 — 普通窗口内的应用沉浸视图<img width="1920" height="1273" alt="image" src="https://github.com/user-attachments/assets/d1e5a652-a137-4ba2-b64a-56510d9444a6" />
+<img width="1920" height="1273" alt="image" src="https://github.com/user-attachments/assets/d1e5a652-a137-4ba2-b64a-56510d9444a6" />
 
 
 
