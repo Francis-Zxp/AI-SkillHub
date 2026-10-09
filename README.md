@@ -24,7 +24,7 @@
 
 ### 关系图谱 · 沉浸视图
 
-![关系图谱 — 普通窗口内的应用沉浸视图](docs/images/relations-immersive-window-en.png)
+![关系图谱 — 普通窗口内的应用沉浸视图](<img width="1920" height="1273" alt="image" src="https://github.com/user-attachments/assets/384bc935-8c69-42ba-a7bc-c3bc05198fde" />)
 
 *截图使用英文演示技能库。三张均按 1440 × 960 普通窗口布局，以 4320 × 2880 高分辨率输出。关系图谱开启应用内的沉浸按钮，程序与桌面均未全屏。点击图片可查看原图。*
 
