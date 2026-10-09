@@ -20956,6 +20956,49 @@ fn check_security_review(
     Ok(())
 }
 
+/// A pack enabled without any recorded security scan is scanned first, so the review
+/// gate (I-5) still applies. 3.2.x could record the scan under a provisional id and the
+/// pack kept only its "off" state (seen with oil-ui--oil-oil).
+fn scan_unscanned_source(connection: &Connection, source_id: &str) -> Result<(), SkillHubError> {
+    let scanned = connection
+        .query_row(
+            "SELECT COUNT(*) FROM source_security_state WHERE source_id = ?1",
+            params![source_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+    if scanned {
+        return Ok(());
+    }
+    let local_path: String = connection
+        .query_row(
+            "SELECT COALESCE(local_path, '') FROM sources WHERE id = ?1",
+            params![source_id],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+    let folder = PathBuf::from(&local_path);
+    if local_path.is_empty() || !folder.is_dir() {
+        return Ok(());
+    }
+    let report = security_scan::scan_source_tree(&folder).map_err(SkillHubError::from)?;
+    let high = report
+        .findings
+        .iter()
+        .filter(|finding| finding.severity == "high")
+        .count();
+    source_governance::record_security_scan(
+        connection,
+        source_id,
+        &report.status,
+        report.scanned_files,
+        high,
+        report.findings.len().saturating_sub(high),
+    )?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn set_source_library_enabled(
     source_id: String,
@@ -20970,6 +21013,7 @@ async fn set_source_library_enabled(
             return Err(SkillHubError::code("UNIT_NOT_FOUND").with_source(&source_id));
         }
         if enabled {
+            scan_unscanned_source(&connection, &source_id)?;
             check_security_review(&connection, &source_id, security_review_confirmed)?;
         }
         skill_delivery::set_source_library_enabled_rows(

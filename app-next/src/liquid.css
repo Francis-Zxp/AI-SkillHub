@@ -282,7 +282,7 @@ main.shell.v33.theme-family-atlas.page-dashboard .atlas-intro-toggle {
   border-radius: 999px;
   color: var(--text-soft);
 }
-main.shell.v33.theme-family-atlas.page-dashboard .atlas-intro-toggle[aria-pressed="true"] { color: var(--lg-bead-text); }
+main.shell.v33.theme-family-atlas.page-dashboard .atlas-intro-toggle[aria-pressed="true"] { color: var(--text-soft); }
 
 /* Islands: the six scene buttons share one capsule, like the switch. */
 main.shell.v33.theme-family-atlas.page-dashboard .sky-controls {
@@ -532,3 +532,14 @@ main.shell.v33 .lib-row:hover:not(.selected) { background: color-mix(in srgb, va
    than the globe, sun and GitHub marks. */
 main.shell.v33 .topbar-actions :is(.ghost-pill, .icon-button, .lang-trigger, .theme-trigger, .primary-pill, .update-available-pill) svg { width: 18px; height: 18px; }
 main.shell.v33 .topbar-actions .update-pill svg { width: 16px; height: 16px; }
+
+/* ---------- home: the update run says how far it is ----------
+   HomeScene.css keeps the banner as a 4px line under the top bar; the label, the
+   percentage and 停止 sit in one small pill just below it. */
+main.shell.v33.theme-family-atlas.page-dashboard .workspace-body > .operation-banner { overflow: visible; }
+main.shell.v33.theme-family-atlas.page-dashboard .operation-banner > div { position: absolute; top: 10px; left: 50%; width: auto; height: auto; overflow: visible; clip-path: none; display: flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 999px; background: var(--lg-fill-strong); box-shadow: var(--lg-rim), var(--lg-shadow); white-space: nowrap; transform: translateX(-50%); pointer-events: none; }
+main.shell.v33.theme-family-atlas.page-dashboard .operation-banner > div strong { font-size: 12px; }
+main.shell.v33.theme-family-atlas.page-dashboard .operation-banner > div span { max-width: 32ch; overflow: hidden; color: var(--text-soft); font-size: 12px; text-overflow: ellipsis; }
+main.shell.v33 .operation-percent { display: none; }
+main.shell.v33.theme-family-atlas.page-dashboard .operation-banner .operation-percent { display: inline; color: var(--brand-strong); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+main.shell.v33.theme-family-atlas.page-dashboard .operation-banner > button { top: 44px; }

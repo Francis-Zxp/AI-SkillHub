@@ -1,7 +1,7 @@
 // v3.3 app shell pieces (skills contract §6.1): sidebar with AI 工具 sub-items, the sync
 // indicator and its 问题 popover, the single error banner, global search results and
 // the small monogram used for every AI tool. Pure presentation; App owns the state.
-import { type CSSProperties, useEffect, useRef } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import { Icon, type IconName } from "../icons";
 import { t } from "../i18n";
 import { type SyncIndicator } from "../deliveryView";
@@ -99,6 +99,7 @@ export function SyncIndicatorButton({
 }) {
   const label = t(indicator.labelKey, indicator.vars);
   const tip = indicator.waitingFor ? t("sync.waitingFor", { what: indicator.waitingFor }) : label;
+  const elapsed = useElapsedSeconds(indicator.tone === "busy" ? indicator.since ?? "" : "");
   return (
     <button
       aria-expanded={open}
@@ -112,8 +113,23 @@ export function SyncIndicatorButton({
     >
       <i className="sync-dot" aria-hidden="true" />
       <span>{label}</span>
+      {indicator.tone === "busy" && elapsed > 0 && <em className="sync-elapsed">{t("sync.elapsed", { s: elapsed })}</em>}
+      {indicator.tone === "busy" && <i className="sync-strip" aria-hidden="true" />}
     </button>
   );
+}
+
+/** Whole seconds since an ISO time, ticking once a second; 0 when there is none. */
+function useElapsedSeconds(since: string): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!since) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [since]);
+  const start = since ? Date.parse(since) : Number.NaN;
+  return Number.isFinite(start) ? Math.max(0, Math.floor((now - start) / 1000)) : 0;
 }
 
 export function ProblemsPopover({

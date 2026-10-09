@@ -2095,6 +2095,7 @@ export function App() {
               <div>
                 <strong>{operation.title}</strong>
                 <span>{operation.detail}</span>
+                <small className="operation-percent">{operationProgress}%</small>
               </div>
               <em>{operationProgress}% · {operation.step}/{operation.total}</em>
               {operation.stoppable && (
@@ -2209,6 +2210,7 @@ export function App() {
                   "move_source_skills_to_folder", { sourceId, folderId }, t("folders.movedSource")
                 )}
                 onOpenDetail={openDetail}
+                onSetLibraryEnabled={setSourceLibraryEnabled}
                 onOpenLibraryFolder={() => void copyTextToClipboard(snapshot?.skillsDir ?? "", t("v33.libraryPathCopied"))}
                 onReanalyze={() => void reanalyzeLibraryMetadata()}
                 onRepair={() => void requestDelivery("repair", "full")}

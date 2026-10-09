@@ -125,7 +125,7 @@ main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: 230px;
+  max-width: 300px;
   height: 36px;
   padding: 0 12px;
   border: 1px solid var(--border);
@@ -138,6 +138,14 @@ main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
 }
 .sync-indicator:hover { border-color: var(--border-strong); color: var(--text); }
 .sync-indicator span { overflow: hidden; text-overflow: ellipsis; }
+/* Busy: elapsed seconds and a strip that sweeps along the pill's bottom edge. The job
+   reports per tool only when it ends, so the strip shows activity, not a fraction. */
+.sync-indicator { position: relative; overflow: hidden; }
+.sync-elapsed { flex: 0 0 auto; color: var(--text-muted); font-size: 11.5px; font-style: normal; font-variant-numeric: tabular-nums; }
+.sync-strip { position: absolute; right: 10px; bottom: 3px; left: 10px; height: 2px; overflow: hidden; border-radius: 2px; background: color-mix(in srgb, var(--info) 18%, transparent); pointer-events: none; }
+.sync-strip::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 38%; border-radius: inherit; background: var(--info); animation: sync-strip-sweep 1.3s cubic-bezier(.45, 0, .55, 1) infinite; }
+@keyframes sync-strip-sweep { from { transform: translateX(-100%); } to { transform: translateX(265%); } }
+@media (prefers-reduced-motion: reduce) { .sync-strip::after { width: 100%; opacity: .5; animation: none; } }
 .sync-dot { flex: 0 0 10px; width: 10px; height: 10px; border-radius: 50%; }
 .sync-indicator.tone-ok .sync-dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
 .sync-indicator.tone-problem .sync-dot { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
@@ -147,7 +155,7 @@ main.shell.v33.dashboard-immersive { grid-template-columns: 0 minmax(0, 1fr); }
 @media (max-width: 1100px) {
   .v33 .topbar-actions .add-pill span,
   .v33 .topbar-actions .update-pill span { display: none; }
-  .sync-indicator { max-width: 150px; }
+  .sync-indicator { max-width: 190px; }
 }
 
 .problems-popover {

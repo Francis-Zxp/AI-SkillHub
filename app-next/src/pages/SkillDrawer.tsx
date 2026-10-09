@@ -187,6 +187,7 @@ export function SkillDrawer({
           childBusy={childBusy}
           entry={entry}
           onOpenAgentFolder={onOpenAgentFolder}
+          onEnablePack={source => void onSetLibraryEnabled(source, true, false)}
           onReview={onReview}
           onSetChildEnabled={onSetChildEnabled}
           onTargetClick={target => onTargetClick(row, target)}
@@ -264,6 +265,7 @@ function OverviewTab({
   agents,
   childBusy,
   entry,
+  onEnablePack,
   onOpenAgentFolder,
   onReview,
   onSetChildEnabled,
@@ -276,6 +278,7 @@ function OverviewTab({
   agents: SkillAgent[];
   childBusy: ReadonlySet<string>;
   entry: SkillCard | null;
+  onEnablePack: (source: SourceCard) => void;
   onOpenAgentFolder: (agentId: string) => void;
   onReview: (sourceId: string) => void;
   onSetChildEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
@@ -334,6 +337,9 @@ function OverviewTab({
         <section className="drawer-notice">
           <Icon name="info" />
           <span>{reason === "disabled-by-user" ? t("v33.disabledEverywhere") : t("v33.noEnabledSkills")}</span>
+          {reason === "disabled-by-user" && row.source && (
+            <button className="primary-action small" data-testid="drawer-enable" onClick={() => onEnablePack(row.source!)} type="button">{t("v33.enablePack")}</button>
+          )}
         </section>
       )}
       {conflicts.map(target => {

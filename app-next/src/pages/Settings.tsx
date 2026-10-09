@@ -30,7 +30,7 @@ import {
   copyTextToClipboard
 } from "../appShared";
 import { normalizeSkillHubError } from "../skillErrors";
-import { DeferredSurface, SegmentedToggle, ToggleSwitch } from "../components/ui";
+import { DeferredSurface, SegmentedToggle, Spinner, ToggleSwitch } from "../components/ui";
 import "./settings.css";
 
 const DevTools = lazy(() => import("./DevTools").then(module => ({ default: module.DevTools })));
@@ -519,7 +519,7 @@ export function Settings({
             <small>{t("v33.reportBody")}</small>
           </span>
           <button className="ghost-action small" data-testid="export-report" disabled={busyAction === "report"} onClick={onExportReport} type="button">
-            <Icon className={busyAction === "report" ? "icon-spin" : ""} name="download" /> {busyAction === "report" ? t("v33.reportWorking") : t("v33.reportAction")}
+            {busyAction === "report" ? <Spinner /> : <Icon name="download" />} {busyAction === "report" ? t("v33.reportWorking") : t("v33.reportAction")}
           </button>
         </div>
         <div className="path-row">

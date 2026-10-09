@@ -26,7 +26,7 @@ import type {
   SkillDeliveryState,
   SkillHubError
 } from "../types";
-import { DeferredSurface, Dialog, MoreMenu, ToggleSwitch } from "../components/ui";
+import { DeferredSurface, Dialog, MoreMenu, Spinner, ToggleSwitch } from "../components/ui";
 import { AgentGlyph } from "../components/shell";
 import "./agents.css";
 
@@ -107,10 +107,10 @@ export function Agents({
         <h2>{t("nav.agents")}</h2>
         <div className="page-head-actions">
           <button className="ghost-action" data-testid="agents-detect" disabled={refreshing} onClick={onDetect} type="button">
-            <Icon className={refreshing ? "icon-spin" : ""} name="search" /> {refreshing ? t("v33.detecting") : t("v33.detectTools")}
+            {refreshing ? <Spinner /> : <Icon name="search" />} {refreshing ? t("v33.detecting") : t("v33.detectTools")}
           </button>
           <button className="primary-action" data-testid="agents-sync-now" disabled={!delivery || delivery.paused} onClick={onSyncNow} title={delivery?.paused ? t("sync.paused") : undefined} type="button">
-            <Icon className={busy ? "icon-spin" : ""} name="sync" /> {busy ? t("sync.busy") : t("v33.syncNow")}
+            {busy ? <Spinner /> : <Icon name="sync" />} {busy ? t("sync.busy") : t("v33.syncNow")}
           </button>
         </div>
       </header>

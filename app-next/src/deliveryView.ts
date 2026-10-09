@@ -19,6 +19,8 @@ export type SyncIndicator = {
   vars: Record<string, string | number>;
   /** Plain label of whatever holds the write lock while waiting ("" otherwise). */
   waitingFor: string;
+  /** Busy only: when the running job started (or was queued), for the elapsed time. */
+  since?: string;
 };
 
 const BUSY_PHASES = new Set(["queued", "waiting", "running"]);
@@ -31,7 +33,12 @@ export function deliveryJobBusy(state: Pick<SkillDeliveryState, "job"> | null | 
 export function topSyncIndicator(state: SkillDeliveryState | null | undefined): SyncIndicator {
   if (!state) return { tone: "idle", labelKey: "sync.idle", vars: {}, waitingFor: "" };
   if (deliveryJobBusy(state)) {
-    return { tone: "busy", labelKey: "sync.busy", vars: {}, waitingFor: state.job?.waitingFor ?? "" };
+    // The job writes every tool in one pass and reports at the end, so the label says
+    // what it is doing and for how many tools; the pill adds the elapsed time.
+    const job = state.job!;
+    const tools = state.agents.filter(agent => agent.takeover && agent.installed && agent.canDeliver).length;
+    const labelKey = job.phase === "queued" ? "sync.queued" : job.phase === "waiting" ? "sync.waiting" : tools > 0 ? "sync.running" : "sync.busy";
+    return { tone: "busy", labelKey, vars: { n: tools }, waitingFor: job.waitingFor ?? "", since: job.startedAt || job.queuedAt || "" };
   }
   if (state.paused) return { tone: "paused", labelKey: "sync.paused", vars: {}, waitingFor: "" };
   const managed = state.agents.filter(agent => agent.takeover);

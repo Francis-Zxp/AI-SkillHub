@@ -7,6 +7,12 @@ import { Icon, type IconName } from "../icons";
 import { CountUp } from "../effects";
 import { t } from "../i18n";
 
+/** Busy state for buttons whose icon is not a circle (search, sync, download): a small
+ * ring turns instead, so an arrow or magnifier never spins on the spot. */
+export function Spinner() {
+  return <span aria-hidden="true" className="ui-spinner" />;
+}
+
 export function DeferredSurface({ label }: { label: string }) {
   return (
     <section className="deferred-surface glow-card" role="status">

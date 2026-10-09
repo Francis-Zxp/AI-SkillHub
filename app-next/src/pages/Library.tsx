@@ -58,6 +58,7 @@ export function Library({
   onRepair,
   onSelectFolder,
   onSetChildEnabled,
+  onSetLibraryEnabled,
   onSetSkillRating,
   onSetSourceRating,
   onTargetClick,
@@ -88,6 +89,8 @@ export function Library({
   onRepair: () => void;
   onSelectFolder: (folderId: string) => void;
   onSetChildEnabled: (skill: SkillCard, enabled: boolean) => Promise<boolean>;
+  /** Turns a pack on in the library; a pending security review opens the review instead. */
+  onSetLibraryEnabled: (source: NonNullable<LibraryRow["source"]>, enabled: boolean, confirmed: boolean) => Promise<boolean>;
   onSetSkillRating: (skill: SkillCard, rating: number) => Promise<boolean>;
   onSetSourceRating: (source: NonNullable<LibraryRow["source"]>, rating: number) => Promise<boolean>;
   onTargetClick: (row: LibraryRow, target: SkillTarget) => void;
@@ -412,6 +415,7 @@ export function Library({
                   key={item.key}
                   onCopy={onCopySkill}
                   onDragStart={startDrag}
+                  onEnable={() => item.row.source ? void onSetLibraryEnabled(item.row.source, true, false) : undefined}
                   onMove={() => setFolderDialog({ mode: "move", row: item.row })}
                   onOpen={tab => onOpenDetail(item.row.key, tab)}
                   onRate={rating => item.row.source
@@ -614,6 +618,7 @@ function LibraryRowView({
   expanded,
   onCopy,
   onDragStart,
+  onEnable,
   onMove,
   onOpen,
   onRate,
@@ -627,6 +632,7 @@ function LibraryRowView({
   expanded: boolean;
   onCopy: (skill: SkillCard) => void;
   onDragStart: (event: ReactPointerEvent, kind: DragState["kind"], id: string, label: string) => void;
+  onEnable: () => void;
   onMove: () => void;
   onOpen: (tab?: "overview" | "versions" | "settings") => void;
   onRate: (rating: number) => void;
@@ -737,7 +743,9 @@ function LibraryRowView({
           <button
             className="chip chip-action"
             data-testid={`library-row-enable-${row.key}`}
-            onClick={() => onOpen("overview")}
+            // 待确认安全 opens the risks first; 已停用 turns the pack back on here (the backend
+            // scans a pack that has no recorded scan and asks for a review if it needs one).
+            onClick={() => (row.unit?.libraryOnlyReason === "security-review" ? onOpen("overview") : onEnable())}
             title={row.unit.libraryOnlyReason === "security-review" ? t("v33.reviewAndEnable") : t("v33.packOffHint")}
             type="button"
           >
