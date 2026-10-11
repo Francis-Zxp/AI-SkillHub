@@ -543,3 +543,24 @@ main.shell.v33.theme-family-atlas.page-dashboard .operation-banner > div span { 
 main.shell.v33 .operation-percent { display: none; }
 main.shell.v33.theme-family-atlas.page-dashboard .operation-banner .operation-percent { display: inline; color: var(--brand-strong); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
 main.shell.v33.theme-family-atlas.page-dashboard .operation-banner > button { top: 44px; }
+
+/* ---------- bottom bar in narrow and portrait windows ----------
+   The actions stay the compact tiles at the end of the row (a full-width 添加 bar
+   below the numbers looked out of place); the numbers lose their side notes first. */
+@media (max-width: 1080px) {
+  main.shell.v33.theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; }
+  main.shell.v33.theme-family-atlas.page-dashboard .atlas-touchbar-actions {
+    grid-column: auto;
+    grid-auto-columns: minmax(64px, auto);
+    min-height: 0;
+    padding: 0 0 0 4px;
+    border-top: 0;
+    border-left: 1px solid var(--lg-hairline);
+  }
+  main.shell.v33.theme-family-atlas.page-dashboard .atlas-touchbar-actions button { grid-auto-flow: row; padding: 4px 8px; }
+  main.shell.v33.theme-family-atlas.page-dashboard .metric-grid.atlas-touchbar .metric small { display: none; }
+}
+@media (max-width: 640px) {
+  main.shell.v33.theme-family-atlas.page-dashboard .atlas-touchbar-actions button > span:not(.agent-glyph) { display: none; }
+  main.shell.v33.theme-family-atlas.page-dashboard .atlas-touchbar-actions { grid-auto-columns: 44px; }
+}

@@ -182,10 +182,17 @@
   pointer-events: none;
 }
 /* Narrow windows: the note keeps its line; ratings give way. */
+/* Narrow and portrait windows: the rating stays (smaller); the count chip and the
+   description give way first, then the owner. */
 @media (max-width: 1180px) {
   .lib-note { max-width: 100%; }
   .lib-note + .lib-desc { display: none; }
-  .lib-row .star-rating { display: none; }
+  .lib-row { gap: 6px; }
+  .lib-row .star-rating { flex: 0 0 auto; white-space: nowrap; }
+  .lib-row .star-rating.compact button { padding: 0; font-size: 12px; }
+}
+@media (max-width: 980px) {
+  .lib-badges .chip:not(.chip-update):not(.chip-problem):not(.chip-action):not(.chip-prompt):not(.chip-warn) { display: none; }
 }
 
 /* ---------- drawer ---------- */

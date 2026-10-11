@@ -1046,3 +1046,8 @@
 /* The remove button of a key row sits in its corner instead of wrapping onto its own line. */
 .mcp-secret-row { position: relative; padding-right: 40px; }
 .mcp-secret-row .mcp-secret-remove { position: absolute; top: 8px; right: 8px; margin: 0; }
+/* Narrow and portrait windows: a long tool name wraps onto two lines instead of being cut. */
+@media (max-width: 1000px) {
+  .mcp-col-label { white-space: normal; }
+  .mcp-col-text { line-height: 1.2; text-align: center; overflow-wrap: anywhere; }
+}
