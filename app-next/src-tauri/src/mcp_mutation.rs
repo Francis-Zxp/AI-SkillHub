@@ -4022,9 +4022,23 @@ fn atomic_replace_file(
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
     };
-    let mut temp_wide = temp.as_os_str().encode_wide().collect::<Vec<_>>();
+    // Match std::fs long-path normalization before calling Win32 directly.
+    let native_temp =
+        fs::canonicalize(temp).map_err(|_| "MCP 临时文件无法定位，已停止原子替换。".to_string())?;
+    let native_parent = fs::canonicalize(
+        target
+            .parent()
+            .ok_or_else(|| "MCP 配置父目录无效。".to_string())?,
+    )
+    .map_err(|_| "MCP 配置父目录无法定位，已停止原子替换。".to_string())?;
+    let native_target = native_parent.join(
+        target
+            .file_name()
+            .ok_or_else(|| "MCP 配置文件名无效。".to_string())?,
+    );
+    let mut temp_wide = native_temp.as_os_str().encode_wide().collect::<Vec<_>>();
     temp_wide.push(0);
-    let mut target_wide = target.as_os_str().encode_wide().collect::<Vec<_>>();
+    let mut target_wide = native_target.as_os_str().encode_wide().collect::<Vec<_>>();
     target_wide.push(0);
     let mut attempt = 0;
     loop {
@@ -5852,6 +5866,31 @@ env_vars = [{ name = "REMOTE_TOKEN", source = "remote" }]
                 .exists()
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_supports_windows_paths_longer_than_max_path() {
+        let (root, context) = fixture("atomic-long-path");
+        let mut parent = context.home_dir.join(".codex");
+        for index in 0..8 {
+            parent = parent.join(format!("nested-project-folder-{index:02}"));
+        }
+        fs::create_dir_all(&parent).unwrap();
+        let path = parent.join("config.toml");
+        assert!(path.as_os_str().len() > 260);
+        fs::write(&path, "# original\n").unwrap();
+        let original = read_regular_config(&path, false).unwrap().unwrap();
+        write_atomic(
+            &path,
+            b"# new\n",
+            Some(&original),
+            "mcp-long-path",
+            Some(&original.fingerprint),
+        )
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"# new\n");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(windows)]
