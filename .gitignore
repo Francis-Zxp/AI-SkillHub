@@ -9,6 +9,7 @@
 /app-next/reports/
 /app-next/runtime/skillhub.config.json
 /app-next/src-tauri/target/
+/app-next/src-tauri/target-v33-*/
 /app-next/.cargo-target-*/
 /app-next/node_modules/
 /app-next/dist/

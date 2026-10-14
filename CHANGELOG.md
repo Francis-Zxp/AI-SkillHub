@@ -2,7 +2,7 @@
 
 All notable changes to AI SkillHub are documented here.
 
-## 3.3.0 — One-click takeover, per-tool sync, MCP matrix, island climates, lower memory (2026-10-08)
+## 3.3.0 — Per-tool sync, MCP matrix, island climates, lower memory (2026-10-15)
 
 - New shell: sidebar with text labels and per-tool sub-items, a top bar with working Ctrl/⌘+K search, "+ 添加" from anywhere (paste a GitHub address, owner/repo, /tree/ path, local folder or .zip — or an MCP config), "更新 (N)" and one sync status dot. Plain-language terms throughout (技能 / 技能包 / MCP / AI 工具); the fake "真实写入授权" pill and the Workspaces page are gone.
 - First-run consent: nothing is written to any AI tool folder before the user agrees; per-tool "接管" switches and a global pause are enforced by the backend. Existing users keep their current tools.
@@ -15,7 +15,7 @@ All notable changes to AI SkillHub are documented here.
 - Second feedback round: liquid-glass chrome (translucent, rim-lit, with lens refraction on the large surfaces, off on software rendering or reduced transparency); 群岛 / 星图 / 归纳 and the scene controls share one aligned toolbar row with a sliding selection bead; the full-screen bottom bar is compact and centred again; equal simple-view cards; theme-coloured progress; two-line library rows with copy after the name, user folders first and an enable chip for packs that are off.
 - Weathers combine (clouds, mist, rainbow and aurora stack; one precipitation at a time) and the rainbow is a seamless spectrum with a faint secondary bow. The star map's glow sits in the sphere's centre. Animals walk with a diagonal gait instead of pacing; island rims no longer curl up.
 - Codex's own bundled MCP servers (e.g. node_repl) stay in Codex and no longer report missing API keys; re-adding a flagged pack keeps its security evidence; the 归纳 skill count matches the library.
-- 50 adversarially verified bugs fixed across the shell, Rust core, MCP and visuals. Public updater manifest unchanged.
+- Includes the subsequent root Skill, Prompt task panel, sync feedback, portrait and narrow-window fixes tested locally through October 12.
 
 ## 3.2.18 — Client discovery and Coze delivery (2026-10-06)
 

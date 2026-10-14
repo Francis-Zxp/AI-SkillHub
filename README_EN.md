@@ -1,6 +1,6 @@
 # AI SkillHub
 
-**Latest release:** v3.2.18 · Improved AI tool detection and automatic Coze default-directory delivery.
+**Latest release:** v3.3.0 · Per-tool Skill sync, MCP matrix, island weather and compact layouts.
 
 [简体中文](README.md) · **English** · [한국어](README_KO.md)
 
