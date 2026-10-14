@@ -16,6 +16,7 @@ All notable changes to AI SkillHub are documented here.
 - Weathers combine (clouds, mist, rainbow and aurora stack; one precipitation at a time) and the rainbow is a seamless spectrum with a faint secondary bow. The star map's glow sits in the sphere's centre. Animals walk with a diagonal gait instead of pacing; island rims no longer curl up.
 - Codex's own bundled MCP servers (e.g. node_repl) stay in Codex and no longer report missing API keys; re-adding a flagged pack keeps its security evidence; the 归纳 skill count matches the library.
 - Includes the subsequent root Skill, Prompt task panel, sync feedback, portrait and narrow-window fixes tested locally through October 12.
+- Close temporary MCP files before Windows replacement; retry brief sharing locks only after rechecking the target fingerprint. Preserve externally edited or persistently locked files and report the system error code.
 
 ## 3.2.18 — Client discovery and Coze delivery (2026-10-06)
 

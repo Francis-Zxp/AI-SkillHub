@@ -3928,9 +3928,11 @@ fn write_atomic(
         return Err(error);
     }
     if let Err(error) = file.write_all(bytes).and_then(|_| file.sync_all()) {
+        drop(file);
         let _ = fs::remove_file(&temp);
         return Err(format!("MCP 临时文件写入失败：{}", error.kind()));
     }
+    drop(file);
     if let Some(expected) = expected {
         if let Err(error) = ensure_target_fingerprint(
             target,
@@ -3953,7 +3955,7 @@ fn write_atomic(
             return Err(error);
         }
     }
-    if let Err(error) = atomic_replace_file(&temp, target) {
+    if let Err(error) = atomic_replace_file(&temp, target, expected) {
         let _ = fs::remove_file(&temp);
         return Err(error);
     }
@@ -4011,7 +4013,11 @@ pub(crate) fn install_atomic_replace_test_hook(target: PathBuf, bytes: Vec<u8>) 
 }
 
 #[cfg(windows)]
-fn atomic_replace_file(temp: &Path, target: &Path) -> Result<(), String> {
+fn atomic_replace_file(
+    temp: &Path,
+    target: &Path,
+    expected: Option<&FileFingerprint>,
+) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -4020,22 +4026,42 @@ fn atomic_replace_file(temp: &Path, target: &Path) -> Result<(), String> {
     temp_wide.push(0);
     let mut target_wide = target.as_os_str().encode_wide().collect::<Vec<_>>();
     target_wide.push(0);
-    let success = unsafe {
-        MoveFileExW(
-            temp_wide.as_ptr(),
-            target_wide.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if success == 0 {
-        Err("Windows 无法原子替换 MCP 配置。".to_string())
-    } else {
-        Ok(())
+    let mut attempt = 0;
+    loop {
+        if attempt > 0 {
+            ensure_target_fingerprint(
+                target,
+                expected.expect("retry requires an expected fingerprint"),
+                "MCP 目标在等待原子替换时被外部修改；已停止且不会覆盖外部改动。",
+            )?;
+        }
+        let success = unsafe {
+            MoveFileExW(
+                temp_wide.as_ptr(),
+                target_wide.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if success != 0 {
+            return Ok(());
+        }
+        let code = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        if attempt >= 4 || expected.is_none() || !matches!(code, 5 | 32 | 33) {
+            return Err(format!(
+                "Windows 无法原子替换 MCP 配置（系统错误码 {code}）。"
+            ));
+        }
+        attempt += 1;
+        std::thread::sleep(std::time::Duration::from_millis(attempt * 25));
     }
 }
 
 #[cfg(not(windows))]
-fn atomic_replace_file(temp: &Path, target: &Path) -> Result<(), String> {
+fn atomic_replace_file(
+    temp: &Path,
+    target: &Path,
+    _expected: Option<&FileFingerprint>,
+) -> Result<(), String> {
     fs::rename(temp, target).map_err(|_| "无法原子替换 MCP 配置。".to_string())
 }
 
@@ -5826,6 +5852,98 @@ env_vars = [{ name = "REMOTE_TOKEN", source = "remote" }]
                 .exists()
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_retries_a_short_windows_sharing_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (root, context) = fixture("atomic-sharing-released");
+        let path = context.home_dir.join(".codex/config.toml");
+        fs::write(&path, "# original\n").unwrap();
+        let original = read_regular_config(&path, false).unwrap().unwrap();
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&path)
+            .unwrap();
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            drop(held);
+        });
+        let result = write_atomic(
+            &path,
+            b"# new\n",
+            Some(&original),
+            "mcp-sharing-released",
+            Some(&original.fingerprint),
+        );
+        releaser.join().unwrap();
+        result.unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"# new\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_retains_original_under_persistent_windows_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (root, context) = fixture("atomic-sharing-held");
+        let path = context.home_dir.join(".codex/config.toml");
+        fs::write(&path, "# original\n").unwrap();
+        let original = read_regular_config(&path, false).unwrap().unwrap();
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&path)
+            .unwrap();
+        let error = write_atomic(
+            &path,
+            b"# new\n",
+            Some(&original),
+            "mcp-sharing-held",
+            Some(&original.fingerprint),
+        )
+        .unwrap_err();
+        assert!(error.contains("系统错误码"));
+        assert_eq!(fs::read(&path).unwrap(), b"# original\n");
+        assert!(!sibling_artifact_path(&path, "temp", "mcp-sharing-held")
+            .unwrap()
+            .exists());
+        drop(held);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_preserves_external_edit_during_windows_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (root, context) = fixture("atomic-sharing-edited");
+        let path = context.home_dir.join(".codex/config.toml");
+        fs::write(&path, "# original\n").unwrap();
+        let original = read_regular_config(&path, false).unwrap().unwrap();
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&path)
+            .unwrap();
+        let external_path = path.clone();
+        let editor = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            fs::write(external_path, "# external\n").unwrap();
+            drop(held);
+        });
+        let result = write_atomic(
+            &path,
+            b"# new\n",
+            Some(&original),
+            "mcp-sharing-edited",
+            Some(&original.fingerprint),
+        );
+        editor.join().unwrap();
+        assert!(result.unwrap_err().contains("外部修改"));
+        assert_eq!(fs::read(&path).unwrap(), b"# external\n");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
