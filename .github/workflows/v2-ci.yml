@@ -38,6 +38,9 @@ jobs:
     name: cargo test (Rust backend)
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      # This suite spawns process trees and ACL tools on shared runners.
+      RUST_TEST_THREADS: "2"
     steps:
       - uses: actions/checkout@v5
 

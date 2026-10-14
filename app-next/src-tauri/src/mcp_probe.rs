@@ -1044,7 +1044,8 @@ mod tests {
             &[fixture_script().into_os_string()],
             &env,
             None,
-            Duration::from_secs(20),
+            // This verifies protocol and cleanup; the deadline has its own test.
+            Duration::from_secs(60),
             "test",
             &|_| {},
         );
